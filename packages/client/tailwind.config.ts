@@ -19,7 +19,7 @@ export default {
       },
       fontFamily: {
         ui: ["Outfit", "sans-serif"],
-        mono: [""JetBrains Mono"", "Menlo", "monospace"],
+        mono: ["JetBrains Mono", "Menlo", "monospace"],
       },
       fontSize: {
         "2xs": ["10px", "14px"],
