@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import type { Session, Message, FileNode, GitStatus, GitHubUser, GitHubIssue, AgentSession, LiveToolCall } from '@myeditor/shared';
+import type { Session, Message, FileNode, GitStatus, GitHubUser, GitHubIssue, AgentSession, LiveToolCall, TabInfo } from '@myeditor/shared';
+import { wsClient } from '../ws/client';
 
 export interface ToolCallDisplay {
   id: string;
@@ -93,6 +94,17 @@ interface EditorStore {
   setBottomPanel: (p: 'chat' | 'terminal') => void;
 }
 
+// Pushes current open tab state to the Go server so the agent can introspect it.
+function syncTabs(get: () => EditorStore): void {
+  const { openFiles, activeFilePath } = get();
+  const tabs: TabInfo[] = openFiles.map(f => ({
+    path: f.path,
+    isActive: f.path === activeFilePath,
+    isDirty: f.dirty,
+  }));
+  wsClient.send({ type: 'editor.tabs.sync', tabs });
+}
+
 export const useStore = create<EditorStore>((set, get) => ({
   connected: false,
   setConnected: (v) => set({ connected: v }),
@@ -175,6 +187,7 @@ export const useStore = create<EditorStore>((set, get) => ({
     } else {
       set({ activeFilePath: path });
     }
+    syncTabs(get);
   },
 
   closeFile: (path) => set(s => {
@@ -182,10 +195,14 @@ export const useStore = create<EditorStore>((set, get) => ({
     const active = s.activeFilePath === path
       ? (files[files.length - 1]?.path ?? null)
       : s.activeFilePath;
+    setTimeout(() => syncTabs(get), 0);
     return { openFiles: files, activeFilePath: active };
   }),
 
-  setActiveFile: (path) => set({ activeFilePath: path }),
+  setActiveFile: (path) => {
+    set({ activeFilePath: path });
+    syncTabs(get);
+  },
 
   markFileDirty: (path, content) => set(s => ({
     openFiles: s.openFiles.map(f => f.path === path ? { ...f, content, dirty: true } : f),

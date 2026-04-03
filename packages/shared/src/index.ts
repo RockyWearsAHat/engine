@@ -84,7 +84,8 @@ export type ClientMessage =
   | { type: 'terminal.create'; cwd: string }
   | { type: 'terminal.input'; terminalId: string; data: string }
   | { type: 'terminal.resize'; terminalId: string; cols: number; rows: number }
-  | { type: 'terminal.close'; terminalId: string };
+  | { type: 'terminal.close'; terminalId: string }
+  | { type: 'editor.tabs.sync'; tabs: TabInfo[] };
 
 // WebSocket protocol — Server → Client
 export type ServerMessage =
@@ -106,7 +107,22 @@ export type ServerMessage =
   | { type: 'terminal.output'; terminalId: string; data: string }
   | { type: 'terminal.closed'; terminalId: string }
   | { type: 'editor.open'; path: string }
+  | { type: 'editor.tab.close'; path: string }
+  | { type: 'editor.tab.focus'; path: string }
   | { type: 'error'; message: string; code?: string };
+
+// Tab and system info types
+export interface TabInfo {
+  path: string;
+  isActive: boolean;
+  isDirty: boolean;
+}
+
+export interface SystemInfo {
+  memory: { usedMB: number; totalMB: number; percentUsed: number };
+  cpuPercent: number;
+  disk: { usedGB: number; totalGB: number; percentUsed: number };
+}
 
 // GitHub types
 export interface GitHubUser {

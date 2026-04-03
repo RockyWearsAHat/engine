@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from './store/index.js';
 import { wsClient } from './ws/client.js';
+import { bridge } from './bridge.js';
 import type { ServerMessage } from '@myeditor/shared';
 import { randomUUID } from './utils.js';
 import FileTree from './components/FileTree/FileTree.js';
@@ -11,18 +12,6 @@ import AgentPanel from './components/AgentPanel/AgentPanel.js';
 import StatusBar from './components/StatusBar/StatusBar.js';
 import { FolderOpen, Terminal as TermIcon, GitBranch, Settings2, Activity, AlertCircle } from 'lucide-react';
 
-declare global {
-  interface Window {
-    electronAPI?: {
-      getProjectPath(): Promise<string>;
-      getGithubToken(): Promise<string | null>;
-      setGithubToken(token: string): Promise<boolean>;
-      openExternal(url: string): Promise<void>;
-      platform: string;
-      isElectron: boolean;
-    };
-  }
-}
 
 type ActivityTab = 'explorer' | 'git' | 'issues' | 'settings';
 type BottomPanel = 'chat' | 'terminal';
@@ -42,7 +31,7 @@ export default function App() {
 
     const off = wsClient.onMessage((msg: ServerMessage) => {
       const {
-        setSessions, setActiveSession, setMessages, openFile,
+        setSessions, setActiveSession, setMessages, openFile, closeFile, setActiveFile,
         setFileTree, setGitStatus, addToolCall, resolveToolCall,
         appendChunk, finalizeMessage, startAssistantMessage,
         addLiveToolCall, resolveLiveToolCall, updateAgentSession,
@@ -74,6 +63,12 @@ export default function App() {
           break;
         case 'editor.open':
           wsClient.send({ type: 'file.read', path: msg.path });
+          break;
+        case 'editor.tab.close':
+          closeFile(msg.path);
+          break;
+        case 'editor.tab.focus':
+          setActiveFile(msg.path);
           break;
         case 'github.issues':
           setGithubIssues(msg.issues);
@@ -129,9 +124,7 @@ export default function App() {
 
     async function initProject() {
       let projectPath = '.';
-      if (window.electronAPI?.isElectron) {
-        try { projectPath = await window.electronAPI.getProjectPath(); } catch { /* fallback */ }
-      }
+      try { projectPath = await bridge.getProjectPath(); } catch { /* fallback */ }
       const name = projectPath.split('/').pop() ?? 'Project';
       setProjectName(name);
       wsClient.send({ type: 'session.create', projectPath: projectPath || '.' });
