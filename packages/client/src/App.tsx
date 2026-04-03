@@ -170,19 +170,23 @@ export default function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden" style={{ background: '#0c0c0e', color: '#f0f0f2' }}>
+    <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'var(--bg)', color: 'var(--tx)' }}>
 
-      {/* macOS titlebar drag region — clears traffic lights */}
+      {/* macOS titlebar drag region */}
       <div
         className="titlebar-drag shrink-0 flex items-center"
-        style={{ height: 36, paddingLeft: 80, background: '#0c0c0e', borderBottom: '1px solid rgba(255,255,255,0.06)' }}
+        style={{ height: 36, paddingLeft: 80, background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}
       >
-        <span
-          className="titlebar-no-drag text-sm font-medium"
-          style={{ color: '#9898a6', fontSize: 12, userSelect: 'none' }}
-        >
-          {projectName}
-        </span>
+        <div className="titlebar-no-drag" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--tx-2)', userSelect: 'none' }}>
+            MyEditor
+          </span>
+          {store.activeSession && (
+            <span style={{ fontSize: 11, color: 'var(--tx-3)', fontFamily: 'monospace', userSelect: 'none' }}>
+              {store.activeSession.projectPath.split('/').pop()}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Main workspace */}
@@ -191,7 +195,7 @@ export default function App() {
         {/* Activity bar */}
         <div
           className="shrink-0 flex flex-col items-center py-2 gap-0.5"
-          style={{ width: 44, background: '#0c0c0e', borderRight: '1px solid rgba(255,255,255,0.06)' }}
+          style={{ width: 40, background: 'var(--surface)', borderRight: '1px solid var(--border)' }}
         >
           {activityItems.map(item => (
             <button
@@ -202,20 +206,25 @@ export default function App() {
                 width: 32, height: 32,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 borderRadius: 6,
-                color: activityTab === item.id && showSidebar ? '#5b8def' : '#55555f',
-                background: activityTab === item.id && showSidebar ? 'rgba(91,141,239,0.1)' : 'transparent',
-                border: 'none', cursor: 'pointer',
-                transition: 'all 120ms ease',
+                color: activityTab === item.id && showSidebar ? 'var(--tx)' : 'var(--tx-3)',
+                background: activityTab === item.id && showSidebar ? 'var(--surface-3)' : 'transparent',
+                borderLeft: `2px solid ${activityTab === item.id && showSidebar ? 'var(--accent)' : 'transparent'}`,
+                border: 'none',
+                borderLeftWidth: 2,
+                borderLeftStyle: 'solid',
+                borderLeftColor: activityTab === item.id && showSidebar ? 'var(--accent)' : 'transparent',
+                cursor: 'pointer',
+                transition: 'all 150ms ease',
               }}
               onMouseEnter={e => {
                 if (!(activityTab === item.id && showSidebar)) {
-                  (e.currentTarget as HTMLButtonElement).style.color = '#9898a6';
-                  (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.05)';
+                  (e.currentTarget as HTMLButtonElement).style.color = 'var(--tx-2)';
+                  (e.currentTarget as HTMLButtonElement).style.background = 'var(--surface-3)';
                 }
               }}
               onMouseLeave={e => {
                 if (!(activityTab === item.id && showSidebar)) {
-                  (e.currentTarget as HTMLButtonElement).style.color = '#55555f';
+                  (e.currentTarget as HTMLButtonElement).style.color = 'var(--tx-3)';
                   (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
                 }
               }}
@@ -234,13 +243,13 @@ export default function App() {
               width: 32, height: 32,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               borderRadius: 6,
-              color: showAgentPanel ? '#5b8def' : '#55555f',
-              background: showAgentPanel ? 'rgba(91,141,239,0.1)' : 'transparent',
+              color: showAgentPanel ? 'var(--accent)' : 'var(--tx-3)',
+              background: showAgentPanel ? 'var(--accent-dim)' : 'transparent',
               border: 'none', cursor: 'pointer',
-              transition: 'all 120ms ease',
+              transition: 'all 150ms ease',
             }}
           >
-            <Activity size={17} />
+            <Activity size={16} />
           </button>
         </div>
 
@@ -248,7 +257,7 @@ export default function App() {
         {showSidebar && (
           <div
             className="shrink-0 overflow-hidden flex flex-col fade-in"
-            style={{ width: 220, borderRight: '1px solid rgba(255,255,255,0.06)', background: '#111113' }}
+            style={{ width: 220, borderRight: '1px solid var(--border)', background: 'var(--surface)' }}
           >
             <FileTree activeTab={activityTab} />
           </div>
@@ -263,12 +272,12 @@ export default function App() {
           {/* Bottom panel with tabs */}
           <div
             className="shrink-0 flex flex-col overflow-hidden"
-            style={{ height: 260, borderTop: '1px solid rgba(255,255,255,0.06)' }}
+            style={{ height: 260, borderTop: '1px solid var(--border)' }}
           >
             {/* Tab strip */}
             <div
-              className="shrink-0 flex items-center gap-1 px-2"
-              style={{ height: 30, background: '#111113', borderBottom: '1px solid rgba(255,255,255,0.06)' }}
+              className="shrink-0 flex items-center"
+              style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)', minHeight: 32 }}
             >
               {([
                 { id: 'chat' as BottomPanel, label: 'AI Chat', icon: null },
@@ -277,12 +286,17 @@ export default function App() {
                 <button
                   key={tab.id}
                   onClick={() => setBottomPanel(tab.id)}
-                  className="flex items-center gap-1.5 px-2 py-0.5 rounded transition-all"
                   style={{
-                    fontSize: 11,
-                    color: bottomPanel === tab.id ? '#f0f0f2' : '#55555f',
-                    background: bottomPanel === tab.id ? 'rgba(255,255,255,0.07)' : 'transparent',
-                    border: 'none', cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '0 14px', height: 32,
+                    fontSize: '11px', fontFamily: 'Outfit, sans-serif',
+                    color: bottomPanel === tab.id ? 'var(--tx)' : 'var(--tx-3)',
+                    borderBottom: bottomPanel === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
+                    background: 'transparent', border: 'none',
+                    borderBottomWidth: 2, borderBottomStyle: 'solid',
+                    borderBottomColor: bottomPanel === tab.id ? 'var(--accent)' : 'transparent',
+                    cursor: 'pointer',
+                    transition: 'color 150ms',
                   }}
                 >
                   {tab.icon}
@@ -300,7 +314,7 @@ export default function App() {
         {showAgentPanel && (
           <div
             className="shrink-0 overflow-hidden fade-in"
-            style={{ width: 260, borderLeft: '1px solid rgba(255,255,255,0.06)' }}
+            style={{ width: 260, borderLeft: '1px solid var(--border)' }}
           >
             <AgentPanel />
           </div>

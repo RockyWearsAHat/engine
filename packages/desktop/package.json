@@ -4,7 +4,7 @@
   "private": true,
   "main": "dist/main.js",
   "scripts": {
-    "dev": "concurrently -k -n electron,wait \"sleep 4 && electron .\" \"tsc --watch --preserveWatchOutput\"",
+    "dev": "concurrently -k -n electron,wait \"sleep 2 && electron .\" \"tsc --watch --preserveWatchOutput\"",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "dist": "tsc && electron-builder"

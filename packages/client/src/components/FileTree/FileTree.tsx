@@ -2,24 +2,38 @@ import { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
 import type { FileNode, GitHubIssue } from '@myeditor/shared';
-import { ChevronRight, ChevronDown, RefreshCw } from 'lucide-react';
+import {
+  ChevronRight, ChevronDown, RefreshCw,
+  Plus, Minus, Circle, AlertCircle, GitBranch, RotateCcw
+} from 'lucide-react';
 
-// File color by extension (VS Code style)
 function fileColor(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase() ?? '';
   const map: Record<string, string> = {
-    ts: '#3178c6', tsx: '#3178c6', js: '#e5b80b', jsx: '#5b8def',
-    py: '#3dd68c', rb: '#f06e6e', go: '#5b8def', rs: '#e8855f',
-    json: '#e5b80b', yaml: '#e5b80b', yml: '#e5b80b', toml: '#e8855f',
-    md: '#9898a6', mdx: '#9898a6', css: '#5b8def', scss: '#f06e6e',
-    html: '#e8855f', svg: '#3dd68c', sh: '#3dd68c', bash: '#3dd68c',
-    sql: '#e5b80b', graphql: '#e8855f', prisma: '#5b8def',
+    ts: '#4d7fff', tsx: '#4d7fff', js: '#f59e0b', jsx: '#f59e0b',
+    css: '#a78bfa', scss: '#a78bfa', less: '#a78bfa',
+    html: '#f97316', json: '#f59e0b', yaml: '#ef4444', yml: '#ef4444',
+    md: '#999999', mdx: '#999999',
+    py: '#22c55e', go: '#22d3ee', rs: '#f97316',
+    sh: '#22c55e', bash: '#22c55e',
+    sql: '#f59e0b', graphql: '#e879f9',
+    toml: '#f97316',
   };
-  return map[ext] ?? '#55555f';
+  return map[ext] ?? '#555555';
 }
 
-function TreeNode({ node, depth = 0 }: { node: FileNode; depth?: number }) {
-  const [expanded, setExpanded] = useState(depth === 0);
+function FileIcon({ name }: { name: string }) {
+  const color = fileColor(name);
+  const ext = name.split('.').pop()?.toLowerCase() ?? '';
+  return (
+    <span style={{ color, flexShrink: 0, fontFamily: 'monospace', fontSize: '9px', fontWeight: 600, letterSpacing: '0.02em', lineHeight: 1 }}>
+      {ext ? ext.slice(0, 2).toUpperCase() : '\u00b7\u00b7'}
+    </span>
+  );
+}
+
+function TreeNode({ node, depth = 0, activeFilePath }: { node: FileNode; depth?: number; activeFilePath?: string | null }) {
+  const [expanded, setExpanded] = useState(depth < 2);
 
   const handleClick = () => {
     if (node.type === 'directory') {
@@ -29,48 +43,63 @@ function TreeNode({ node, depth = 0 }: { node: FileNode; depth?: number }) {
     }
   };
 
+  const isActive = node.path === activeFilePath;
+
   return (
     <div>
       <div
         onClick={handleClick}
-        className="flex items-center cursor-pointer truncate"
         style={{
-          height: 22,
-          paddingLeft: `${6 + depth * 12}px`,
-          paddingRight: 8,
-          gap: 4,
-          borderRadius: 4,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          paddingTop: '3px',
+          paddingBottom: '3px',
+          paddingLeft: `${10 + depth * 14}px`,
+          paddingRight: '8px',
+          fontSize: '12px',
+          cursor: 'pointer',
+          borderRadius: '4px',
           margin: '0 4px',
-          fontSize: 12,
-          color: '#c8c8d0',
           userSelect: 'none',
+          transition: 'background 150ms, color 150ms',
+          background: isActive ? 'rgba(77,127,255,0.08)' : 'transparent',
+          color: isActive ? 'var(--tx)' : 'var(--tx-2)',
         }}
-        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
-        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+        onMouseEnter={e => {
+          if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'var(--surface-3)';
+        }}
+        onMouseLeave={e => {
+          if (!isActive) (e.currentTarget as HTMLDivElement).style.background = 'transparent';
+        }}
       >
         {node.type === 'directory' ? (
-          <span style={{ color: '#383840', flexShrink: 0, width: 12, display: 'flex', alignItems: 'center' }}>
-            {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-          </span>
+          <>
+            <span style={{ color: 'var(--tx-3)', flexShrink: 0, width: 12, display: 'flex', alignItems: 'center' }}>
+              {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+            </span>
+            <span style={{ flexShrink: 0, fontSize: '10px', fontFamily: 'monospace', color: expanded ? 'rgba(245,158,11,0.7)' : 'var(--tx-3)' }}>{'\u25b8'}</span>
+          </>
         ) : (
-          <span style={{ flexShrink: 0, width: 12 }} />
+          <>
+            <span style={{ width: 12, flexShrink: 0 }} />
+            <FileIcon name={node.name} />
+          </>
         )}
-        {node.type === 'file' && (
-          <span
-            style={{
-              width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-              background: fileColor(node.name),
-              opacity: 0.8,
-            }}
-          />
-        )}
-        {node.type === 'directory' && (
-          <span style={{ fontSize: 11, flexShrink: 0 }}>📁</span>
-        )}
-        <span className="truncate">{node.name}</span>
+        <span style={{
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          flex: 1,
+          fontWeight: node.type === 'directory' ? 500 : 400,
+          color: isActive ? 'var(--tx)' : undefined,
+        }}>
+          {node.name}
+        </span>
+        {isActive && <span style={{ width: 4, height: 12, background: 'var(--accent)', borderRadius: 2, flexShrink: 0 }} />}
       </div>
       {node.type === 'directory' && expanded && node.children?.map(child => (
-        <TreeNode key={child.path} node={child} depth={depth + 1} />
+        <TreeNode key={child.path} node={child} depth={depth + 1} activeFilePath={activeFilePath} />
       ))}
     </div>
   );
@@ -85,46 +114,96 @@ function GitPanel() {
 
   if (!gitStatus) {
     return (
-      <div style={{ padding: '16px 12px', textAlign: 'center', fontSize: 11, color: '#383840' }}>
-        No git repository detected
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 128, gap: 8 }}>
+        <GitBranch size={20} style={{ color: 'var(--tx-3)' }} />
+        <span style={{ fontSize: '10px', color: 'var(--tx-3)' }}>No repository</span>
       </div>
     );
   }
 
-  const groups = [
-    { label: 'Staged', files: gitStatus.staged, color: '#3dd68c', symbol: '+' },
-    { label: 'Changes', files: gitStatus.unstaged, color: '#e5b80b', symbol: '~' },
-    { label: 'Untracked', files: gitStatus.untracked, color: '#55555f', symbol: '?' },
-  ].filter(g => g.files.length > 0);
+  const all = gitStatus.staged.length + gitStatus.unstaged.length + gitStatus.untracked.length;
 
   return (
-    <div className="overflow-y-auto">
-      {groups.length === 0 ? (
-        <div style={{ padding: '16px 12px', textAlign: 'center', fontSize: 11, color: '#383840' }}>
-          ✓ No changes
+    <div style={{ overflowY: 'auto', paddingTop: 8, paddingBottom: 8 }}>
+      <div style={{ padding: '0 12px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '11px', color: 'var(--tx-2)' }}>
+          <GitBranch size={11} style={{ color: 'var(--accent)' }} />
+          <span style={{ fontWeight: 500, color: 'var(--tx)' }}>{gitStatus.branch}</span>
+          {gitStatus.ahead > 0 && <span style={{ color: 'var(--accent)', fontSize: '10px' }}>{'\u2191'}{gitStatus.ahead}</span>}
+          {gitStatus.behind > 0 && <span style={{ color: '#f59e0b', fontSize: '10px' }}>{'\u2193'}{gitStatus.behind}</span>}
+        </div>
+        <button
+          onClick={() => wsClient.send({ type: 'git.status' })}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--tx-3)', padding: 2, transition: 'color 150ms' }}
+          onMouseEnter={e => (e.currentTarget.style.color = 'var(--tx-2)')}
+          onMouseLeave={e => (e.currentTarget.style.color = 'var(--tx-3)')}
+        >
+          <RotateCcw size={11} />
+        </button>
+      </div>
+
+      {all === 0 ? (
+        <div style={{ padding: '16px 12px', textAlign: 'center', fontSize: '10px', color: 'var(--tx-3)' }}>
+          Working tree clean
         </div>
       ) : (
-        groups.map(g => (
-          <div key={g.label} style={{ marginBottom: 8 }}>
-            <div style={{ padding: '4px 12px 2px', fontSize: 10, fontWeight: 600, color: '#55555f', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-              {g.label} ({g.files.length})
-            </div>
-            {g.files.map(f => (
-              <div
-                key={f}
-                onClick={() => wsClient.send({ type: 'file.read', path: `${useStore.getState().activeSession?.projectPath}/${f}` })}
-                className="flex items-center gap-2 truncate cursor-pointer"
-                style={{ height: 22, padding: '0 12px 0 20px', fontSize: 11, color: '#9898a6' }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-              >
-                <span style={{ color: g.color, fontWeight: 600, fontFamily: 'monospace', fontSize: 10, flexShrink: 0 }}>{g.symbol}</span>
-                <span className="truncate">{f}</span>
-              </div>
-            ))}
-          </div>
-        ))
+        <>
+          {gitStatus.staged.length > 0 && (
+            <GitSection label="Staged" count={gitStatus.staged.length} icon={<Plus size={9} style={{ color: '#22c55e' }} />} files={gitStatus.staged} projectPath={activeSession?.projectPath} />
+          )}
+          {gitStatus.unstaged.length > 0 && (
+            <GitSection label="Changes" count={gitStatus.unstaged.length} icon={<Minus size={9} style={{ color: '#f59e0b' }} />} files={gitStatus.unstaged} projectPath={activeSession?.projectPath} />
+          )}
+          {gitStatus.untracked.length > 0 && (
+            <GitSection label="Untracked" count={gitStatus.untracked.length} icon={<Circle size={9} style={{ color: 'var(--tx-3)' }} />} files={gitStatus.untracked} projectPath={activeSession?.projectPath} />
+          )}
+        </>
       )}
+    </div>
+  );
+}
+
+function GitSection({ label, count, icon, files, projectPath }: {
+  label: string; count: number; icon: React.ReactNode; files: string[]; projectPath?: string;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div style={{ marginBottom: 4 }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+          padding: '4px 12px', fontSize: '10px', color: 'var(--tx-3)',
+          background: 'none', border: 'none', cursor: 'pointer',
+          textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600,
+          transition: 'color 150ms',
+        }}
+        onMouseEnter={e => (e.currentTarget.style.color = 'var(--tx-2)')}
+        onMouseLeave={e => (e.currentTarget.style.color = 'var(--tx-3)')}
+      >
+        {open ? <ChevronDown size={9} /> : <ChevronRight size={9} />}
+        {icon}
+        <span>{label}</span>
+        <span style={{ marginLeft: 'auto', color: 'var(--tx-3)' }}>{count}</span>
+      </button>
+      {open && files.map(f => (
+        <div
+          key={f}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '3px 12px 3px 20px', fontSize: '11px',
+            color: 'var(--tx-2)', cursor: 'pointer', transition: 'background 150ms',
+            margin: '0 4px', borderRadius: 4,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface-3)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+          onClick={() => projectPath && wsClient.send({ type: 'file.read', path: `${projectPath}/${f}` })}
+        >
+          {icon}
+          <span style={{ fontFamily: 'monospace', fontSize: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -137,35 +216,60 @@ function IssuesPanel() {
   }, [activeSession?.id]);
 
   if (githubIssuesLoading) {
-    return <div style={{ padding: '16px 12px', textAlign: 'center', fontSize: 11, color: '#383840' }}>Loading issues...</div>;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 128, gap: 8 }}>
+        <span style={{ fontSize: '10px', color: 'var(--tx-3)' }}>Loading issues...</span>
+      </div>
+    );
   }
 
   if (!githubIssues || githubIssues.length === 0) {
-    return <div style={{ padding: '16px 12px', textAlign: 'center', fontSize: 11, color: '#383840' }}>No open issues</div>;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 128, gap: 8, padding: '0 16px' }}>
+        <AlertCircle size={20} style={{ color: 'var(--tx-3)' }} />
+        <span style={{ fontSize: '10px', color: 'var(--tx-3)', textAlign: 'center', lineHeight: 1.5 }}>
+          No open issues or connect GitHub to see issues
+        </span>
+        <button
+          style={{
+            marginTop: 4, padding: '4px 12px', fontSize: '10px',
+            background: 'rgba(77,127,255,0.1)', color: 'var(--accent)',
+            border: '1px solid rgba(77,127,255,0.2)', borderRadius: 4, cursor: 'pointer',
+            transition: 'background 150ms',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(77,127,255,0.2)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'rgba(77,127,255,0.1)')}
+        >
+          Connect GitHub
+        </button>
+      </div>
+    );
   }
 
   return (
-    <div className="overflow-y-auto">
+    <div style={{ overflowY: 'auto' }}>
       {githubIssues.map((issue: GitHubIssue) => (
         <div
           key={issue.number}
           onClick={() => window.electronAPI?.openExternal(issue.htmlUrl)}
-          className="cursor-pointer"
-          style={{ padding: '6px 12px', borderBottom: '1px solid rgba(255,255,255,0.04)' }}
-          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')}
+          style={{
+            padding: '6px 12px', borderBottom: '1px solid var(--border)',
+            cursor: 'pointer', transition: 'background 150ms',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface-3)')}
           onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
         >
-          <div className="flex items-center gap-2">
-            <span style={{ fontSize: 10, color: '#3dd68c', fontFamily: 'monospace', flexShrink: 0 }}>#{issue.number}</span>
-            <span style={{ fontSize: 11, color: '#c8c8d0', lineHeight: 1.4 }} className="truncate">{issue.title}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: '10px', color: '#22c55e', fontFamily: 'monospace', flexShrink: 0 }}>#{issue.number}</span>
+            <span style={{ fontSize: '11px', color: 'var(--tx)', lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{issue.title}</span>
           </div>
           {issue.labels.length > 0 && (
-            <div className="flex gap-1 mt-1 flex-wrap">
+            <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
               {issue.labels.slice(0, 3).map(l => (
                 <span
                   key={l.name}
                   style={{
-                    fontSize: 9, padding: '1px 5px', borderRadius: 10,
+                    fontSize: '9px', padding: '1px 5px', borderRadius: 10,
                     background: `#${l.color}22`, color: `#${l.color}`, border: `1px solid #${l.color}44`,
                     fontFamily: 'monospace',
                   }}
@@ -175,8 +279,8 @@ function IssuesPanel() {
               ))}
             </div>
           )}
-          <div style={{ fontSize: 10, color: '#383840', marginTop: 2 }}>
-            {issue.author} · {new Date(issue.createdAt).toLocaleDateString()}
+          <div style={{ fontSize: '10px', color: 'var(--tx-3)', marginTop: 2 }}>
+            {issue.author} {'\u00b7'} {new Date(issue.createdAt).toLocaleDateString()}
           </div>
         </div>
       ))}
@@ -185,7 +289,7 @@ function IssuesPanel() {
 }
 
 export default function FileTree({ activeTab }: { activeTab: 'explorer' | 'git' | 'issues' | 'settings' }) {
-  const { fileTree, activeSession } = useStore();
+  const { fileTree, activeSession, activeFilePath } = useStore();
 
   useEffect(() => {
     if (activeSession) {
@@ -194,54 +298,45 @@ export default function FileTree({ activeTab }: { activeTab: 'explorer' | 'git' 
     }
   }, [activeSession?.id]);
 
-  const projectName = activeSession?.projectPath.split('/').pop() ?? 'Explorer';
-
-  const titles: Record<string, string> = {
-    explorer: projectName.toUpperCase(),
-    git: 'SOURCE CONTROL',
-    issues: 'ISSUES',
-    settings: 'SETTINGS',
-  };
+  const projectName = activeSession?.projectPath.split('/').pop()?.toUpperCase() ?? 'EXPLORER';
 
   return (
-    <div className="flex flex-col h-full" style={{ background: '#111113' }}>
-      {/* Section header */}
-      <div
-        className="shrink-0 flex items-center justify-between"
-        style={{ height: 30, padding: '0 8px 0 12px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}
-      >
-        <span style={{ fontSize: 10, fontWeight: 700, color: '#55555f', letterSpacing: '0.08em' }}>
-          {titles[activeTab]}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--surface)' }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '0 8px 0 12px', height: 30, flexShrink: 0,
+        borderBottom: '1px solid var(--border)',
+      }}>
+        <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--tx-3)', letterSpacing: '0.08em' }}>
+          {activeTab === 'explorer' ? projectName :
+           activeTab === 'git' ? 'SOURCE CONTROL' :
+           activeTab === 'issues' ? 'ISSUES' : 'SETTINGS'}
         </span>
         {activeTab === 'explorer' && (
           <button
             onClick={() => activeSession && wsClient.send({ type: 'file.tree', path: activeSession.projectPath })}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#383840', padding: 2, borderRadius: 3 }}
-            onMouseEnter={e => (e.currentTarget.style.color = '#9898a6')}
-            onMouseLeave={e => (e.currentTarget.style.color = '#383840')}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--tx-3)', padding: 2, borderRadius: 3, transition: 'color 150ms' }}
+            onMouseEnter={e => (e.currentTarget.style.color = 'var(--tx-2)')}
+            onMouseLeave={e => (e.currentTarget.style.color = 'var(--tx-3)')}
           >
             <RefreshCw size={11} />
           </button>
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto" style={{ paddingTop: 4 }}>
-        {activeTab === 'explorer' && (
+      <div style={{ flex: 1, overflowY: 'auto', paddingTop: 4 }}>
+        {activeTab === 'explorer' ? (
           fileTree
-            ? fileTree.children?.map(node => <TreeNode key={node.path} node={node} />)
-            : <div style={{ padding: '12px', fontSize: 11, color: '#383840', textAlign: 'center' }}>No project loaded</div>
-        )}
-        {activeTab === 'git' && <GitPanel />}
-        {activeTab === 'issues' && <IssuesPanel />}
-        {activeTab === 'settings' && (
-          <div style={{ padding: '12px', fontSize: 11, color: '#383840' }}>
-            <div style={{ marginBottom: 8, color: '#55555f', fontWeight: 600 }}>GitHub</div>
-            <div>Connect your account to see issues and CI status.</div>
-            <div style={{ marginTop: 8 }}>Settings coming soon.</div>
+            ? <div className="fade-in">{fileTree.children?.map(node => <TreeNode key={node.path} node={node} activeFilePath={activeFilePath} />)}</div>
+            : <div style={{ padding: 12, fontSize: '11px', color: 'var(--tx-3)', textAlign: 'center' }}>Loading...</div>
+        ) : activeTab === 'git' ? <GitPanel />
+        : activeTab === 'issues' ? <IssuesPanel />
+        : (
+          <div style={{ padding: 12, fontSize: '11px', color: 'var(--tx-3)' }}>
+            Settings coming soon
           </div>
         )}
       </div>
     </div>
   );
 }
-

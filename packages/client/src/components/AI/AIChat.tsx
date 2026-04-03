@@ -2,45 +2,65 @@ import { useRef, useEffect, useState, type KeyboardEvent } from 'react';
 import { useStore, type ChatMessage, type ToolCallDisplay } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
 import { randomUUID } from '../../utils.js';
-import { Send, ChevronDown, ChevronRight, Terminal, FileText, Search, GitBranch, Loader2 } from 'lucide-react';
+import { ArrowUp, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 
-function ToolCallBadge({ tc }: { tc: ToolCallDisplay }) {
-  const [expanded, setExpanded] = useState(false);
+function ToolBadge({ tc }: { tc: ToolCallDisplay }) {
+  const [open, setOpen] = useState(false);
 
-  const icon = () => {
-    if (tc.name.includes('file') || tc.name === 'list_directory') return <FileText size={11} />;
-    if (tc.name === 'shell' || tc.name === 'git_commit') return <Terminal size={11} />;
-    if (tc.name === 'search_files') return <Search size={11} />;
-    if (tc.name.startsWith('git')) return <GitBranch size={11} />;
-    return <Terminal size={11} />;
-  };
+  const pending = tc.pending;
+  const isErr = tc.isError;
+  const borderColor = pending ? 'rgba(245,158,11,0.4)' : isErr ? 'rgba(239,68,68,0.4)' : 'rgba(34,197,94,0.3)';
+  const bgColor = pending ? 'rgba(245,158,11,0.08)' : isErr ? 'rgba(239,68,68,0.08)' : 'rgba(34,197,94,0.06)';
+  const textColor = pending ? '#f59e0b' : isErr ? '#ef4444' : '#22c55e';
+
+  const shortInput = typeof tc.input === 'object' && tc.input !== null
+    ? Object.values(tc.input as Record<string, unknown>)[0]?.toString().slice(0, 50) ?? ''
+    : '';
 
   return (
-    <div className={`mt-1 rounded text-xs border ${tc.isError ? 'border-red-800 bg-red-950/30' : 'border-gray-700 bg-gray-900/50'}`}>
+    <div style={{
+      marginTop: 6, borderRadius: 4,
+      border: `1px solid ${borderColor}`,
+      background: bgColor,
+      fontFamily: 'monospace',
+      fontSize: '10px',
+    }}>
       <button
-        onClick={() => setExpanded(e => !e)}
-        className="flex items-center gap-1.5 px-2 py-1 w-full text-left"
+        onClick={() => setOpen(o => !o)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '6px 10px', width: '100%', textAlign: 'left',
+          background: 'none', border: 'none', cursor: 'pointer',
+          color: textColor,
+        }}
       >
-        <span className={tc.pending ? 'text-yellow-400' : tc.isError ? 'text-red-400' : 'text-green-400'}>
-          {tc.pending ? <Loader2 size={11} className="animate-spin" /> : icon()}
+        <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+          {tc.pending
+            ? <Loader2 size={9} className="animate-spin" />
+            : tc.isError ? '\u2717' : '\u2713'}
         </span>
-        <span className="font-mono text-gray-400">{tc.name}</span>
-        <span className="text-gray-600 truncate ml-1">
-          {typeof tc.input === 'object' && tc.input !== null
-            ? Object.values(tc.input as Record<string, unknown>)[0]?.toString().slice(0, 40)
-            : ''}
-        </span>
-        <span className="ml-auto text-gray-600">
-          {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+        <span style={{ color: 'var(--tx-2)', fontWeight: 500 }}>{tc.name}</span>
+        {shortInput && <span style={{ color: 'var(--tx-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{shortInput}</span>}
+        {tc.durationMs != null && !tc.pending && (
+          <span style={{ color: 'var(--tx-3)', flexShrink: 0, marginLeft: 'auto' }}>{tc.durationMs}ms</span>
+        )}
+        <span style={{ flexShrink: 0, color: 'var(--tx-3)', display: 'flex', alignItems: 'center' }}>
+          {open ? <ChevronDown size={8} /> : <ChevronRight size={8} />}
         </span>
       </button>
-      {expanded && (
-        <div className="px-2 pb-2 border-t border-gray-700/50 mt-0.5 pt-1 space-y-1">
-          <div className="text-gray-500 font-mono text-xs">{JSON.stringify(tc.input, null, 2)}</div>
-          {tc.result !== undefined && (
-            <div className={`font-mono text-xs whitespace-pre-wrap max-h-32 overflow-y-auto ${tc.isError ? 'text-red-300' : 'text-gray-300'}`}>
-              {String(tc.result).slice(0, 2000)}
-            </div>
+      {open && (
+        <div style={{ borderTop: `1px solid ${borderColor}`, padding: '8px 10px' }}>
+          <pre style={{ color: 'var(--tx-3)', fontSize: '10px', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>
+            {JSON.stringify(tc.input, null, 2)}
+          </pre>
+          {tc.result != null && (
+            <pre style={{
+              color: isErr ? '#fca5a5' : 'var(--tx-2)',
+              fontSize: '10px', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+              maxHeight: 112, overflowY: 'auto', marginTop: 6, margin: 0,
+            }}>
+              {String(tc.result).slice(0, 1500)}
+            </pre>
           )}
         </div>
       )}
@@ -48,22 +68,57 @@ function ToolCallBadge({ tc }: { tc: ToolCallDisplay }) {
   );
 }
 
-function MessageBubble({ msg }: { msg: ChatMessage }) {
-  const isUser = msg.role === 'user';
+function Message({ msg }: { msg: ChatMessage }) {
+  if (msg.role === 'user') {
+    return (
+      <div className="fade-in" style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+        <div style={{
+          maxWidth: '80%', padding: '8px 12px', borderRadius: 12,
+          fontSize: '12px', color: 'var(--tx)',
+          background: 'rgba(77,127,255,0.12)',
+          border: '1px solid rgba(77,127,255,0.2)',
+          lineHeight: 1.6,
+        }}>
+          {msg.content}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className={`mb-3 ${isUser ? 'pl-8' : 'pr-4'}`}>
-      <div className={`text-xs font-medium mb-1 ${isUser ? 'text-blue-400 text-right' : 'text-gray-500'}`}>
-        {isUser ? 'You' : 'AI'}
+    <div className="fade-in" style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <span style={{
+          width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+          background: 'var(--accent-dim)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <span style={{ color: 'var(--accent)', fontSize: '9px', fontWeight: 700 }}>A</span>
+        </span>
+        <span style={{ fontSize: '10px', color: 'var(--tx-3)', fontWeight: 500 }}>AI</span>
+        {msg.streaming && (
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '10px', color: 'var(--accent)' }}>
+            <span className="pulse-dot" style={{ width: 4, height: 4, background: 'var(--accent)', borderRadius: '50%', display: 'inline-block' }} />
+            thinking
+          </span>
+        )}
       </div>
       {msg.content && (
-        <div className={`text-sm leading-relaxed whitespace-pre-wrap ${
-          isUser ? 'text-gray-200 text-right' : 'text-gray-200'
-        }`}>
+        <div style={{ fontSize: '12px', color: 'var(--tx)', lineHeight: 1.6, paddingLeft: 24, whiteSpace: 'pre-wrap' }}>
           {msg.content}
-          {msg.streaming && <span className="inline-block w-1 h-3.5 bg-blue-400 animate-pulse ml-0.5 align-middle" />}
+          {msg.streaming && !msg.toolCalls.some((t: ToolCallDisplay) => t.pending) && (
+            <span className="cursor-blink" style={{
+              display: 'inline-block', width: 2, height: 14,
+              background: 'var(--accent)', marginLeft: 2, verticalAlign: 'middle',
+            }} />
+          )}
         </div>
       )}
-      {msg.toolCalls.map((tc, i) => <ToolCallBadge key={i} tc={tc} />)}
+      {msg.toolCalls.length > 0 && (
+        <div style={{ paddingLeft: 24, marginTop: 4 }}>
+          {msg.toolCalls.map((tc: ToolCallDisplay, i: number) => <ToolBadge key={i} tc={tc} />)}
+        </div>
+      )}
     </div>
   );
 }
@@ -77,23 +132,25 @@ export default function AIChat() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages]);
+  }, [chatMessages.length, chatMessages[chatMessages.length - 1]?.content?.length]);
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+  }, [input]);
 
   const send = () => {
     const content = input.trim();
     if (!content || !activeSession || sending) return;
-
     const id = randomUUID();
     useStore.getState().addUserMessage(id, content);
     wsClient.send({ type: 'chat', sessionId: activeSession.id, content });
     setInput('');
     setSending(true);
-
     const off = wsClient.onMessage(msg => {
-      if (msg.type === 'chat.chunk' && msg.done) {
-        setSending(false);
-        off();
-      } else if (msg.type === 'chat.error') {
+      if ((msg.type === 'chat.chunk' && msg.done) || msg.type === 'chat.error') {
         setSending(false);
         off();
       }
@@ -101,61 +158,76 @@ export default function AIChat() {
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-      e.preventDefault();
-      send();
-    }
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); send(); }
   };
 
   return (
-    <div className="flex flex-col h-full bg-editor-bg">
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-1.5 bg-editor-surface border-b border-editor-border shrink-0">
-        <span className="text-xs text-gray-500 font-medium uppercase tracking-wide">AI</span>
-        {activeSession && (
-          <span className="text-xs text-gray-600 font-mono truncate max-w-48">
-            {activeSession.branchName}
-          </span>
-        )}
-      </div>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-3 py-2">
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
         {chatMessages.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-gray-600 text-xs text-center">
-            {connected
-              ? 'Ask the AI anything. It can read files, run commands, write code, and commit changes.'
-              : 'Connecting to server...'}
+          <div className="fade-in" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+            <p style={{ fontSize: '11px', color: 'var(--tx-3)', textAlign: 'center', lineHeight: 1.6 }}>
+              {connected
+                ? activeSession
+                  ? 'Ask anything \u2014 the AI has full access to your project'
+                  : 'Opening project...'
+                : 'Connecting...'}
+            </p>
           </div>
         ) : (
-          chatMessages.map(msg => <MessageBubble key={msg.id} msg={msg} />)
+          chatMessages.map(msg => <Message key={msg.id} msg={msg} />)
         )}
         <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
-      <div className="shrink-0 border-t border-editor-border p-2">
-        <div className="flex items-end gap-2 bg-editor-surface rounded-lg border border-editor-border px-3 py-2">
+      <div style={{ flexShrink: 0, padding: '0 12px 12px' }}>
+        <div style={{
+          display: 'flex', alignItems: 'flex-end', gap: 8,
+          borderRadius: 8, padding: '8px 12px',
+          background: 'var(--surface)',
+          border: '1px solid var(--border-2)',
+        }}>
           <textarea
             ref={textareaRef}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder={activeSession ? 'Ask the AI... (⌘↵ to send)' : 'Create a session to start...'}
+            placeholder={activeSession ? 'Ask the AI...' : 'Opening project...'}
             disabled={!activeSession || sending}
             rows={1}
-            className="flex-1 bg-transparent text-sm text-gray-200 placeholder-gray-600 outline-none resize-none max-h-32 font-mono"
-            style={{ minHeight: '20px' }}
+            style={{
+              flex: 1, background: 'transparent',
+              fontSize: '12px', color: 'var(--tx)',
+              border: 'none', outline: 'none', resize: 'none',
+              fontFamily: 'Outfit, sans-serif', lineHeight: 1.6,
+              minHeight: '20px', maxHeight: '120px',
+            }}
           />
           <button
             onClick={send}
             disabled={!input.trim() || !activeSession || sending}
-            className="text-blue-400 hover:text-blue-300 disabled:text-gray-700 shrink-0 pb-0.5"
+            style={{
+              flexShrink: 0, width: 24, height: 24,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              borderRadius: 6, border: 'none', cursor: 'pointer',
+              background: input.trim() && activeSession && !sending ? 'var(--accent)' : 'var(--surface-3)',
+              transition: 'background 150ms, opacity 150ms',
+              opacity: !input.trim() || !activeSession || sending ? 0.3 : 1,
+            }}
           >
-            {sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+            {sending
+              ? <Loader2 size={12} className="animate-spin" style={{ color: 'var(--tx-2)' }} />
+              : <ArrowUp size={12} style={{ color: input.trim() ? '#fff' : 'var(--tx-3)' }} />}
           </button>
         </div>
-        <div className="text-xs text-gray-700 mt-1 px-1">⌘↵ send · AI has full access to your project</div>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between',
+          marginTop: 6, padding: '0 4px',
+          fontSize: '10px', color: 'var(--tx-3)',
+        }}>
+          <span>\u2318\u21a9 send</span>
+          {activeSession && <span style={{ fontFamily: 'monospace' }}>{activeSession.branchName}</span>}
+        </div>
       </div>
     </div>
   );
