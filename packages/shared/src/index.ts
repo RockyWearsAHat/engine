@@ -80,6 +80,7 @@ export type ClientMessage =
   | { type: 'git.status' }
   | { type: 'git.diff'; path?: string }
   | { type: 'git.log'; limit?: number }
+  | { type: 'github.issues'; projectPath: string }
   | { type: 'terminal.create'; cwd: string }
   | { type: 'terminal.input'; terminalId: string; data: string }
   | { type: 'terminal.resize'; terminalId: string; cols: number; rows: number }
@@ -100,6 +101,7 @@ export type ServerMessage =
   | { type: 'git.status'; status: GitStatus }
   | { type: 'git.diff'; path?: string; diff: string }
   | { type: 'git.log'; commits: GitCommit[] }
+  | { type: 'github.issues'; issues: GitHubIssue[]; error?: string }
   | { type: 'terminal.created'; terminalId: string; cwd: string }
   | { type: 'terminal.output'; terminalId: string; data: string }
   | { type: 'terminal.closed'; terminalId: string }
@@ -111,6 +113,18 @@ export interface GitHubUser {
   login: string;
   name: string;
   avatarUrl: string;
+}
+
+export interface GitHubIssue {
+  number: number;
+  title: string;
+  body: string;
+  htmlUrl: string;
+  state: 'open' | 'closed';
+  author: string;
+  labels: { name: string; color: string }[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface GitHubRepo {

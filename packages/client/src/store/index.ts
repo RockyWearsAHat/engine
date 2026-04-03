@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Session, Message, FileNode, GitStatus, GitHubUser, AgentSession, LiveToolCall } from '@myeditor/shared';
+import type { Session, Message, FileNode, GitStatus, GitHubUser, GitHubIssue, AgentSession, LiveToolCall } from '@myeditor/shared';
 
 export interface ToolCallDisplay {
   id: string;
@@ -70,6 +70,11 @@ interface EditorStore {
   githubUser: GitHubUser | null;
   setGithubToken: (t: string | null) => void;
   setGithubUser: (u: GitHubUser | null) => void;
+
+  // GitHub Issues
+  githubIssues: GitHubIssue[];
+  githubIssuesLoading: boolean;
+  setGithubIssues: (issues: GitHubIssue[], loading?: boolean) => void;
 
   // Agent monitor
   agentSessions: AgentSession[];
@@ -197,6 +202,10 @@ export const useStore = create<EditorStore>((set, get) => ({
   githubUser: null,
   setGithubToken: (t) => set({ githubToken: t }),
   setGithubUser: (u) => set({ githubUser: u }),
+
+  githubIssues: [],
+  githubIssuesLoading: false,
+  setGithubIssues: (issues, loading = false) => set({ githubIssues: issues, githubIssuesLoading: loading }),
 
   agentSessions: [],
   activeAgentSessionId: null,

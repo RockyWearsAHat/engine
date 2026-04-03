@@ -1,94 +1,122 @@
 import { useStore, type ToolCallDisplay } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
-import {
-  Activity, Plus, Circle, CheckCircle2, XCircle,
-  Loader2, FileText, Terminal, Search, GitBranch,
-  FolderOpen, Cpu,
-} from 'lucide-react';
-import type { AgentSession } from '@myeditor/shared';
+import { Activity, Plus, CheckCircle2, XCircle, Loader2, FileText, Terminal, Search, GitBranch, FolderOpen, ChevronDown } from 'lucide-react';
+import { useState } from 'react';
+import type { AgentSession, Session } from '@myeditor/shared';
 
-function ToolIcon({ name }: { name: string }) {
-  if (name === 'read_file' || name === 'write_file' || name === 'list_directory') return <FileText size={10} />;
-  if (name === 'shell' || name === 'git_commit') return <Terminal size={10} />;
-  if (name === 'search_files') return <Search size={10} />;
-  if (name.startsWith('git')) return <GitBranch size={10} />;
-  if (name === 'open_file') return <FolderOpen size={10} />;
-  return <Cpu size={10} />;
-}
+const TOOL_ICONS: Record<string, React.ReactNode> = {
+  read_file: <FileText size={9} />,
+  write_file: <FileText size={9} />,
+  list_directory: <FolderOpen size={9} />,
+  shell: <Terminal size={9} />,
+  search_files: <Search size={9} />,
+  git_status: <GitBranch size={9} />,
+  git_diff: <GitBranch size={9} />,
+  git_commit: <GitBranch size={9} />,
+  open_file: <FolderOpen size={9} />,
+};
 
-function ToolCallRow({ tc }: { tc: ToolCallDisplay }) {
-  const shortInput = typeof tc.input === 'object' && tc.input !== null
-    ? (Object.values(tc.input as Record<string, unknown>)[0]?.toString() ?? '').slice(0, 35)
+function ToolRow({ tc }: { tc: ToolCallDisplay }) {
+  const inputPreview = typeof tc.input === 'object' && tc.input !== null
+    ? (Object.values(tc.input as Record<string, unknown>)[0]?.toString() ?? '').slice(0, 28)
     : '';
 
   return (
-    <div className={`flex items-center gap-1.5 px-2 py-0.5 text-xs font-mono rounded mx-1 ${
-      tc.pending ? 'bg-yellow-950/30 text-yellow-300' :
-      tc.isError ? 'bg-red-950/30 text-red-300' :
-      'bg-green-950/20 text-green-300'
-    }`}>
+    <div
+      className="flex items-center gap-1.5 px-3 py-[3px] font-mono"
+      style={{ fontSize: 10, color: tc.pending ? '#e5b80b' : tc.isError ? '#f06e6e' : '#3dd68c' }}
+    >
       <span className="shrink-0">
         {tc.pending
-          ? <Loader2 size={9} className="animate-spin" />
-          : tc.isError
-          ? <XCircle size={9} />
-          : <CheckCircle2 size={9} />}
+          ? <Loader2 size={8} className="animate-spin inline" />
+          : tc.isError ? <XCircle size={8} className="inline" />
+          : <CheckCircle2 size={8} className="inline" />}
       </span>
-      <span className="text-gray-400 shrink-0"><ToolIcon name={tc.name} /></span>
-      <span className="text-gray-300 shrink-0">{tc.name}</span>
-      {shortInput && <span className="text-gray-500 truncate">{shortInput}</span>}
+      <span style={{ color: '#55555f' }}>{TOOL_ICONS[tc.name] ?? <Terminal size={9} />}</span>
+      <span style={{ color: '#9898a6' }}>{tc.name}</span>
+      {inputPreview && <span style={{ color: '#55555f' }} className="truncate">{inputPreview}</span>}
       {tc.durationMs !== undefined && !tc.pending && (
-        <span className="ml-auto text-gray-600 shrink-0">{tc.durationMs}ms</span>
+        <span className="ml-auto shrink-0" style={{ color: '#383840' }}>{tc.durationMs}ms</span>
       )}
     </div>
   );
 }
 
-function SessionCard({ session, isSelected, onClick }: {
-  session: AgentSession;
+function SessionCard({
+  session,
+  liveState,
+  isSelected,
+  onClick,
+}: {
+  session: Session;
+  liveState?: AgentSession;
   isSelected: boolean;
   onClick: () => void;
 }) {
-  const projectName = session.projectPath.split('/').pop() ?? session.projectPath;
+  const [expanded, setExpanded] = useState(true);
+  const name = session.projectPath.split('/').pop() ?? session.projectPath;
+  const isStreaming = liveState?.isStreaming ?? false;
+  const toolCalls = liveState?.recentToolCalls ?? [];
+  const activity = liveState?.currentActivity ?? '';
 
   return (
     <div
-      onClick={onClick}
-      className={`mx-2 mb-2 rounded-lg border cursor-pointer transition-colors ${
-        isSelected
-          ? 'border-blue-500/50 bg-blue-950/20'
-          : 'border-editor-border hover:border-gray-600 bg-editor-surface/50'
-      }`}
+      style={{
+        margin: '4px 8px',
+        borderRadius: 8,
+        border: isSelected
+          ? '1px solid rgba(91,141,239,0.4)'
+          : '1px solid rgba(255,255,255,0.07)',
+        background: isSelected ? 'rgba(91,141,239,0.06)' : 'rgba(255,255,255,0.02)',
+        overflow: 'hidden',
+        transition: 'border-color 120ms ease, background 120ms ease',
+      }}
     >
-      {/* Session header */}
-      <div className="flex items-center gap-2 px-3 py-2">
-        <span className={`shrink-0 ${session.isStreaming ? 'text-blue-400' : 'text-gray-600'}`}>
-          {session.isStreaming
-            ? <Loader2 size={12} className="animate-spin" />
-            : <Circle size={12} fill={session.isActive ? '#4ade80' : 'transparent'} />}
-        </span>
+      {/* Header */}
+      <div
+        onClick={onClick}
+        className="flex items-center gap-2 cursor-pointer"
+        style={{ padding: '7px 10px' }}
+      >
+        {/* Live indicator */}
+        <span
+          className={isStreaming ? 'pulse-live' : ''}
+          style={{
+            width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+            background: isStreaming ? '#5b8def' : isSelected ? '#3dd68c' : 'rgba(255,255,255,0.15)',
+          }}
+        />
+
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-medium text-gray-200 truncate">{projectName}</span>
-            <span className="text-xs text-gray-600 font-mono shrink-0">{session.branchName}</span>
+          <div className="flex items-center gap-2">
+            <span style={{ fontSize: 12, fontWeight: 500, color: '#f0f0f2' }} className="truncate">{name}</span>
+            <span style={{ fontSize: 10, color: '#383840', fontFamily: 'monospace' }} className="shrink-0">
+              {session.branchName}
+            </span>
           </div>
-          {session.isStreaming && session.currentActivity && (
-            <div className="text-xs text-blue-400 truncate mt-0.5">{session.currentActivity}</div>
-          )}
-          {!session.isStreaming && (
-            <div className="text-xs text-gray-600 truncate mt-0.5">
-              {session.messageCount} messages · {new Date(session.updatedAt).toLocaleTimeString()}
+          {isStreaming && activity ? (
+            <div style={{ fontSize: 10, color: '#5b8def', marginTop: 1 }} className="truncate">{activity}</div>
+          ) : (
+            <div style={{ fontSize: 10, color: '#383840', marginTop: 1 }}>
+              {session.messageCount} msg · {new Date(session.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </div>
           )}
         </div>
+
+        {toolCalls.length > 0 && (
+          <button
+            onClick={e => { e.stopPropagation(); setExpanded(v => !v); }}
+            style={{ color: '#383840', border: 'none', background: 'none', cursor: 'pointer', padding: 0 }}
+          >
+            <ChevronDown size={11} style={{ transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 120ms' }} />
+          </button>
+        )}
       </div>
 
-      {/* Recent tool calls */}
-      {session.recentToolCalls.length > 0 && (
-        <div className="pb-2 space-y-0.5">
-          {session.recentToolCalls.slice(-5).map((tc, i) => (
-            <ToolCallRow key={i} tc={tc as ToolCallDisplay} />
-          ))}
+      {/* Tool calls */}
+      {expanded && toolCalls.length > 0 && (
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingBottom: 4, paddingTop: 2 }}>
+          {toolCalls.slice(-6).map((tc, i) => <ToolRow key={i} tc={tc as ToolCallDisplay} />)}
         </div>
       )}
     </div>
@@ -96,70 +124,76 @@ function SessionCard({ session, isSelected, onClick }: {
 }
 
 export default function AgentPanel() {
-  const { agentSessions, activeAgentSessionId, setActiveAgentSession, activeSession, sessions } = useStore();
-
-  const newSession = () => {
-    if (activeSession) {
-      wsClient.send({ type: 'session.create', projectPath: activeSession.projectPath });
-    }
-  };
+  const { sessions, activeSession, agentSessions, activeAgentSessionId, setActiveAgentSession } = useStore();
 
   return (
-    <div className="flex flex-col h-full bg-editor-surface border-l border-editor-border">
+    <div className="flex flex-col h-full" style={{ background: '#0c0c0e' }}>
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-editor-border shrink-0">
-        <div className="flex items-center gap-1.5">
-          <Activity size={13} className="text-blue-400" />
-          <span className="text-xs font-semibold text-gray-300 uppercase tracking-wide">Agents</span>
+      <div
+        className="shrink-0 flex items-center justify-between"
+        style={{ height: 36, padding: '0 12px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}
+      >
+        <div className="flex items-center gap-2">
+          <Activity size={12} style={{ color: '#5b8def' }} />
+          <span style={{ fontSize: 11, fontWeight: 600, color: '#9898a6', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+            Agents
+          </span>
         </div>
         <button
-          onClick={newSession}
-          className="text-gray-500 hover:text-gray-300 p-0.5 rounded hover:bg-editor-hover"
+          onClick={() => {
+            if (activeSession) wsClient.send({ type: 'session.create', projectPath: activeSession.projectPath });
+          }}
           title="New session"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#383840', padding: 2, borderRadius: 4 }}
+          onMouseEnter={e => (e.currentTarget.style.color = '#9898a6')}
+          onMouseLeave={e => (e.currentTarget.style.color = '#383840')}
         >
-          <Plus size={14} />
+          <Plus size={13} />
         </button>
       </div>
 
-      {/* Session list */}
-      <div className="flex-1 overflow-y-auto py-2">
+      {/* Sessions */}
+      <div className="flex-1 overflow-y-auto" style={{ paddingTop: 4 }}>
         {sessions.length === 0 ? (
-          <div className="px-3 py-4 text-center text-xs text-gray-600">
-            <Activity size={24} className="mx-auto mb-2 opacity-30" />
-            <div>No active agents</div>
-            <div className="mt-1 text-gray-700">Start a chat to spawn an agent</div>
+          <div className="flex flex-col items-center justify-center h-full" style={{ color: '#383840', gap: 8, padding: 24 }}>
+            <Activity size={28} style={{ opacity: 0.3 }} />
+            <span style={{ fontSize: 11, textAlign: 'center', lineHeight: 1.5 }}>
+              No active agents.<br />
+              <span style={{ color: '#55555f' }}>Start a chat to spawn one.</span>
+            </span>
           </div>
         ) : (
-          sessions.map(s => {
-            const liveData = agentSessions.find(a => a.id === s.id);
-            const session: AgentSession = {
-              ...s,
-              isActive: s.id === activeSession?.id,
-              isStreaming: liveData?.isStreaming ?? false,
-              currentActivity: liveData?.currentActivity ?? '',
-              recentToolCalls: liveData?.recentToolCalls ?? [],
-            };
-            return (
-              <SessionCard
-                key={s.id}
-                session={session}
-                isSelected={s.id === activeAgentSessionId}
-                onClick={() => {
-                  setActiveAgentSession(s.id);
-                  wsClient.send({ type: 'session.load', sessionId: s.id });
-                }}
-              />
-            );
-          })
+          sessions.map(s => (
+            <SessionCard
+              key={s.id}
+              session={s}
+              liveState={agentSessions.find(a => a.id === s.id)}
+              isSelected={s.id === (activeAgentSessionId ?? activeSession?.id)}
+              onClick={() => {
+                setActiveAgentSession(s.id);
+                wsClient.send({ type: 'session.load', sessionId: s.id });
+              }}
+            />
+          ))
         )}
       </div>
 
-      {/* Footer: session count */}
-      <div className="px-3 py-1.5 border-t border-editor-border shrink-0">
-        <span className="text-xs text-gray-600">
+      {/* Footer */}
+      <div
+        className="shrink-0 flex items-center justify-between"
+        style={{ height: 24, padding: '0 12px', borderTop: '1px solid rgba(255,255,255,0.06)' }}
+      >
+        <span style={{ fontSize: 10, color: '#383840' }}>
           {sessions.length} session{sessions.length !== 1 ? 's' : ''}
         </span>
+        {sessions.some(s => agentSessions.find(a => a.id === s.id)?.isStreaming) && (
+          <span style={{ fontSize: 10, color: '#5b8def' }} className="flex items-center gap-1">
+            <span className="pulse-live inline-block w-1.5 h-1.5 rounded-full" style={{ background: '#5b8def' }} />
+            active
+          </span>
+        )}
       </div>
     </div>
   );
 }
+
