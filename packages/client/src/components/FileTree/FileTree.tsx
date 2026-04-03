@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
+import { bridge } from '../../bridge.js';
 import type { FileNode, GitHubIssue } from '@myeditor/shared';
 import {
   ChevronRight, ChevronDown, RefreshCw,
@@ -251,7 +252,7 @@ function IssuesPanel() {
       {githubIssues.map((issue: GitHubIssue) => (
         <div
           key={issue.number}
-          onClick={() => window.electronAPI?.openExternal(issue.htmlUrl)}
+          onClick={() => bridge.openExternal(issue.htmlUrl)}
           style={{
             padding: '6px 12px', borderBottom: '1px solid var(--border)',
             cursor: 'pointer', transition: 'background 150ms',
