@@ -85,7 +85,8 @@ function createWindow(projectPath: string): void {
     minWidth: 800,
     minHeight: 600,
     titleBarStyle: 'hiddenInset',
-    backgroundColor: '#0d0d0d',
+    trafficLightPosition: { x: 14, y: 10 },
+    backgroundColor: '#0c0c0e',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

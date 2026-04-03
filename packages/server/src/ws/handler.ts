@@ -129,6 +129,58 @@ export function handleConnection(ws: WebSocket, defaultProjectPath: string): voi
           break;
         }
 
+        case 'github.issues': {
+          try {
+            const git = gitOps.getGit(msg.projectPath);
+            const remotes = await git.getRemotes(true);
+            const origin = remotes.find(r => r.name === 'origin');
+            if (!origin?.refs?.fetch) {
+              send({ type: 'github.issues', issues: [], error: 'No git remote' });
+              break;
+            }
+            const remoteUrl = origin.refs.fetch;
+            const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
+            if (!match) {
+              send({ type: 'github.issues', issues: [], error: 'Not a GitHub repo' });
+              break;
+            }
+            const [, owner, repo] = match;
+            const headers: Record<string, string> = {
+              'Accept': 'application/vnd.github.v3+json',
+              'User-Agent': 'MyEditor/0.1',
+            };
+            const token = process.env['GITHUB_TOKEN'];
+            if (token) headers['Authorization'] = `token ${token}`;
+            const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues?state=open&per_page=30`, { headers });
+            if (!res.ok) {
+              send({ type: 'github.issues', issues: [], error: `GitHub API error: ${res.status}` });
+              break;
+            }
+            const data = await res.json() as Array<{
+              number: number; title: string; body: string; html_url: string;
+              state: string; user: { login: string };
+              labels: Array<{ name: string; color: string }>;
+              created_at: string; updated_at: string;
+              pull_request?: unknown;
+            }>;
+            const issues = data.filter(i => !i.pull_request).map(i => ({
+              number: i.number,
+              title: i.title,
+              body: i.body ?? '',
+              htmlUrl: i.html_url,
+              state: i.state as 'open' | 'closed',
+              author: i.user.login,
+              labels: i.labels,
+              createdAt: i.created_at,
+              updatedAt: i.updated_at,
+            }));
+            send({ type: 'github.issues', issues });
+          } catch (err) {
+            send({ type: 'github.issues', issues: [], error: String(err) });
+          }
+          break;
+        }
+
         case 'terminal.create': {
           const term = terminalManager.create(msg.cwd);
           state.terminalIds.add(term.id);
