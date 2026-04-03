@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Session, Message, FileNode, GitStatus } from '@myeditor/shared';
+import type { Session, Message, FileNode, GitStatus, GitHubUser, AgentSession, LiveToolCall } from '@myeditor/shared';
 
 export interface ToolCallDisplay {
   id: string;
@@ -8,6 +8,7 @@ export interface ToolCallDisplay {
   result?: unknown;
   isError?: boolean;
   pending: boolean;
+  durationMs?: number;
 }
 
 export interface ChatMessage {
@@ -63,6 +64,20 @@ interface EditorStore {
   // Git
   gitStatus: GitStatus | null;
   setGitStatus: (s: GitStatus | null) => void;
+
+  // GitHub
+  githubToken: string | null;
+  githubUser: GitHubUser | null;
+  setGithubToken: (t: string | null) => void;
+  setGithubUser: (u: GitHubUser | null) => void;
+
+  // Agent monitor
+  agentSessions: AgentSession[];
+  activeAgentSessionId: string | null;
+  updateAgentSession: (id: string, patch: Partial<AgentSession>) => void;
+  addLiveToolCall: (sessionId: string, tc: LiveToolCall) => void;
+  resolveLiveToolCall: (sessionId: string, toolId: string, result: unknown, isError: boolean, durationMs: number) => void;
+  setActiveAgentSession: (id: string | null) => void;
 
   // Layout
   showFileTree: boolean;
@@ -177,6 +192,40 @@ export const useStore = create<EditorStore>((set, get) => ({
 
   gitStatus: null,
   setGitStatus: (s) => set({ gitStatus: s }),
+
+  githubToken: null,
+  githubUser: null,
+  setGithubToken: (t) => set({ githubToken: t }),
+  setGithubUser: (u) => set({ githubUser: u }),
+
+  agentSessions: [],
+  activeAgentSessionId: null,
+  setActiveAgentSession: (id) => set({ activeAgentSessionId: id }),
+
+  updateAgentSession: (id, patch) => set(s => ({
+    agentSessions: s.agentSessions.map(a => a.id === id ? { ...a, ...patch } : a),
+  })),
+
+  addLiveToolCall: (sessionId, tc) => set(s => ({
+    agentSessions: s.agentSessions.map(a =>
+      a.id === sessionId
+        ? { ...a, recentToolCalls: [...a.recentToolCalls.slice(-19), tc], currentActivity: `${tc.name}...`, isStreaming: true }
+        : a
+    ),
+  })),
+
+  resolveLiveToolCall: (sessionId, toolId, result, isError, durationMs) => set(s => ({
+    agentSessions: s.agentSessions.map(a =>
+      a.id === sessionId
+        ? {
+            ...a,
+            recentToolCalls: a.recentToolCalls.map(tc =>
+              tc.id === toolId ? { ...tc, result, isError, pending: false, durationMs } : tc
+            ),
+          }
+        : a
+    ),
+  })),
 
   showFileTree: true,
   showTerminal: true,

@@ -105,3 +105,46 @@ export type ServerMessage =
   | { type: 'terminal.closed'; terminalId: string }
   | { type: 'editor.open'; path: string }
   | { type: 'error'; message: string; code?: string };
+
+// GitHub types
+export interface GitHubUser {
+  login: string;
+  name: string;
+  avatarUrl: string;
+}
+
+export interface GitHubRepo {
+  name: string;
+  fullName: string;
+  htmlUrl: string;
+  cloneUrl: string;
+  defaultBranch: string;
+  private: boolean;
+}
+
+// Agent monitor types
+export interface AgentSession {
+  id: string;
+  projectPath: string;
+  branchName: string;
+  summary: string;
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
+  // Live state (not persisted)
+  isActive: boolean;
+  isStreaming: boolean;
+  currentActivity: string;
+  recentToolCalls: LiveToolCall[];
+}
+
+export interface LiveToolCall {
+  id: string;
+  name: string;
+  input: unknown;
+  result?: unknown;
+  isError?: boolean;
+  pending: boolean;
+  startedAt: number;
+  durationMs?: number;
+}
