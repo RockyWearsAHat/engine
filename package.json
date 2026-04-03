@@ -6,7 +6,7 @@
   ],
   "scripts": {
     "dev": "concurrently -n server,client -c blue,green \"pnpm --filter @myeditor/server dev\" \"pnpm --filter @myeditor/client dev\"",
-    "dev:desktop": "concurrently -k -n server,client,electron -c blue,green,cyan \"pnpm --filter @myeditor/server dev\" \"pnpm --filter @myeditor/client dev\" \"sleep 5 && pnpm --filter @myeditor/desktop dev\"",
+    "dev:desktop": "concurrently -k -n server,client,electron -c blue,green,cyan \"pnpm --filter @myeditor/server dev\" \"pnpm --filter @myeditor/client dev\" \"sleep 3 && pnpm --filter @myeditor/desktop dev\"",
     "build": "pnpm --filter @myeditor/shared build && pnpm --filter @myeditor/server build && pnpm --filter @myeditor/client build && pnpm --filter @myeditor/desktop build",
     "typecheck": "pnpm -r typecheck",
     "install:all": "pnpm install"

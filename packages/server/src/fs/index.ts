@@ -8,6 +8,16 @@ const execFileAsync = promisify(execFile);
 
 const IGNORED = new Set(['.git', 'node_modules', 'dist', 'out', 'build', '.myeditor', '.DS_Store']);
 
+const BINARY_EXTENSIONS = new Set([
+  'pdb','exe','dll','obj','o','a','lib','so','dylib','class','jar','war',
+  'png','jpg','jpeg','gif','bmp','ico','webp','tiff','heic',
+  'mp3','mp4','wav','ogg','flac','aac','m4a','mov','avi','mkv',
+  'zip','tar','gz','bz2','7z','rar','dmg','pkg','deb','rpm',
+  'pdf','doc','docx','xls','xlsx','ppt','pptx',
+  'woff','woff2','ttf','eot','otf',
+  'db','sqlite','sqlite3',
+]);
+
 export async function readFile(filePath: string): Promise<FileContent> {
   const content = await fs.readFile(filePath, 'utf-8');
   const stats = await fs.stat(filePath);
@@ -50,6 +60,11 @@ export async function getTree(dirPath: string, depth = 0, maxDepth = 4): Promise
       .map(async entry => {
         const entryPath = path.join(dirPath, entry);
         try {
+          const stat = await fs.stat(entryPath);
+          if (!stat.isDirectory()) {
+            const ext = entry.split('.').pop()?.toLowerCase() ?? '';
+            if (BINARY_EXTENSIONS.has(ext)) return null;
+          }
           return await getTree(entryPath, depth + 1, maxDepth);
         } catch {
           return null;
