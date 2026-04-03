@@ -97,7 +97,7 @@ function createWindow(projectPath: string): void {
 
   if (isDev) {
     mainWindow.loadURL(`http://localhost:${CLIENT_PORT}`);
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
+    // mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     const clientDist = path.join(process.resourcesPath, 'client-dist', 'index.html');
     mainWindow.loadFile(clientDist);
