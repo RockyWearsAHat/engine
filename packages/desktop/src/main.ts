@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
 import fs from 'fs';
@@ -9,6 +9,7 @@ const SERVER_PORT = 3000;
 
 let mainWindow: BrowserWindow | null = null;
 let serverProcess: ChildProcess | null = null;
+let chosenProjectPath = '';
 
 function getProjectPath(): string {
   const argPath = process.argv.find((a, i) => i > 1 && !a.startsWith('--') && fs.existsSync(a));
@@ -187,6 +188,8 @@ async function main(): Promise<void> {
 
   buildMenu();
 
+  chosenProjectPath = projectPath;
+
   try {
     await startServer(projectPath);
   } catch (err) {
@@ -209,7 +212,25 @@ app.on('before-quit', () => {
   if (serverProcess) serverProcess.kill();
 });
 
-ipcMain.handle('get-project-path', () => getProjectPath());
+ipcMain.handle('get-project-path', () => chosenProjectPath || getProjectPath());
+
+const configPath = path.join(app.getPath('userData'), 'config.json');
+
+function loadConfig(): { githubToken?: string } {
+  try { return JSON.parse(fs.readFileSync(configPath, 'utf-8')); } catch { return {}; }
+}
+function saveConfig(data: { githubToken?: string }): void {
+  fs.writeFileSync(configPath, JSON.stringify(data, null, 2), 'utf-8');
+}
+
+ipcMain.handle('get-github-token', () => loadConfig().githubToken ?? null);
+ipcMain.handle('set-github-token', (_event: Electron.IpcMainInvokeEvent, token: string) => {
+  saveConfig({ ...loadConfig(), githubToken: token });
+  return true;
+});
+ipcMain.handle('open-external', (_event: Electron.IpcMainInvokeEvent, url: string) => {
+  shell.openExternal(url);
+});
 
 main().catch(err => {
   console.error('[desktop] Fatal:', err);
