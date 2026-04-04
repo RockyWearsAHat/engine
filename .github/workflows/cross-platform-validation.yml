@@ -64,9 +64,8 @@ jobs:
         working-directory: packages/server-go
         run: go test ./...
 
-      - name: Build Go sidecar
-        working-directory: packages/server-go
-        run: go build ./...
+      - name: Build Go sidecar binary
+        run: pnpm build:go
 
       - name: Check desktop crate
         run: pnpm check:desktop
