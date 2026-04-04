@@ -8,7 +8,7 @@
     "dev": "concurrently -n server,client -c blue,green \"pnpm --filter @engine/server dev\" \"pnpm --filter @engine/client dev\"",
     "dev:desktop": "concurrently -k -n server,client,electron -c blue,green,cyan \"pnpm --filter @engine/server dev\" \"pnpm --filter @engine/client dev\" \"sleep 3 && pnpm --filter @engine/desktop dev\"",
     "dev:tauri": "concurrently -k -n go,client,tauri -c blue,green,cyan \"pnpm build:go-dev\" \"pnpm --filter @engine/client dev\" \"sleep 4 && pnpm tauri:dev\"",
-    "build": "pnpm --filter @engine/shared build && pnpm --filter @engine/server build && pnpm --filter @engine/client build && pnpm --filter @engine/desktop build",
+    "build": "pnpm --filter @engine/shared build && pnpm --filter @engine/client build",
     "build:go": "cd packages/server-go && /opt/homebrew/bin/go build -ldflags='-s -w' -o engine-server .",
     "build:go-dev": "cd packages/server-go && /opt/homebrew/bin/go build -o engine-server . && PROJECT_PATH=${PROJECT_PATH:-.} PORT=3000 ./engine-server",
     "build:tauri": "pnpm --filter @engine/shared build && pnpm build:go && pnpm --filter @engine/client build && pnpm tauri:build",
