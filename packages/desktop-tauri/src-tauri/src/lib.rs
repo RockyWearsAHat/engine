@@ -1,28 +1,70 @@
+use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
-struct ServerProcess(Mutex<Option<Child>>);
+const DEFAULT_PORT: u16 = 3000;
+const STARTUP_ENTRY_PATH_ENV: &str = "ENGINE_STARTUP_ENTRY_PATH";
+#[cfg(target_os = "windows")]
+const STARTUP_REG_PATH_ENV: &str = "ENGINE_STARTUP_REG_PATH";
+#[cfg(target_os = "windows")]
+const STARTUP_REG_NAME_ENV: &str = "ENGINE_STARTUP_REG_NAME";
+const STARTUP_TEST_MODE_ENV: &str = "ENGINE_STARTUP_TEST_MODE";
 
-#[derive(Serialize, Deserialize, Default)]
+struct ServerProcess {
+    child: Mutex<Option<Child>>,
+    managed: bool,
+}
+
+struct ServerLaunch {
+    child: Option<Child>,
+    managed: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServiceStatus {
+    platform: String,
+    installed: bool,
+    running: bool,
+    startup_target: String,
+}
+
+#[derive(Serialize, Deserialize, Default, Clone)]
 struct AppConfig {
     github_token: Option<String>,
+    github_owner: Option<String>,
+    github_repo: Option<String>,
     anthropic_api_key: Option<String>,
     openai_api_key: Option<String>,
     model: Option<String>,
+    last_project_path: Option<String>,
 }
 
-fn config_path() -> PathBuf {
+enum CliAction {
+    Background,
+    InstallService,
+    UninstallService,
+    ServiceStatus,
+}
+
+fn config_root() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Engine")
-        .join("config.json")
+}
+
+fn config_path() -> PathBuf {
+    config_root().join("config.json")
 }
 
 fn read_config() -> AppConfig {
@@ -46,9 +88,236 @@ fn write_config(cfg: &AppConfig) -> bool {
     }
 }
 
-// ── LaunchAgent plist path (macOS) ────────────────────────────────────────────
+fn default_project_path() -> String {
+    if let Some(home) = dirs::home_dir() {
+        return home.to_string_lossy().to_string();
+    }
+    env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .to_string_lossy()
+        .to_string()
+}
 
-fn launchagent_plist_path() -> PathBuf {
+fn project_path_for_server(cfg: &AppConfig) -> String {
+    env::var("PROJECT_PATH")
+        .ok()
+        .filter(|path| !path.trim().is_empty())
+        .or_else(|| cfg.last_project_path.clone())
+        .unwrap_or_else(default_project_path)
+}
+
+fn logs_dir() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        return dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Library")
+            .join("Logs")
+            .join("Engine");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        return dirs::data_local_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Engine")
+            .join("logs");
+    }
+}
+
+fn server_running(port: u16) -> bool {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(300)) else {
+        return false;
+    };
+
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
+    let request = format!("GET /health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return false;
+    }
+
+    response.contains("\"status\":\"ok\"")
+}
+
+fn server_binary_names() -> [&'static str; 2] {
+    if cfg!(target_os = "windows") {
+        ["engine-server.exe", "engine-server"]
+    } else {
+        ["engine-server", "engine-server.exe"]
+    }
+}
+
+fn push_server_binary_candidates(candidates: &mut Vec<PathBuf>, base: PathBuf) {
+    for binary_name in server_binary_names() {
+        candidates.push(base.join(binary_name));
+    }
+}
+
+fn server_binary_path() -> PathBuf {
+    let mut candidates = Vec::new();
+
+    if cfg!(debug_assertions) {
+        if let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
+            let manifest_dir = PathBuf::from(manifest_dir);
+            if let Some(repo_root) = manifest_dir
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::parent)
+            {
+                push_server_binary_candidates(
+                    &mut candidates,
+                    repo_root.join("packages").join("server-go"),
+                );
+                push_server_binary_candidates(&mut candidates, repo_root.join("server-go"));
+            }
+        }
+
+        if let Ok(current_exe) = env::current_exe() {
+            for ancestor in current_exe.ancestors().skip(1).take(7) {
+                push_server_binary_candidates(
+                    &mut candidates,
+                    ancestor.join("packages").join("server-go"),
+                );
+                push_server_binary_candidates(&mut candidates, ancestor.join("server-go"));
+            }
+        }
+
+        if let Ok(current_dir) = env::current_dir() {
+            push_server_binary_candidates(
+                &mut candidates,
+                current_dir.join("packages").join("server-go"),
+            );
+            push_server_binary_candidates(&mut candidates, current_dir.join("server-go"));
+            push_server_binary_candidates(
+                &mut candidates,
+                current_dir.join("..").join("..").join("server-go"),
+            );
+        }
+    }
+
+    push_server_binary_candidates(&mut candidates, PathBuf::from("resources"));
+
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            push_server_binary_candidates(&mut candidates, parent.to_path_buf());
+            push_server_binary_candidates(&mut candidates, parent.join("resources"));
+            #[cfg(target_os = "macos")]
+            push_server_binary_candidates(&mut candidates, parent.join("../Resources"));
+        }
+    }
+
+    candidates
+        .into_iter()
+        .find(|path| path.exists())
+        .unwrap_or_else(|| PathBuf::from("resources").join(server_binary_names()[0]))
+}
+
+fn configure_server_command(cmd: &mut Command, project_path: &str, cfg: &AppConfig) {
+    cmd.env("PROJECT_PATH", project_path)
+        .env("PORT", DEFAULT_PORT.to_string());
+
+    if let Some(token) = &cfg.github_token {
+        cmd.env("GITHUB_TOKEN", token);
+    }
+    if let Some(owner) = &cfg.github_owner {
+        cmd.env("ENGINE_GITHUB_OWNER", owner);
+    }
+    if let Some(repo) = &cfg.github_repo {
+        cmd.env("ENGINE_GITHUB_REPO", repo);
+    }
+    if let Some(key) = &cfg.anthropic_api_key {
+        cmd.env("ANTHROPIC_API_KEY", key);
+    }
+    if let Some(key) = &cfg.openai_api_key {
+        cmd.env("OPENAI_API_KEY", key);
+    }
+    if let Some(model) = &cfg.model {
+        cmd.env("ENGINE_MODEL", model);
+    }
+}
+
+fn start_go_server(project_path: &str, cfg: &AppConfig) -> ServerLaunch {
+    if server_running(DEFAULT_PORT) {
+        return ServerLaunch {
+            child: None,
+            managed: false,
+        };
+    }
+
+    let server_bin = server_binary_path();
+    if !server_bin.exists() {
+        eprintln!("Engine server binary not found at {}", server_bin.display());
+        return ServerLaunch {
+            child: None,
+            managed: false,
+        };
+    }
+
+    let mut cmd = Command::new(&server_bin);
+    configure_server_command(&mut cmd, project_path, cfg);
+
+    match cmd.spawn() {
+        Ok(child) => ServerLaunch {
+            child: Some(child),
+            managed: true,
+        },
+        Err(err) => {
+            eprintln!("Failed to start Engine server: {err}");
+            ServerLaunch {
+                child: None,
+                managed: false,
+            }
+        }
+    }
+}
+
+fn run_background_service() {
+    let cfg = read_config();
+    let project_path = project_path_for_server(&cfg);
+    let ServerLaunch { child, .. } = start_go_server(&project_path, &cfg);
+    if let Some(mut managed_child) = child {
+        let _ = managed_child.wait();
+    }
+}
+
+fn cli_action() -> Option<CliAction> {
+    env::args().skip(1).find_map(|arg| match arg.as_str() {
+        "--background" => Some(CliAction::Background),
+        "--install-service" => Some(CliAction::InstallService),
+        "--uninstall-service" => Some(CliAction::UninstallService),
+        "--service-status" => Some(CliAction::ServiceStatus),
+        _ => None,
+    })
+}
+
+fn startup_test_mode() -> bool {
+    matches!(
+        env::var(STARTUP_TEST_MODE_ENV).ok().as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES")
+    )
+}
+
+fn startup_entry_override() -> Option<PathBuf> {
+    env::var(STARTUP_ENTRY_PATH_ENV)
+        .ok()
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+}
+
+#[cfg(target_os = "macos")]
+fn startup_entry_path() -> PathBuf {
+    if let Some(path) = startup_entry_override() {
+        return path;
+    }
+
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Library")
@@ -56,15 +325,266 @@ fn launchagent_plist_path() -> PathBuf {
         .join("com.engine.app.plist")
 }
 
+#[cfg(target_os = "linux")]
+fn startup_entry_path() -> PathBuf {
+    if let Some(path) = startup_entry_override() {
+        return path;
+    }
+
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("autostart")
+        .join("engine-background.desktop")
+}
+
+#[cfg(target_os = "windows")]
+fn startup_registry_path() -> String {
+    env::var(STARTUP_REG_PATH_ENV)
+        .ok()
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .unwrap_or_else(|| r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn startup_registry_name() -> String {
+    env::var(STARTUP_REG_NAME_ENV)
+        .ok()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "EngineBackground".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn startup_service_target() -> String {
+    startup_entry_path().display().to_string()
+}
+
+#[cfg(target_os = "linux")]
+fn startup_service_target() -> String {
+    startup_entry_path().display().to_string()
+}
+
+#[cfg(target_os = "windows")]
+fn startup_service_target() -> String {
+    format!(r"{}\{}", startup_registry_path(), startup_registry_name())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn startup_service_target() -> String {
+    String::from("unsupported")
+}
+
+#[cfg(target_os = "macos")]
+fn startup_service_installed() -> bool {
+    startup_entry_path().exists()
+}
+
+#[cfg(target_os = "linux")]
+fn startup_service_installed() -> bool {
+    startup_entry_path().exists()
+}
+
+#[cfg(target_os = "windows")]
+fn startup_service_installed() -> bool {
+    Command::new("reg")
+        .args([
+            "query",
+            &startup_registry_path(),
+            "/v",
+            &startup_registry_name(),
+        ])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn startup_service_installed() -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn install_startup_service(binary: &Path) -> Result<String, String> {
+    let log_dir = logs_dir();
+    fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
+
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.engine.app</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{binary}</string>
+    <string>--background</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>{stdout}</string>
+  <key>StandardErrorPath</key>
+  <string>{stderr}</string>
+</dict>
+</plist>"#,
+        binary = binary.display(),
+        stdout = log_dir.join("engine.log").display(),
+        stderr = log_dir.join("engine-error.log").display(),
+    );
+
+    let plist_path = startup_entry_path();
+    if let Some(parent) = plist_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(&plist_path, plist).map_err(|e| e.to_string())?;
+
+    if startup_test_mode() {
+        return Ok(String::from(
+            "Engine background service test entry was written for macOS.",
+        ));
+    }
+
+    let status = Command::new("launchctl")
+        .args(["load", "-w", plist_path.to_str().unwrap_or("")])
+        .status()
+        .map_err(|e| e.to_string())?;
+
+    if status.success() {
+        Ok(String::from("Engine background service will start at login on macOS."))
+    } else {
+        Err(String::from("launchctl load failed — check ~/Library/Logs/Engine/engine-error.log"))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn install_startup_service(binary: &Path) -> Result<String, String> {
+    let desktop_file = format!(
+        "[Desktop Entry]\nType=Application\nVersion=1.0\nName=Engine Background Service\nComment=Start Engine background service at login\nExec=\"{}\" --background\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n",
+        binary.display()
+    );
+
+    let autostart_path = startup_entry_path();
+    if let Some(parent) = autostart_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(&autostart_path, desktop_file).map_err(|e| e.to_string())?;
+    Ok(String::from("Engine background service will start at login on Linux."))
+}
+
+#[cfg(target_os = "windows")]
+fn install_startup_service(binary: &Path) -> Result<String, String> {
+    let command = format!("\"{}\" --background", binary.display());
+    let status = Command::new("reg")
+        .args([
+            "add",
+            &startup_registry_path(),
+            "/v",
+            &startup_registry_name(),
+            "/t",
+            "REG_SZ",
+            "/d",
+            &command,
+            "/f",
+        ])
+        .status()
+        .map_err(|e| e.to_string())?;
+
+    if status.success() {
+        Ok(String::from("Engine background service will start at login on Windows."))
+    } else {
+        Err(String::from("Failed to register Engine background service in Windows startup."))
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn install_startup_service(_binary: &Path) -> Result<String, String> {
+    Err(String::from("Startup/background service is not supported on this platform yet."))
+}
+
+#[cfg(target_os = "macos")]
+fn uninstall_startup_service() -> Result<String, String> {
+    let plist_path = startup_entry_path();
+    if !plist_path.exists() {
+        return Ok(String::from("Engine background service is not installed."));
+    }
+
+    if !startup_test_mode() {
+        let _ = Command::new("launchctl")
+            .args(["unload", "-w", plist_path.to_str().unwrap_or("")])
+            .status();
+    }
+
+    fs::remove_file(&plist_path).map_err(|e| e.to_string())?;
+    Ok(String::from("Engine background service removed from macOS login items."))
+}
+
+#[cfg(target_os = "linux")]
+fn uninstall_startup_service() -> Result<String, String> {
+    let autostart_path = startup_entry_path();
+    if !autostart_path.exists() {
+        return Ok(String::from("Engine background service is not installed."));
+    }
+
+    fs::remove_file(&autostart_path).map_err(|e| e.to_string())?;
+    Ok(String::from("Engine background service removed from Linux login startup."))
+}
+
+#[cfg(target_os = "windows")]
+fn uninstall_startup_service() -> Result<String, String> {
+    let status = Command::new("reg")
+        .args([
+            "delete",
+            &startup_registry_path(),
+            "/v",
+            &startup_registry_name(),
+            "/f",
+        ])
+        .status()
+        .map_err(|e| e.to_string())?;
+
+    if status.success() {
+        Ok(String::from("Engine background service removed from Windows startup."))
+    } else {
+        Err(String::from("Failed to remove Engine background service from Windows startup."))
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn uninstall_startup_service() -> Result<String, String> {
+    Err(String::from("Startup/background service is not supported on this platform yet."))
+}
+
+fn platform_name() -> String {
+    env::consts::OS.to_string()
+}
+
+fn service_status() -> ServiceStatus {
+    ServiceStatus {
+        platform: platform_name(),
+        installed: startup_service_installed(),
+        running: server_running(DEFAULT_PORT),
+        startup_target: startup_service_target(),
+    }
+}
+
+fn install_agent_service_cli() -> Result<String, String> {
+    let binary = env::current_exe().map_err(|e| e.to_string())?;
+    install_startup_service(&binary)
+}
+
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
 #[tauri::command]
-fn get_project_path(app: AppHandle) -> String {
-    std::env::var("PROJECT_PATH").unwrap_or_else(|_| {
-        app.path().home_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| String::from("/"))
-    })
+fn get_project_path() -> String {
+    env::var("PROJECT_PATH")
+        .ok()
+        .filter(|path| !path.trim().is_empty())
+        .unwrap_or_else(|| read_config().last_project_path.unwrap_or_default())
 }
 
 #[tauri::command]
@@ -76,6 +596,38 @@ fn get_github_token() -> Option<String> {
 fn set_github_token(token: String) -> bool {
     let mut cfg = read_config();
     cfg.github_token = if token.is_empty() { None } else { Some(token) };
+    write_config(&cfg)
+}
+
+#[tauri::command]
+fn get_github_owner() -> Option<String> {
+    read_config().github_owner
+}
+
+#[tauri::command]
+fn set_github_owner(owner: String) -> bool {
+    let mut cfg = read_config();
+    cfg.github_owner = if owner.trim().is_empty() {
+        None
+    } else {
+        Some(owner.trim().to_string())
+    };
+    write_config(&cfg)
+}
+
+#[tauri::command]
+fn get_github_repo() -> Option<String> {
+    read_config().github_repo
+}
+
+#[tauri::command]
+fn set_github_repo(repo: String) -> bool {
+    let mut cfg = read_config();
+    cfg.github_repo = if repo.trim().is_empty() {
+        None
+    } else {
+        Some(repo.trim().to_string())
+    };
     write_config(&cfg)
 }
 
@@ -117,139 +669,145 @@ fn set_model(model: String) -> bool {
 
 #[tauri::command]
 async fn open_folder_dialog(app: AppHandle) -> Option<String> {
-    app.dialog()
-        .file()
-        .blocking_pick_folder()
-        .map(|p| p.to_string())
+    let cfg = read_config();
+    let mut dialog = app.dialog().file().set_title("Open workspace");
+    if let Some(dir) = cfg
+        .last_project_path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| app.path().home_dir().ok())
+    {
+        dialog = dialog.set_directory(dir);
+    }
+
+    let folder = dialog.blocking_pick_folder().map(|path| {
+        path.as_path()
+            .map(|resolved| resolved.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string())
+    });
+
+    if let Some(path) = folder.as_ref() {
+        let mut next_cfg = read_config();
+        next_cfg.last_project_path = Some(path.clone());
+        let _ = write_config(&next_cfg);
+    }
+
+    folder
+}
+
+#[tauri::command]
+fn set_last_project_path(path: String) -> bool {
+    let mut cfg = read_config();
+    cfg.last_project_path = if path.trim().is_empty() {
+        None
+    } else {
+        Some(path)
+    };
+    write_config(&cfg)
+}
+
+#[tauri::command]
+fn window_minimize(app: AppHandle) -> Result<(), String> {
+    app.get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?
+        .minimize()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn window_toggle_maximize(app: AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+
+    if window.is_maximized().map_err(|e| e.to_string())? {
+        window.unmaximize().map_err(|e| e.to_string())
+    } else {
+        window.maximize().map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+fn window_close(app: AppHandle) -> Result<(), String> {
+    app.get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?
+        .close()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn window_start_drag(app: AppHandle) -> Result<(), String> {
+    app.get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?
+        .start_dragging()
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn open_external(url: String, app: AppHandle) -> Result<(), String> {
-    app.opener().open_url(&url, None::<&str>).map_err(|e| e.to_string())
+    app.opener()
+        .open_url(&url, None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
-// ── Agent service (macOS launchd) ─────────────────────────────────────────────
-
 #[tauri::command]
-fn install_agent_service(app: AppHandle) -> Result<String, String> {
-    let binary = std::env::current_exe()
-        .map_err(|e| e.to_string())?;
-    let home = app.path().home_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| String::from("/tmp"));
-    let log_dir = format!("{}/Library/Logs/Engine", home);
-    let _ = fs::create_dir_all(&log_dir);
-
-    let plist = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.engine.app</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>{binary}</string>
-    <string>--background</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <false/>
-  <key>StandardOutPath</key>
-  <string>{log_dir}/engine.log</string>
-  <key>StandardErrorPath</key>
-  <string>{log_dir}/engine-error.log</string>
-</dict>
-</plist>"#,
-        binary = binary.display(),
-        log_dir = log_dir,
-    );
-
-    let plist_path = launchagent_plist_path();
-    if let Some(parent) = plist_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    fs::write(&plist_path, plist).map_err(|e| e.to_string())?;
-
-    let status = Command::new("launchctl")
-        .args(["load", "-w", plist_path.to_str().unwrap_or("")])
-        .status()
-        .map_err(|e| e.to_string())?;
-
-    if status.success() {
-        Ok("Engine Agent Service installed and enabled at login.".to_string())
-    } else {
-        Err("launchctl load failed — check ~/Library/Logs/Engine/engine-error.log".to_string())
-    }
+fn install_agent_service() -> Result<String, String> {
+    let binary = env::current_exe().map_err(|e| e.to_string())?;
+    install_startup_service(&binary)
 }
 
 #[tauri::command]
 fn uninstall_agent_service() -> Result<String, String> {
-    let plist_path = launchagent_plist_path();
-    if !plist_path.exists() {
-        return Ok("Agent service is not installed.".to_string());
-    }
-
-    let _ = Command::new("launchctl")
-        .args(["unload", "-w", plist_path.to_str().unwrap_or("")])
-        .status();
-
-    fs::remove_file(&plist_path).map_err(|e| e.to_string())?;
-    Ok("Engine Agent Service removed.".to_string())
+    uninstall_startup_service()
 }
 
 #[tauri::command]
-fn agent_service_status() -> String {
-    if launchagent_plist_path().exists() {
-        "installed".to_string()
-    } else {
-        "not_installed".to_string()
-    }
-}
-
-// ── Server sidecar management ─────────────────────────────────────────────────
-
-fn start_go_server(project_path: &str, cfg: &AppConfig) -> Option<Child> {
-    let server_bin = if cfg!(debug_assertions) {
-        let workspace = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
-        PathBuf::from(&workspace)
-            .parent().unwrap_or(&PathBuf::from("."))
-            .parent().unwrap_or(&PathBuf::from("."))
-            .join("server-go")
-            .join("engine-server")
-    } else {
-        PathBuf::from("resources").join("engine-server")
-    };
-
-    let mut cmd = Command::new(&server_bin);
-    cmd.env("PROJECT_PATH", project_path)
-       .env("PORT", "3000");
-
-    if let Some(key) = &cfg.anthropic_api_key {
-        cmd.env("ANTHROPIC_API_KEY", key);
-    }
-    if let Some(key) = &cfg.openai_api_key {
-        cmd.env("OPENAI_API_KEY", key);
-    }
-    if let Some(model) = &cfg.model {
-        cmd.env("ENGINE_MODEL", model);
-    }
-
-    cmd.spawn().ok()
+fn agent_service_status() -> ServiceStatus {
+    service_status()
 }
 
 // ── App entry point ───────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let project_path = std::env::var("PROJECT_PATH")
-        .unwrap_or_else(|_| dirs::home_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| String::from("/")));
+    match cli_action() {
+        Some(CliAction::Background) => {
+            run_background_service();
+            return;
+        }
+        Some(CliAction::InstallService) => match install_agent_service_cli() {
+            Ok(message) => {
+                println!("{message}");
+                return;
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        },
+        Some(CliAction::UninstallService) => match uninstall_startup_service() {
+            Ok(message) => {
+                println!("{message}");
+                return;
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        },
+        Some(CliAction::ServiceStatus) => {
+            println!(
+                "{}",
+                serde_json::to_string(&service_status()).unwrap_or_else(|_| "{}".to_string())
+            );
+            return;
+        }
+        None => {}
+    }
 
     let cfg = read_config();
+    let project_path = project_path_for_server(&cfg);
     let server = start_go_server(&project_path, &cfg);
 
     tauri::Builder::default()
@@ -257,29 +815,43 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
-        .manage(ServerProcess(Mutex::new(server)))
+        .manage(ServerProcess {
+            child: Mutex::new(server.child),
+            managed: server.managed,
+        })
         .invoke_handler(tauri::generate_handler![
             get_project_path,
             get_github_token,
             set_github_token,
+            get_github_owner,
+            set_github_owner,
+            get_github_repo,
+            set_github_repo,
             get_anthropic_key,
             set_anthropic_key,
             get_openai_key,
             set_openai_key,
             get_model,
             set_model,
+            set_last_project_path,
             install_agent_service,
             uninstall_agent_service,
             agent_service_status,
             open_external,
             open_folder_dialog,
+            window_minimize,
+            window_toggle_maximize,
+            window_close,
+            window_start_drag,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 if let Some(state) = window.try_state::<ServerProcess>() {
-                    if let Ok(mut guard) = state.0.lock() {
-                        if let Some(mut child) = guard.take() {
-                            let _ = child.kill();
+                    if state.managed {
+                        if let Ok(mut guard) = state.child.lock() {
+                            if let Some(mut child) = guard.take() {
+                                let _ = child.kill();
+                            }
                         }
                     }
                 }

@@ -89,15 +89,15 @@ function SessionCard({
           <div style={{ fontSize: '10px', color: isStreaming && agentData?.currentActivity ? 'var(--accent)' : 'var(--tx-3)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {isStreaming && agentData?.currentActivity
               ? agentData.currentActivity
-              : `${session.messageCount}        ${new Date(session.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}msg 
+              : `${session.messageCount} msg${session.messageCount === 1 ? '' : 's'} · ${new Date(session.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
           </div>
         </div>
       </div>
 
       {toolCalls.length > 0 && (
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 4, paddingBottom: 4 }}>
-          {toolCalls.slice(-4).map((tc, i) => (
-            <ToolRow key={i} tc={tc as ToolCallDisplay} />
+          {toolCalls.slice(-4).map(tc => (
+            <ToolRow key={tc.id} tc={tc as ToolCallDisplay} />
           ))}
         </div>
       )}

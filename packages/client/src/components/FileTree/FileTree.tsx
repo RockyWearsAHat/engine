@@ -1,9 +1,9 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import type { GitStatus } from '@engine/shared';
 import { useStore } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
-import { bridge } from '../../bridge.js';
-import type { FileNode, GitHubIssue } from '@engine/shared';
+import { bridge, type BackgroundServiceStatus } from '../../bridge.js';
+import type { FileNode, GitHubIssue, SearchResult } from '@engine/shared';
 import {
   FolderOpen, Folder, RefreshCw, Plus, GitBranch,
   AlertCircle, Settings2, FileText, ChevronRight,
@@ -19,12 +19,15 @@ interface Props {
 
 export default function FileTree({ activityTab, onOpenFolder }: Props) {
   const { fileTree, activeSession, gitStatus, githubIssues, githubIssuesLoading,
-          activeFilePath, setGithubIssuesLoading } = useStore();
+          githubIssuesError, activeFilePath, setGithubIssuesLoading, setGithubIssuesError,
+          searchQuery, searchResults, searchLoading, searchError,
+          setSearchQuery, setSearchLoading, clearSearch } = useStore();
 
   useEffect(() => {
     if (!activeSession) return;
     wsClient.send({ type: 'file.tree', path: activeSession.projectPath });
     wsClient.send({ type: 'git.status' });
+    clearSearch();
   }, [activeSession?.id]);
 
   const refresh = () => {
@@ -36,7 +39,16 @@ export default function FileTree({ activityTab, onOpenFolder }: Props) {
   const loadIssues = () => {
     if (!activeSession) return;
     setGithubIssuesLoading(true);
+    setGithubIssuesError(null);
     wsClient.send({ type: 'github.issues', projectPath: activeSession.projectPath });
+  };
+
+  const runSearch = () => {
+    if (!activeSession) return;
+    const query = searchQuery.trim();
+    if (!query) return;
+    setSearchLoading(true);
+    wsClient.send({ type: 'file.search', query, root: activeSession.projectPath });
   };
 
   return (
@@ -86,12 +98,56 @@ export default function FileTree({ activityTab, onOpenFolder }: Props) {
           <div className="sidebar-header">
             <Search size={13} style={{ color: 'var(--accent-2)' }} />
             <span className="sidebar-title">Search</span>
+            <button className="sidebar-action" onClick={runSearch} disabled={!activeSession || !searchQuery.trim() || searchLoading} title="Search">
+              {searchLoading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+            </button>
           </div>
           <div className="sidebar-body">
-            <div className="empty-state" style={{ marginTop: 16 }}>
-              <Search size={28} style={{ opacity: 0.2 }} />
-              <span>File search coming soon</span>
+            <div style={{ padding: 12, borderBottom: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      runSearch();
+                    }
+                  }}
+                  placeholder={activeSession ? 'Search in files…' : 'Open a folder first…'}
+                  disabled={!activeSession}
+                  style={{
+                    flex: 1,
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--border-2)',
+                    borderRadius: 'var(--radius)',
+                    padding: '7px 9px',
+                    color: 'var(--tx)',
+                    fontSize: 12,
+                    outline: 'none',
+                  }}
+                />
+                <button
+                  className="btn-secondary"
+                  style={{ fontSize: 11, padding: '6px 10px' }}
+                  onClick={runSearch}
+                  disabled={!activeSession || !searchQuery.trim() || searchLoading}
+                >
+                  Search
+                </button>
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--tx-3)', marginTop: 6 }}>
+                Search the current workspace with ripgrep.
+              </div>
             </div>
+            <SearchPanel
+              activeSessionPath={activeSession?.projectPath ?? null}
+              results={searchResults}
+              loading={searchLoading}
+              error={searchError}
+              hasQuery={searchQuery.trim().length > 0}
+            />
           </div>
         </>
       )}
@@ -107,6 +163,7 @@ export default function FileTree({ activityTab, onOpenFolder }: Props) {
             <IssuesPanel
               issues={githubIssues}
               loading={githubIssuesLoading}
+              error={githubIssuesError}
               onLoad={loadIssues}
             />
           </div>
@@ -221,8 +278,15 @@ function GitSection({ title, files, color }: { title: string; files: string[]; c
 
 // Issues panel
 
-function IssuesPanel({ issues, loading, onLoad }: { issues: GitHubIssue[]; loading: boolean; onLoad: () => void }) {
-  if (loading) return <div className="empty-state"><Loader2 size={20} className="animate-spin" /><span>Loading </span></div>;issues
+function IssuesPanel({ issues, loading, error, onLoad }: { issues: GitHubIssue[]; loading: boolean; error: string | null; onLoad: () => void }) {
+  if (loading) return <div className="empty-state"><Loader2 size={20} className="animate-spin" /><span>Loading</span></div>;
+  if (error) return (
+    <div className="empty-state">
+      <AlertCircle size={28} style={{ opacity: 0.2 }} />
+      <span>{error}</span>
+      <button className="btn-secondary" style={{ fontSize: 11, padding: '5px 12px', marginTop: 4 }} onClick={onLoad}>Retry</button>
+    </div>
+  );
   if (issues.length === 0) return (
     <div className="empty-state">
       <AlertCircle size={28} style={{ opacity: 0.2 }} />
@@ -261,29 +325,167 @@ function IssuesPanel({ issues, loading, onLoad }: { issues: GitHubIssue[]; loadi
   );
 }
 
+function SearchPanel({
+  activeSessionPath,
+  results,
+  loading,
+  error,
+  hasQuery,
+}: {
+  activeSessionPath: string | null;
+  results: SearchResult[];
+  loading: boolean;
+  error: string | null;
+  hasQuery: boolean;
+}) {
+  if (!activeSessionPath) {
+    return (
+      <div className="empty-state" style={{ marginTop: 16 }}>
+        <Search size={28} style={{ opacity: 0.2 }} />
+        <span>Open a folder to search</span>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return <div className="empty-state"><Loader2 size={20} className="animate-spin" /><span>Searching</span></div>;
+  }
+
+  if (error) {
+    return (
+      <div className="empty-state" style={{ marginTop: 16 }}>
+        <AlertCircle size={28} style={{ opacity: 0.2 }} />
+        <span>{error}</span>
+      </div>
+    );
+  }
+
+  if (!hasQuery) {
+    return (
+      <div className="empty-state" style={{ marginTop: 16 }}>
+        <Search size={28} style={{ opacity: 0.2 }} />
+        <span>Search for text in this workspace</span>
+      </div>
+    );
+  }
+
+  if (results.length === 0) {
+    return (
+      <div className="empty-state" style={{ marginTop: 16 }}>
+        <Search size={28} style={{ opacity: 0.2 }} />
+        <span>No matches found</span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: '4px 0' }}>
+      {results.map(result => {
+        const relativePath = result.path.startsWith(activeSessionPath)
+          ? result.path.slice(activeSessionPath.length + 1)
+          : result.path;
+        return (
+          <div
+            key={`${result.path}:${result.line}:${result.column ?? 0}`}
+            onClick={() => wsClient.send({ type: 'file.read', path: result.path })}
+            style={{
+              padding: '8px 12px',
+              borderBottom: '1px solid var(--border)',
+              cursor: 'pointer',
+              transition: 'background 80ms',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface-2)')}
+            onMouseLeave={e => (e.currentTarget.style.background = '')}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+              <FileText size={12} style={{ color: 'var(--accent-2)', flexShrink: 0 }} />
+              <span style={{ fontSize: 11, color: 'var(--tx-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {relativePath}
+              </span>
+              <span style={{ fontSize: 10, color: 'var(--tx-3)', flexShrink: 0 }}>
+                {result.line}{result.column ? `:${result.column}` : ''}
+              </span>
+            </div>
+            <div style={{
+              fontSize: 11,
+              color: 'var(--tx)',
+              fontFamily: 'JetBrains Mono, monospace',
+              lineHeight: 1.5,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}>
+              {result.preview}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // Settings panel
 
 function SettingsPanel() {
-  const { githubToken: token } = useStore();
+  const { githubToken: token, setGithubToken, setGithubUser } = useStore();
 
   const [ghInput, setGhInput] = useState('');
+  const [ghOwnerInput, setGhOwnerInput] = useState('');
+  const [ghRepoInput, setGhRepoInput] = useState('');
   const [anthropicInput, setAnthropicInput] = useState('');
   const [openaiInput, setOpenaiInput] = useState('');
   const [modelInput, setModelInput] = useState('');
   const [saved, setSaved] = useState<string | null>(null);
-  const [serviceStatus, setServiceStatus] = useState<string>('');
+  const [serviceStatus, setServiceStatus] = useState<BackgroundServiceStatus | null>(null);
   const [serviceMsg, setServiceMsg] = useState('');
   const [serviceLoading, setServiceLoading] = useState(false);
 
   useEffect(() => {
+    bridge.getGithubToken().then(k => {
+      if (k) {
+        setGhInput(k);
+        setGithubToken(k);
+      }
+    });
+    bridge.getGithubRepoOwner().then(owner => { if (owner) setGhOwnerInput(owner); });
+    bridge.getGithubRepoName().then(repo => { if (repo) setGhRepoInput(repo); });
     bridge.getAnthropicKey().then(k => { if (k) setAnthropicInput(k); });
     bridge.getOpenAiKey().then(k => { if (k) setOpenaiInput(k); });
     bridge.getModel().then(m => { if (m) setModelInput(m); });
     bridge.agentServiceStatus().then(setServiceStatus);
-  }, []);
+  }, [setGithubToken]);
+
+  const pushRuntimeConfig = (overrides?: {
+    githubToken?: string | null;
+    githubOwner?: string | null;
+    githubRepo?: string | null;
+    anthropicKey?: string | null;
+    openaiKey?: string | null;
+    model?: string | null;
+  }) => {
+    const nextConfig = {
+      githubToken: overrides?.githubToken ?? (ghInput.trim() || null),
+      githubOwner: overrides?.githubOwner ?? (ghOwnerInput.trim() || null),
+      githubRepo: overrides?.githubRepo ?? (ghRepoInput.trim() || null),
+      anthropicKey: overrides?.anthropicKey ?? (anthropicInput.trim() || null),
+      openaiKey: overrides?.openaiKey ?? (openaiInput.trim() || null),
+      model: overrides?.model ?? (modelInput.trim() || null),
+    };
+
+    setGithubToken(nextConfig.githubToken);
+    wsClient.send({ type: 'config.sync', config: nextConfig });
+    if (nextConfig.githubToken) {
+      wsClient.send({ type: 'github.user' });
+    } else {
+      setGithubUser(null);
+    }
+  };
 
   const saveField = async (field: string, fn: () => Promise<boolean>) => {
-    await fn();
+    const ok = await fn();
+    if (!ok) {
+      return;
+    }
     setSaved(field);
     setTimeout(() => setSaved(null), 2000);
   };
@@ -334,10 +536,78 @@ function SettingsPanel() {
         <button
           className="btn-primary"
           style={{ marginTop: 6, fontSize: 11, padding: '4px 12px', display: 'flex', alignItems: 'center', gap: 4 }}
-          onClick={() => saveField('gh', () => bridge.setGithubToken(ghInput))}
+          onClick={() => saveField('gh', async () => {
+            const nextToken = ghInput.trim() || '';
+            const ok = await bridge.setGithubToken(nextToken);
+            if (ok) {
+              pushRuntimeConfig({ githubToken: nextToken || null });
+            }
+            return ok;
+          })}
         >
           {saved === 'gh' ? <><Check size={11} /> Saved</> : 'Save'}
         </button>
+      </div>
+
+      <div>
+        <span style={labelStyle}>GitHub Repository Override</span>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          <div>
+            <input
+              type="text"
+              placeholder="owner"
+              value={ghOwnerInput}
+              onChange={e => setGhOwnerInput(e.target.value)}
+              style={inputStyle}
+              onFocus={e => (e.target.style.borderColor = 'var(--accent)')}
+              onBlur={e => (e.target.style.borderColor = 'var(--border-2)')}
+            />
+          </div>
+          <div>
+            <input
+              type="text"
+              placeholder="repository"
+              value={ghRepoInput}
+              onChange={e => setGhRepoInput(e.target.value)}
+              style={inputStyle}
+              onFocus={e => (e.target.style.borderColor = 'var(--accent)')}
+              onBlur={e => (e.target.style.borderColor = 'var(--border-2)')}
+            />
+          </div>
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--tx-3)', marginTop: 4, lineHeight: 1.5 }}>
+          Used when the workspace has no GitHub remote or you want Issues to target a different repo.
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+          <button
+            className="btn-primary"
+            style={{ fontSize: 11, padding: '4px 12px', display: 'flex', alignItems: 'center', gap: 4 }}
+            onClick={() => saveField('gh-owner', async () => {
+              const nextOwner = ghOwnerInput.trim() || '';
+              const ok = await bridge.setGithubRepoOwner(nextOwner);
+              if (ok) {
+                pushRuntimeConfig({ githubOwner: nextOwner || null });
+              }
+              return ok;
+            })}
+          >
+            {saved === 'gh-owner' ? <><Check size={11} /> Owner saved</> : 'Save owner'}
+          </button>
+          <button
+            className="btn-primary"
+            style={{ fontSize: 11, padding: '4px 12px', display: 'flex', alignItems: 'center', gap: 4 }}
+            onClick={() => saveField('gh-repo', async () => {
+              const nextRepo = ghRepoInput.trim() || '';
+              const ok = await bridge.setGithubRepoName(nextRepo);
+              if (ok) {
+                pushRuntimeConfig({ githubRepo: nextRepo || null });
+              }
+              return ok;
+            })}
+          >
+            {saved === 'gh-repo' ? <><Check size={11} /> Repo saved</> : 'Save repo'}
+          </button>
+        </div>
       </div>
 
       {/* Anthropic API Key */}
@@ -355,7 +625,14 @@ function SettingsPanel() {
         <button
           className="btn-primary"
           style={{ marginTop: 6, fontSize: 11, padding: '4px 12px', display: 'flex', alignItems: 'center', gap: 4 }}
-          onClick={() => saveField('anthropic', () => bridge.setAnthropicKey(anthropicInput))}
+          onClick={() => saveField('anthropic', async () => {
+            const nextKey = anthropicInput.trim() || '';
+            const ok = await bridge.setAnthropicKey(nextKey);
+            if (ok) {
+              pushRuntimeConfig({ anthropicKey: nextKey || null });
+            }
+            return ok;
+          })}
         >
           {saved === 'anthropic' ? <><Check size={11} /> Saved</> : 'Save'}
         </button>
@@ -376,7 +653,14 @@ function SettingsPanel() {
         <button
           className="btn-primary"
           style={{ marginTop: 6, fontSize: 11, padding: '4px 12px', display: 'flex', alignItems: 'center', gap: 4 }}
-          onClick={() => saveField('openai', () => bridge.setOpenAiKey(openaiInput))}
+          onClick={() => saveField('openai', async () => {
+            const nextKey = openaiInput.trim() || '';
+            const ok = await bridge.setOpenAiKey(nextKey);
+            if (ok) {
+              pushRuntimeConfig({ openaiKey: nextKey || null });
+            }
+            return ok;
+          })}
         >
           {saved === 'openai' ? <><Check size={11} /> Saved</> : 'Save'}
         </button>
@@ -400,7 +684,14 @@ function SettingsPanel() {
         <button
           className="btn-primary"
           style={{ marginTop: 6, fontSize: 11, padding: '4px 12px', display: 'flex', alignItems: 'center', gap: 4 }}
-          onClick={() => saveField('model', () => bridge.setModel(modelInput))}
+          onClick={() => saveField('model', async () => {
+            const nextModel = modelInput.trim() || '';
+            const ok = await bridge.setModel(nextModel);
+            if (ok) {
+              pushRuntimeConfig({ model: nextModel || null });
+            }
+            return ok;
+          })}
         >
           {saved === 'model' ? <><Check size={11} /> Saved</> : 'Save'}
         </button>
@@ -408,20 +699,27 @@ function SettingsPanel() {
 
       {/* Agent Service */}
       <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
-        <span style={labelStyle}>Agent Service</span>
+        <span style={labelStyle}>Background Service</span>
         <div style={{ fontSize: 11, color: 'var(--tx-3)', marginBottom: 8, lineHeight: 1.5 }}>
-          Run Engine as a background service that starts at login.
+          Start Engine automatically at login without opening the full window.
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
           <span style={{
             width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-            background: serviceStatus === 'installed' ? 'var(--green)' : 'var(--tx-3)',
+            background: serviceStatus?.installed ? 'var(--green)' : 'var(--tx-3)',
           }} />
           <span style={{ fontSize: 11, color: 'var(--tx-2)' }}>
-            {serviceStatus === 'installed' ? 'Installed' : 'Not installed'}
+            {serviceStatus?.installed ? 'Installed at login' : 'Not installed'}
           </span>
         </div>
-        {serviceStatus !== 'installed' ? (
+        {serviceStatus && (
+          <div style={{ fontSize: 10, color: 'var(--tx-3)', marginBottom: 8, lineHeight: 1.5 }}>
+            <div>Platform: {serviceStatus.platform}</div>
+            <div>Server: {serviceStatus.running ? 'running' : 'stopped'}</div>
+            <div style={{ wordBreak: 'break-all' }}>Startup target: {serviceStatus.startupTarget}</div>
+          </div>
+        )}
+        {!serviceStatus?.installed ? (
           <button
             className="btn-primary"
             style={{ fontSize: 11, padding: '5px 12px', display: 'flex', alignItems: 'center', gap: 5, width: '100%', justifyContent: 'center' }}

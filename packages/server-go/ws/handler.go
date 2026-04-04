@@ -10,12 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/engine/server/ai"
 	"github.com/engine/server/db"
 	gofs "github.com/engine/server/fs"
 	gogit "github.com/engine/server/git"
 	"github.com/engine/server/terminal"
+	"github.com/gorilla/websocket"
 )
 
 var upgrader = websocket.Upgrader{
@@ -59,6 +59,15 @@ type conn struct {
 	openTabs []ai.TabInfo
 
 	writeMu sync.Mutex
+}
+
+type runtimeConfig struct {
+	GitHubToken  *string `json:"githubToken"`
+	GitHubOwner  *string `json:"githubOwner"`
+	GitHubRepo   *string `json:"githubRepo"`
+	AnthropicKey *string `json:"anthropicKey"`
+	OpenAIKey    *string `json:"openaiKey"`
+	Model        *string `json:"model"`
 }
 
 func newConn(ws *websocket.Conn, projectPath string) *conn {
@@ -275,6 +284,32 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		}
 		c.send(map[string]interface{}{"type": "file.tree", "tree": tree})
 
+	case "file.search":
+		var msg struct {
+			Query    string `json:"query"`
+			Root     string `json:"root"`
+			FileGlob string `json:"fileGlob"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.send(map[string]interface{}{"type": "search.results", "query": "", "results": []gofs.SearchResult{}, "error": "Bad payload"})
+			return
+		}
+		query := strings.TrimSpace(msg.Query)
+		if query == "" {
+			c.send(map[string]interface{}{"type": "search.results", "query": msg.Query, "results": []gofs.SearchResult{}, "error": "Query required"})
+			return
+		}
+		root := msg.Root
+		if root == "" {
+			root = projectPath
+		}
+		results, err := gofs.SearchMatches(query, root, msg.FileGlob)
+		if err != nil {
+			c.send(map[string]interface{}{"type": "search.results", "query": query, "results": []gofs.SearchResult{}, "error": err.Error()})
+			return
+		}
+		c.send(map[string]interface{}{"type": "search.results", "query": query, "results": results})
+
 	// ── Git ───────────────────────────────────────────────────────────────────
 
 	case "git.status":
@@ -300,7 +335,20 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		commits, _ := gogit.GetLog(projectPath, msg.Limit)
 		c.send(map[string]interface{}{"type": "git.log", "commits": commits})
 
+	case "config.sync":
+		var msg struct {
+			Config runtimeConfig `json:"config"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.sendErr("Bad payload", "BAD_PAYLOAD")
+			return
+		}
+		applyRuntimeConfig(msg.Config)
+
 	// ── GitHub Issues ─────────────────────────────────────────────────────────
+
+	case "github.user":
+		c.handleGitHubUser()
 
 	case "github.issues":
 		var msg struct{ ProjectPath string `json:"projectPath"` }
@@ -317,7 +365,11 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		var msg struct{ Cwd string `json:"cwd"` }
 		json.Unmarshal(raw, &msg) //nolint:errcheck
 		id := newID()
-		_, err := c.termMgr.Create(id, msg.Cwd,
+		cwd := msg.Cwd
+		if cwd == "" {
+			cwd = projectPath
+		}
+		_, err := c.termMgr.Create(id, cwd,
 			func(data string) {
 				c.send(map[string]interface{}{"type": "terminal.output", "terminalId": id, "data": data})
 			},
@@ -331,7 +383,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			return
 		}
 		c.termIDs[id] = true
-		c.send(map[string]interface{}{"type": "terminal.created", "terminalId": id, "cwd": msg.Cwd})
+		c.send(map[string]interface{}{"type": "terminal.created", "terminalId": id, "cwd": cwd})
 
 	case "terminal.input":
 		var msg struct {
@@ -374,30 +426,22 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 }
 
 func (c *conn) handleGitHubIssues(projectPath string) {
-	remoteURL, err := gogit.GetRemoteOrigin(projectPath)
-	if err != nil || remoteURL == "" {
-		c.send(map[string]interface{}{"type": "github.issues", "issues": []interface{}{}, "error": "No git remote"})
+	owner, repo, overrideConfigured := githubRepoOverride()
+	switch {
+	case overrideConfigured && (owner == "" || repo == ""):
+		c.send(map[string]interface{}{"type": "github.issues", "issues": []interface{}{}, "error": "GitHub owner and repository must both be set in Settings."})
 		return
-	}
-
-	// Extract owner/repo from remote URL (HTTPS or SSH)
-	remoteURL = strings.TrimSuffix(remoteURL, ".git")
-	var owner, repo string
-	if idx := strings.Index(remoteURL, "github.com/"); idx != -1 {
-		parts := strings.SplitN(remoteURL[idx+11:], "/", 2)
-		if len(parts) == 2 {
-			owner, repo = parts[0], parts[1]
+	case !overrideConfigured:
+		resolvedOwner, resolvedRepo, err := gogit.ResolveGitHubRepo(projectPath)
+		if err != nil {
+			c.send(map[string]interface{}{
+				"type":   "github.issues",
+				"issues": []interface{}{},
+				"error":  "No GitHub remote or configured repository. Add a GitHub remote or set GitHub owner/repository in Settings.",
+			})
+			return
 		}
-	} else if idx := strings.Index(remoteURL, "github.com:"); idx != -1 {
-		parts := strings.SplitN(remoteURL[idx+11:], "/", 2)
-		if len(parts) == 2 {
-			owner, repo = parts[0], parts[1]
-		}
-	}
-
-	if owner == "" || repo == "" {
-		c.send(map[string]interface{}{"type": "github.issues", "issues": []interface{}{}, "error": "Not a GitHub repo"})
-		return
+		owner, repo = resolvedOwner, resolvedRepo
 	}
 
 	issues, err := fetchGitHubIssues(owner, repo)
@@ -406,6 +450,15 @@ func (c *conn) handleGitHubIssues(projectPath string) {
 		return
 	}
 	c.send(map[string]interface{}{"type": "github.issues", "issues": issues})
+}
+
+func (c *conn) handleGitHubUser() {
+	user, err := fetchGitHubUser()
+	if err != nil {
+		c.send(map[string]interface{}{"type": "github.user", "user": nil, "error": err.Error()})
+		return
+	}
+	c.send(map[string]interface{}{"type": "github.user", "user": user})
 }
 
 type githubIssue struct {
@@ -421,6 +474,66 @@ type githubIssue struct {
 	} `json:"labels"`
 	CreatedAt string `json:"createdAt"`
 	UpdatedAt string `json:"updatedAt"`
+}
+
+type githubUser struct {
+	Login     string `json:"login"`
+	Name      string `json:"name"`
+	AvatarURL string `json:"avatarUrl"`
+}
+
+func applyRuntimeConfig(cfg runtimeConfig) {
+	setRuntimeEnv("GITHUB_TOKEN", cfg.GitHubToken)
+	setRuntimeEnv("ENGINE_GITHUB_OWNER", cfg.GitHubOwner)
+	setRuntimeEnv("ENGINE_GITHUB_REPO", cfg.GitHubRepo)
+	setRuntimeEnv("ANTHROPIC_API_KEY", cfg.AnthropicKey)
+	setRuntimeEnv("OPENAI_API_KEY", cfg.OpenAIKey)
+	setRuntimeEnv("ENGINE_MODEL", cfg.Model)
+}
+
+func setRuntimeEnv(key string, value *string) {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		os.Unsetenv(key) //nolint:errcheck
+		return
+	}
+	os.Setenv(key, strings.TrimSpace(*value)) //nolint:errcheck
+}
+
+func fetchGitHubUser() (*githubUser, error) {
+	token := githubToken()
+	if token == "" {
+		return nil, fmt.Errorf("GitHub token not configured")
+	}
+
+	req, _ := http.NewRequest("GET", "https://api.github.com/user", nil)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	req.Header.Set("User-Agent", "Engine/0.1")
+	req.Header.Set("Authorization", "token "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("GitHub API error: %d", resp.StatusCode)
+	}
+
+	var raw struct {
+		Login     string `json:"login"`
+		Name      string `json:"name"`
+		AvatarURL string `json:"avatar_url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, err
+	}
+
+	return &githubUser{
+		Login:     raw.Login,
+		Name:      raw.Name,
+		AvatarURL: raw.AvatarURL,
+	}, nil
 }
 
 func fetchGitHubIssues(owner, repo string) ([]githubIssue, error) {
@@ -492,4 +605,10 @@ func newID() string {
 
 func githubToken() string {
 	return os.Getenv("GITHUB_TOKEN")
+}
+
+func githubRepoOverride() (string, string, bool) {
+	owner := strings.TrimSpace(os.Getenv("ENGINE_GITHUB_OWNER"))
+	repo := strings.TrimSpace(os.Getenv("ENGINE_GITHUB_REPO"))
+	return owner, repo, owner != "" || repo != ""
 }

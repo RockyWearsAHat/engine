@@ -10,10 +10,20 @@ import (
 	"github.com/engine/server/ws"
 )
 
+func defaultProjectPath() string {
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		return cwd
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
+	}
+	return "."
+}
+
 func main() {
 	projectPath := os.Getenv("PROJECT_PATH")
 	if projectPath == "" {
-		log.Fatal("PROJECT_PATH environment variable is required")
+		projectPath = defaultProjectPath()
 	}
 
 	port := os.Getenv("PORT")
