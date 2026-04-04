@@ -1,234 +1,264 @@
-import { useRef, useEffect, useState, type KeyboardEvent } from 'react';
-import { useStore, type ChatMessage, type ToolCallDisplay } from '../../store/index.js';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { useStore } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
 import { randomUUID } from '../../utils.js';
-import { ArrowUp, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
-
-function ToolBadge({ tc }: { tc: ToolCallDisplay }) {
-  const [open, setOpen] = useState(false);
-
-  const pending = tc.pending;
-  const isErr = tc.isError;
-  const borderColor = pending ? 'rgba(245,158,11,0.4)' : isErr ? 'rgba(239,68,68,0.4)' : 'rgba(34,197,94,0.3)';
-  const bgColor = pending ? 'rgba(245,158,11,0.08)' : isErr ? 'rgba(239,68,68,0.08)' : 'rgba(34,197,94,0.06)';
-  const textColor = pending ? '#f59e0b' : isErr ? '#ef4444' : '#22c55e';
-
-  const shortInput = typeof tc.input === 'object' && tc.input !== null
-    ? Object.values(tc.input as Record<string, unknown>)[0]?.toString().slice(0, 50) ?? ''
-    : '';
-
-  return (
-    <div style={{
-      marginTop: 6, borderRadius: 4,
-      border: `1px solid ${borderColor}`,
-      background: bgColor,
-      fontFamily: 'monospace',
-      fontSize: '10px',
-    }}>
-      <button
-        onClick={() => setOpen(o => !o)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 8,
-          padding: '6px 10px', width: '100%', textAlign: 'left',
-          background: 'none', border: 'none', cursor: 'pointer',
-          color: textColor,
-        }}
-      >
-        <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
-          {tc.pending
-            ? <Loader2 size={9} className="animate-spin" />
-            : tc.isError ? '\u2717' : '\u2713'}
-        </span>
-        <span style={{ color: 'var(--tx-2)', fontWeight: 500 }}>{tc.name}</span>
-        {shortInput && <span style={{ color: 'var(--tx-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{shortInput}</span>}
-        {tc.durationMs != null && !tc.pending && (
-          <span style={{ color: 'var(--tx-3)', flexShrink: 0, marginLeft: 'auto' }}>{tc.durationMs}ms</span>
-        )}
-        <span style={{ flexShrink: 0, color: 'var(--tx-3)', display: 'flex', alignItems: 'center' }}>
-          {open ? <ChevronDown size={8} /> : <ChevronRight size={8} />}
-        </span>
-      </button>
-      {open && (
-        <div style={{ borderTop: `1px solid ${borderColor}`, padding: '8px 10px' }}>
-          <pre style={{ color: 'var(--tx-3)', fontSize: '10px', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>
-            {JSON.stringify(tc.input, null, 2)}
-          </pre>
-          {tc.result != null && (
-            <pre style={{
-              color: isErr ? '#fca5a5' : 'var(--tx-2)',
-              fontSize: '10px', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-              maxHeight: 112, overflowY: 'auto', marginTop: 6, margin: 0,
-            }}>
-              {String(tc.result).slice(0, 1500)}
-            </pre>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Message({ msg }: { msg: ChatMessage }) {
-  if (msg.role === 'user') {
-    return (
-      <div className="fade-in" style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
-        <div style={{
-          maxWidth: '80%', padding: '8px 12px', borderRadius: 12,
-          fontSize: '12px', color: 'var(--tx)',
-          background: 'rgba(77,127,255,0.12)',
-          border: '1px solid rgba(77,127,255,0.2)',
-          lineHeight: 1.6,
-        }}>
-          {msg.content}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="fade-in" style={{ marginBottom: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-        <span style={{
-          width: 16, height: 16, borderRadius: 4, flexShrink: 0,
-          background: 'var(--accent-dim)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <span style={{ color: 'var(--accent)', fontSize: '9px', fontWeight: 700 }}>A</span>
-        </span>
-        <span style={{ fontSize: '10px', color: 'var(--tx-3)', fontWeight: 500 }}>AI</span>
-        {msg.streaming && (
-          <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '10px', color: 'var(--accent)' }}>
-            <span className="pulse-dot" style={{ width: 4, height: 4, background: 'var(--accent)', borderRadius: '50%', display: 'inline-block' }} />
-            thinking
-          </span>
-        )}
-      </div>
-      {msg.content && (
-        <div style={{ fontSize: '12px', color: 'var(--tx)', lineHeight: 1.6, paddingLeft: 24, whiteSpace: 'pre-wrap' }}>
-          {msg.content}
-          {msg.streaming && !msg.toolCalls.some((t: ToolCallDisplay) => t.pending) && (
-            <span className="cursor-blink" style={{
-              display: 'inline-block', width: 2, height: 14,
-              background: 'var(--accent)', marginLeft: 2, verticalAlign: 'middle',
-            }} />
-          )}
-        </div>
-      )}
-      {msg.toolCalls.length > 0 && (
-        <div style={{ paddingLeft: 24, marginTop: 4 }}>
-          {msg.toolCalls.map((tc: ToolCallDisplay, i: number) => <ToolBadge key={i} tc={tc} />)}
-        </div>
-      )}
-    </div>
-  );
-}
+import { ArrowUp, ChevronDown, ChevronRight, Loader2, Check, X, Wrench } from 'lucide-react';
 
 export default function AIChat() {
-  const { chatMessages, activeSession, connected } = useStore();
+  const { activeSession, chatMessages, addUserMessage, streamingMessageId } = useStore();
   const [input, setInput] = useState('');
-  const [sending, setSending] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages.length, chatMessages[chatMessages.length - 1]?.content?.length]);
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
 
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
-  }, [input]);
-
-  const send = () => {
+  const send = useCallback(() => {
     const content = input.trim();
-    if (!content || !activeSession || sending) return;
-    const id = randomUUID();
-    useStore.getState().addUserMessage(id, content);
+    if (!content || !activeSession) return;
+    const msgId = randomUUID();
+    addUserMessage(msgId, content);
     wsClient.send({ type: 'chat', sessionId: activeSession.id, content });
     setInput('');
-    setSending(true);
-    const off = wsClient.onMessage(msg => {
-      if ((msg.type === 'chat.chunk' && msg.done) || msg.type === 'chat.error') {
-        setSending(false);
-        off();
-      }
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
+  }, [input, activeSession, addUserMessage]);
+
+  const handleKey = (e: React.KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      send();
+    }
+  };
+
+  const adjustHeight = (el: HTMLTextAreaElement) => {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+  };
+
+  const toggleTool = (id: string) => {
+    setExpandedTools(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
     });
   };
 
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); send(); }
-  };
+  const noSession = !activeSession;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)' }}>
-      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px' }}>
-        {chatMessages.length === 0 ? (
-          <div className="fade-in" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-            <p style={{ fontSize: '11px', color: 'var(--tx-3)', textAlign: 'center', lineHeight: 1.6 }}>
-              {connected
-                ? activeSession
-                  ? 'Ask anything \u2014 the AI has full access to your project'
-                  : 'Opening project...'
-                : 'Connecting...'}
-            </p>
+    <div className="chat-container">
+      {activeSession && (
+        <div style={{
+          padding: '6px 12px', borderBottom: '1px solid var(--border)',
+          fontSize: 11, color: 'var(--tx-3)', display: 'flex', alignItems: 'center', gap: 5,
+        }}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {activeSession.projectPath.split('/').pop()}
+          </span>
+          {activeSession.branchName && (
+            <>
+              <span>{'·'}</span>
+              <span style={{ color: 'var(--accent-2)', fontWeight: 500 }}>{activeSession.branchName}</span>
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="chat-messages">
+        {chatMessages.length === 0 && (
+          <div className="empty-state" style={{ paddingTop: 32 }}>
+            <div style={{
+              width: 40, height: 40, borderRadius: '50%',
+              background: 'linear-gradient(135deg, var(--accent), var(--purple))',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 18, fontWeight: 800, color: 'white', marginBottom: 8,
+            }}>A</div>
+            <span style={{ color: 'var(--tx-2)', fontWeight: 500 }}>
+              {noSession ? 'Open a folder to start' : 'How can I help?'}
+            </span>
+            {!noSession && (
+              <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>{'⌘↵ to send'}</span>
+            )}
           </div>
-        ) : (
-          chatMessages.map(msg => <Message key={msg.id} msg={msg} />)
         )}
-        <div ref={bottomRef} />
+
+        {chatMessages.map(msg => (
+          <div key={msg.id} className={'chat-msg chat-msg-' + msg.role}>
+            {msg.role === 'user' ? (
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <div className="chat-bubble">{msg.content}</div>
+              </div>
+            ) : (
+              <div className="chat-msg-assistant-row">
+                <div className="chat-avatar">A</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {msg.toolCalls?.map(tc => (
+                    <ToolBadge
+                      key={tc.id}
+                      toolCall={tc}
+                      expanded={expandedTools.has(tc.id)}
+                      onToggle={() => toggleTool(tc.id)}
+                    />
+                  ))}
+                  {msg.content && (
+                    <div className="chat-bubble">
+                      <MarkdownText text={msg.content} />
+                    </div>
+                  )}
+                  {msg.id === streamingMessageId && !msg.content && (
+                    <div style={{ padding: '6px 0', display: 'flex', gap: 3 }}>
+                      {[0, 1, 2].map(i => (
+                        <span key={i} style={{
+                          width: 5, height: 5, borderRadius: '50%',
+                          background: 'var(--accent-2)',
+                          animation: 'pulse-dot 1.2s ease-in-out ' + (i * 0.2) + 's infinite',
+                          display: 'inline-block',
+                        }} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+        <div ref={messagesEndRef} />
       </div>
 
-      <div style={{ flexShrink: 0, padding: '0 12px 12px' }}>
-        <div style={{
-          display: 'flex', alignItems: 'flex-end', gap: 8,
-          borderRadius: 8, padding: '8px 12px',
-          background: 'var(--surface)',
-          border: '1px solid var(--border-2)',
-        }}>
+      <div className="chat-input-area">
+        <div className="chat-input-wrap">
           <textarea
             ref={textareaRef}
+            className="chat-input"
+            placeholder={noSession ? 'Open a folder first\u2026' : 'Ask anything\u2026 (\u2318\u21b5 to send)'}
             value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder={activeSession ? 'Ask the AI...' : 'Opening project...'}
-            disabled={!activeSession || sending}
-            rows={1}
-            style={{
-              flex: 1, background: 'transparent',
-              fontSize: '12px', color: 'var(--tx)',
-              border: 'none', outline: 'none', resize: 'none',
-              fontFamily: 'Outfit, sans-serif', lineHeight: 1.6,
-              minHeight: '20px', maxHeight: '120px',
+            disabled={noSession}
+            onChange={e => {
+              setInput(e.target.value);
+              adjustHeight(e.target);
             }}
+            onKeyDown={handleKey}
+            rows={1}
           />
           <button
+            className="chat-send-btn"
             onClick={send}
-            disabled={!input.trim() || !activeSession || sending}
-            style={{
-              flexShrink: 0, width: 24, height: 24,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              borderRadius: 6, border: 'none', cursor: 'pointer',
-              background: input.trim() && activeSession && !sending ? 'var(--accent)' : 'var(--surface-3)',
-              transition: 'background 150ms, opacity 150ms',
-              opacity: !input.trim() || !activeSession || sending ? 0.3 : 1,
-            }}
+            disabled={!input.trim() || noSession}
+            title="Send"
           >
-            {sending
-              ? <Loader2 size={12} className="animate-spin" style={{ color: 'var(--tx-2)' }} />
-              : <ArrowUp size={12} style={{ color: input.trim() ? '#fff' : 'var(--tx-3)' }} />}
+            {streamingMessageId
+              ? <Loader2 size={14} className="animate-spin" />
+              : <ArrowUp size={14} />}
           </button>
-        </div>
-        <div style={{
-          display: 'flex', justifyContent: 'space-between',
-          marginTop: 6, padding: '0 4px',
-          fontSize: '10px', color: 'var(--tx-3)',
-        }}>
-          <span>\u2318\u21a9 send</span>
-          {activeSession && <span style={{ fontFamily: 'monospace' }}>{activeSession.branchName}</span>}
         </div>
       </div>
     </div>
+  );
+}
+
+function ToolBadge({ toolCall, expanded, onToggle }: {
+  toolCall: { id: string; name: string; input: unknown; result?: unknown; isError?: boolean; pending: boolean; durationMs?: number };
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const state = toolCall.pending ? 'pending' : toolCall.isError ? 'error' : 'success';
+  return (
+    <div style={{ marginBottom: 4 }}>
+      <div className={'tool-badge ' + state} onClick={onToggle} style={{ cursor: 'pointer', userSelect: 'none' }}>
+        {state === 'pending' && <Loader2 size={11} className="animate-spin" />}
+        {state === 'success' && <Check size={11} />}
+        {state === 'error'   && <X size={11} />}
+        <Wrench size={10} style={{ opacity: 0.6 }} />
+        <span className="tool-badge-name">{toolCall.name}</span>
+        {toolCall.durationMs !== undefined && (
+          <span style={{ opacity: 0.5, fontSize: 10 }}>{toolCall.durationMs}ms</span>
+        )}
+        {expanded
+          ? <ChevronDown size={10} style={{ marginLeft: 'auto' }} />
+          : <ChevronRight size={10} style={{ marginLeft: 'auto' }} />}
+      </div>
+      {expanded && (
+        <div style={{
+          background: 'var(--surface-2)', borderRadius: '0 0 var(--radius) var(--radius)',
+          border: '1px solid var(--border)', borderTop: 'none',
+          padding: '6px 8px', fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
+          color: 'var(--tx-2)', overflow: 'auto', maxHeight: 160, lineHeight: 1.5,
+        }}>
+          <div style={{ opacity: 0.5, fontSize: 10, marginBottom: 3 }}>INPUT</div>
+          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+            {JSON.stringify(toolCall.input, null, 2)}
+          </pre>
+          {toolCall.result !== undefined && (
+            <>
+              <div style={{ opacity: 0.5, fontSize: 10, marginTop: 6, marginBottom: 3 }}>RESULT</div>
+              <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                            color: toolCall.isError ? 'var(--red)' : 'var(--green)' }}>
+                {typeof toolCall.result === 'string' ? toolCall.result
+                                                      : JSON.stringify(toolCall.result, null, 2)}
+              </pre>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MarkdownText({ text }: { text: string }) {
+  const lines = text.split('\n');
+  const elements: React.ReactNode[] = [];
+  let codeBlock: string[] = [];
+  let inCode = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith('```')) {
+      if (!inCode) {
+        inCode = true;
+        codeBlock = [];
+      } else {
+        elements.push(
+          <pre key={i} style={{
+            background: 'var(--surface-2)', border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)', padding: '8px 10px', margin: '6px 0',
+            overflowX: 'auto', fontSize: 11.5, fontFamily: 'JetBrains Mono, monospace',
+            lineHeight: 1.6, color: 'var(--tx)',
+          }}>
+            <code>{codeBlock.join('\n')}</code>
+          </pre>
+        );
+        inCode = false;
+        codeBlock = [];
+      }
+    } else if (inCode) {
+      codeBlock.push(line);
+    } else if (line.trim() === '') {
+      elements.push(<br key={i} />);
+    } else {
+      elements.push(
+        <span key={i} style={{ display: 'block' }}>
+          {inlineFormat(line)}
+        </span>
+      );
+    }
+  }
+
+  return <>{elements}</>;
+}
+
+function inlineFormat(text: string): React.ReactNode {
+  const parts = text.split(/(`[^`]+`)/);
+  return parts.map((part, i) =>
+    part.startsWith('`') && part.endsWith('`')
+      ? <code key={i} style={{
+          fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
+          background: 'var(--surface-3)', padding: '1px 4px',
+          borderRadius: 3, color: 'var(--accent-2)',
+        }}>{part.slice(1, -1)}</code>
+      : part
   );
 }

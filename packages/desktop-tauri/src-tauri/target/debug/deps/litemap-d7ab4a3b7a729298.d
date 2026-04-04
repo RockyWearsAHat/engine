@@ -1,8 +1,0 @@
-/Users/alexwaldmann/Desktop/MyEditor.worktrees/copilot-worktree-2026-04-03T23-06-56/packages/desktop-tauri/src-tauri/target/debug/deps/litemap-d7ab4a3b7a729298.d: /Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.2/src/lib.rs /Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.2/src/map.rs /Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.2/src/store/mod.rs /Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.2/src/store/slice_impl.rs
-
-/Users/alexwaldmann/Desktop/MyEditor.worktrees/copilot-worktree-2026-04-03T23-06-56/packages/desktop-tauri/src-tauri/target/debug/deps/liblitemap-d7ab4a3b7a729298.rmeta: /Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.2/src/lib.rs /Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.2/src/map.rs /Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.2/src/store/mod.rs /Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.2/src/store/slice_impl.rs
-
-/Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.2/src/lib.rs:
-/Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.2/src/map.rs:
-/Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.2/src/store/mod.rs:
-/Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/litemap-0.8.2/src/store/slice_impl.rs:

@@ -1,8 +1,0 @@
-/Users/alexwaldmann/Desktop/MyEditor.worktrees/copilot-worktree-2026-04-03T23-06-56/packages/desktop-tauri/src-tauri/target/debug/deps/serde_with_macros-e9dbbfdd78bca0bc.d: /Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.18.0/src/lib.rs /Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.18.0/src/apply.rs /Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.18.0/src/lazy_bool.rs /Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.18.0/src/utils.rs
-
-/Users/alexwaldmann/Desktop/MyEditor.worktrees/copilot-worktree-2026-04-03T23-06-56/packages/desktop-tauri/src-tauri/target/debug/deps/libserde_with_macros-e9dbbfdd78bca0bc.dylib: /Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.18.0/src/lib.rs /Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.18.0/src/apply.rs /Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.18.0/src/lazy_bool.rs /Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.18.0/src/utils.rs
-
-/Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.18.0/src/lib.rs:
-/Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.18.0/src/apply.rs:
-/Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.18.0/src/lazy_bool.rs:
-/Users/alexwaldmann/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.18.0/src/utils.rs:

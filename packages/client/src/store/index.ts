@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Session, Message, FileNode, GitStatus, GitHubUser, GitHubIssue, AgentSession, LiveToolCall, TabInfo } from '@myeditor/shared';
+import type { Session, Message, FileNode, GitStatus, GitHubUser, GitHubIssue, AgentSession, LiveToolCall, TabInfo } from '@engine/shared';
 import { wsClient } from '../ws/client';
 
 export interface ToolCallDisplay {
@@ -35,7 +35,7 @@ interface EditorStore {
   // Sessions
   sessions: Session[];
   activeSession: Session | null;
-  setSessions: (s: Session[]) => void;
+  setSessions: (s: Session[] | ((prev: Session[]) => Session[])) => void;
   setActiveSession: (s: Session | null) => void;
 
   // Chat
@@ -76,6 +76,7 @@ interface EditorStore {
   githubIssues: GitHubIssue[];
   githubIssuesLoading: boolean;
   setGithubIssues: (issues: GitHubIssue[], loading?: boolean) => void;
+  setGithubIssuesLoading: (loading: boolean) => void;
 
   // Agent monitor
   agentSessions: AgentSession[];
@@ -111,7 +112,7 @@ export const useStore = create<EditorStore>((set, get) => ({
 
   sessions: [],
   activeSession: null,
-  setSessions: (sessions) => set({ sessions }),
+  setSessions: (sessions) => set(s => ({ sessions: typeof sessions === 'function' ? sessions(s.sessions) : sessions })),
   setActiveSession: (s) => set({ activeSession: s }),
 
   chatMessages: [],
@@ -223,6 +224,7 @@ export const useStore = create<EditorStore>((set, get) => ({
   githubIssues: [],
   githubIssuesLoading: false,
   setGithubIssues: (issues, loading = false) => set({ githubIssues: issues, githubIssuesLoading: loading }),
+  setGithubIssuesLoading: (loading) => set({ githubIssuesLoading: loading }),
 
   agentSessions: [],
   activeAgentSessionId: null,

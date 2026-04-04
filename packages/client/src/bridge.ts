@@ -66,6 +66,13 @@ export const bridge = {
     return false;
   },
 
+  async openFolderDialog(): Promise<string | null> {
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<string | null>('open_folder_dialog');
+    }
+    return null;
+  },
+
   async openExternal(url: string): Promise<void> {
     if (isTauri()) {
       if (window.__TAURI__?.opener) {
@@ -79,5 +86,50 @@ export const bridge = {
       return window.electronAPI!.openExternal(url);
     }
     window.open(url, '_blank', 'noopener,noreferrer');
+  },
+
+  async getAnthropicKey(): Promise<string | null> {
+    if (isTauri()) return window.__TAURI__!.core.invoke<string | null>('get_anthropic_key');
+    return null;
+  },
+
+  async setAnthropicKey(key: string): Promise<boolean> {
+    if (isTauri()) return window.__TAURI__!.core.invoke<boolean>('set_anthropic_key', { key });
+    return false;
+  },
+
+  async getOpenAiKey(): Promise<string | null> {
+    if (isTauri()) return window.__TAURI__!.core.invoke<string | null>('get_openai_key');
+    return null;
+  },
+
+  async setOpenAiKey(key: string): Promise<boolean> {
+    if (isTauri()) return window.__TAURI__!.core.invoke<boolean>('set_openai_key', { key });
+    return false;
+  },
+
+  async getModel(): Promise<string | null> {
+    if (isTauri()) return window.__TAURI__!.core.invoke<string | null>('get_model');
+    return null;
+  },
+
+  async setModel(model: string): Promise<boolean> {
+    if (isTauri()) return window.__TAURI__!.core.invoke<boolean>('set_model', { model });
+    return false;
+  },
+
+  async installAgentService(): Promise<string> {
+    if (isTauri()) return window.__TAURI__!.core.invoke<string>('install_agent_service');
+    return 'Not supported on this platform.';
+  },
+
+  async uninstallAgentService(): Promise<string> {
+    if (isTauri()) return window.__TAURI__!.core.invoke<string>('uninstall_agent_service');
+    return 'Not supported on this platform.';
+  },
+
+  async agentServiceStatus(): Promise<string> {
+    if (isTauri()) return window.__TAURI__!.core.invoke<string>('agent_service_status');
+    return 'not_installed';
   },
 };

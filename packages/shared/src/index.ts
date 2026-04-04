@@ -69,6 +69,7 @@ export interface TerminalInfo {
 
 // WebSocket protocol — Client → Server
 export type ClientMessage =
+  | { type: 'project.open'; path: string }
   | { type: 'chat'; sessionId: string; content: string }
   | { type: 'chat.stop'; sessionId: string }
   | { type: 'session.create'; projectPath: string }

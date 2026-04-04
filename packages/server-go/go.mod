@@ -1,4 +1,4 @@
-module github.com/myeditor/server
+module github.com/engine/server
 
 go 1.26.1
 

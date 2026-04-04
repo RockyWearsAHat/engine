@@ -1,17 +1,17 @@
 {
-  "name": "myeditor",
+  "name": "engine",
   "private": true,
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -n server,client -c blue,green \"pnpm --filter @myeditor/server dev\" \"pnpm --filter @myeditor/client dev\"",
-    "dev:desktop": "concurrently -k -n server,client,electron -c blue,green,cyan \"pnpm --filter @myeditor/server dev\" \"pnpm --filter @myeditor/client dev\" \"sleep 3 && pnpm --filter @myeditor/desktop dev\"",
-    "dev:tauri": "concurrently -k -n go,client,tauri -c blue,green,cyan \"pnpm build:go-dev\" \"pnpm --filter @myeditor/client dev\" \"sleep 4 && pnpm tauri:dev\"",
-    "build": "pnpm --filter @myeditor/shared build && pnpm --filter @myeditor/server build && pnpm --filter @myeditor/client build && pnpm --filter @myeditor/desktop build",
-    "build:go": "cd packages/server-go && /opt/homebrew/bin/go build -ldflags='-s -w' -o myeditor-server .",
-    "build:go-dev": "cd packages/server-go && /opt/homebrew/bin/go build -o myeditor-server . && PROJECT_PATH=${PROJECT_PATH:-.} PORT=3000 ./myeditor-server",
-    "build:tauri": "pnpm --filter @myeditor/shared build && pnpm build:go && pnpm --filter @myeditor/client build && pnpm tauri:build",
+    "dev": "concurrently -n server,client -c blue,green \"pnpm --filter @engine/server dev\" \"pnpm --filter @engine/client dev\"",
+    "dev:desktop": "concurrently -k -n server,client,electron -c blue,green,cyan \"pnpm --filter @engine/server dev\" \"pnpm --filter @engine/client dev\" \"sleep 3 && pnpm --filter @engine/desktop dev\"",
+    "dev:tauri": "concurrently -k -n go,client,tauri -c blue,green,cyan \"pnpm build:go-dev\" \"pnpm --filter @engine/client dev\" \"sleep 4 && pnpm tauri:dev\"",
+    "build": "pnpm --filter @engine/shared build && pnpm --filter @engine/server build && pnpm --filter @engine/client build && pnpm --filter @engine/desktop build",
+    "build:go": "cd packages/server-go && /opt/homebrew/bin/go build -ldflags='-s -w' -o engine-server .",
+    "build:go-dev": "cd packages/server-go && /opt/homebrew/bin/go build -o engine-server . && PROJECT_PATH=${PROJECT_PATH:-.} PORT=3000 ./engine-server",
+    "build:tauri": "pnpm --filter @engine/shared build && pnpm build:go && pnpm --filter @engine/client build && pnpm tauri:build",
     "tauri:dev": "cd packages/desktop-tauri && source $HOME/.cargo/env && cargo tauri dev",
     "tauri:build": "cd packages/desktop-tauri && source $HOME/.cargo/env && cargo tauri build",
     "typecheck": "pnpm -r typecheck",
