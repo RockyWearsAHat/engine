@@ -63,7 +63,7 @@ export default function StatusBar() {
             )}
           </>
         )}
-        <span>MyEditor</span>
+        <span>Engine</span>
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import type { ClientMessage, ServerMessage } from '@myeditor/shared';
+import type { ClientMessage, ServerMessage } from '@engine/shared';
 
 type MessageHandler = (msg: ServerMessage) => void;
 

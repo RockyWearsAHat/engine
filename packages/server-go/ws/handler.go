@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/myeditor/server/ai"
-	"github.com/myeditor/server/db"
-	gofs "github.com/myeditor/server/fs"
-	gogit "github.com/myeditor/server/git"
-	"github.com/myeditor/server/terminal"
+	"github.com/engine/server/ai"
+	"github.com/engine/server/db"
+	gofs "github.com/engine/server/fs"
+	gogit "github.com/engine/server/git"
+	"github.com/engine/server/terminal"
 )
 
 var upgrader = websocket.Upgrader{
@@ -114,6 +114,35 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 	projectPath := c.projectPath
 
 	switch msgType {
+
+	// ── Project ───────────────────────────────────────────────────────────────
+
+	case "project.open":
+		var msg struct{ Path string `json:"path"` }
+		json.Unmarshal(raw, &msg) //nolint:errcheck
+		if msg.Path == "" {
+			c.sendErr("Path required", "BAD_PAYLOAD")
+			return
+		}
+		c.projectPath = msg.Path
+		projectPath = msg.Path
+		id := newID()
+		branch, _ := gogit.GetCurrentBranch(msg.Path)
+		if err := db.CreateSession(id, msg.Path, branch); err != nil {
+			c.sendErr(err.Error(), "DB_ERROR")
+			return
+		}
+		c.sessionID = id
+		session, _ := db.GetSession(id)
+		c.send(map[string]interface{}{"type": "session.created", "session": session})
+		tree, err := gofs.GetTree(msg.Path, 4)
+		if err == nil {
+			c.send(map[string]interface{}{"type": "file.tree", "tree": tree})
+		}
+		status, err := gogit.GetStatus(msg.Path)
+		if err == nil {
+			c.send(map[string]interface{}{"type": "git.status", "status": status})
+		}
 
 	// ── Sessions ──────────────────────────────────────────────────────────────
 
@@ -398,7 +427,7 @@ func fetchGitHubIssues(owner, repo string) ([]githubIssue, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues?state=open&per_page=30", owner, repo)
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	req.Header.Set("User-Agent", "MyEditor/0.1")
+	req.Header.Set("User-Agent", "Engine/0.1")
 	if token := githubToken(); token != "" {
 		req.Header.Set("Authorization", "token "+token)
 	}
@@ -463,12 +492,4 @@ func newID() string {
 
 func githubToken() string {
 	return os.Getenv("GITHUB_TOKEN")
-}
-
-func getenv(key string) string {
-	return os.Getenv(key)
-}
-
-func osGetenv(key string) string {
-	return os.Getenv(key)
 }

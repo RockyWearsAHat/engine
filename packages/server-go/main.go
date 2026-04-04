@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/myeditor/server/db"
-	"github.com/myeditor/server/ws"
+	"github.com/engine/server/db"
+	"github.com/engine/server/ws"
 )
 
 func main() {

@@ -55,3 +55,6 @@ coverage/
 # package-lock.json
 # yarn.lock
 # pnpm-lock.yaml
+
+# Rust build artifacts
+packages/desktop-tauri/src-tauri/target/

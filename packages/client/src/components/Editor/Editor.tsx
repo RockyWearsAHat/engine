@@ -1,20 +1,17 @@
 import MonacoEditor from '@monaco-editor/react';
 import { useStore } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
-import { X } from 'lucide-react';
+import { X, FileText } from 'lucide-react';
 import { basename } from '../../utils.js';
 
-function fileExt(path: string): string {
-  return path.split('.').pop()?.toLowerCase() ?? '';
-}
-
 function tabColor(path: string): string {
-  const ext = fileExt(path);
+  const ext = path.split('.').pop()?.toLowerCase() ?? '';
   const map: Record<string, string> = {
-    ts: '#4d7fff', tsx: '#4d7fff', js: '#f59e0b', jsx: '#f59e0b',
-    css: '#a78bfa', scss: '#a78bfa', html: '#f97316',
-    json: '#f59e0b', md: '#999', py: '#22c55e', go: '#22d3ee',
-    rs: '#f97316', sh: '#22c55e',
+    ts: '#6366f1', tsx: '#6366f1', js: '#f59e0b', jsx: '#f59e0b',
+    css: '#a78bfa', scss: '#a78bfa', less: '#a78bfa',
+    html: '#fb923c', json: '#f59e0b', yaml: '#f43f5e', yml: '#f43f5e',
+    md: '#888', mdx: '#888', py: '#22c55e', go: '#22d3ee',
+    rs: '#fb923c', sh: '#22c55e', sql: '#f59e0b', toml: '#fb923c',
   };
   return map[ext] ?? '#555';
 }
@@ -30,20 +27,10 @@ export default function Editor() {
 
   if (openFiles.length === 0) {
     return (
-      <div className="fade-in" style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        height: '100%', background: 'var(--bg)',
-      }}>
-        <div style={{ textAlign: 'center', userSelect: 'none' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
-            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
-              <rect x="1" y="1" width="38" height="38" rx="8" stroke="#2a2a2a" strokeWidth="1.5" />
-              <path d="M12 20h16M20 12v16" stroke="#4d7fff" strokeWidth="1.5" strokeLinecap="round" opacity="0.6" />
-            </svg>
-          </div>
-          <p style={{ fontSize: '12px', fontWeight: 500, color: 'var(--tx-2)' }}>MyEditor</p>
-          <p style={{ fontSize: '10px', color: 'var(--tx-3)', marginTop: 4 }}>Open a file or tell the AI what to build</p>
-        </div>
+      <div className="empty-state animate-appear" style={{ background: 'var(--bg)', height: '100%' }}>
+        <FileText size={36} style={{ opacity: 0.12 }} />
+        <span style={{ color: 'var(--tx-3)' }}>Open a file from the explorer</span>
+        <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>or ask the AI to create one</span>
       </div>
     );
   }
@@ -51,67 +38,35 @@ export default function Editor() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)' }}>
       {/* Tab bar */}
-      <div style={{
-        display: 'flex', alignItems: 'center', overflowX: 'auto',
-        flexShrink: 0, background: 'var(--surface)',
-        borderBottom: '1px solid var(--border)', minHeight: '34px',
-      }}>
+      <div className="tab-bar">
         {openFiles.map(file => {
           const isActive = file.path === activeFilePath;
           const color = tabColor(file.path);
+          const name = basename(file.path);
           return (
             <div
               key={file.path}
+              className={`tab ${isActive ? 'active' : ''}`}
               onClick={() => setActiveFile(file.path)}
-              className="group"
-              style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                padding: '0 12px', height: '100%', minHeight: 34,
-                cursor: 'pointer', fontSize: '12px', whiteSpace: 'nowrap',
-                flexShrink: 0, position: 'relative',
-                borderRight: '1px solid var(--border)',
-                background: isActive ? 'var(--bg)' : 'transparent',
-                color: isActive ? 'var(--tx)' : 'var(--tx-3)',
-                transition: 'color 150ms, background 150ms',
-              }}
-              onMouseEnter={e => {
-                if (!isActive) (e.currentTarget as HTMLDivElement).style.color = 'var(--tx-2)';
-              }}
-              onMouseLeave={e => {
-                if (!isActive) (e.currentTarget as HTMLDivElement).style.color = 'var(--tx-3)';
-              }}
+              title={file.path}
             >
+              {/* accent top bar for active tab */}
               {isActive && (
                 <span style={{
-                  position: 'absolute', top: 0, left: 0, right: 0, height: 1,
-                  background: color,
+                  position: 'absolute', top: 0, left: 0, right: 0, height: 2,
+                  background: color, borderRadius: '0 0 2px 2px',
                 }} />
               )}
-              <span style={{ color, fontSize: '9px', fontFamily: 'monospace', fontWeight: 600 }}>
-                {file.path.split('.').pop()?.toUpperCase().slice(0, 2) ?? '??'}
-              </span>
-              <span style={{ fontSize: '12px' }}>{basename(file.path)}</span>
-              {file.dirty && (
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)', flexShrink: 0 }} />
-              )}
+              <FileText size={11} style={{ color, flexShrink: 0 }} />
+              <span className="tab-name">{name}</span>
+              {file.dirty && !isActive && <span className="tab-dirty-dot" />}
               <button
-                onClick={(e) => { e.stopPropagation(); closeFile(file.path); }}
-                style={{
-                  marginLeft: 2, background: 'none', border: 'none', cursor: 'pointer',
-                  color: 'var(--tx-3)', padding: 1, borderRadius: 2,
-                  display: 'flex', alignItems: 'center', transition: 'color 150ms',
-                  opacity: isActive ? 1 : 0,
-                }}
-                onMouseEnter={e => {
-                  (e.currentTarget as HTMLButtonElement).style.color = 'var(--tx)';
-                  (e.currentTarget as HTMLButtonElement).style.opacity = '1';
-                }}
-                onMouseLeave={e => {
-                  (e.currentTarget as HTMLButtonElement).style.color = 'var(--tx-3)';
-                  (e.currentTarget as HTMLButtonElement).style.opacity = isActive ? '1' : '0';
-                }}
+                className="tab-close"
+                onClick={e => { e.stopPropagation(); closeFile(file.path); }}
+                title="Close"
               >
-                <X size={11} />
+                {file.dirty ? <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent-2)', display: 'block' }} />
+                             : <X size={11} />}
               </button>
             </div>
           );
@@ -123,33 +78,47 @@ export default function Editor() {
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <MonacoEditor
             height="100%"
-            theme="vs-dark"
+            theme="engine-dark"
             path={activeFile.path}
             language={activeFile.language}
             value={activeFile.content}
-            onChange={(value) => { if (value !== undefined) markFileDirty(activeFile.path, value); }}
+            onChange={value => { if (value !== undefined) markFileDirty(activeFile.path, value); }}
             onMount={(editor, monaco) => {
               editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
                 handleSave(activeFile.path, editor.getValue());
               });
-              monaco.editor.defineTheme('myeditor-dark', {
+              monaco.editor.defineTheme('engine-dark', {
                 base: 'vs-dark',
                 inherit: true,
-                rules: [],
+                rules: [
+                  { token: 'comment', foreground: '4a4a6a', fontStyle: 'italic' },
+                  { token: 'keyword', foreground: '818cf8' },
+                  { token: 'string', foreground: '86efac' },
+                  { token: 'number', foreground: 'fb923c' },
+                  { token: 'type', foreground: '67e8f9' },
+                ],
                 colors: {
-                  'editor.background': '#080808',
-                  'editor.lineHighlightBackground': '#0d0d0d',
-                  'editorGutter.background': '#080808',
-                  'editor.selectionBackground': '#1a2d5a',
-                  'editor.inactiveSelectionBackground': '#1a2d5a88',
-                  'editorLineNumber.foreground': '#333333',
-                  'editorLineNumber.activeForeground': '#555555',
+                  'editor.background': '#0c0c10',
+                  'editor.lineHighlightBackground': '#111116',
+                  'editorGutter.background': '#0c0c10',
+                  'editor.selectionBackground': '#1e1e3a',
+                  'editor.inactiveSelectionBackground': '#1e1e3a88',
+                  'editorLineNumber.foreground': '#2a2a40',
+                  'editorLineNumber.activeForeground': '#4a4a6a',
+                  'editorIndentGuide.background1': '#1f1f2a',
+                  'editorIndentGuide.activeBackground1': '#2a2a40',
+                  'editor.findMatchBackground': '#1e1e3a',
+                  'editor.findMatchHighlightBackground': '#1a1a30',
+                  'scrollbarSlider.background': '#1e1e2e66',
+                  'scrollbarSlider.hoverBackground': '#2a2a38aa',
                 },
               });
-              monaco.editor.setTheme('myeditor-dark');
+              monaco.editor.setTheme('engine-dark');
+              editor.focus();
             }}
             options={{
               fontSize: 13,
+              lineHeight: 22,
               fontFamily: '"JetBrains Mono", Menlo, monospace',
               fontLigatures: true,
               lineNumbers: 'on',
@@ -158,16 +127,21 @@ export default function Editor() {
               wordWrap: 'off',
               tabSize: 2,
               insertSpaces: true,
+              automaticLayout: true,
               cursorBlinking: 'smooth',
+              cursorSmoothCaretAnimation: 'on',
               smoothScrolling: true,
-              renderWhitespace: 'selection',
-              padding: { top: 12, bottom: 12 },
-              lineHeight: 1.7,
-              letterSpacing: 0.3,
-              scrollbar: { verticalScrollbarSize: 4, horizontalScrollbarSize: 4 },
-              overviewRulerBorder: false,
+              renderLineHighlight: 'line',
+              bracketPairColorization: { enabled: true },
+              guides: { bracketPairs: true, indentation: true },
+              suggest: { showIcons: true },
+              padding: { top: 16, bottom: 16 },
+              scrollbar: { verticalScrollbarSize: 5, horizontalScrollbarSize: 5 },
+              overviewRulerLanes: 0,
               hideCursorInOverviewRuler: true,
-              renderLineHighlight: 'gutter',
+              glyphMargin: false,
+              folding: true,
+              renderWhitespace: 'none',
             }}
           />
         </div>

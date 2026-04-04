@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useStore } from './store/index.js';
 import { wsClient } from './ws/client.js';
 import { bridge } from './bridge.js';
-import type { ServerMessage } from '@myeditor/shared';
+import type { ServerMessage } from '@engine/shared';
 import { randomUUID } from './utils.js';
 import FileTree from './components/FileTree/FileTree.js';
 import Editor from './components/Editor/Editor.js';
@@ -10,308 +10,286 @@ import Terminal from './components/Terminal/Terminal.js';
 import AIChat from './components/AI/AIChat.js';
 import AgentPanel from './components/AgentPanel/AgentPanel.js';
 import StatusBar from './components/StatusBar/StatusBar.js';
-import { FolderOpen, Terminal as TermIcon, GitBranch, Settings2, Activity, AlertCircle } from 'lucide-react';
+import {
+  FolderOpen, GitBranch, AlertCircle, Settings2, Activity,
+  Search, ChevronRight, ChevronLeft, ServerCog, ChevronDown,
+} from 'lucide-react';
 
-
-type ActivityTab = 'explorer' | 'git' | 'issues' | 'settings';
-type BottomPanel = 'chat' | 'terminal';
+type ActivityTab = 'explorer' | 'git' | 'issues' | 'search' | 'settings';
+type RightTab = 'chat' | 'agent';
 
 export default function App() {
-  const store = useStore();
-  const streamingIdRef = useRef<string | null>(null);
-  const currentSessionIdRef = useRef<string | null>(null);
-  const [activityTab, setActivityTab] = useState<ActivityTab>('explorer');
-  const [bottomPanel, setBottomPanel] = useState<BottomPanel>('chat');
-  const [showSidebar, setShowSidebar] = useState(true);
-  const [showAgentPanel, setShowAgentPanel] = useState(true);
-  const [projectName, setProjectName] = useState('MyEditor');
+  const {
+    connected, setConnected,
+    sessions, setSessions,
+    activeSession, setActiveSession,
+    chatMessages, addUserMessage, startAssistantMessage,
+    appendChunk, addToolCall, resolveToolCall,
+    fileTree, setFileTree,
+    openFiles, openFile, closeFile, setActiveFile,
+    gitStatus, setGitStatus,
+    githubIssues, setGithubIssues, setGithubIssuesLoading,
+    agentSessions, updateAgentSession,
+  } = useStore();
 
+  const [activityTab, setActivityTab] = useState<ActivityTab>('explorer');
+  const [showSidebar, setShowSidebar] = useState(true);
+  const [rightTab, setRightTab] = useState<RightTab>('chat');
+  const [showTerminal, setShowTerminal] = useState(false);
+  const [projectName, setProjectName] = useState('');
+  const [terminalHeight, setTerminalHeight] = useState(220);
+
+  const streamingRef = useRef<{ sessionId: string; msgId: string } | null>(null);
+
+  // Open folder helper
+  const openFolder = useCallback(async (path?: string) => {
+    let folderPath = path;
+    if (!folderPath) {
+      folderPath = await bridge.openFolderDialog() ?? undefined;
+    }
+    if (!folderPath) return;
+    setProjectName(folderPath.split('/').pop() ?? folderPath);
+    wsClient.send({ type: 'project.open', path: folderPath });
+  }, []);
+
+  // WebSocket handler
   useEffect(() => {
     wsClient.connect();
 
     const off = wsClient.onMessage((msg: ServerMessage) => {
-      const {
-        setSessions, setActiveSession, setMessages, openFile, closeFile, setActiveFile,
-        setFileTree, setGitStatus, addToolCall, resolveToolCall,
-        appendChunk, finalizeMessage, startAssistantMessage,
-        addLiveToolCall, resolveLiveToolCall, updateAgentSession,
-        setGithubIssues,
-      } = useStore.getState();
-
       switch (msg.type) {
+
         case 'session.list':
           setSessions(msg.sessions);
           break;
+
         case 'session.created':
           setActiveSession(msg.session);
-          setSessions([...useStore.getState().sessions, msg.session]);
-          currentSessionIdRef.current = msg.session.id;
+          setSessions(prev => {
+            const exists = prev.find(s => s.id === msg.session.id);
+            return exists ? prev.map(s => s.id === msg.session.id ? msg.session : s)
+                          : [msg.session, ...prev];
+          });
           break;
+
         case 'session.loaded':
           setActiveSession(msg.session);
-          setMessages(msg.messages);
-          currentSessionIdRef.current = msg.session.id;
+          msg.messages.forEach(m => {
+            if (m.role === 'user') addUserMessage(m.id, m.content);
+            else {
+              startAssistantMessage(m.id);
+              appendChunk(m.id, m.content);
+            }
+          });
           break;
+
+        case 'chat.chunk': {
+          const sid = msg.sessionId;
+          if (!streamingRef.current || streamingRef.current.sessionId !== sid) {
+            const msgId = randomUUID();
+            streamingRef.current = { sessionId: sid, msgId };
+            startAssistantMessage(msgId);
+          }
+          appendChunk(streamingRef.current.msgId, msg.content);
+          if (msg.done) streamingRef.current = null;
+          break;
+        }
+
+        case 'chat.tool_call': {
+          if (!streamingRef.current) {
+            const msgId = randomUUID();
+            streamingRef.current = { sessionId: msg.sessionId, msgId };
+            startAssistantMessage(msgId);
+          }
+          addToolCall(streamingRef.current.msgId, {
+            id: randomUUID(),
+            name: msg.name,
+            input: msg.input,
+            pending: true,
+          });
+          break;
+        }
+
+        case 'chat.tool_result': {
+          if (streamingRef.current) {
+            resolveToolCall(streamingRef.current.msgId, msg.name, msg.result, msg.isError);
+          }
+          break;
+        }
+
+        case 'chat.error':
+          streamingRef.current = null;
+          break;
+
         case 'file.content':
           openFile(msg.path, msg.content, msg.language);
           break;
+
         case 'file.tree':
           setFileTree(msg.tree);
           break;
+
         case 'git.status':
           setGitStatus(msg.status);
           break;
+
+        case 'github.issues':
+          setGithubIssues(msg.issues);
+          setGithubIssuesLoading(false);
+          break;
+
         case 'editor.open':
           wsClient.send({ type: 'file.read', path: msg.path });
           break;
+
         case 'editor.tab.close':
           closeFile(msg.path);
           break;
+
         case 'editor.tab.focus':
           setActiveFile(msg.path);
           break;
-        case 'github.issues':
-          setGithubIssues(msg.issues);
-          break;
-        case 'chat.chunk': {
-          if (!streamingIdRef.current) {
-            const newId = randomUUID();
-            streamingIdRef.current = newId;
-            startAssistantMessage(newId);
-            if (currentSessionIdRef.current) {
-              updateAgentSession(currentSessionIdRef.current, { isStreaming: true, currentActivity: 'thinking...' });
-            }
-          }
-          if (msg.done) {
-            finalizeMessage(streamingIdRef.current!);
-            streamingIdRef.current = null;
-            if (currentSessionIdRef.current) {
-              updateAgentSession(currentSessionIdRef.current, { isStreaming: false, currentActivity: '' });
-            }
-          } else if (msg.content) {
-            appendChunk(streamingIdRef.current!, msg.content);
-          }
-          break;
-        }
-        case 'chat.tool_call': {
-          const sid = currentSessionIdRef.current;
-          if (streamingIdRef.current) {
-            const tcId = randomUUID();
-            addToolCall(streamingIdRef.current, { id: tcId, name: msg.name, input: msg.input, pending: true });
-            if (sid) {
-              addLiveToolCall(sid, { id: tcId, name: msg.name, input: msg.input, pending: true, startedAt: Date.now() });
-            }
-          }
-          break;
-        }
-        case 'chat.tool_result': {
-          const sid = currentSessionIdRef.current;
-          if (streamingIdRef.current) {
-            resolveToolCall(streamingIdRef.current, msg.name, msg.result, msg.isError);
-            if (sid) {
-              const agentSessions = useStore.getState().agentSessions;
-              const agentSession = agentSessions.find(s => s.id === sid);
-              const tc = agentSession?.recentToolCalls.slice().reverse().find(
-                (t: { name: string; pending: boolean }) => t.name === msg.name && t.pending
-              );
-              if (tc) resolveLiveToolCall(sid, tc.id, msg.result, msg.isError, Date.now() - tc.startedAt);
-            }
-          }
-          break;
-        }
       }
     });
 
-    async function initProject() {
-      let projectPath = '.';
-      try { projectPath = await bridge.getProjectPath(); } catch { /* fallback */ }
-      const name = projectPath.split('/').pop() ?? 'Project';
-      setProjectName(name);
-      wsClient.send({ type: 'session.create', projectPath: projectPath || '.' });
-      wsClient.send({ type: 'session.list' });
-    }
+    // Wait for WS then init
+    const interval = setInterval(async () => {
+      if (!wsClient.isConnected) return;
+      clearInterval(interval);
+      setConnected(true);
 
-    const connectInterval = setInterval(() => {
-      if (wsClient.isConnected) {
-        clearInterval(connectInterval);
-        initProject();
+      const initialPath = await bridge.getProjectPath().catch(() => '');
+      if (initialPath && initialPath !== '.') {
+        setProjectName(initialPath.split('/').pop() ?? initialPath);
+        wsClient.send({ type: 'project.open', path: initialPath });
+      } else {
+        wsClient.send({ type: 'session.list' });
       }
-    }, 150);
+    }, 120);
 
-    return () => { off(); clearInterval(connectInterval); wsClient.disconnect(); };
-  }, []);
+    return () => { off(); clearInterval(interval); wsClient.disconnect(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    const check = setInterval(() => store.setConnected(wsClient.isConnected), 500);
-    return () => clearInterval(check);
-  }, [store]);
-
-  const activityItems: { id: ActivityTab; icon: React.ReactNode; label: string }[] = [
-    { id: 'explorer', icon: <FolderOpen size={17} />, label: 'Explorer' },
-    { id: 'git', icon: <GitBranch size={17} />, label: 'Source Control' },
-    { id: 'issues', icon: <AlertCircle size={17} />, label: 'Issues' },
-    { id: 'settings', icon: <Settings2 size={17} />, label: 'Settings' },
-  ];
-
-  const handleActivityClick = (id: ActivityTab) => {
-    if (activityTab === id && showSidebar) {
-      setShowSidebar(false);
-    } else {
-      setActivityTab(id);
-      setShowSidebar(true);
-    }
+  const hasProject = !!fileTree;
+  const toggleActivity = (tab: ActivityTab) => {
+    if (activityTab === tab && showSidebar) { setShowSidebar(false); }
+    else { setActivityTab(tab); setShowSidebar(true); }
   };
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'var(--bg)', color: 'var(--tx)' }}>
-
-      {/* macOS titlebar drag region */}
-      <div
-        className="titlebar-drag shrink-0 flex items-center"
-        style={{ height: 36, paddingLeft: 80, background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}
-      >
-        <div className="titlebar-no-drag" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--tx-2)', userSelect: 'none' }}>
-            MyEditor
-          </span>
-          {store.activeSession && (
-            <span style={{ fontSize: 11, color: 'var(--tx-3)', fontFamily: 'monospace', userSelect: 'none' }}>
-              {store.activeSession.projectPath.split('/').pop()}
-            </span>
+    <div className="app">
+      {/* Titlebar */}
+      <div className="titlebar titlebar-drag">
+        <span className="titlebar-no-drag" style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--tx-2)', fontSize: 12 }}>
+          <span style={{ fontWeight: 700, color: 'var(--accent-2)', letterSpacing: '-0.01em' }}>E</span>
+          <span style={{ color: 'var(--tx-3)', fontSize: 11 }}>Engine</span>
+          {projectName && (
+            <>
+              <span style={{ color: 'var(--tx-3)' }}>{' · '}</span>
+              <span style={{ color: 'var(--tx-2)', fontWeight: 500 }}>{projectName}</span>
+            </>
           )}
+        </span>
+        {/* File menu */}
+        <div className="titlebar-no-drag" style={{ marginLeft: 8 }}>
+          <FileMenu onOpenFolder={openFolder} />
+        </div>
+        <div className="titlebar-no-drag" style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+          <button
+            onClick={() => setShowTerminal(v => !v)}
+            style={{
+              background: showTerminal ? 'var(--surface-3)' : 'transparent',
+              border: 'none', borderRadius: 4, padding: '3px 7px',
+              cursor: 'pointer', color: showTerminal ? 'var(--tx-2)' : 'var(--tx-3)',
+              fontSize: 11, fontFamily: 'inherit', transition: 'all 100ms',
+            }}
+          >Terminal</button>
+          <button
+            onClick={() => setShowSidebar(v => !v)}
+            style={{
+              background: 'transparent', border: 'none', borderRadius: 4,
+              padding: '3px 5px', cursor: 'pointer', color: 'var(--tx-3)',
+              display: 'flex', alignItems: 'center', transition: 'color 100ms',
+            }}
+          >
+            {showSidebar ? <ChevronLeft size={13} /> : <ChevronRight size={13} />}
+          </button>
         </div>
       </div>
 
-      {/* Main workspace */}
-      <div className="flex flex-1 overflow-hidden">
-
+      <div className="workspace">
         {/* Activity bar */}
-        <div
-          className="shrink-0 flex flex-col items-center py-2 gap-0.5"
-          style={{ width: 40, background: 'var(--surface)', borderRight: '1px solid var(--border)' }}
-        >
-          {activityItems.map(item => (
+        <div className="activity-bar">
+          {([
+            ['explorer', FolderOpen],
+            ['git', GitBranch],
+            ['search', Search],
+            ['issues', AlertCircle],
+            ['settings', Settings2],
+          ] as [ActivityTab, React.ComponentType<{ size?: number }>][]).map(([id, Icon]) => (
             <button
-              key={item.id}
-              onClick={() => handleActivityClick(item.id)}
-              title={item.label}
-              style={{
-                width: 32, height: 32,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                borderRadius: 6,
-                color: activityTab === item.id && showSidebar ? 'var(--tx)' : 'var(--tx-3)',
-                background: activityTab === item.id && showSidebar ? 'var(--surface-3)' : 'transparent',
-                borderLeft: `2px solid ${activityTab === item.id && showSidebar ? 'var(--accent)' : 'transparent'}`,
-                border: 'none',
-                borderLeftWidth: 2,
-                borderLeftStyle: 'solid',
-                borderLeftColor: activityTab === item.id && showSidebar ? 'var(--accent)' : 'transparent',
-                cursor: 'pointer',
-                transition: 'all 150ms ease',
-              }}
-              onMouseEnter={e => {
-                if (!(activityTab === item.id && showSidebar)) {
-                  (e.currentTarget as HTMLButtonElement).style.color = 'var(--tx-2)';
-                  (e.currentTarget as HTMLButtonElement).style.background = 'var(--surface-3)';
-                }
-              }}
-              onMouseLeave={e => {
-                if (!(activityTab === item.id && showSidebar)) {
-                  (e.currentTarget as HTMLButtonElement).style.color = 'var(--tx-3)';
-                  (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
-                }
-              }}
+              key={id}
+              className={`activity-btn ${activityTab === id && showSidebar ? 'active' : ''}`}
+              onClick={() => toggleActivity(id)}
+              title={id.charAt(0).toUpperCase() + id.slice(1)}
             >
-              {item.icon}
+              <Icon size={17} />
             </button>
           ))}
-
           <div style={{ flex: 1 }} />
-
-          {/* Agent panel toggle */}
           <button
-            onClick={() => setShowAgentPanel(v => !v)}
+            className={`activity-btn ${rightTab === 'agent' ? 'active' : ''}`}
+            onClick={() => setRightTab(r => r === 'agent' ? 'chat' : 'agent')}
             title="Agent Monitor"
-            style={{
-              width: 32, height: 32,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              borderRadius: 6,
-              color: showAgentPanel ? 'var(--accent)' : 'var(--tx-3)',
-              background: showAgentPanel ? 'var(--accent-dim)' : 'transparent',
-              border: 'none', cursor: 'pointer',
-              transition: 'all 150ms ease',
-            }}
           >
-            <Activity size={16} />
+            <Activity size={17} />
           </button>
         </div>
 
         {/* Sidebar */}
         {showSidebar && (
-          <div
-            className="shrink-0 overflow-hidden flex flex-col fade-in"
-            style={{ width: 220, borderRight: '1px solid var(--border)', background: 'var(--surface)' }}
-          >
-            <FileTree activeTab={activityTab} />
+          <div className="sidebar animate-slide">
+            <FileTree
+              activityTab={activityTab}
+              onOpenFolder={() => openFolder()}
+            />
           </div>
         )}
 
-        {/* Center: editor + bottom panel */}
-        <div className="flex flex-col flex-1 overflow-hidden">
-          <div className="flex-1 overflow-hidden">
-            <Editor />
-          </div>
+        {/* Main content */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {hasProject ? (
+            <div className="editor-area">
+              <Editor />
+            </div>
+          ) : (
+            <WelcomeScreen
+              sessions={sessions}
+              onOpenFolder={openFolder}
+            />
+          )}
 
-          {/* Bottom panel with tabs */}
-          <div
-            className="shrink-0 flex flex-col overflow-hidden"
-            style={{ height: 260, borderTop: '1px solid var(--border)' }}
-          >
-            {/* Tab strip */}
-            <div
-              className="shrink-0 flex items-center"
-              style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)', minHeight: 32 }}
-            >
-              {([
-                { id: 'chat' as BottomPanel, label: 'AI Chat', icon: null },
-                { id: 'terminal' as BottomPanel, label: 'Terminal', icon: <TermIcon size={11} /> },
-              ] as const).map(tab => (
-                <button
-                  key={tab.id}
-                  onClick={() => setBottomPanel(tab.id)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 6,
-                    padding: '0 14px', height: 32,
-                    fontSize: '11px', fontFamily: 'Outfit, sans-serif',
-                    color: bottomPanel === tab.id ? 'var(--tx)' : 'var(--tx-3)',
-                    borderBottom: bottomPanel === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
-                    background: 'transparent', border: 'none',
-                    borderBottomWidth: 2, borderBottomStyle: 'solid',
-                    borderBottomColor: bottomPanel === tab.id ? 'var(--accent)' : 'transparent',
-                    cursor: 'pointer',
-                    transition: 'color 150ms',
-                  }}
-                >
-                  {tab.icon}
-                  {tab.label}
-                </button>
-              ))}
+          {/* Terminal panel */}
+          {showTerminal && hasProject && (
+            <div className="bottom-panel" style={{ height: terminalHeight }}>
+              <Terminal />
             </div>
-            <div className="flex-1 overflow-hidden">
-              {bottomPanel === 'chat' ? <AIChat /> : <Terminal />}
-            </div>
-          </div>
+          )}
         </div>
 
-        {/* Right: Agent monitor */}
-        {showAgentPanel && (
-          <div
-            className="shrink-0 overflow-hidden fade-in"
-            style={{ width: 260, borderLeft: '1px solid var(--border)' }}
-          >
-            <AgentPanel />
+        {/* Right panel */}
+        <div className="right-panel">
+          <div className="panel-tab-bar">
+            <button className={`panel-tab ${rightTab === 'chat' ? 'active' : ''}`} onClick={() => setRightTab('chat')}>
+              Chat
+            </button>
+            <button className={`panel-tab ${rightTab === 'agent' ? 'active' : ''}`} onClick={() => setRightTab('agent')}>
+              <Activity size={12} />
+              Agent
+            </button>
           </div>
-        )}
+          {rightTab === 'chat'  ? <AIChat /> : <AgentPanel />}
+        </div>
       </div>
 
       <StatusBar />
@@ -319,3 +297,144 @@ export default function App() {
   );
 }
 
+// File menu dropdown
+function FileMenu({ onOpenFolder }: { onOpenFolder: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [serviceMsg, setServiceMsg] = useState('');
+
+  const handleInstall = async () => {
+    setOpen(false);
+    const msg = await bridge.installAgentService();
+    setServiceMsg(msg);
+    setTimeout(() => setServiceMsg(''), 4000);
+  };
+
+  const handleUninstall = async () => {
+    setOpen(false);
+    const msg = await bridge.uninstallAgentService();
+    setServiceMsg(msg);
+    setTimeout(() => setServiceMsg(''), 4000);
+  };
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        style={{
+          background: open ? 'var(--surface-3)' : 'transparent',
+          border: 'none', borderRadius: 4, padding: '3px 6px',
+          cursor: 'pointer', color: 'var(--tx-3)',
+          fontSize: 11, fontFamily: 'inherit',
+          display: 'flex', alignItems: 'center', gap: 2,
+          transition: 'all 100ms',
+        }}
+      >
+        File <ChevronDown size={10} />
+      </button>
+
+      {open && (
+        <>
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 99 }}
+            onClick={() => setOpen(false)}
+          />
+          <div style={{
+            position: 'absolute', top: '100%', left: 0, marginTop: 2,
+            background: 'var(--surface)', border: '1px solid var(--border-2)',
+            borderRadius: 'var(--radius)', boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+            minWidth: 200, zIndex: 100, overflow: 'hidden',
+          }}>
+            <MenuItem icon={<FolderOpen size={13} />} label="Open Folder…" onClick={() => { setOpen(false); onOpenFolder(); }} />
+            <div style={{ height: 1, background: 'var(--border)', margin: '2px 0' }} />
+            <MenuItem icon={<ServerCog size={13} />} label="Install Agent Service" onClick={handleInstall} />
+            <MenuItem icon={<ServerCog size={13} />} label="Remove Agent Service" onClick={handleUninstall} />
+          </div>
+        </>
+      )}
+
+      {serviceMsg && (
+        <div style={{
+          position: 'fixed', bottom: 32, left: '50%', transform: 'translateX(-50%)',
+          background: 'var(--surface)', border: '1px solid var(--border-2)',
+          borderRadius: 'var(--radius)', padding: '8px 16px', fontSize: 12,
+          color: 'var(--tx-2)', zIndex: 200, boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+          maxWidth: 360, textAlign: 'center',
+        }}>
+          {serviceMsg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuItem({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '7px 12px', cursor: 'pointer', fontSize: 12,
+        color: 'var(--tx-2)', transition: 'background 80ms',
+      }}
+      onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface-2)')}
+      onMouseLeave={e => (e.currentTarget.style.background = '')}
+    >
+      <span style={{ color: 'var(--tx-3)', display: 'flex' }}>{icon}</span>
+      {label}
+    </div>
+  );
+}
+
+// Welcome screen
+function WelcomeScreen({
+  sessions,
+  onOpenFolder,
+}: {
+  sessions: { id: string; projectPath: string; updatedAt: string }[];
+  onOpenFolder: (path?: string) => void;
+}) {
+  const recent = sessions
+    .filter(s => s.projectPath && s.projectPath !== '.')
+    .reduce<{ path: string; updatedAt: string }[]>((acc, s) => {
+      if (!acc.find(a => a.path === s.projectPath)) {
+        acc.push({ path: s.projectPath, updatedAt: s.updatedAt });
+      }
+      return acc;
+    }, [])
+    .slice(0, 5);
+
+  return (
+    <div className="welcome">
+      <div className="welcome-content animate-appear">
+        <div className="welcome-logo">E</div>
+        <div className="welcome-title">Engine</div>
+        <div className="welcome-subtitle">AI-native code editor</div>
+
+        <div className="welcome-actions">
+          <button className="btn-primary" onClick={() => onOpenFolder()}>
+            <FolderOpen size={15} />
+            Open Folder
+          </button>
+        </div>
+
+        {recent.length > 0 && (
+          <div className="welcome-recent">
+            <div className="welcome-recent-title">Recent</div>
+            {recent.map(r => {
+              const name = r.path.split('/').pop() ?? r.path;
+              return (
+                <div key={r.path} className="welcome-recent-item" onClick={() => onOpenFolder(r.path)}>
+                  <FolderOpen size={13} style={{ flexShrink: 0, color: 'var(--accent-2)' }} />
+                  <div style={{ flex: 1, overflow: 'hidden' }}>
+                    <div className="welcome-recent-name">{name}</div>
+                    <div className="welcome-recent-path">{r.path}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

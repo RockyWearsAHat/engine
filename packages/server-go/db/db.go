@@ -13,11 +13,11 @@ import (
 
 var globalDB *sql.DB
 
-// Init opens (or creates) the SQLite database at <projectPath>/.myeditor/state.db.
+// Init opens (or creates) the SQLite database at <projectPath>/.engine/state.db.
 func Init(projectPath string) error {
-	dir := filepath.Join(projectPath, ".myeditor")
+	dir := filepath.Join(projectPath, ".engine")
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("create .myeditor dir: %w", err)
+		return fmt.Errorf("create .engine dir: %w", err)
 	}
 	dbPath := filepath.Join(dir, "state.db")
 

@@ -1,7 +1,7 @@
 import { useStore, type ToolCallDisplay } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
 import { Activity, Plus, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
-import type { Session } from '@myeditor/shared';
+import type { Session } from '@engine/shared';
 
 function ToolRow({ tc }: { tc: ToolCallDisplay }) {
   const shortInput = typeof tc.input === 'object' && tc.input !== null

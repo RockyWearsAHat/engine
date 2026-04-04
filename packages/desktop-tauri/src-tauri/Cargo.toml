@@ -1,16 +1,16 @@
 [package]
-name = "myeditor"
+name = "engine"
 version = "0.1.0"
-description = "MyEditor — AI-native code editor"
+description = "Engine — AI-native code editor"
 authors = ["Alex Waldmann"]
 edition = "2021"
 
 [lib]
-name = "myeditor_lib"
+name = "engine_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "myeditor"
+name = "engine"
 path = "src/main.rs"
 
 [build-dependencies]

@@ -10,7 +10,7 @@ import (
 
 var ignoreDirs = map[string]bool{
 	".git": true, "node_modules": true, "dist": true, "out": true,
-	"build": true, ".myeditor": true, ".DS_Store": true,
+	"build": true, ".engine": true, ".DS_Store": true,
 	"target": true, "__pycache__": true, ".next": true, ".nuxt": true,
 }
 

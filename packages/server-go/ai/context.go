@@ -12,15 +12,25 @@ import (
 	"strings"
 	"time"
 
-	"github.com/myeditor/server/db"
-	gofs "github.com/myeditor/server/fs"
-	gogit "github.com/myeditor/server/git"
+	"github.com/engine/server/db"
+	gofs "github.com/engine/server/fs"
+	gogit "github.com/engine/server/git"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/mem"
 )
 
 const defaultModel = "claude-opus-4-5"
+
+// providerForModel returns "openai" for gpt-* / o1-* / o3-* models, "anthropic" otherwise.
+func providerForModel(model string) string {
+	lower := strings.ToLower(model)
+	if strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "o1-") ||
+		strings.HasPrefix(lower, "o3-") || strings.HasPrefix(lower, "o4-") {
+		return "openai"
+	}
+	return "anthropic"
+}
 
 // ChatContext carries callbacks for streaming responses to the WebSocket client.
 type ChatContext struct {
@@ -350,14 +360,22 @@ func formatTree(node *gofs.FileNode, depth int) string {
 
 // Chat runs the full agentic loop for a user message, streaming results via ctx callbacks.
 func Chat(ctx *ChatContext, userMessage string) {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		ctx.OnError("ANTHROPIC_API_KEY not set")
-		return
-	}
-	model := os.Getenv("ANTHROPIC_MODEL")
+	model := os.Getenv("ENGINE_MODEL")
 	if model == "" {
 		model = defaultModel
+	}
+	provider := providerForModel(model)
+
+	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
+	openaiKey := os.Getenv("OPENAI_API_KEY")
+
+	if provider == "anthropic" && anthropicKey == "" {
+		ctx.OnError("ANTHROPIC_API_KEY not set — configure it in Engine Settings")
+		return
+	}
+	if provider == "openai" && openaiKey == "" {
+		ctx.OnError("OPENAI_API_KEY not set — configure it in Engine Settings")
+		return
 	}
 
 	// Persist user message
@@ -380,7 +398,7 @@ func Chat(ctx *ChatContext, userMessage string) {
 	// Build system prompt
 	branch, _ := gogit.GetCurrentBranch(ctx.ProjectPath)
 	systemLines := []string{
-		"You are the AI assistant for MyEditor — an AI-native code editor.",
+		"You are the AI assistant for Engine — an AI-native code editor.",
 		"You ARE the editor. You have full control: read files, write files, run commands, search code, commit changes.",
 		"",
 		fmt.Sprintf("Project: %s", ctx.ProjectPath),
@@ -404,67 +422,68 @@ func Chat(ctx *ChatContext, userMessage string) {
 	var allToolCalls []ToolCall
 	var finalText strings.Builder
 
-	// Agentic loop
-	for {
-		// Window to last 50 messages
-		windowed := messages
-		if len(windowed) > 50 {
-			windowed = windowed[len(windowed)-50:]
-		}
-
-		req := anthropicRequest{
-			Model:     model,
-			MaxTokens: 8192,
-			System:    systemPrompt,
-			Messages:  windowed,
-			Tools:     tools,
-			Stream:    true,
-		}
-
-		responseBlocks, stopReason, err := streamRequest(apiKey, req, ctx, &finalText)
-		if err != nil {
-			ctx.OnError(err.Error())
-			return
-		}
-
-		messages = append(messages, anthropicMessage{Role: "assistant", Content: responseBlocks})
-
-		if stopReason != "tool_use" {
-			break
-		}
-
-		// Execute all tool calls from this turn
-		var toolResults []contentBlock
-		for _, block := range responseBlocks {
-			if block.Type != "tool_use" {
-				continue
+	if provider == "openai" {
+		runOpenAILoop(ctx, model, openaiKey, systemPrompt, messages, &allToolCalls, &finalText)
+	} else {
+		// Anthropic agentic loop
+		for {
+			windowed := messages
+			if len(windowed) > 50 {
+				windowed = windowed[len(windowed)-50:]
 			}
-			inputMap, _ := block.Input.(map[string]interface{})
-			if inputMap == nil {
-				inputMap = map[string]interface{}{}
+
+			req := anthropicRequest{
+				Model:     model,
+				MaxTokens: 8192,
+				System:    systemPrompt,
+				Messages:  windowed,
+				Tools:     tools,
+				Stream:    true,
 			}
-			ctx.OnToolCall(block.Name, inputMap)
 
-			start := time.Now()
-			result, isError := executeTool(block.Name, inputMap, ctx)
-			durationMs := time.Since(start).Milliseconds()
+			responseBlocks, stopReason, err := streamRequest(anthropicKey, req, ctx, &finalText)
+			if err != nil {
+				ctx.OnError(err.Error())
+				return
+			}
 
-			db.LogToolCall(newID(), ctx.SessionID, block.Name, inputMap, result, isError, durationMs) //nolint:errcheck
-			ctx.OnToolResult(block.Name, result, isError)
+			messages = append(messages, anthropicMessage{Role: "assistant", Content: responseBlocks})
 
-			allToolCalls = append(allToolCalls, ToolCall{
-				ID: block.ID, Name: block.Name, Input: inputMap,
-				Result: result, IsError: isError,
-			})
-			toolResults = append(toolResults, contentBlock{
-				Type:      "tool_result",
-				ToolUseID: block.ID,
-				Content:   result,
-			})
+			if stopReason != "tool_use" {
+				break
+			}
+
+			var toolResults []contentBlock
+			for _, block := range responseBlocks {
+				if block.Type != "tool_use" {
+					continue
+				}
+				inputMap, _ := block.Input.(map[string]interface{})
+				if inputMap == nil {
+					inputMap = map[string]interface{}{}
+				}
+				ctx.OnToolCall(block.Name, inputMap)
+
+				start := time.Now()
+				result, isError := executeTool(block.Name, inputMap, ctx)
+				durationMs := time.Since(start).Milliseconds()
+
+				db.LogToolCall(newID(), ctx.SessionID, block.Name, inputMap, result, isError, durationMs) //nolint:errcheck
+				ctx.OnToolResult(block.Name, result, isError)
+
+				allToolCalls = append(allToolCalls, ToolCall{
+					ID: block.ID, Name: block.Name, Input: inputMap,
+					Result: result, IsError: isError,
+				})
+				toolResults = append(toolResults, contentBlock{
+					Type:      "tool_result",
+					ToolUseID: block.ID,
+					Content:   result,
+				})
+			}
+
+			messages = append(messages, anthropicMessage{Role: "user", Content: toolResults})
 		}
-
-		// Feed results back for next iteration
-		messages = append(messages, anthropicMessage{Role: "user", Content: toolResults})
 	}
 
 	// Persist final assistant message
@@ -595,4 +614,231 @@ func streamRequest(
 // newID generates a simple unique ID using time + random.
 func newID() string {
 	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Nanosecond()%1000)
+}
+
+// ── OpenAI types and agentic loop ─────────────────────────────────────────────
+
+type openAIFunction struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Parameters  interface{} `json:"parameters"`
+}
+
+type openAITool struct {
+	Type     string         `json:"type"`
+	Function openAIFunction `json:"function"`
+}
+
+type openAIMessage struct {
+	Role       string      `json:"role"`
+	Content    interface{} `json:"content,omitempty"` // string or nil
+	ToolCallID string      `json:"tool_call_id,omitempty"`
+	ToolCalls  interface{} `json:"tool_calls,omitempty"`
+}
+
+type openAIRequest struct {
+	Model    string          `json:"model"`
+	Messages []openAIMessage `json:"messages"`
+	Tools    []openAITool    `json:"tools,omitempty"`
+	Stream   bool            `json:"stream"`
+}
+
+// openAIToolsFrom converts the Anthropic tool definitions to OpenAI format.
+func openAIToolsFrom(src []anthropicTool) []openAITool {
+	out := make([]openAITool, len(src))
+	for i, t := range src {
+		out[i] = openAITool{
+			Type: "function",
+			Function: openAIFunction{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.InputSchema,
+			},
+		}
+	}
+	return out
+}
+
+// runOpenAILoop runs the full agentic loop against the OpenAI chat completions API.
+func runOpenAILoop(
+	ctx *ChatContext,
+	model, apiKey, systemPrompt string,
+	history []anthropicMessage,
+	allToolCalls *[]ToolCall,
+	finalText *strings.Builder,
+) {
+	// Convert history to OpenAI message format
+	msgs := []openAIMessage{{Role: "system", Content: systemPrompt}}
+	for _, m := range history {
+		content, _ := m.Content.(string)
+		msgs = append(msgs, openAIMessage{Role: m.Role, Content: content})
+	}
+
+	oaiTools := openAIToolsFrom(tools)
+
+	for {
+		windowed := msgs
+		if len(windowed) > 51 { // 1 system + 50 conversation
+			windowed = append(msgs[:1], msgs[len(msgs)-50:]...)
+		}
+
+		req := openAIRequest{
+			Model:    model,
+			Messages: windowed,
+			Tools:    oaiTools,
+			Stream:   true,
+		}
+
+		body, _ := json.Marshal(req)
+		httpReq, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewReader(body))
+		if err != nil {
+			ctx.OnError("openai request build: " + err.Error())
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+
+		resp, err := http.DefaultClient.Do(httpReq)
+		if err != nil {
+			ctx.OnError("openai request: " + err.Error())
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			var errBody map[string]interface{}
+			json.NewDecoder(resp.Body).Decode(&errBody) //nolint:errcheck
+			ctx.OnError(fmt.Sprintf("openai error %d: %v", resp.StatusCode, errBody))
+			return
+		}
+
+		// Parse SSE stream
+		type toolCallDelta struct {
+			index int
+			id    string
+			name  string
+			args  strings.Builder
+		}
+		toolCallMap := map[int]*toolCallDelta{}
+		var textBuf strings.Builder
+		finishReason := ""
+
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := line[6:]
+			if data == "[DONE]" {
+				break
+			}
+			var event map[string]interface{}
+			if err := json.Unmarshal([]byte(data), &event); err != nil {
+				continue
+			}
+			choices, _ := event["choices"].([]interface{})
+			if len(choices) == 0 {
+				continue
+			}
+			choice, _ := choices[0].(map[string]interface{})
+			if fr, ok := choice["finish_reason"].(string); ok && fr != "" {
+				finishReason = fr
+			}
+			delta, _ := choice["delta"].(map[string]interface{})
+			if delta == nil {
+				continue
+			}
+			if text, ok := delta["content"].(string); ok && text != "" {
+				textBuf.WriteString(text)
+				finalText.WriteString(text)
+				ctx.OnChunk(text, false)
+			}
+			if tcs, ok := delta["tool_calls"].([]interface{}); ok {
+				for _, tcRaw := range tcs {
+					tc, _ := tcRaw.(map[string]interface{})
+					if tc == nil {
+						continue
+					}
+					idx := int(func() float64 { v, _ := tc["index"].(float64); return v }())
+					if toolCallMap[idx] == nil {
+						toolCallMap[idx] = &toolCallDelta{index: idx}
+					}
+					tcd := toolCallMap[idx]
+					if id, ok := tc["id"].(string); ok && id != "" {
+						tcd.id = id
+					}
+					if fn, ok := tc["function"].(map[string]interface{}); ok {
+						if name, ok := fn["name"].(string); ok && name != "" {
+							tcd.name = name
+						}
+						if args, ok := fn["arguments"].(string); ok {
+							tcd.args.WriteString(args)
+						}
+					}
+				}
+			}
+		}
+
+		// Build assistant message with tool_calls if any
+		if len(toolCallMap) > 0 {
+			type oaiTC struct {
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			}
+			tcsSlice := make([]oaiTC, len(toolCallMap))
+			for i, tcd := range toolCallMap {
+				tcsSlice[i] = oaiTC{
+					ID:   tcd.id,
+					Type: "function",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: tcd.name, Arguments: tcd.args.String()},
+				}
+			}
+			msgs = append(msgs, openAIMessage{Role: "assistant", ToolCalls: tcsSlice})
+		} else if textBuf.Len() > 0 {
+			msgs = append(msgs, openAIMessage{Role: "assistant", Content: textBuf.String()})
+		}
+
+		if finishReason != "tool_calls" || len(toolCallMap) == 0 {
+			break
+		}
+
+		// Execute tools and add results
+		for i := 0; i < len(toolCallMap); i++ {
+			tcd := toolCallMap[i]
+			if tcd == nil {
+				continue
+			}
+			var inputMap map[string]interface{}
+			json.Unmarshal([]byte(tcd.args.String()), &inputMap) //nolint:errcheck
+			if inputMap == nil {
+				inputMap = map[string]interface{}{}
+			}
+			ctx.OnToolCall(tcd.name, inputMap)
+
+			start := time.Now()
+			result, isError := executeTool(tcd.name, inputMap, ctx)
+			durationMs := time.Since(start).Milliseconds()
+
+			db.LogToolCall(newID(), ctx.SessionID, tcd.name, inputMap, result, isError, durationMs) //nolint:errcheck
+			ctx.OnToolResult(tcd.name, result, isError)
+
+			*allToolCalls = append(*allToolCalls, ToolCall{
+				ID: tcd.id, Name: tcd.name, Input: inputMap,
+				Result: result, IsError: isError,
+			})
+			msgs = append(msgs, openAIMessage{
+				Role:       "tool",
+				ToolCallID: tcd.id,
+				Content:    result,
+			})
+		}
+	}
 }
