@@ -1,6 +1,10 @@
 package fs
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -57,6 +61,14 @@ type FileContent struct {
 	Content  string `json:"content"`
 	Language string `json:"language"`
 	Size     int64  `json:"size"`
+}
+
+// SearchResult holds a single text search match.
+type SearchResult struct {
+	Path    string `json:"path"`
+	Line    int    `json:"line"`
+	Column  int    `json:"column,omitempty"`
+	Preview string `json:"preview"`
 }
 
 // ReadFile reads a text file and returns its content with language detection.
@@ -133,9 +145,31 @@ func buildTree(path string, depth, maxDepth int) (*FileNode, error) {
 	return node, nil
 }
 
-// SearchFiles runs ripgrep to search for a pattern in files.
+// SearchFiles runs ripgrep and formats matches as plain text for tool responses.
 func SearchFiles(pattern, dir, fileGlob string) (string, error) {
-	args := []string{"--line-number", "--with-filename", "--color=never", pattern}
+	results, err := SearchMatches(pattern, dir, fileGlob)
+	if err != nil {
+		return "", err
+	}
+	if len(results) == 0 {
+		return "No matches found", nil
+	}
+
+	var b strings.Builder
+	for _, result := range results {
+		fmt.Fprintf(&b, "%s:%d:%s\n", result.Path, result.Line, result.Preview)
+	}
+
+	formatted := strings.TrimSpace(b.String())
+	if len(formatted) > 4*1024*1024 {
+		formatted = formatted[:4*1024*1024] + "\n... (truncated)"
+	}
+	return formatted, nil
+}
+
+// SearchMatches runs ripgrep and returns structured search results.
+func SearchMatches(pattern, dir, fileGlob string) ([]SearchResult, error) {
+	args := []string{"--json", "--line-number", "--color=never", pattern}
 	if fileGlob != "" {
 		args = append(args, "--glob", fileGlob)
 	}
@@ -143,20 +177,65 @@ func SearchFiles(pattern, dir, fileGlob string) (string, error) {
 
 	out, err := exec.Command("rg", args...).CombinedOutput()
 	if err != nil {
-		// exit code 1 means no matches — not a real error
-		if len(out) == 0 {
-			return "No matches found", nil
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return []SearchResult{}, nil
+		}
+		return nil, fmt.Errorf("search files: %w", err)
+	}
+
+	type ripgrepEvent struct {
+		Type string `json:"type"`
+		Data struct {
+			Path struct {
+				Text string `json:"text"`
+			} `json:"path"`
+			Lines struct {
+				Text string `json:"text"`
+			} `json:"lines"`
+			LineNumber int `json:"line_number"`
+			Submatches []struct {
+				Start int `json:"start"`
+			} `json:"submatches"`
+		} `json:"data"`
+	}
+
+	results := make([]SearchResult, 0, 32)
+	scanner := bufio.NewScanner(bytes.NewReader(out))
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+
+	for scanner.Scan() {
+		var event ripgrepEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil || event.Type != "match" {
+			continue
+		}
+
+		matchPath := event.Data.Path.Text
+		if !filepath.IsAbs(matchPath) {
+			matchPath = filepath.Join(dir, matchPath)
+		}
+
+		result := SearchResult{
+			Path:    matchPath,
+			Line:    event.Data.LineNumber,
+			Preview: strings.TrimRight(event.Data.Lines.Text, "\r\n"),
+		}
+		if len(event.Data.Submatches) > 0 {
+			result.Column = event.Data.Submatches[0].Start + 1
+		}
+		results = append(results, result)
+		if len(results) >= 200 {
+			break
 		}
 	}
-	result := strings.TrimSpace(string(out))
-	if result == "" {
-		return "No matches found", nil
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("parse search results: %w", err)
 	}
-	// Truncate to 4MB
-	if len(result) > 4*1024*1024 {
-		result = result[:4*1024*1024] + "\n... (truncated)"
+	if results == nil {
+		results = []SearchResult{}
 	}
-	return result, nil
+	return results, nil
 }
 
 // DetectLanguage returns the Monaco language ID for a file path.

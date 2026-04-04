@@ -17,12 +17,11 @@ function tabColor(path: string): string {
 }
 
 export default function Editor() {
-  const { openFiles, activeFilePath, setActiveFile, closeFile, markFileDirty, markFileSaved } = useStore();
+  const { openFiles, activeFilePath, setActiveFile, closeFile, markFileDirty } = useStore();
   const activeFile = openFiles.find(f => f.path === activeFilePath);
 
   const handleSave = (path: string, content: string) => {
     wsClient.send({ type: 'file.save', path, content });
-    markFileSaved(path);
   };
 
   if (openFiles.length === 0) {

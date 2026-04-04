@@ -13,10 +13,44 @@ import StatusBar from './components/StatusBar/StatusBar.js';
 import {
   FolderOpen, GitBranch, AlertCircle, Settings2, Activity,
   Search, ChevronRight, ChevronLeft, ServerCog, ChevronDown,
+  Minus, Square, X,
 } from 'lucide-react';
 
 type ActivityTab = 'explorer' | 'git' | 'issues' | 'search' | 'settings';
 type RightTab = 'chat' | 'agent';
+type NoticeTone = 'info' | 'error';
+type WindowAction = 'minimize' | 'toggle-maximize' | 'close';
+
+function normalizeProjectPath(path: string): string {
+  if (!path) {
+    return '';
+  }
+  if (!path.startsWith('file://')) {
+    return path;
+  }
+
+  try {
+    let normalized = decodeURIComponent(new URL(path).pathname);
+    if (/^\/[A-Za-z]:/.test(normalized)) {
+      normalized = normalized.slice(1);
+    }
+    return normalized || path;
+  } catch {
+    return path;
+  }
+}
+
+function projectLabel(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
+}
+
+function isDesktopShell(): boolean {
+  return typeof window !== 'undefined' && ('__TAURI__' in window || !!window.electronAPI?.isElectron);
+}
+
+function isMacPlatform(): boolean {
+  return typeof navigator !== 'undefined' && /(Mac|iPhone|iPad|iPod)/i.test(navigator.userAgent);
+}
 
 export default function App() {
   const {
@@ -24,12 +58,14 @@ export default function App() {
     sessions, setSessions,
     activeSession, setActiveSession,
     chatMessages, addUserMessage, startAssistantMessage,
-    appendChunk, addToolCall, resolveToolCall,
+    appendChunk, finalizeMessage, addToolCall, resolveToolCall, setMessages,
     fileTree, setFileTree,
-    openFiles, openFile, closeFile, setActiveFile,
+    openFiles, openFile, closeFile, setActiveFile, markFileSaved,
     gitStatus, setGitStatus,
-    githubIssues, setGithubIssues, setGithubIssuesLoading,
-    agentSessions, updateAgentSession,
+    setGithubToken, setGithubUser,
+    githubIssues, setGithubIssues, setGithubIssuesLoading, setGithubIssuesError,
+    agentSessions, updateAgentSession, addLiveToolCall, resolveLiveToolCall,
+    setSearchResults,
   } = useStore();
 
   const [activityTab, setActivityTab] = useState<ActivityTab>('explorer');
@@ -38,19 +74,112 @@ export default function App() {
   const [showTerminal, setShowTerminal] = useState(false);
   const [projectName, setProjectName] = useState('');
   const [terminalHeight, setTerminalHeight] = useState(220);
+  const [appNotice, setAppNotice] = useState<{ message: string; tone: NoticeTone } | null>(null);
 
   const streamingRef = useRef<{ sessionId: string; msgId: string } | null>(null);
+  const pendingToolCallsRef = useRef<Record<string, Array<{
+    id: string;
+    msgId: string;
+    name: string;
+    startedAt: number;
+  }>>>({});
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const desktopShell = isDesktopShell();
+  const macPlatform = isMacPlatform();
+
+  const showNotice = useCallback((message: string, tone: NoticeTone = 'info') => {
+    if (noticeTimerRef.current) {
+      clearTimeout(noticeTimerRef.current);
+    }
+    setAppNotice({ message, tone });
+    noticeTimerRef.current = setTimeout(() => {
+      setAppNotice(null);
+      noticeTimerRef.current = null;
+    }, 4200);
+  }, []);
+
+  useEffect(() => () => {
+    if (noticeTimerRef.current) {
+      clearTimeout(noticeTimerRef.current);
+    }
+  }, []);
+
+  const handleWindowAction = useCallback(async (action: WindowAction) => {
+    try {
+      switch (action) {
+        case 'minimize':
+          await bridge.minimizeWindow();
+          break;
+        case 'toggle-maximize':
+          await bridge.toggleMaximizeWindow();
+          break;
+        case 'close':
+          await bridge.closeWindow();
+          break;
+      }
+    } catch {
+      showNotice('Window controls are unavailable right now.', 'error');
+    }
+  }, [showNotice]);
+
+  const startWindowDrag = useCallback(() => {
+    if (!desktopShell) {
+      return;
+    }
+    void bridge.startWindowDrag().catch(() => {
+      showNotice('Window dragging is unavailable right now.', 'error');
+    });
+  }, [desktopShell, showNotice]);
+
+  const syncRuntimeConfig = useCallback(async () => {
+    const [savedGithubToken, githubOwner, githubRepo, anthropicKey, openaiKey, model] = await Promise.all([
+      bridge.getGithubToken().catch(() => null),
+      bridge.getGithubRepoOwner().catch(() => null),
+      bridge.getGithubRepoName().catch(() => null),
+      bridge.getAnthropicKey().catch(() => null),
+      bridge.getOpenAiKey().catch(() => null),
+      bridge.getModel().catch(() => null),
+    ]);
+
+    setGithubToken(savedGithubToken);
+    wsClient.send({
+      type: 'config.sync',
+      config: {
+        githubToken: savedGithubToken,
+        githubOwner,
+        githubRepo,
+        anthropicKey,
+        openaiKey,
+        model,
+      },
+    });
+
+    if (savedGithubToken) {
+      wsClient.send({ type: 'github.user' });
+    } else {
+      setGithubUser(null);
+    }
+  }, [setGithubToken, setGithubUser]);
 
   // Open folder helper
   const openFolder = useCallback(async (path?: string) => {
-    let folderPath = path;
-    if (!folderPath) {
-      folderPath = await bridge.openFolderDialog() ?? undefined;
+    let folderPath = path ? normalizeProjectPath(path) : undefined;
+    try {
+      if (!folderPath) {
+        const pickedPath = await bridge.openFolderDialog();
+        folderPath = pickedPath ? normalizeProjectPath(pickedPath) : undefined;
+      }
+    } catch {
+      showNotice('The desktop folder picker could not be opened.', 'error');
+      return;
     }
     if (!folderPath) return;
-    setProjectName(folderPath.split('/').pop() ?? folderPath);
+    setProjectName(projectLabel(folderPath));
+    setShowSidebar(true);
+    setActivityTab('explorer');
+    void bridge.setLastProjectPath(folderPath);
     wsClient.send({ type: 'project.open', path: folderPath });
-  }, []);
+  }, [showNotice]);
 
   // WebSocket handler
   useEffect(() => {
@@ -65,6 +194,8 @@ export default function App() {
 
         case 'session.created':
           setActiveSession(msg.session);
+          setMessages([]);
+          pendingToolCallsRef.current[msg.session.id] = [];
           setSessions(prev => {
             const exists = prev.find(s => s.id === msg.session.id);
             return exists ? prev.map(s => s.id === msg.session.id ? msg.session : s)
@@ -74,13 +205,8 @@ export default function App() {
 
         case 'session.loaded':
           setActiveSession(msg.session);
-          msg.messages.forEach(m => {
-            if (m.role === 'user') addUserMessage(m.id, m.content);
-            else {
-              startAssistantMessage(m.id);
-              appendChunk(m.id, m.content);
-            }
-          });
+          setMessages(msg.messages);
+          pendingToolCallsRef.current[msg.session.id] = [];
           break;
 
         case 'chat.chunk': {
@@ -91,42 +217,91 @@ export default function App() {
             startAssistantMessage(msgId);
           }
           appendChunk(streamingRef.current.msgId, msg.content);
-          if (msg.done) streamingRef.current = null;
+          updateAgentSession(sid, {
+            isStreaming: !msg.done,
+            currentActivity: msg.done ? '' : 'Responding...',
+          });
+          if (msg.done) {
+            finalizeMessage(streamingRef.current.msgId);
+            streamingRef.current = null;
+          }
           break;
         }
 
         case 'chat.tool_call': {
-          if (!streamingRef.current) {
+          if (!streamingRef.current || streamingRef.current.sessionId !== msg.sessionId) {
             const msgId = randomUUID();
             streamingRef.current = { sessionId: msg.sessionId, msgId };
             startAssistantMessage(msgId);
           }
+          const toolId = randomUUID();
+          const startedAt = Date.now();
           addToolCall(streamingRef.current.msgId, {
-            id: randomUUID(),
+            id: toolId,
             name: msg.name,
             input: msg.input,
             pending: true,
+          });
+          const queue = pendingToolCallsRef.current[msg.sessionId] ?? [];
+          queue.push({ id: toolId, msgId: streamingRef.current.msgId, name: msg.name, startedAt });
+          pendingToolCallsRef.current[msg.sessionId] = queue;
+          addLiveToolCall(msg.sessionId, {
+            id: toolId,
+            name: msg.name,
+            input: msg.input,
+            pending: true,
+            startedAt,
+          });
+          updateAgentSession(msg.sessionId, {
+            isStreaming: true,
+            currentActivity: msg.name,
           });
           break;
         }
 
         case 'chat.tool_result': {
-          if (streamingRef.current) {
-            resolveToolCall(streamingRef.current.msgId, msg.name, msg.result, msg.isError);
+          const queue = pendingToolCallsRef.current[msg.sessionId] ?? [];
+          const nextToolIndex = queue.findIndex(toolCall => toolCall.name === msg.name);
+          if (nextToolIndex !== -1) {
+            const [toolCall] = queue.splice(nextToolIndex, 1);
+            const durationMs = Date.now() - toolCall.startedAt;
+            resolveToolCall(toolCall.msgId, toolCall.id, msg.result, msg.isError, durationMs);
+            resolveLiveToolCall(msg.sessionId, toolCall.id, msg.result, msg.isError, durationMs);
+            pendingToolCallsRef.current[msg.sessionId] = queue;
           }
+          updateAgentSession(msg.sessionId, {
+            isStreaming: true,
+            currentActivity: 'Responding...',
+          });
           break;
         }
 
         case 'chat.error':
-          streamingRef.current = null;
+          if (streamingRef.current?.sessionId === msg.sessionId) {
+            finalizeMessage(streamingRef.current.msgId);
+            streamingRef.current = null;
+          }
+          pendingToolCallsRef.current[msg.sessionId] = [];
+          updateAgentSession(msg.sessionId, {
+            isStreaming: false,
+            currentActivity: '',
+          });
           break;
 
         case 'file.content':
           openFile(msg.path, msg.content, msg.language);
           break;
 
+        case 'file.saved':
+          markFileSaved(msg.path);
+          break;
+
         case 'file.tree':
           setFileTree(msg.tree);
+          break;
+
+        case 'search.results':
+          setSearchResults(msg.query, msg.results, msg.error ?? null);
           break;
 
         case 'git.status':
@@ -135,7 +310,12 @@ export default function App() {
 
         case 'github.issues':
           setGithubIssues(msg.issues);
+          setGithubIssuesError(msg.error ?? null);
           setGithubIssuesLoading(false);
+          break;
+
+        case 'github.user':
+          setGithubUser(msg.user);
           break;
 
         case 'editor.open':
@@ -157,10 +337,11 @@ export default function App() {
       if (!wsClient.isConnected) return;
       clearInterval(interval);
       setConnected(true);
+      await syncRuntimeConfig();
 
-      const initialPath = await bridge.getProjectPath().catch(() => '');
+      const initialPath = normalizeProjectPath(await bridge.getProjectPath().catch(() => ''));
       if (initialPath && initialPath !== '.') {
-        setProjectName(initialPath.split('/').pop() ?? initialPath);
+        setProjectName(projectLabel(initialPath));
         wsClient.send({ type: 'project.open', path: initialPath });
       } else {
         wsClient.send({ type: 'session.list' });
@@ -168,7 +349,7 @@ export default function App() {
     }, 120);
 
     return () => { off(); clearInterval(interval); wsClient.disconnect(); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [setConnected, syncRuntimeConfig, setGithubIssues, setGithubIssuesError, setGithubIssuesLoading, setGitStatus, setFileTree, setSearchResults, setGithubUser, closeFile, openFile, markFileSaved, setActiveFile, finalizeMessage, appendChunk, startAssistantMessage, updateAgentSession, addToolCall, addLiveToolCall, resolveToolCall, resolveLiveToolCall, setActiveSession, setMessages, setSessions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const hasProject = !!fileTree;
   const toggleActivity = (tab: ActivityTab) => {
@@ -176,48 +357,76 @@ export default function App() {
     else { setActivityTab(tab); setShowSidebar(true); }
   };
 
-  return (
-    <div className="app">
-      {/* Titlebar */}
-      <div className="titlebar titlebar-drag">
-        <span className="titlebar-no-drag" style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--tx-2)', fontSize: 12 }}>
-          <span style={{ fontWeight: 700, color: 'var(--accent-2)', letterSpacing: '-0.01em' }}>E</span>
-          <span style={{ color: 'var(--tx-3)', fontSize: 11 }}>Engine</span>
-          {projectName && (
-            <>
-              <span style={{ color: 'var(--tx-3)' }}>{' · '}</span>
-              <span style={{ color: 'var(--tx-2)', fontWeight: 500 }}>{projectName}</span>
-            </>
-          )}
-        </span>
-        {/* File menu */}
-        <div className="titlebar-no-drag" style={{ marginLeft: 8 }}>
-          <FileMenu onOpenFolder={openFolder} />
-        </div>
-        <div className="titlebar-no-drag" style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
-          <button
-            onClick={() => setShowTerminal(v => !v)}
-            style={{
-              background: showTerminal ? 'var(--surface-3)' : 'transparent',
-              border: 'none', borderRadius: 4, padding: '3px 7px',
-              cursor: 'pointer', color: showTerminal ? 'var(--tx-2)' : 'var(--tx-3)',
-              fontSize: 11, fontFamily: 'inherit', transition: 'all 100ms',
+    return (
+      <div className="app">
+        {/* Titlebar */}
+        <div className="titlebar">
+          <div className="titlebar-leading">
+            {desktopShell && macPlatform && (
+              <WindowControls
+                macStyle
+                onAction={handleWindowAction}
+              />
+            )}
+            <div className="titlebar-brand">
+              <span className="titlebar-brand-mark">E</span>
+              <div className="titlebar-brand-copy">
+                <span className="titlebar-brand-name">Engine</span>
+                <span className="titlebar-brand-subtitle">Desktop shell</span>
+              </div>
+            </div>
+          </div>
+
+          <div
+            className="titlebar-drag-zone"
+            onMouseDown={(event) => {
+              if (event.button !== 0) return;
+              startWindowDrag();
             }}
-          >Terminal</button>
-          <button
-            onClick={() => setShowSidebar(v => !v)}
-            style={{
-              background: 'transparent', border: 'none', borderRadius: 4,
-              padding: '3px 5px', cursor: 'pointer', color: 'var(--tx-3)',
-              display: 'flex', alignItems: 'center', transition: 'color 100ms',
+            onDoubleClick={() => {
+              if (!desktopShell) return;
+              void handleWindowAction('toggle-maximize');
             }}
           >
-            {showSidebar ? <ChevronLeft size={13} /> : <ChevronRight size={13} />}
-          </button>
-        </div>
-      </div>
+            <div className="titlebar-chip">
+              <span className={`titlebar-chip-dot ${connected ? 'online' : 'offline'}`} />
+              <span className="titlebar-chip-name">{projectName || 'No workspace open'}</span>
+              {gitStatus?.branch && (
+                <span className="titlebar-chip-branch">{gitStatus.branch}</span>
+              )}
+            </div>
+          </div>
 
-      <div className="workspace">
+          <div className="titlebar-actions">
+            <button className="shell-action primary" onClick={() => openFolder()}>
+              <FolderOpen size={14} />
+              Open Folder
+            </button>
+            <FileMenu onOpenFolder={() => openFolder()} />
+            <button
+              className={`shell-action ${showTerminal ? 'active' : ''}`}
+              onClick={() => setShowTerminal(v => !v)}
+            >
+              Terminal
+            </button>
+            <button
+              className="shell-icon-btn"
+              onClick={() => setShowSidebar(v => !v)}
+              title={showSidebar ? 'Hide sidebar' : 'Show sidebar'}
+            >
+              {showSidebar ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
+            </button>
+            {desktopShell && !macPlatform && (
+              <WindowControls onAction={handleWindowAction} />
+            )}
+          </div>
+        </div>
+
+        {appNotice && (
+          <ShellNotice message={appNotice.message} tone={appNotice.tone} />
+        )}
+
+        <div className="workspace">
         {/* Activity bar */}
         <div className="activity-bar">
           {([
@@ -263,10 +472,10 @@ export default function App() {
               <Editor />
             </div>
           ) : (
-            <WelcomeScreen
-              sessions={sessions}
-              onOpenFolder={openFolder}
-            />
+             <WelcomeScreen
+               sessions={sessions}
+               onOpenFolder={openFolder}
+             />
           )}
 
           {/* Terminal panel */}
@@ -292,7 +501,47 @@ export default function App() {
         </div>
       </div>
 
-      <StatusBar />
+        <StatusBar />
+      </div>
+  );
+}
+
+function WindowControls({
+  macStyle = false,
+  onAction,
+}: {
+  macStyle?: boolean;
+  onAction: (action: WindowAction) => void;
+}) {
+  if (macStyle) {
+    return (
+      <div className="window-controls mac">
+        <button className="traffic-light close" aria-label="Close window" title="Close" onClick={() => onAction('close')} />
+        <button className="traffic-light minimize" aria-label="Minimize window" title="Minimize" onClick={() => onAction('minimize')} />
+        <button className="traffic-light maximize" aria-label="Zoom window" title="Zoom" onClick={() => onAction('toggle-maximize')} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="window-controls inline">
+      <button className="window-control-btn" aria-label="Minimize window" title="Minimize" onClick={() => onAction('minimize')}>
+        <Minus size={12} />
+      </button>
+      <button className="window-control-btn" aria-label="Maximize window" title="Maximize" onClick={() => onAction('toggle-maximize')}>
+        <Square size={11} />
+      </button>
+      <button className="window-control-btn danger" aria-label="Close window" title="Close" onClick={() => onAction('close')}>
+        <X size={12} />
+      </button>
+    </div>
+  );
+}
+
+function ShellNotice({ message, tone }: { message: string; tone: NoticeTone }) {
+  return (
+    <div className={`shell-notice ${tone}`}>
+      {message}
     </div>
   );
 }
@@ -317,17 +566,10 @@ function FileMenu({ onOpenFolder }: { onOpenFolder: () => void }) {
   };
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div className="shell-menu-root">
       <button
         onClick={() => setOpen(v => !v)}
-        style={{
-          background: open ? 'var(--surface-3)' : 'transparent',
-          border: 'none', borderRadius: 4, padding: '3px 6px',
-          cursor: 'pointer', color: 'var(--tx-3)',
-          fontSize: 11, fontFamily: 'inherit',
-          display: 'flex', alignItems: 'center', gap: 2,
-          transition: 'all 100ms',
-        }}
+        className={`shell-action ${open ? 'active' : ''}`}
       >
         File <ChevronDown size={10} />
       </button>
@@ -338,14 +580,9 @@ function FileMenu({ onOpenFolder }: { onOpenFolder: () => void }) {
             style={{ position: 'fixed', inset: 0, zIndex: 99 }}
             onClick={() => setOpen(false)}
           />
-          <div style={{
-            position: 'absolute', top: '100%', left: 0, marginTop: 2,
-            background: 'var(--surface)', border: '1px solid var(--border-2)',
-            borderRadius: 'var(--radius)', boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-            minWidth: 200, zIndex: 100, overflow: 'hidden',
-          }}>
+          <div className="shell-menu">
             <MenuItem icon={<FolderOpen size={13} />} label="Open Folder…" onClick={() => { setOpen(false); onOpenFolder(); }} />
-            <div style={{ height: 1, background: 'var(--border)', margin: '2px 0' }} />
+            <div className="shell-menu-divider" />
             <MenuItem icon={<ServerCog size={13} />} label="Install Agent Service" onClick={handleInstall} />
             <MenuItem icon={<ServerCog size={13} />} label="Remove Agent Service" onClick={handleUninstall} />
           </div>
@@ -353,13 +590,7 @@ function FileMenu({ onOpenFolder }: { onOpenFolder: () => void }) {
       )}
 
       {serviceMsg && (
-        <div style={{
-          position: 'fixed', bottom: 32, left: '50%', transform: 'translateX(-50%)',
-          background: 'var(--surface)', border: '1px solid var(--border-2)',
-          borderRadius: 'var(--radius)', padding: '8px 16px', fontSize: 12,
-          color: 'var(--tx-2)', zIndex: 200, boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
-          maxWidth: 360, textAlign: 'center',
-        }}>
+        <div className="shell-menu-toast">
           {serviceMsg}
         </div>
       )}
@@ -371,15 +602,9 @@ function MenuItem({ icon, label, onClick }: { icon: React.ReactNode; label: stri
   return (
     <div
       onClick={onClick}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        padding: '7px 12px', cursor: 'pointer', fontSize: 12,
-        color: 'var(--tx-2)', transition: 'background 80ms',
-      }}
-      onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface-2)')}
-      onMouseLeave={e => (e.currentTarget.style.background = '')}
+      className="shell-menu-item"
     >
-      <span style={{ color: 'var(--tx-3)', display: 'flex' }}>{icon}</span>
+      <span className="shell-menu-item-icon">{icon}</span>
       {label}
     </div>
   );
@@ -405,35 +630,51 @@ function WelcomeScreen({
 
   return (
     <div className="welcome">
-      <div className="welcome-content animate-appear">
-        <div className="welcome-logo">E</div>
-        <div className="welcome-title">Engine</div>
-        <div className="welcome-subtitle">AI-native code editor</div>
+      <div className="welcome-grid animate-appear">
+        <div className="welcome-hero">
+          <div className="welcome-kicker">Engine shell</div>
+          <div className="welcome-logo">E</div>
+          <div className="welcome-title">Open a workspace and keep the editor, shell, and AI in one coherent flow.</div>
+          <div className="welcome-subtitle">
+            Persistent sessions, live tool feedback, and a desktop shell that behaves like a real app instead of a prototype.
+          </div>
 
-        <div className="welcome-actions">
-          <button className="btn-primary" onClick={() => onOpenFolder()}>
-            <FolderOpen size={15} />
-            Open Folder
-          </button>
+          <div className="welcome-actions">
+            <button className="btn-primary" onClick={() => onOpenFolder()}>
+              <FolderOpen size={15} />
+              Open Folder
+            </button>
+            {recent[0] && (
+              <button className="btn-secondary" onClick={() => onOpenFolder(recent[0].path)}>
+                <ChevronRight size={15} />
+                Reopen {projectLabel(recent[0].path)}
+              </button>
+            )}
+          </div>
+
+          <div className="welcome-pill-row">
+            <span className="welcome-pill">Native desktop shell</span>
+            <span className="welcome-pill">Persistent project context</span>
+            <span className="welcome-pill">Live terminal + AI tooling</span>
+          </div>
         </div>
 
-        {recent.length > 0 && (
-          <div className="welcome-recent">
-            <div className="welcome-recent-title">Recent</div>
-            {recent.map(r => {
-              const name = r.path.split('/').pop() ?? r.path;
-              return (
-                <div key={r.path} className="welcome-recent-item" onClick={() => onOpenFolder(r.path)}>
-                  <FolderOpen size={13} style={{ flexShrink: 0, color: 'var(--accent-2)' }} />
-                  <div style={{ flex: 1, overflow: 'hidden' }}>
-                    <div className="welcome-recent-name">{name}</div>
-                    <div className="welcome-recent-path">{r.path}</div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+        <div className="welcome-recent-card">
+          <div className="welcome-recent-title">Recent workspaces</div>
+          {recent.length > 0 ? recent.map(r => (
+            <div key={r.path} className="welcome-recent-item" onClick={() => onOpenFolder(r.path)}>
+              <FolderOpen size={13} style={{ flexShrink: 0, color: 'var(--accent-2)' }} />
+              <div style={{ flex: 1, overflow: 'hidden' }}>
+                <div className="welcome-recent-name">{projectLabel(r.path)}</div>
+                <div className="welcome-recent-path">{r.path}</div>
+              </div>
+            </div>
+          )) : (
+            <div className="welcome-empty-state">
+              Your recent workspaces will appear here after you open one.
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

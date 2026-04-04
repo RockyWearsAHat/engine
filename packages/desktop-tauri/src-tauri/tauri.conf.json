@@ -6,11 +6,11 @@
   "build": {
     "frontendDist": "../../client/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "",
-    "beforeBuildCommand": "pnpm --filter @engine/client build"
+    "beforeDevCommand": "pnpm -C ../.. build:go && pnpm --filter @engine/client dev -- --host 127.0.0.1 --port 5173",
+    "beforeBuildCommand": "pnpm -C ../.. build:go && pnpm --filter @engine/client build"
   },
   "app": {
-    "withGlobalTauri": false,
+    "withGlobalTauri": true,
     "windows": [
       {
         "label": "main",

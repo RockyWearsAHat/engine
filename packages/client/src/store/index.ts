@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Session, Message, FileNode, GitStatus, GitHubUser, GitHubIssue, AgentSession, LiveToolCall, TabInfo } from '@engine/shared';
+import type { Session, Message, FileNode, GitStatus, GitHubUser, GitHubIssue, AgentSession, LiveToolCall, TabInfo, SearchResult } from '@engine/shared';
 import { wsClient } from '../ws/client';
 
 export interface ToolCallDisplay {
@@ -46,7 +46,7 @@ interface EditorStore {
   appendChunk: (id: string, text: string) => void;
   finalizeMessage: (id: string) => void;
   addToolCall: (msgId: string, tc: ToolCallDisplay) => void;
-  resolveToolCall: (msgId: string, name: string, result: unknown, isError: boolean) => void;
+  resolveToolCall: (msgId: string, toolId: string, result: unknown, isError: boolean, durationMs?: number) => void;
   setMessages: (msgs: Message[]) => void;
 
   // File tree
@@ -75,8 +75,20 @@ interface EditorStore {
   // GitHub Issues
   githubIssues: GitHubIssue[];
   githubIssuesLoading: boolean;
+  githubIssuesError: string | null;
   setGithubIssues: (issues: GitHubIssue[], loading?: boolean) => void;
   setGithubIssuesLoading: (loading: boolean) => void;
+  setGithubIssuesError: (error: string | null) => void;
+
+  // Search
+  searchQuery: string;
+  searchResults: SearchResult[];
+  searchLoading: boolean;
+  searchError: string | null;
+  setSearchQuery: (query: string) => void;
+  setSearchLoading: (loading: boolean) => void;
+  setSearchResults: (query: string, results: SearchResult[], error?: string | null) => void;
+  clearSearch: () => void;
 
   // Agent monitor
   agentSessions: AgentSession[];
@@ -106,13 +118,38 @@ function syncTabs(get: () => EditorStore): void {
   wsClient.send({ type: 'editor.tabs.sync', tabs });
 }
 
+function mergeAgentSessions(sessions: Session[], previous: AgentSession[]): AgentSession[] {
+  return sessions.map(session => {
+    const existing = previous.find(agentSession => agentSession.id === session.id);
+    if (!existing) {
+      return {
+        ...session,
+        isActive: false,
+        isStreaming: false,
+        currentActivity: '',
+        recentToolCalls: [],
+      };
+    }
+    return {
+      ...existing,
+      ...session,
+    };
+  });
+}
+
 export const useStore = create<EditorStore>((set, get) => ({
   connected: false,
   setConnected: (v) => set({ connected: v }),
 
   sessions: [],
   activeSession: null,
-  setSessions: (sessions) => set(s => ({ sessions: typeof sessions === 'function' ? sessions(s.sessions) : sessions })),
+  setSessions: (sessions) => set(s => {
+    const nextSessions = typeof sessions === 'function' ? sessions(s.sessions) : sessions;
+    return {
+      sessions: nextSessions,
+      agentSessions: mergeAgentSessions(nextSessions, s.agentSessions),
+    };
+  }),
   setActiveSession: (s) => set({ activeSession: s }),
 
   chatMessages: [],
@@ -144,13 +181,13 @@ export const useStore = create<EditorStore>((set, get) => ({
     ),
   })),
 
-  resolveToolCall: (msgId, name, result, isError) => set(s => ({
+  resolveToolCall: (msgId, toolId, result, isError, durationMs) => set(s => ({
     chatMessages: s.chatMessages.map(m =>
       m.id === msgId
         ? {
             ...m,
             toolCalls: m.toolCalls.map(tc =>
-              tc.name === name && tc.pending ? { ...tc, result, isError, pending: false } : tc
+              tc.id === toolId ? { ...tc, result, isError, pending: false, durationMs } : tc
             ),
           }
         : m
@@ -223,16 +260,61 @@ export const useStore = create<EditorStore>((set, get) => ({
 
   githubIssues: [],
   githubIssuesLoading: false,
+  githubIssuesError: null,
   setGithubIssues: (issues, loading = false) => set({ githubIssues: issues, githubIssuesLoading: loading }),
   setGithubIssuesLoading: (loading) => set({ githubIssuesLoading: loading }),
+  setGithubIssuesError: (error) => set({ githubIssuesError: error }),
+
+  searchQuery: '',
+  searchResults: [],
+  searchLoading: false,
+  searchError: null,
+  setSearchQuery: (query) => set({ searchQuery: query }),
+  setSearchLoading: (loading) => set({ searchLoading: loading }),
+  setSearchResults: (query, results, error = null) => set({
+    searchQuery: query,
+    searchResults: results,
+    searchLoading: false,
+    searchError: error,
+  }),
+  clearSearch: () => set({
+    searchQuery: '',
+    searchResults: [],
+    searchLoading: false,
+    searchError: null,
+  }),
 
   agentSessions: [],
   activeAgentSessionId: null,
   setActiveAgentSession: (id) => set({ activeAgentSessionId: id }),
 
-  updateAgentSession: (id, patch) => set(s => ({
-    agentSessions: s.agentSessions.map(a => a.id === id ? { ...a, ...patch } : a),
-  })),
+  updateAgentSession: (id, patch) => set(s => {
+    const existing = s.agentSessions.find(agentSession => agentSession.id === id);
+    if (existing) {
+      return {
+        agentSessions: s.agentSessions.map(agentSession =>
+          agentSession.id === id ? { ...agentSession, ...patch } : agentSession
+        ),
+      };
+    }
+    const session = s.sessions.find(sessionItem => sessionItem.id === id);
+    if (!session) {
+      return {};
+    }
+    return {
+      agentSessions: [
+        ...s.agentSessions,
+        {
+          ...session,
+          isActive: false,
+          isStreaming: false,
+          currentActivity: '',
+          recentToolCalls: [],
+          ...patch,
+        },
+      ],
+    };
+  }),
 
   addLiveToolCall: (sessionId, tc) => set(s => ({
     agentSessions: s.agentSessions.map(a =>

@@ -152,5 +152,83 @@ func Commit(cwd, message string) (string, error) {
 
 // GetRemoteOrigin returns the URL of the origin remote.
 func GetRemoteOrigin(cwd string) (string, error) {
-	return run(cwd, "remote", "get-url", "origin")
+	return GetRemoteURL(cwd, "origin")
+}
+
+// GetRemoteURL returns the URL of a named remote.
+func GetRemoteURL(cwd, name string) (string, error) {
+	return run(cwd, "remote", "get-url", name)
+}
+
+// ListRemotes returns the configured git remotes for a repository.
+func ListRemotes(cwd string) ([]string, error) {
+	out, err := run(cwd, "remote")
+	if err != nil {
+		return nil, err
+	}
+
+	remotes := make([]string, 0)
+	for _, line := range strings.Split(out, "\n") {
+		remote := strings.TrimSpace(line)
+		if remote != "" {
+			remotes = append(remotes, remote)
+		}
+	}
+	return remotes, nil
+}
+
+// ParseGitHubRepo extracts an owner/repo pair from a GitHub remote URL.
+func ParseGitHubRepo(remoteURL string) (string, string, bool) {
+	trimmed := strings.TrimSpace(strings.TrimSuffix(remoteURL, ".git"))
+	if trimmed == "" {
+		return "", "", false
+	}
+
+	var repoPath string
+	switch {
+	case strings.Contains(trimmed, "github.com:"):
+		repoPath = trimmed[strings.Index(trimmed, "github.com:")+len("github.com:"):]
+	case strings.Contains(trimmed, "github.com/"):
+		repoPath = trimmed[strings.Index(trimmed, "github.com/")+len("github.com/"):]
+	default:
+		return "", "", false
+	}
+
+	repoPath = strings.Trim(repoPath, "/")
+	parts := strings.Split(repoPath, "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+
+	return parts[0], parts[1], true
+}
+
+// ResolveGitHubRepo returns the first GitHub owner/repo found in repository remotes.
+func ResolveGitHubRepo(cwd string) (string, string, error) {
+	if remoteURL, err := GetRemoteOrigin(cwd); err == nil {
+		if owner, repo, ok := ParseGitHubRepo(remoteURL); ok {
+			return owner, repo, nil
+		}
+	}
+
+	remotes, err := ListRemotes(cwd)
+	if err != nil {
+		return "", "", fmt.Errorf("no git remote")
+	}
+
+	for _, remote := range remotes {
+		if remote == "origin" {
+			continue
+		}
+
+		remoteURL, err := GetRemoteURL(cwd, remote)
+		if err != nil {
+			continue
+		}
+		if owner, repo, ok := ParseGitHubRepo(remoteURL); ok {
+			return owner, repo, nil
+		}
+	}
+
+	return "", "", fmt.Errorf("not a GitHub repo")
 }

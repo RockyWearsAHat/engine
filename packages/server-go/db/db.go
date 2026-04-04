@@ -13,11 +13,27 @@ import (
 
 var globalDB *sql.DB
 
-// Init opens (or creates) the SQLite database at <projectPath>/.engine/state.db.
+func stateDir(projectPath string) string {
+	if override := os.Getenv("ENGINE_STATE_DIR"); override != "" {
+		return override
+	}
+	if configDir, err := os.UserConfigDir(); err == nil && configDir != "" {
+		return filepath.Join(configDir, "Engine")
+	}
+	if homeDir, err := os.UserHomeDir(); err == nil && homeDir != "" {
+		return filepath.Join(homeDir, ".engine")
+	}
+	if projectPath != "" {
+		return filepath.Join(projectPath, ".engine")
+	}
+	return filepath.Join(".", ".engine")
+}
+
+// Init opens (or creates) the SQLite database at the Engine app state path.
 func Init(projectPath string) error {
-	dir := filepath.Join(projectPath, ".engine")
+	dir := stateDir(projectPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("create .engine dir: %w", err)
+		return fmt.Errorf("create engine state dir: %w", err)
 	}
 	dbPath := filepath.Join(dir, "state.db")
 

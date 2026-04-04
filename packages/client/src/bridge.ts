@@ -26,12 +26,53 @@ declare global {
   }
 }
 
+const githubRepoOwnerStorageKey = 'engine.githubRepoOwner';
+const githubRepoNameStorageKey = 'engine.githubRepoName';
+
 function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI__' in window;
 }
 
 function isElectron(): boolean {
   return typeof window !== 'undefined' && !!window.electronAPI?.isElectron;
+}
+
+function getBrowserSetting(key: string): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const value = window.localStorage.getItem(key)?.trim();
+    return value ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function setBrowserSetting(key: string, value: string): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  try {
+    const nextValue = value.trim();
+    if (nextValue) {
+      window.localStorage.setItem(key, nextValue);
+    } else {
+      window.localStorage.removeItem(key);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface BackgroundServiceStatus {
+  platform: string;
+  installed: boolean;
+  running: boolean;
+  startupTarget: string;
 }
 
 export const bridge = {
@@ -66,11 +107,46 @@ export const bridge = {
     return false;
   },
 
+  async getGithubRepoOwner(): Promise<string | null> {
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<string | null>('get_github_owner');
+    }
+    return getBrowserSetting(githubRepoOwnerStorageKey);
+  },
+
+  async setGithubRepoOwner(owner: string): Promise<boolean> {
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<boolean>('set_github_owner', { owner });
+    }
+    return setBrowserSetting(githubRepoOwnerStorageKey, owner);
+  },
+
+  async getGithubRepoName(): Promise<string | null> {
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<string | null>('get_github_repo');
+    }
+    return getBrowserSetting(githubRepoNameStorageKey);
+  },
+
+  async setGithubRepoName(repo: string): Promise<boolean> {
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<boolean>('set_github_repo', { repo });
+    }
+    return setBrowserSetting(githubRepoNameStorageKey, repo);
+  },
+
   async openFolderDialog(): Promise<string | null> {
     if (isTauri()) {
       return window.__TAURI__!.core.invoke<string | null>('open_folder_dialog');
     }
     return null;
+  },
+
+  async setLastProjectPath(path: string): Promise<boolean> {
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<boolean>('set_last_project_path', { path });
+    }
+    return false;
   },
 
   async openExternal(url: string): Promise<void> {
@@ -128,8 +204,39 @@ export const bridge = {
     return 'Not supported on this platform.';
   },
 
-  async agentServiceStatus(): Promise<string> {
-    if (isTauri()) return window.__TAURI__!.core.invoke<string>('agent_service_status');
-    return 'not_installed';
+  async agentServiceStatus(): Promise<BackgroundServiceStatus> {
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<BackgroundServiceStatus>('agent_service_status');
+    }
+    return {
+      platform: typeof navigator !== 'undefined' ? navigator.platform : 'web',
+      installed: false,
+      running: false,
+      startupTarget: 'not available in web mode',
+    };
+  },
+
+  async minimizeWindow(): Promise<void> {
+    if (isTauri()) {
+      await window.__TAURI__!.core.invoke('window_minimize');
+    }
+  },
+
+  async toggleMaximizeWindow(): Promise<void> {
+    if (isTauri()) {
+      await window.__TAURI__!.core.invoke('window_toggle_maximize');
+    }
+  },
+
+  async closeWindow(): Promise<void> {
+    if (isTauri()) {
+      await window.__TAURI__!.core.invoke('window_close');
+    }
+  },
+
+  async startWindowDrag(): Promise<void> {
+    if (isTauri()) {
+      await window.__TAURI__!.core.invoke('window_start_drag');
+    }
   },
 };

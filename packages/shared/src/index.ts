@@ -43,6 +43,22 @@ export interface FileContent {
   size: number;
 }
 
+export interface SearchResult {
+  path: string;
+  line: number;
+  column?: number;
+  preview: string;
+}
+
+export interface RuntimeConfig {
+  githubToken?: string | null;
+  githubOwner?: string | null;
+  githubRepo?: string | null;
+  anthropicKey?: string | null;
+  openaiKey?: string | null;
+  model?: string | null;
+}
+
 // Git types
 export interface GitStatus {
   branch: string;
@@ -78,9 +94,12 @@ export type ClientMessage =
   | { type: 'file.read'; path: string }
   | { type: 'file.save'; path: string; content: string }
   | { type: 'file.tree'; path: string }
+  | { type: 'file.search'; query: string; root?: string; fileGlob?: string }
   | { type: 'git.status' }
   | { type: 'git.diff'; path?: string }
   | { type: 'git.log'; limit?: number }
+  | { type: 'config.sync'; config: RuntimeConfig }
+  | { type: 'github.user' }
   | { type: 'github.issues'; projectPath: string }
   | { type: 'terminal.create'; cwd: string }
   | { type: 'terminal.input'; terminalId: string; data: string }
@@ -100,9 +119,11 @@ export type ServerMessage =
   | { type: 'file.content'; path: string; content: string; language: string }
   | { type: 'file.saved'; path: string }
   | { type: 'file.tree'; tree: FileNode }
+  | { type: 'search.results'; query: string; results: SearchResult[]; error?: string }
   | { type: 'git.status'; status: GitStatus }
   | { type: 'git.diff'; path?: string; diff: string }
   | { type: 'git.log'; commits: GitCommit[] }
+  | { type: 'github.user'; user: GitHubUser | null; error?: string }
   | { type: 'github.issues'; issues: GitHubIssue[]; error?: string }
   | { type: 'terminal.created'; terminalId: string; cwd: string }
   | { type: 'terminal.output'; terminalId: string; data: string }
