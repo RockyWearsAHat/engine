@@ -4,6 +4,8 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
+#[cfg(target_os = "windows")]
+use std::process::Stdio;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -13,11 +15,13 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 const DEFAULT_PORT: u16 = 3000;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 const STARTUP_ENTRY_PATH_ENV: &str = "ENGINE_STARTUP_ENTRY_PATH";
 #[cfg(target_os = "windows")]
 const STARTUP_REG_PATH_ENV: &str = "ENGINE_STARTUP_REG_PATH";
 #[cfg(target_os = "windows")]
 const STARTUP_REG_NAME_ENV: &str = "ENGINE_STARTUP_REG_NAME";
+#[cfg(target_os = "macos")]
 const STARTUP_TEST_MODE_ENV: &str = "ENGINE_STARTUP_TEST_MODE";
 
 struct ServerProcess {
@@ -106,23 +110,13 @@ fn project_path_for_server(cfg: &AppConfig) -> String {
         .unwrap_or_else(default_project_path)
 }
 
+#[cfg(target_os = "macos")]
 fn logs_dir() -> PathBuf {
-    #[cfg(target_os = "macos")]
-    {
-        return dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("Library")
-            .join("Logs")
-            .join("Engine");
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        return dirs::data_local_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("Engine")
-            .join("logs");
-    }
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Library")
+        .join("Logs")
+        .join("Engine")
 }
 
 fn server_running(port: u16) -> bool {
@@ -297,6 +291,7 @@ fn cli_action() -> Option<CliAction> {
     })
 }
 
+#[cfg(target_os = "macos")]
 fn startup_test_mode() -> bool {
     matches!(
         env::var(STARTUP_TEST_MODE_ENV).ok().as_deref(),
@@ -304,6 +299,7 @@ fn startup_test_mode() -> bool {
     )
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn startup_entry_override() -> Option<PathBuf> {
     env::var(STARTUP_ENTRY_PATH_ENV)
         .ok()
@@ -394,6 +390,8 @@ fn startup_service_installed() -> bool {
             "/v",
             &startup_registry_name(),
         ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
@@ -491,6 +489,8 @@ fn install_startup_service(binary: &Path) -> Result<String, String> {
             &command,
             "/f",
         ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .map_err(|e| e.to_string())?;
 
@@ -544,6 +544,8 @@ fn uninstall_startup_service() -> Result<String, String> {
             &startup_registry_name(),
             "/f",
         ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .map_err(|e| e.to_string())?;
 
