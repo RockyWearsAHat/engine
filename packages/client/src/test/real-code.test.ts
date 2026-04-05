@@ -162,6 +162,26 @@ describe('folderUtils - Real Production Code Tests', () => {
       const result = hasFolderWithCollapsedChildren('/nonexistent', tree, expanded);
       expect(result).toBe(false);
     });
+
+    it('handles undefined node input', () => {
+      const expanded = new Set<string>();
+      const result = hasFolderWithCollapsedChildren('/project', undefined, expanded);
+      // Line 45: if (!node) return false;
+      expect(result).toBe(false);
+    });
+
+    it('returns false for folder with no children property', () => {
+      const tree: FileNode = {
+        name: 'project',
+        path: '/project',
+        type: 'directory',
+        // No children property
+      };
+      const expanded = new Set<string>();
+      const result = hasFolderWithCollapsedChildren('/project', tree, expanded);
+      // Line 61: ... ? ... : false
+      expect(result).toBe(false);
+    });
   });
 
   describe('shouldShowExpandAll - Real Code', () => {
@@ -185,6 +205,19 @@ describe('folderUtils - Real Production Code Tests', () => {
       const tree = createTestTree();
       const expanded = new Set<string>();
       const result = shouldShowExpandAll('/project/src/components', tree, expanded);
+      expect(result).toBe(false);
+    });
+
+    it('handles null tree input', () => {
+      const expanded = new Set<string>();
+      const result = shouldShowExpandAll('/project', null, expanded);
+      // Line 97: tree || undefined
+      expect(result).toBe(false);
+    });
+
+    it('handles undefined tree input', () => {
+      const expanded = new Set<string>();
+      const result = shouldShowExpandAll('/project', undefined, expanded);
       expect(result).toBe(false);
     });
   });
