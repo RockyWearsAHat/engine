@@ -752,7 +752,7 @@ function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirS
         <span className="tree-name">{node.name}</span>
       </div>
       {open && node.children?.map(child => (
-        <TreeDir key={child.path} node={child} depth={depth + 1} activePath={activePath} statusMap={statusMap} dirStatusMap={dirStatusMap} showDotfiles={showDotfiles} expandedFolders={expandedFolders} onContextMenu={onContextMenu} onToggleFolder={onToggleFolder} />
+        <TreeDir key={child.path} node={child} depth={depth + 1} defaultOpen={expandedFolders.has(child.path)} activePath={activePath} statusMap={statusMap} dirStatusMap={dirStatusMap} showDotfiles={showDotfiles} expandedFolders={expandedFolders} onContextMenu={onContextMenu} onToggleFolder={onToggleFolder} />
       ))}
     </>
   );
