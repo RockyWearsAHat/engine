@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import type { GitCommit, GitStatus } from '@engine/shared';
 import { useStore } from '../../store/index.js';
 import type { OpenFile } from '../../store/index.js';
@@ -7,8 +8,8 @@ import { bridge } from '../../bridge.js';
 import type { FileNode, GitHubIssue, SearchResult } from '@engine/shared';
 import {
   FolderOpen, Folder, RefreshCw, GitBranch,
-  AlertCircle, FileText, ChevronRight,
-  Loader2, Search, FilePlus, FolderPlus, ChevronDown, Circle,
+  AlertCircle, FileText, ChevronRight, Circle,
+  Loader2, Search,
 } from 'lucide-react';
 
 type ActivityTab = 'explorer' | 'open-editors' | 'git' | 'search' | 'issues';
@@ -77,8 +78,8 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
           searchQuery, searchResults, searchLoading, searchError,
           setSearchQuery, setSearchLoading, clearSearch, showDotfiles } = useStore();
 
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; dirPath: string } | null>(null);
   const [groupFolders, setGroupFolders] = useState(true);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
 
   // Sort children: directories first (alphabetical) if grouping, then files (alphabetical)
   const sortNode = (node: FileNode): FileNode => {
@@ -127,6 +128,74 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
     clearSearch();
   }, [activeSession?.id]);
 
+  // Handle native context menu events
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    const setupMenuListener = async () => {
+      const { listen } = await import('@tauri-apps/api/event');
+      unlisten = await listen<string>('engine-context-menu', (event) => {
+        const itemId = event.payload;
+        switch (itemId) {
+          case 'new-file': {
+            const name = prompt('New file name:');
+            if (name && activeSession) {
+              const path = activeSession.projectPath.endsWith('/') 
+                ? activeSession.projectPath + name 
+                : activeSession.projectPath + '/' + name;
+              wsClient.send({ type: 'file.create', path });
+            }
+            break;
+          }
+          case 'new-folder': {
+            const name = prompt('New folder name:');
+            if (name && activeSession) {
+              const path = activeSession.projectPath.endsWith('/') 
+                ? activeSession.projectPath + name 
+                : activeSession.projectPath + '/' + name;
+              wsClient.send({ type: 'folder.create', path });
+            }
+            break;
+          }
+          case 'group-folders': {
+            setGroupFolders(!groupFolders);
+            break;
+          }
+          case 'expand-all': {
+            // Expand all folders by finding all .tree-node elements and clicking chevrons if closed
+            const chevrons = document.querySelectorAll('.tree-chevron:not(.open)');
+            chevrons.forEach(chevron => {
+              const parent = chevron.closest('.tree-node');
+              if (parent) {
+                (parent as HTMLElement).click();
+              }
+            });
+            break;
+          }
+          case 'collapse-all': {
+            // Collapse all folders by finding all .tree-node elements and clicking chevrons if open
+            const chevrons = document.querySelectorAll('.tree-chevron.open');
+            chevrons.forEach(chevron => {
+              const parent = chevron.closest('.tree-node');
+              if (parent) {
+                (parent as HTMLElement).click();
+              }
+            });
+            break;
+          }
+        }
+      });
+    };
+
+    setupMenuListener().catch(err => console.error('Failed to setup menu listener:', err));
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [activeSession, groupFolders]);
+
+
+
   const refresh = () => {
     if (!activeSession) return;
     wsClient.send({ type: 'file.tree', path: activeSession.projectPath });
@@ -165,25 +234,71 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
           <div className="sidebar-body" onContextMenu={(e) => {
             e.preventDefault();
             if (visibleTree) {
-              setContextMenu({ x: e.clientX, y: e.clientY, dirPath: activeSession?.projectPath ?? '' });
+              // Count total folders and expanded folders
+              const countFolders = (node: FileNode): { total: number; expanded: number } => {
+                if (node.type === 'file') return { total: 0, expanded: 0 };
+                let total = 1;
+                let expanded = expandedFolders.has(node.path) ? 1 : 0;
+                if (node.children) {
+                  for (const child of node.children) {
+                    const count = countFolders(child);
+                    total += count.total;
+                    expanded += count.expanded;
+                  }
+                }
+                return { total, expanded };
+              };
+              const { total: totalFolders, expanded: expandedCount } = countFolders(visibleTree);
+              
+              const items: [string, string][] = [
+                ['New File', 'new-file'],
+                ['New Folder', 'new-folder'],
+              ];
+              
+              // Only show collapse if some folders are expanded
+              if (expandedCount > 0) {
+                items.push(['Collapse All', 'collapse-all']);
+              }
+              
+              // Only show expand if some folders are collapsed
+              if (expandedCount < totalFolders) {
+                items.push(['Expand All', 'expand-all']);
+              }
+              
+              items.push(['Group Folders', 'group-folders']);
+              
+              invoke('show_context_menu', { x: Math.round(e.clientX), y: Math.round(e.clientY), items }).catch(err => console.error('Menu error:', err));
             }
           }}>
             {visibleTree ? (
-              <>
-                <TreeDir node={visibleTree} depth={0} defaultOpen activePath={activeFilePath} statusMap={statusMap} dirStatusMap={dirStatusMap} showDotfiles={showDotfiles} onContextMenu={(x, y, path, type) => {
-                  setContextMenu({ x, y, dirPath: path });
-                }} />
-                {contextMenu && (
-                  <TreeContextMenu
-                    x={contextMenu.x}
-                    y={contextMenu.y}
-                    dirPath={contextMenu.dirPath}
-                    onClose={() => setContextMenu(null)}
-                    groupFolders={groupFolders}
-                    onToggleGroupFolders={() => setGroupFolders(!groupFolders)}
-                  />
-                )}
-              </>
+              <TreeDir 
+                node={visibleTree} 
+                depth={0} 
+                defaultOpen 
+                activePath={activeFilePath} 
+                statusMap={statusMap} 
+                dirStatusMap={dirStatusMap} 
+                showDotfiles={showDotfiles} 
+                onContextMenu={(x, y, path, type) => {
+                  const items = [
+                    ['New File', 'new-file'],
+                    ['New Folder', 'new-folder'],
+                    ['Group Folders', 'group-folders'],
+                  ];
+                  invoke('show_context_menu', { x, y, items }).catch(err => console.error('Menu error:', err));
+                }}
+                onToggleFolder={(path, isOpen) => {
+                  setExpandedFolders(prev => {
+                    const next = new Set(prev);
+                    if (isOpen) {
+                      next.add(path);
+                    } else {
+                      next.delete(path);
+                    }
+                    return next;
+                  });
+                }}
+              />
             ) : (
               <div style={{ padding: '20px 12px', textAlign: 'center' }}>
                 <div style={{ color: 'var(--tx-3)', fontSize: 12, marginBottom: 12 }}>No folder open</div>
@@ -338,10 +453,11 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
 
 // Tree
 
-function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirStatusMap, showDotfiles, onContextMenu }: {
+function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirStatusMap, showDotfiles, onContextMenu, onToggleFolder }: {
   node: FileNode; depth: number; defaultOpen?: boolean; activePath: string | null;
   statusMap: Map<string, GitFileStatus>; dirStatusMap: Map<string, GitFileStatus>; showDotfiles: boolean;
   onContextMenu?: (x: number, y: number, path: string, type: 'file' | 'folder' | 'empty') => void;
+  onToggleFolder?: (path: string, isOpen: boolean) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen || depth < 1);
   const [loading, setLoading] = useState(false);
@@ -349,14 +465,8 @@ function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirS
   const canExpand = Boolean(node.hasChildren || node.children?.length);
 
   useEffect(() => {
-    if (node.loaded || !open) {
-      if (loadTimerRef.current) {
-        window.clearTimeout(loadTimerRef.current);
-        loadTimerRef.current = null;
-      }
-      setLoading(false);
-    }
-  }, [node.loaded, open]);
+    onToggleFolder?.(node.path, open);
+  }, [open, node.path, onToggleFolder]);
 
   useEffect(() => () => {
     if (loadTimerRef.current) {
@@ -404,7 +514,7 @@ function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirS
         onContextMenu={(e) => {
           e.preventDefault();
           if (onContextMenu) {
-            onContextMenu(e.clientX, e.clientY, node.path, 'folder');
+            onContextMenu(Math.round(e.clientX), Math.round(e.clientY), node.path, 'folder');
           }
         }}
       >
@@ -424,7 +534,7 @@ function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirS
         </div>
       )}
       {open && node.children?.map(child => (
-        <TreeDir key={child.path} node={child} depth={depth + 1} activePath={activePath} statusMap={statusMap} dirStatusMap={dirStatusMap} showDotfiles={showDotfiles} onContextMenu={onContextMenu} />
+        <TreeDir key={child.path} node={child} depth={depth + 1} activePath={activePath} statusMap={statusMap} dirStatusMap={dirStatusMap} showDotfiles={showDotfiles} onContextMenu={onContextMenu} onToggleFolder={onToggleFolder} />
       ))}
     </>
   );
@@ -464,7 +574,7 @@ function TreeFile({ node, depth, activePath, statusMap, showDotfiles, onContextM
       onContextMenu={(e) => {
         e.preventDefault();
         if (onContextMenu) {
-          onContextMenu(e.clientX, e.clientY, node.path.substring(0, node.path.lastIndexOf('/')), 'file');
+          onContextMenu(Math.round(e.clientX), Math.round(e.clientY), node.path.substring(0, node.path.lastIndexOf('/')), 'file');
         }
       }}
     >
@@ -900,135 +1010,6 @@ function SearchPanel({
 }
 
 
-function TreeContextMenu({ x, y, dirPath, onClose, groupFolders, onToggleGroupFolders }: { 
-  x: number; y: number; dirPath: string; onClose: () => void; groupFolders: boolean; onToggleGroupFolders: () => void 
-}) {
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        onClose();
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [onClose]);
-
-  const createNewFile = () => {
-    const name = prompt('New file name:');
-    if (name) {
-      const path = dirPath.endsWith('/') ? dirPath + name : dirPath + '/' + name;
-      wsClient.send({ type: 'file.create', path });
-    }
-    onClose();
-  };
-
-  const createNewFolder = () => {
-    const name = prompt('New folder name:');
-    if (name) {
-      const path = dirPath.endsWith('/') ? dirPath + name : dirPath + '/' + name;
-      wsClient.send({ type: 'folder.create', path });
-    }
-    onClose();
-  };
-
-  const handleGroupFolders = () => {
-    onToggleGroupFolders();
-    onClose();
-  };
-
-  return (
-    <div
-      ref={menuRef}
-      className="tree-context-menu"
-      style={{
-        position: 'fixed',
-        left: `${x}px`,
-        top: `${y}px`,
-        background: 'var(--surface)',
-        border: '1px solid var(--border)',
-        borderRadius: '4px',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
-        zIndex: 10000,
-        minWidth: '180px',
-        overflow: 'hidden',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
-        fontSize: '13px',
-      }}
-    >
-      <button
-        onClick={createNewFile}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          width: '100%',
-          padding: '6px 12px',
-          textAlign: 'left',
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          fontSize: '13px',
-          color: 'var(--tx)',
-          borderBottom: 'none',
-          transition: 'background-color 0.1s ease',
-        }}
-        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--accent)'}
-        onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
-      >
-        <FilePlus size={12} style={{ flexShrink: 0 }} />
-        <span>New File</span>
-      </button>
-      <button
-        onClick={createNewFolder}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          width: '100%',
-          padding: '6px 12px',
-          textAlign: 'left',
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          fontSize: '13px',
-          color: 'var(--tx)',
-          borderBottom: 'none',
-          transition: 'background-color 0.1s ease',
-        }}
-        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--accent)'}
-        onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
-      >
-        <FolderPlus size={12} style={{ flexShrink: 0 }} />
-        <span>New Folder</span>
-      </button>
-      <button
-        onClick={handleGroupFolders}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          width: '100%',
-          padding: '6px 12px',
-          textAlign: 'left',
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          fontSize: '13px',
-          color: 'var(--tx)',
-          transition: 'background-color 0.1s ease',
-        }}
-        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--accent)'}
-        onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
-      >
-        <ChevronDown size={12} style={{ flexShrink: 0 }} />
-        <span>{groupFolders ? '✓ ' : ''}Group Folders</span>
-      </button>
-    </div>
-  );
-}
-
 
 // File style helpers
 
@@ -1044,3 +1025,5 @@ function getFileStyle(name: string): { color: string; Icon: React.ComponentType<
   };
   return { color: map[ext] ?? 'var(--tx-3)', Icon: FileText as React.ComponentType<{ size?: number; style?: React.CSSProperties }> };
 }
+
+

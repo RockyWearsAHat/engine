@@ -934,6 +934,26 @@ fn agent_service_status() -> ServiceStatus {
     service_status()
 }
 
+#[tauri::command]
+fn show_context_menu(app: AppHandle, x: i32, y: i32, items: Vec<(String, String)>) -> Result<(), String> {
+    use tauri::Position;
+    
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+
+    let mut menu = MenuBuilder::new(&app);
+    
+    for (label, id) in items {
+        let item = MenuItemBuilder::new(&label).id(&id).build(&app).map_err(|e| e.to_string())?;
+        menu = menu.item(&item);
+    }
+
+    let context_menu = menu.build().map_err(|e| e.to_string())?;
+    let pos = Position::Logical((x as f64, y as f64).into());
+    window.popup_menu_at(&context_menu, pos).map_err(|e| e.to_string())
+}
+
 // ── App entry point ───────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1116,6 +1136,7 @@ pub fn run() {
             window_toggle_fullscreen,
             window_close,
             window_start_drag,
+            show_context_menu,
         ])
         .on_menu_event(|app, event| match event.id().0.as_str() {
             "open-folder" => {
