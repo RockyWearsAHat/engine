@@ -134,8 +134,10 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
 
     const setupMenuListener = async () => {
       const { listen } = await import('@tauri-apps/api/event');
+      console.log('[FRONTEND] Setting up context menu listener...');
       unlisten = await listen<string>('engine-context-menu', (event) => {
         const itemId = event.payload;
+        console.log('[FRONTEND] Context menu event received:', itemId);
         switch (itemId) {
           case 'new-file': {
             const name = prompt('New file name:');
@@ -187,7 +189,7 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
       });
     };
 
-    setupMenuListener().catch(err => console.error('Failed to setup menu listener:', err));
+    setupMenuListener().catch(err => console.error('[FRONTEND] Failed to setup menu listener:', err));
 
     return () => {
       if (unlisten) unlisten();

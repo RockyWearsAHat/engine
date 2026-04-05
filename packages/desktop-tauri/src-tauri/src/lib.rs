@@ -1138,56 +1138,66 @@ pub fn run() {
             window_start_drag,
             show_context_menu,
         ])
-        .on_menu_event(|app, event| match event.id().0.as_str() {
+        .on_menu_event(|app, event| {
+            eprintln!("[MENU EVENT] id={}", event.id().0);
+            match event.id().0.as_str() {
             "open-folder" => {
-                let _ = app.emit(FRONTEND_MENU_EVENT, "open-folder");
+                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "open-folder");
             }
             "open-file" => {
-                let _ = app.emit(FRONTEND_MENU_EVENT, "open-file");
+                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "open-file");
             }
             "build-workspace" => {
-                let _ = app.emit(FRONTEND_MENU_EVENT, "build-workspace");
+                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "build-workspace");
             }
             "run-workspace" => {
-                let _ = app.emit(FRONTEND_MENU_EVENT, "run-workspace");
+                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "run-workspace");
             }
             "save-file" => {
-                let _ = app.emit(FRONTEND_MENU_EVENT, "save-file");
+                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "save-file");
             }
             "save-all-files" => {
-                let _ = app.emit(FRONTEND_MENU_EVENT, "save-all-files");
+                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "save-all-files");
             }
             "open-preferences" => {
-                let _ = app.emit(FRONTEND_MENU_EVENT, "open-preferences");
+                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "open-preferences");
             }
             "toggle-sidebar" => {
-                let _ = app.emit(FRONTEND_MENU_EVENT, "toggle-sidebar");
+                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "toggle-sidebar");
             }
             "toggle-terminal" => {
-                let _ = app.emit(FRONTEND_MENU_EVENT, "toggle-terminal");
+                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "toggle-terminal");
             }
             "focus-chat" => {
-                let _ = app.emit(FRONTEND_MENU_EVENT, "focus-chat");
+                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "focus-chat");
             }
             "open-project-page" => {
-                let _ = app.emit(FRONTEND_MENU_EVENT, "open-project-page");
+                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "open-project-page");
             }
             "new-file" => {
-                let _ = app.emit(CONTEXT_MENU_EVENT, "new-file");
+                eprintln!("[CONTEXT MENU] emitting new-file to main window");
+                let _ = app.emit_to("main", CONTEXT_MENU_EVENT, "new-file");
             }
             "new-folder" => {
-                let _ = app.emit(CONTEXT_MENU_EVENT, "new-folder");
+                eprintln!("[CONTEXT MENU] emitting new-folder to main window");
+                let _ = app.emit_to("main", CONTEXT_MENU_EVENT, "new-folder");
             }
             "group-folders" => {
-                let _ = app.emit(CONTEXT_MENU_EVENT, "group-folders");
+                eprintln!("[CONTEXT MENU] emitting group-folders to main window");
+                let _ = app.emit_to("main", CONTEXT_MENU_EVENT, "group-folders");
             }
             "expand-all" => {
-                let _ = app.emit(CONTEXT_MENU_EVENT, "expand-all");
+                eprintln!("[CONTEXT MENU] emitting expand-all to main window");
+                let _ = app.emit_to("main", CONTEXT_MENU_EVENT, "expand-all");
             }
             "collapse-all" => {
-                let _ = app.emit(CONTEXT_MENU_EVENT, "collapse-all");
+                eprintln!("[CONTEXT MENU] emitting collapse-all to main window");
+                let _ = app.emit_to("main", CONTEXT_MENU_EVENT, "collapse-all");
             }
-            _ => {}
+            _ => {
+                eprintln!("[MENU EVENT] unhandled id: {}", event.id().0);
+            }
+        }
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
