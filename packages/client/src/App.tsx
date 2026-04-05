@@ -206,21 +206,6 @@ export default function App() {
     }
   }, []);
 
-  // Prevent context menu everywhere except where explicitly enabled (like FileTree)
-  useEffect(() => {
-    const handleContextMenu = (event: MouseEvent) => {
-      const target = event.target as HTMLElement | null;
-      // Allow context menu only on FileTree nodes
-      if (target?.closest('.tree-node, .tree-context-menu')) {
-        return;
-      }
-      event.preventDefault();
-    };
-
-    document.addEventListener('contextmenu', handleContextMenu, true);
-    return () => document.removeEventListener('contextmenu', handleContextMenu, true);
-  }, []);
-
   const finishPendingSaveRequest = useCallback(() => {
     if (pendingSaveRequestTimerRef.current) {
       clearTimeout(pendingSaveRequestTimerRef.current);
