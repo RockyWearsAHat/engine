@@ -11,6 +11,13 @@ import {
   AlertCircle, FileText, ChevronRight, Circle,
   Loader2, Search,
 } from 'lucide-react';
+import {
+  countFolders,
+  hasFolderWithCollapsedChildren,
+  findNodeByPath,
+  shouldShowExpandAll,
+  shouldShowCollapseAll,
+} from './folderUtils';
 
 type ActivityTab = 'explorer' | 'open-editors' | 'git' | 'search' | 'issues';
 
@@ -124,39 +131,18 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
   };
   const visibleTree = fileTree ? sortNode(filterTree(fileTree) || fileTree) : null;
 
-  // Check if a folder has any collapsed children recursively
-  const hasFolderWithCollapsedChildren = useCallback((folderPath: string, node: FileNode | undefined): boolean => {
-    if (!node || node.type === 'file') return false;
-    
-    if (node.children) {
-      for (const child of node.children) {
-        if (child.type === 'directory') {
-          // If this child folder is not expanded, we found a collapsed folder
-          if (!expandedFolders.has(child.path)) {
-            return true;
-          }
-          // Otherwise recurse into it
-          if (hasFolderWithCollapsedChildren(folderPath, child)) {
-            return true;
-          }
-        }
-      }
-    }
-    return false;
-  }, [expandedFolders]);
+  // Wrapper to match FileTree's expected signature while using tested utility
+  // The utility expects to search for the node, but FileTree pre-finds it
+  const checkHasCollapsedChildren = useCallback((node: FileNode | undefined): boolean => {
+    if (!node) return false;
+    // Use utility: check if node has collapsed children
+    return hasFolderWithCollapsedChildren(node.path, visibleTree, expandedFolders);
+  }, [expandedFolders, visibleTree]);
 
-  // Find node by path for context menu logic
-  const findNodeByPath = useCallback((path: string, node: FileNode | null | undefined): FileNode | undefined => {
-    if (!node) return undefined;
-    if (node.path === path) return node;
-    if (node.children) {
-      for (const child of node.children) {
-        const found = findNodeByPath(path, child);
-        if (found) return found;
-      }
-    }
-    return undefined;
-  }, []);
+  // Wrapper to match FileTree's expected signature while using tested utility
+  const findNode = useCallback((path: string): FileNode | undefined => {
+    return findNodeByPath(path, visibleTree);
+  }, [visibleTree]);
 
   // Memoize context menu handler to prevent infinite re-renders
   const onContextMenu = useCallback((x: number, y: number, path: string, type: 'file' | 'folder' | 'empty') => {
@@ -167,22 +153,22 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
 
     // For folder right-clicks, check if we should show expand/collapse options
     if (type === 'folder') {
-      const node = findNodeByPath(path, visibleTree);
+      const node = findNode(path);
       // Show Expand All if this folder has collapsed children
-      if (node && hasFolderWithCollapsedChildren(path, node)) {
+      if (node && checkHasCollapsedChildren(node)) {
         items.push(['Expand All', 'expand-all']);
       }
     }
 
     // Always show Collapse All if any folder beyond root is expanded
-    if (expandedFolders.size > 0) {
+    if (shouldShowCollapseAll(expandedFolders)) {
       items.push(['Collapse All', 'collapse-all']);
     }
 
     items.push(['Group Folders', 'group-folders']);
 
     invoke('show_context_menu', { x, y, items }).catch(err => console.error('Menu error:', err));
-  }, [expandedFolders, visibleTree, findNodeByPath, hasFolderWithCollapsedChildren]);
+  }, [expandedFolders, findNode, checkHasCollapsedChildren]);
 
   const statusMap = useMemo(
     () => buildStatusMap(gitStatus, activeSession?.projectPath ?? null),

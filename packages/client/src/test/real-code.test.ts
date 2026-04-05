@@ -6,7 +6,7 @@ import {
   findNodeByPath,
   shouldShowExpandAll,
   shouldShowCollapseAll,
-} from '@/components/FileTree/folderUtils';
+} from '../components/FileTree/folderUtils';
 
 /**
  * Real integration tests that import and test actual production code
