@@ -13,8 +13,6 @@ import {
 } from 'lucide-react';
 import {
   countFolders,
-  nodeHasCollapsedChildren,
-  nodeHasExpandedChildren,
   findNodeByPath,
   expandAllFolders,
   expandFoldersWithin,
@@ -22,6 +20,8 @@ import {
   collapseFoldersWithin,
   hasSiblingFoldersCollapsed,
   hasSiblingFoldersExpanded,
+  hasDirectChildDirCollapsed,
+  hasDirectChildDirExpanded,
 } from './folderUtils';
 
 type ActivityTab = 'explorer' | 'open-editors' | 'git' | 'search' | 'issues';
@@ -158,17 +158,6 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
   const visibleTree = fileTree ? sortNode(filterTree(fileTree) || fileTree) : null;
 
   // Wrapper to match FileTree's expected signature while using tested utility
-  // Check if a node has collapsed children (directly on the node, no tree search)
-  const checkHasCollapsedChildren = useCallback((node: FileNode | undefined): boolean => {
-    return nodeHasCollapsedChildren(node, expandedFolders);
-  }, [expandedFolders]);
-
-  // Check if a node has expanded children (directly on the node, no tree search)
-  const checkHasExpandedChildren = useCallback((node: FileNode | undefined): boolean => {
-    return nodeHasExpandedChildren(node, expandedFolders);
-  }, [expandedFolders]);
-
-  // Wrapper to match FileTree's expected signature while using tested utility
   const findNode = useCallback((path: string): FileNode | undefined => {
     // Search in fileTree (unfiltered) to find all nodes, but only check if they're visible
     const found = findNodeByPath(path, fileTree || visibleTree);
@@ -183,11 +172,11 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
     ];
 
     if (type === 'folder') {
-      // Folder: show expand/collapse for that folder's children
-      if (nodeHasCollapsedChildren(node, expandedFolders)) {
+      // Folder: show expand/collapse only when direct children would change
+      if (hasDirectChildDirCollapsed(node, expandedFolders)) {
         items.push(['Expand All', `expand-all|${node.path}`]);
       }
-      if (nodeHasExpandedChildren(node, expandedFolders)) {
+      if (hasDirectChildDirExpanded(node, expandedFolders)) {
         items.push(['Collapse All', `collapse-all|${node.path}`]);
       }
     } else if (type === 'file') {
@@ -238,7 +227,7 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
     items.push([groupFoldersLabel, 'group-folders']);
 
     invoke('show_context_menu', { x, y, items }).catch(err => console.error('Menu error:', err));
-  }, [expandedFolders, groupFolders, nodeHasCollapsedChildren, nodeHasExpandedChildren, visibleTree]);
+  }, [expandedFolders, groupFolders, visibleTree]);
 
   const statusMap = useMemo(
     () => buildStatusMap(gitStatus, activeSession?.projectPath ?? null),

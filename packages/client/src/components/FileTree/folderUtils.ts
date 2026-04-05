@@ -112,6 +112,36 @@ export const nodeHasExpandedChildren = (
 };
 
 /**
+ * Check if any direct child directory is collapsed (not in expandedFolders).
+ * Used for context menu visibility — only checks immediate children, not descendants.
+ * This matches expandFoldersWithin which only expands direct children.
+ */
+export const hasDirectChildDirCollapsed = (
+  node: FileNode | undefined,
+  expandedFolders: Set<string>
+): boolean => {
+  if (!node || node.type === 'file' || !node.children) return false;
+  return node.children.some(
+    child => child.type === 'directory' && !expandedFolders.has(child.path)
+  );
+};
+
+/**
+ * Check if any direct child directory is expanded (in expandedFolders).
+ * Used for context menu visibility — only checks immediate children, not descendants.
+ * This matches collapseFoldersWithin which collapses children of the target folder.
+ */
+export const hasDirectChildDirExpanded = (
+  node: FileNode | undefined,
+  expandedFolders: Set<string>
+): boolean => {
+  if (!node || node.type === 'file' || !node.children) return false;
+  return node.children.some(
+    child => child.type === 'directory' && expandedFolders.has(child.path)
+  );
+};
+
+/**
  * Check if a folder has any expanded children that could be collapsed
  * @param folderPath - Path of the folder to check
  * @param node - The tree node to search in
