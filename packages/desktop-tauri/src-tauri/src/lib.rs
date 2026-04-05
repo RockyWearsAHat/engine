@@ -1181,6 +1181,12 @@ pub fn run() {
             "group-folders" => {
                 let _ = app.emit(CONTEXT_MENU_EVENT, "group-folders");
             }
+            "expand-all" => {
+                let _ = app.emit(CONTEXT_MENU_EVENT, "expand-all");
+            }
+            "collapse-all" => {
+                let _ = app.emit(CONTEXT_MENU_EVENT, "collapse-all");
+            }
             _ => {}
         })
         .on_window_event(|window, event| {
