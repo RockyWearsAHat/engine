@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import type { GitCommit, GitStatus } from '@engine/shared';
 import { useStore } from '../../store/index.js';
 import type { OpenFile } from '../../store/index.js';
@@ -77,7 +79,6 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
           searchQuery, searchResults, searchLoading, searchError,
           setSearchQuery, setSearchLoading, clearSearch, showDotfiles } = useStore();
 
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; dirPath: string; type: 'file' | 'folder' | 'empty' } | null>(null);
   const [groupFolders, setGroupFolders] = useState(true);
 
   // Sort children: directories first (alphabetical) if grouping, then files (alphabetical)
@@ -119,6 +120,56 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
     () => buildDirStatusMap(statusMap),
     [statusMap],
   );
+
+  // Listen for context menu events from Tauri
+  useEffect(() => {
+    const setupListener = async () => {
+      const handleContextMenuEvent = (e: any) => {
+        const action = e.payload;
+        const dirPath = activeSession?.projectPath ?? '';
+        
+        switch (action) {
+          case 'new-file': {
+            const name = prompt('New file name:');
+            if (name) {
+              const path = dirPath.endsWith('/') ? dirPath + name : dirPath + '/' + name;
+              wsClient.send({ type: 'file.create', path });
+            }
+            break;
+          }
+          case 'new-folder': {
+            const name = prompt('New folder name:');
+            if (name) {
+              const path = dirPath.endsWith('/') ? dirPath + name : dirPath + '/' + name;
+              wsClient.send({ type: 'folder.create', path });
+            }
+            break;
+          }
+          case 'group-folders': {
+            setGroupFolders(!groupFolders);
+            break;
+          }
+        }
+      };
+
+      try {
+        const unlisten = await listen('engine-context-menu', handleContextMenuEvent);
+        return unlisten;
+      } catch (err) {
+        console.error('Failed to listen for context menu:', err);
+        return null;
+      }
+    };
+
+    let unlistenFn: (() => void) | null = null;
+    setupListener().then(fn => {
+      unlistenFn = fn;
+    });
+
+    return () => {
+      unlistenFn?.();
+    };
+  }, [activeSession?.projectPath, groupFolders]);
 
   useEffect(() => {
     if (!activeSession) return;
@@ -165,25 +216,23 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
           <div className="sidebar-body" onContextMenu={(e) => {
             e.preventDefault();
             if (visibleTree) {
-              setContextMenu({ x: e.clientX, y: e.clientY, dirPath: activeSession?.projectPath ?? '', type: 'empty' });
+              const menuItems = [
+                ['New File', 'new-file'],
+                ['New Folder', 'new-folder'],
+                ['Group Folders', 'group-folders'],
+              ];
+              invoke('show_context_menu', { x: Math.round(e.clientX), y: Math.round(e.clientY), items: menuItems }).catch(err => console.error('Context menu error:', err));
             }
           }}>
             {visibleTree ? (
-              <>
-                <TreeDir node={visibleTree} depth={0} defaultOpen activePath={activeFilePath} statusMap={statusMap} dirStatusMap={dirStatusMap} showDotfiles={showDotfiles} onContextMenu={(x, y, path, type) => setContextMenu({ x, y, dirPath: path, type })} />
-                {contextMenu && (
-                  <TreeContextMenu
-                    x={contextMenu.x}
-                    y={contextMenu.y}
-                    dirPath={contextMenu.dirPath}
-                    itemType={contextMenu.type}
-                    onClose={() => setContextMenu(null)}
-                    projectPath={activeSession?.projectPath ?? ''}
-                    groupFolders={groupFolders}
-                    onToggleGroupFolders={() => setGroupFolders(!groupFolders)}
-                  />
-                )}
-              </>
+              <TreeDir node={visibleTree} depth={0} defaultOpen activePath={activeFilePath} statusMap={statusMap} dirStatusMap={dirStatusMap} showDotfiles={showDotfiles} onContextMenu={(x, y, path, type) => {
+                const menuItems = [
+                  ['New File', 'new-file'],
+                  ['New Folder', 'new-folder'],
+                  ['Group Folders', 'group-folders'],
+                ];
+                invoke('show_context_menu', { x: Math.round(x), y: Math.round(y), items: menuItems }).catch(err => console.error('Context menu error:', err));
+              }} />
             ) : (
               <div style={{ padding: '20px 12px', textAlign: 'center' }}>
                 <div style={{ color: 'var(--tx-3)', fontSize: 12, marginBottom: 12 }}>No folder open</div>
@@ -895,135 +944,6 @@ function SearchPanel({
           </div>
         );
       })}
-    </div>
-  );
-}
-
-
-function TreeContextMenu({ x, y, dirPath, itemType, onClose, projectPath, groupFolders, onToggleGroupFolders }: { 
-  x: number; y: number; dirPath: string; itemType: 'file' | 'folder' | 'empty'; onClose: () => void; projectPath: string; groupFolders: boolean; onToggleGroupFolders: () => void 
-}) {
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        onClose();
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [onClose]);
-
-  const createNewFile = () => {
-    const name = prompt('New file name:');
-    if (name) {
-      const path = dirPath.endsWith('/') ? dirPath + name : dirPath + '/' + name;
-      wsClient.send({ type: 'file.create', path });
-    }
-    onClose();
-  };
-
-  const createNewFolder = () => {
-    const name = prompt('New folder name:');
-    if (name) {
-      const path = dirPath.endsWith('/') ? dirPath + name : dirPath + '/' + name;
-      wsClient.send({ type: 'folder.create', path });
-    }
-    onClose();
-  };
-
-  const handleGroupFolders = () => {
-    onToggleGroupFolders();
-    onClose();
-  };
-
-  return (
-    <div
-      ref={menuRef}
-      className="tree-context-menu"
-      style={{
-        position: 'fixed',
-        left: `${x}px`,
-        top: `${y}px`,
-        background: 'var(--surface)',
-        border: '1px solid var(--border)',
-        borderRadius: '6px',
-        boxShadow: '0 8px 16px rgba(0,0,0,0.25)',
-        zIndex: 10000,
-        minWidth: '220px',
-        overflow: 'hidden',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
-      }}
-    >
-      <button
-        onClick={createNewFile}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px',
-          width: '100%',
-          padding: '10px 12px',
-          textAlign: 'left',
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          fontSize: '12px',
-          color: 'var(--tx)',
-          borderBottom: '1px solid var(--border)',
-          transition: 'background-color 0.15s ease',
-        }}
-        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--accent-light)'}
-        onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
-      >
-        <FilePlus size={14} style={{ flexShrink: 0, color: 'var(--accent-2)' }} />
-        <span>New File</span>
-      </button>
-      <button
-        onClick={createNewFolder}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px',
-          width: '100%',
-          padding: '10px 12px',
-          textAlign: 'left',
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          fontSize: '12px',
-          color: 'var(--tx)',
-          borderBottom: '1px solid var(--border)',
-          transition: 'background-color 0.15s ease',
-        }}
-        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--accent-light)'}
-        onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
-      >
-        <FolderPlus size={14} style={{ flexShrink: 0, color: 'var(--accent-2)' }} />
-        <span>New Folder</span>
-      </button>
-      <button
-        onClick={handleGroupFolders}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px',
-          width: '100%',
-          padding: '10px 12px',
-          textAlign: 'left',
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          fontSize: '12px',
-          color: 'var(--tx)',
-          transition: 'background-color 0.15s ease',
-        }}
-        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--accent-light)'}
-        onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
-      >
-        <ChevronDown size={14} style={{ flexShrink: 0, color: groupFolders ? 'var(--accent-2)' : 'var(--tx-3)' }} />
-        <span>{groupFolders ? '✓ ' : ''}Group Folders</span>
-      </button>
     </div>
   );
 }
