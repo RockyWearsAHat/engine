@@ -2,6 +2,10 @@ package ai
 
 import (
 	"fmt"
+	"time"
+
+	"github.com/engine/server/db"
+	gh "github.com/engine/server/github"
 )
 
 // TestLoopController manages the AI test→observe→validate cycle.
@@ -22,22 +26,11 @@ func NewTestLoopController(ctx *ChatContext, issue string, terminalID string) *T
 }
 
 // SendTestCommand sends a command to the terminal and sets up observation.
-// The AI should use this tool to run tests.
-//
-// Example tool call:
-//   Tool: "test.run"
-//   Input: {
-//     "terminalId": "term-123",
-//     "command": "npm test -- --testNamePattern=UserLogin",
-//     "timeoutMs": 30000,
-//     "issue": "login endpoint returns 500"
-//   }
 func SendTestCommand(ctx *ChatContext, terminalID string, command string, issue string, timeoutMs int64) {
 	if ctx == nil || ctx.SendToClient == nil {
 		return
 	}
 	
-	// Instruct the client to run the test command and stream output back
 	ctx.SendToClient("test.run", map[string]interface{}{
 		"terminalId": terminalID,
 		"command":    command,
@@ -46,8 +39,7 @@ func SendTestCommand(ctx *ChatContext, terminalID string, command string, issue 
 	})
 }
 
-// ReceiveTestOutput should be called by the WebSocket handler when terminal output arrives
-// during a test run. It accumulates output and will call ValidateTestResult when complete.
+// ReceiveTestOutput should be called by the WebSocket handler when terminal output arrives.
 func ReceiveTestOutput(tlc *TestLoopController, output string) {
 	if tlc == nil || tlc.orchestrator == nil {
 		return
@@ -57,17 +49,61 @@ func ReceiveTestOutput(tlc *TestLoopController, output string) {
 }
 
 // CompleteTestRun should be called when the test terminal closes or timeout occurs.
-// Returns the behavioral validation result.
+// Returns the behavioral validation result and persists it to the database.
 func CompleteTestRun(tlc *TestLoopController) BehavioralResult {
 	if tlc == nil || tlc.orchestrator == nil {
 		return BehavioralResult{}
 	}
 	
-	return tlc.orchestrator.GetValidationResult()
+	result := tlc.orchestrator.GetValidationResult()
+
+	// Persist validation result to DB
+	sessionID := ""
+	if tlc.ctx != nil {
+		sessionID = tlc.ctx.SessionID
+	}
+	resultID := fmt.Sprintf("vr-%d", time.Now().UnixNano())
+	_ = db.SaveValidationResult(
+		resultID,
+		sessionID,
+		tlc.orchestrator.issue,
+		result.IssueResolved,
+		result.TestPassed,
+		result.ErrorCount,
+		result.WarningCount,
+		result.DurationMs,
+		result.Evidence,
+		"",
+	)
+
+	// Record a learning event from the outcome
+	category := "test-strategy"
+	if result.ErrorCount > 0 {
+		category = "error-pattern"
+	}
+	outcome := "failure"
+	if result.IssueResolved {
+		outcome = "success"
+	}
+	confidence := 0.5
+	if result.IssueResolved && result.TestPassed {
+		confidence = 0.9
+	}
+	learnID := fmt.Sprintf("le-%d", time.Now().UnixNano())
+	_ = db.SaveLearningEvent(
+		learnID,
+		sessionID,
+		fmt.Sprintf("issue:%s → %s", tlc.orchestrator.issue, outcome),
+		outcome,
+		confidence,
+		category,
+		result.Evidence,
+	)
+
+	return result
 }
 
 // ReportTestResult sends the validation result back to the AI via the ChatContext.
-// The AI can then decide: if issue resolved, commit; if not, iterate.
 func ReportTestResult(tlc *TestLoopController, issue string) {
 	result := CompleteTestRun(tlc)
 	report := FormatValidationReport(result, issue)
@@ -87,7 +123,6 @@ func ReportTestResult(tlc *TestLoopController, issue string) {
 }
 
 // OnTestComplete is a callback hook for when a test run completes.
-// Integrates with ChatContext to feed validation results back to the AI.
 type OnTestComplete func(result BehavioralResult, issue string)
 
 // MakeTestCompleteHandler returns a callback that integrates test results into the chat.
@@ -95,7 +130,6 @@ func MakeTestCompleteHandler(tlc *TestLoopController, issue string) OnTestComple
 	return func(result BehavioralResult, issue string) {
 		report := FormatValidationReport(result, issue)
 		
-		// Send result to client for UI display
 		if tlc.ctx != nil && tlc.ctx.SendToClient != nil {
 			tlc.ctx.SendToClient("test.result", map[string]interface{}{
 				"issueResolved": result.IssueResolved,
@@ -106,7 +140,6 @@ func MakeTestCompleteHandler(tlc *TestLoopController, issue string) OnTestComple
 			})
 		}
 		
-		// Append validation result to chat context so AI can reason about it
 		if tlc.ctx != nil {
 			summary := fmt.Sprintf(
 				"Test result: %s. Issue resolved: %v. Errors: %d, Warnings: %d",
@@ -116,31 +149,35 @@ func MakeTestCompleteHandler(tlc *TestLoopController, issue string) OnTestComple
 				result.WarningCount,
 			)
 			
-			// Store in session for context
-			if tlc.ctx.SessionID != "" {
-				// Note: ideally this would save to DB, but for now we just
-				// notify the AI via the callback
-				if tlc.ctx.SendToClient != nil {
-					tlc.ctx.SendToClient("chat.message", map[string]interface{}{
-						"role":    "system",
-						"content": summary,
-					})
-				}
+			if tlc.ctx.SessionID != "" && tlc.ctx.SendToClient != nil {
+				tlc.ctx.SendToClient("chat.message", map[string]interface{}{
+					"role":    "system",
+					"content": summary,
+				})
 			}
 		}
 	}
 }
 
+// InjectLearnings queries prior learnings from the DB and returns context for the system prompt.
+func InjectLearnings(issueText string) string {
+	learnings, err := db.GetRelevantLearnings(issueText, 5)
+	if err != nil || len(learnings) == 0 {
+		return ""
+	}
+
+	var result string
+	result = "Prior learnings relevant to this issue:\n"
+	for _, l := range learnings {
+		result += fmt.Sprintf("- [%s] %s (confidence: %.0f%%, %s)\n",
+			l.Category, l.Pattern, l.Confidence*100, l.Outcome)
+	}
+	return result
+}
+
 // IssueToTestPredicate converts a GitHub issue to a test predicate.
-// Returns a function that runs the appropriate test for that issue.
 func IssueToTestPredicate(issueTitle string, issueBody string) func(ctx *ChatContext) {
 	return func(ctx *ChatContext) {
-		// The AI should extract what to test from the issue:
-		// Examples:
-		// - "Login endpoint returns 500" → run integration test for login
-		// - "File upload fails with large files" → run test with 500MB file
-		// - "Memory leak in WebSocket handler" → run stress test
-		
 		msg := fmt.Sprintf(
 			"Issue detected: %s\n%s\n\nPlease run appropriate tests to validate the fix.",
 			issueTitle,
@@ -154,4 +191,46 @@ func IssueToTestPredicate(issueTitle string, issueBody string) func(ctx *ChatCon
 			})
 		}
 	}
+}
+
+// AutoCloseIssueIfResolved checks the latest validation result for an issue
+// and closes it on GitHub if resolved, with evidence as the closing comment.
+func AutoCloseIssueIfResolved(sessionID string, issueNumber int, owner, repo, issueText string) (bool, error) {
+	latest, err := db.GetLatestValidation(sessionID, issueText)
+	if err != nil {
+		return false, fmt.Errorf("check validation: %w", err)
+	}
+	if latest == nil || !latest.IssueResolved {
+		return false, nil
+	}
+
+	ghClient, err := newGitHubClient(owner, repo)
+	if err != nil {
+		return false, err
+	}
+
+	comment := fmt.Sprintf(
+		"✅ **Automatically resolved by Engine**\n\n"+
+			"Validation passed at %s\n\n"+
+			"**Evidence:**\n%s\n\n"+
+			"**Duration:** %dms | **Errors:** %d | **Warnings:** %d",
+		time.Now().Format(time.RFC3339),
+		latest.Evidence,
+		latest.DurationMs,
+		latest.ErrorCount,
+		latest.WarningCount,
+	)
+
+	return true, ghClient.CloseIssue(issueNumber, comment)
+}
+
+// newGitHubClient is a seam for testing — defaults to real client.
+var newGitHubClient = newRealGitHubClient
+
+type githubCloser interface {
+	CloseIssue(number int, comment string) error
+}
+
+func newRealGitHubClient(owner, repo string) (githubCloser, error) {
+	return gh.NewClient(owner, repo)
 }

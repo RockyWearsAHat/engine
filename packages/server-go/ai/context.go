@@ -15,6 +15,7 @@ import (
 	"github.com/engine/server/db"
 	gofs "github.com/engine/server/fs"
 	gogit "github.com/engine/server/git"
+	gh "github.com/engine/server/github"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/mem"
@@ -199,6 +200,63 @@ var tools = []anthropicTool{
 		Description: "Bring a specific file tab to the foreground in the editor.",
 		InputSchema: objSchema([]string{"path"}, map[string]interface{}{
 			"path": strProp("Absolute path of the tab to focus"),
+		}),
+	},
+	{
+		Name:        "test.run",
+		Description: "Run a test command in the client terminal and observe output for issue resolution.",
+		InputSchema: objSchema([]string{"command"}, map[string]interface{}{
+			"command":    strProp("Shell command to run"),
+			"terminalId": strProp("Terminal ID to run in (optional)"),
+			"issue":      strProp("Issue description to validate against"),
+		}),
+	},
+	{
+		Name:        "github_list_issues",
+		Description: "List GitHub issues for a repository.",
+		InputSchema: objSchema([]string{"owner", "repo"}, map[string]interface{}{
+			"owner": strProp("Repository owner"),
+			"repo":  strProp("Repository name"),
+			"state": strProp("Issue state: open, closed, or all (default: open)"),
+		}),
+	},
+	{
+		Name:        "github_get_issue",
+		Description: "Get details of a specific GitHub issue.",
+		InputSchema: objSchema([]string{"owner", "repo", "number"}, map[string]interface{}{
+			"owner":  strProp("Repository owner"),
+			"repo":   strProp("Repository name"),
+			"number": map[string]interface{}{"type": "number", "description": "Issue number"},
+		}),
+	},
+	{
+		Name:        "github_close_issue",
+		Description: "Close a GitHub issue with an optional comment explaining the resolution.",
+		InputSchema: objSchema([]string{"owner", "repo", "number"}, map[string]interface{}{
+			"owner":   strProp("Repository owner"),
+			"repo":    strProp("Repository name"),
+			"number":  map[string]interface{}{"type": "number", "description": "Issue number"},
+			"comment": strProp("Closing comment with resolution evidence"),
+		}),
+	},
+	{
+		Name:        "github_create_issue",
+		Description: "Create a new GitHub issue.",
+		InputSchema: objSchema([]string{"owner", "repo", "title"}, map[string]interface{}{
+			"owner": strProp("Repository owner"),
+			"repo":  strProp("Repository name"),
+			"title": strProp("Issue title"),
+			"body":  strProp("Issue body/description"),
+		}),
+	},
+	{
+		Name:        "github_comment",
+		Description: "Add a comment to a GitHub issue.",
+		InputSchema: objSchema([]string{"owner", "repo", "number", "body"}, map[string]interface{}{
+			"owner":  strProp("Repository owner"),
+			"repo":   strProp("Repository name"),
+			"number": map[string]interface{}{"type": "number", "description": "Issue number"},
+			"body":   strProp("Comment body"),
 		}),
 	},
 }
@@ -407,6 +465,107 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 		
 		return fmt.Sprintf("Test command queued: %s\nIssue context: %s\nMonitoring for issue resolution...", command, issue), false
 
+	case "github_list_issues":
+		owner := str("owner")
+		repo := str("repo")
+		state := str("state")
+		if state == "" {
+			state = "open"
+		}
+		client, err := gh.NewClient(owner, repo)
+		if err != nil {
+			return err.Error(), true
+		}
+		issues, err := client.ListIssues(state, nil)
+		if err != nil {
+			return err.Error(), true
+		}
+		var sb strings.Builder
+		for _, issue := range issues {
+			labels := ""
+			for _, l := range issue.Labels {
+				labels += " [" + l.Name + "]"
+			}
+			sb.WriteString(fmt.Sprintf("#%d %s (%s)%s\n", issue.Number, issue.Title, issue.State, labels))
+		}
+		if sb.Len() == 0 {
+			return "No issues found", false
+		}
+		return sb.String(), false
+
+	case "github_get_issue":
+		owner := str("owner")
+		repo := str("repo")
+		numF, _ := input["number"].(float64)
+		num := int(numF)
+		if num == 0 {
+			return "issue number required", true
+		}
+		client, err := gh.NewClient(owner, repo)
+		if err != nil {
+			return err.Error(), true
+		}
+		issue, err := client.GetIssue(num)
+		if err != nil {
+			return err.Error(), true
+		}
+		return fmt.Sprintf("#%d: %s\nState: %s\nURL: %s\n\n%s", issue.Number, issue.Title, issue.State, issue.HTMLURL, issue.Body), false
+
+	case "github_close_issue":
+		owner := str("owner")
+		repo := str("repo")
+		numF, _ := input["number"].(float64)
+		num := int(numF)
+		comment := str("comment")
+		if num == 0 {
+			return "issue number required", true
+		}
+		client, err := gh.NewClient(owner, repo)
+		if err != nil {
+			return err.Error(), true
+		}
+		if err := client.CloseIssue(num, comment); err != nil {
+			return err.Error(), true
+		}
+		return fmt.Sprintf("Issue #%d closed", num), false
+
+	case "github_create_issue":
+		owner := str("owner")
+		repo := str("repo")
+		title := str("title")
+		body := str("body")
+		if title == "" {
+			return "title required", true
+		}
+		client, err := gh.NewClient(owner, repo)
+		if err != nil {
+			return err.Error(), true
+		}
+		issue, err := client.CreateIssue(title, body, nil)
+		if err != nil {
+			return err.Error(), true
+		}
+		return fmt.Sprintf("Created #%d: %s\n%s", issue.Number, issue.Title, issue.HTMLURL), false
+
+	case "github_comment":
+		owner := str("owner")
+		repo := str("repo")
+		numF, _ := input["number"].(float64)
+		num := int(numF)
+		body := str("body")
+		if num == 0 || body == "" {
+			return "issue number and body required", true
+		}
+		client, err := gh.NewClient(owner, repo)
+		if err != nil {
+			return err.Error(), true
+		}
+		comment, err := client.AddComment(num, body)
+		if err != nil {
+			return err.Error(), true
+		}
+		return fmt.Sprintf("Comment added: %s", comment.HTMLURL), false
+
 	default:
 		return "Unknown tool: " + name, true
 	}
@@ -511,7 +670,27 @@ func Chat(ctx *ChatContext, userMessage string) {
 		"- Risky shell commands and git commits require explicit user approval",
 		"- When you open a file, the user sees it in Engine immediately",
 		"- Be decisive: fix problems completely, not just symptoms",
+		"- Use github_list_issues, github_get_issue, github_close_issue to interact with GitHub issues",
 	)
+
+	// Inject cross-session learnings relevant to the current conversation
+	if len(messages) > 0 {
+		lastMsg := ""
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == "user" {
+				if s, ok := messages[i].Content.(string); ok {
+					lastMsg = s
+				}
+				break
+			}
+		}
+		if lastMsg != "" {
+			if learnings := InjectLearnings(lastMsg); learnings != "" {
+				systemLines = append(systemLines, "", learnings)
+			}
+		}
+	}
+
 	systemPrompt := strings.Join(systemLines, "\n")
 
 	var allToolCalls []ToolCall
