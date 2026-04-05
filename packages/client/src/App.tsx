@@ -206,6 +206,21 @@ export default function App() {
     }
   }, []);
 
+  // Prevent context menu everywhere except FileTree (sidebar-body and tree-context-menu)
+  useEffect(() => {
+    const handleContextMenu = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      // Allow context menu only on FileTree sidebar-body and tree nodes
+      if (target?.closest('.sidebar-body, .tree-node, .tree-context-menu')) {
+        return;
+      }
+      event.preventDefault();
+    };
+
+    document.addEventListener('contextmenu', handleContextMenu, true);
+    return () => document.removeEventListener('contextmenu', handleContextMenu, true);
+  }, []);
+
   const finishPendingSaveRequest = useCallback(() => {
     if (pendingSaveRequestTimerRef.current) {
       clearTimeout(pendingSaveRequestTimerRef.current);
