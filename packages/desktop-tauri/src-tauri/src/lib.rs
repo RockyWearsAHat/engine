@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::{
-    menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
+    menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, SubmenuBuilder, PopupMenuBuilder},
     AppHandle, Emitter, Manager,
 };
 use tauri_plugin_dialog::DialogExt;
@@ -27,6 +27,7 @@ const STARTUP_REG_NAME_ENV: &str = "ENGINE_STARTUP_REG_NAME";
 #[cfg(target_os = "macos")]
 const STARTUP_TEST_MODE_ENV: &str = "ENGINE_STARTUP_TEST_MODE";
 const FRONTEND_MENU_EVENT: &str = "engine-shell-menu";
+const CONTEXT_MENU_EVENT: &str = "engine-context-menu";
 
 struct ServerProcess {
     child: Mutex<Option<Child>>,
@@ -933,6 +934,22 @@ fn agent_service_status() -> ServiceStatus {
     service_status()
 }
 
+#[tauri::command]
+fn show_context_menu(app: AppHandle, x: i32, y: i32, items: Vec<(String, String)>) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+
+    let mut menu = PopupMenuBuilder::new(&app);
+    
+    for (label, id) in items {
+        menu = menu.item(&MenuItemBuilder::new(&label).id(&id).build(&app)?);
+    }
+
+    let popup_menu = menu.build(&app).map_err(|e| e.to_string())?;
+    window.popup_menu(&popup_menu, x, y).map_err(|e| e.to_string())
+}
+
 // ── App entry point ───────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1115,6 +1132,7 @@ pub fn run() {
             window_toggle_fullscreen,
             window_close,
             window_start_drag,
+            show_context_menu,
         ])
         .on_menu_event(|app, event| match event.id().0.as_str() {
             "open-folder" => {
@@ -1149,6 +1167,15 @@ pub fn run() {
             }
             "open-project-page" => {
                 let _ = app.emit(FRONTEND_MENU_EVENT, "open-project-page");
+            }
+            "new-file" => {
+                let _ = app.emit(CONTEXT_MENU_EVENT, "new-file");
+            }
+            "new-folder" => {
+                let _ = app.emit(CONTEXT_MENU_EVENT, "new-folder");
+            }
+            "group-folders" => {
+                let _ = app.emit(CONTEXT_MENU_EVENT, "group-folders");
             }
             _ => {}
         })
