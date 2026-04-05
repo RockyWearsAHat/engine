@@ -12,6 +12,8 @@ import {
   expandFoldersWithin,
   collapseAllFolders,
   collapseFoldersWithin,
+  hasDirectChildDirCollapsed,
+  hasDirectChildDirExpanded,
 } from '../components/FileTree/folderUtils';
 
 /**
@@ -695,6 +697,111 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
       // Should find deeply and nested even though deeply is inside another collapsed folder
       expect(collapsed).toContain('/project/src/deeply');
       expect(collapsed).toContain('/project/src/deeply/nested');
+    });
+  });
+
+  describe('hasDirectChildDirCollapsed', () => {
+    it('returns false when node is undefined', () => {
+      expect(hasDirectChildDirCollapsed(undefined, new Set())).toBe(false);
+    });
+
+    it('returns false when node is a file', () => {
+      const file: FileNode = { name: 'f.ts', path: '/f.ts', type: 'file' };
+      expect(hasDirectChildDirCollapsed(file, new Set())).toBe(false);
+    });
+
+    it('returns false when all direct child dirs are expanded', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>(['/project/src', '/project/public']);
+      expect(hasDirectChildDirCollapsed(tree, expanded)).toBe(false);
+    });
+
+    it('returns true when some direct child dirs are collapsed', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>(['/project/src']); // public is collapsed
+      expect(hasDirectChildDirCollapsed(tree, expanded)).toBe(true);
+    });
+
+    it('returns true when all direct child dirs are collapsed', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>(); // nothing expanded
+      expect(hasDirectChildDirCollapsed(tree, expanded)).toBe(true);
+    });
+
+    it('ignores grandchild state — only checks direct children', () => {
+      const tree = createTestTree();
+      // Both direct children (src, public) are expanded
+      // But grandchild (components) is NOT — should still return false
+      const expanded = new Set<string>(['/project/src', '/project/public']);
+      expect(hasDirectChildDirCollapsed(tree, expanded)).toBe(false);
+    });
+
+    it('returns false when folder has no children', () => {
+      const empty: FileNode = { name: 'e', path: '/e', type: 'directory', children: [] };
+      expect(hasDirectChildDirCollapsed(empty, new Set())).toBe(false);
+    });
+
+    it('returns false when folder has only file children', () => {
+      const onlyFiles: FileNode = {
+        name: 'src', path: '/src', type: 'directory',
+        children: [
+          { name: 'a.ts', path: '/src/a.ts', type: 'file' },
+          { name: 'b.ts', path: '/src/b.ts', type: 'file' },
+        ],
+      };
+      expect(hasDirectChildDirCollapsed(onlyFiles, new Set())).toBe(false);
+    });
+  });
+
+  describe('hasDirectChildDirExpanded', () => {
+    it('returns false when node is undefined', () => {
+      expect(hasDirectChildDirExpanded(undefined, new Set())).toBe(false);
+    });
+
+    it('returns false when node is a file', () => {
+      const file: FileNode = { name: 'f.ts', path: '/f.ts', type: 'file' };
+      expect(hasDirectChildDirExpanded(file, new Set())).toBe(false);
+    });
+
+    it('returns true when some direct child dirs are expanded', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>(['/project/src']);
+      expect(hasDirectChildDirExpanded(tree, expanded)).toBe(true);
+    });
+
+    it('returns true when all direct child dirs are expanded', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>(['/project/src', '/project/public']);
+      expect(hasDirectChildDirExpanded(tree, expanded)).toBe(true);
+    });
+
+    it('returns false when no direct child dirs are expanded', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>(); // nothing expanded
+      expect(hasDirectChildDirExpanded(tree, expanded)).toBe(false);
+    });
+
+    it('ignores grandchild state — only checks direct children', () => {
+      const tree = createTestTree();
+      // No direct children expanded, but grandchild components IS
+      const expanded = new Set<string>(['/project/src/components']);
+      expect(hasDirectChildDirExpanded(tree, expanded)).toBe(false);
+    });
+
+    it('returns false when folder has no children', () => {
+      const empty: FileNode = { name: 'e', path: '/e', type: 'directory', children: [] };
+      expect(hasDirectChildDirExpanded(empty, new Set())).toBe(false);
+    });
+
+    it('returns false when folder has only file children', () => {
+      const onlyFiles: FileNode = {
+        name: 'src', path: '/src', type: 'directory',
+        children: [
+          { name: 'a.ts', path: '/src/a.ts', type: 'file' },
+          { name: 'b.ts', path: '/src/b.ts', type: 'file' },
+        ],
+      };
+      expect(hasDirectChildDirExpanded(onlyFiles, new Set())).toBe(false);
     });
   });
 });
