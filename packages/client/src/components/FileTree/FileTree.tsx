@@ -7,7 +7,7 @@ import type { FileNode, GitHubIssue, SearchResult } from '@engine/shared';
 import {
   FolderOpen, Folder, RefreshCw, GitBranch,
   AlertCircle, FileText, ChevronRight,
-  Loader2, Search,
+  Loader2, Search, FilePlus, FolderPlus,
 } from 'lucide-react';
 
 type ActivityTab = 'explorer' | 'git' | 'issues' | 'search';
@@ -75,6 +75,22 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile }: Prop
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; dirPath: string } | null>(null);
 
+  // Sort children: directories first (alphabetical), then files (alphabetical)
+  const sortNode = (node: FileNode): FileNode => {
+    if (node.type === 'directory' && node.children) {
+      const sorted = [...node.children].sort((a, b) => {
+        // Directories come first
+        if (a.type !== b.type) {
+          return a.type === 'directory' ? -1 : 1;
+        }
+        // Then sort alphabetically by name (case-insensitive)
+        return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      }).map(sortNode);
+      return { ...node, children: sorted };
+    }
+    return node;
+  };
+
   // .git is hidden by default; other dotfiles (.github, .vscode, etc) always show.
   // Cmd+. toggles .git visibility.
   const filterTree = (node: FileNode): FileNode | null => {
@@ -87,7 +103,7 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile }: Prop
     }
     return node;
   };
-  const visibleTree = fileTree ? filterTree(fileTree) : null;
+  const visibleTree = fileTree ? sortNode(filterTree(fileTree) || fileTree) : null;
 
   const statusMap = useMemo(
     () => buildStatusMap(gitStatus, activeSession?.projectPath ?? null),
@@ -861,19 +877,22 @@ function TreeContextMenu({ x, y, dirPath, onClose, projectPath }: { x: number; y
         top: `${y}px`,
         background: 'var(--surface)',
         border: '1px solid var(--border)',
-        borderRadius: '4px',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+        borderRadius: '6px',
+        boxShadow: '0 8px 16px rgba(0,0,0,0.25)',
         zIndex: 10000,
-        minWidth: '180px',
+        minWidth: '200px',
         overflow: 'hidden',
+        fontFamily: 'system-ui, -apple-system, sans-serif',
       }}
     >
       <button
         onClick={createNewFile}
         style={{
-          display: 'block',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
           width: '100%',
-          padding: '8px 12px',
+          padding: '10px 12px',
           textAlign: 'left',
           background: 'none',
           border: 'none',
@@ -881,29 +900,35 @@ function TreeContextMenu({ x, y, dirPath, onClose, projectPath }: { x: number; y
           fontSize: '12px',
           color: 'var(--tx)',
           borderBottom: '1px solid var(--border)',
+          transition: 'background-color 0.15s ease',
         }}
         onMouseEnter={(e) => e.currentTarget.style.background = 'var(--accent-light)'}
         onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
       >
-        New File
+        <FilePlus size={14} style={{ flexShrink: 0, color: 'var(--accent-2)' }} />
+        <span>New File</span>
       </button>
       <button
         onClick={createNewFolder}
         style={{
-          display: 'block',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
           width: '100%',
-          padding: '8px 12px',
+          padding: '10px 12px',
           textAlign: 'left',
           background: 'none',
           border: 'none',
           cursor: 'pointer',
           fontSize: '12px',
           color: 'var(--tx)',
+          transition: 'background-color 0.15s ease',
         }}
         onMouseEnter={(e) => e.currentTarget.style.background = 'var(--accent-light)'}
         onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
       >
-        New Folder
+        <FolderPlus size={14} style={{ flexShrink: 0, color: 'var(--accent-2)' }} />
+        <span>New Folder</span>
       </button>
     </div>
   );
