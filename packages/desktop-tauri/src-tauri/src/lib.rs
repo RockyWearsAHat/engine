@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::{
-    menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, SubmenuBuilder, PopupMenuBuilder},
+    menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     AppHandle, Emitter, Manager,
 };
 use tauri_plugin_dialog::DialogExt;
@@ -934,22 +934,6 @@ fn agent_service_status() -> ServiceStatus {
     service_status()
 }
 
-#[tauri::command]
-fn show_context_menu(app: AppHandle, x: i32, y: i32, items: Vec<(String, String)>) -> Result<(), String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "main window not found".to_string())?;
-
-    let mut menu = PopupMenuBuilder::new(&app);
-    
-    for (label, id) in items {
-        menu = menu.item(&MenuItemBuilder::new(&label).id(&id).build(&app)?);
-    }
-
-    let popup_menu = menu.build(&app).map_err(|e| e.to_string())?;
-    window.popup_menu(&popup_menu, x, y).map_err(|e| e.to_string())
-}
-
 // ── App entry point ───────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1132,7 +1116,6 @@ pub fn run() {
             window_toggle_fullscreen,
             window_close,
             window_start_drag,
-            show_context_menu,
         ])
         .on_menu_event(|app, event| match event.id().0.as_str() {
             "open-folder" => {
