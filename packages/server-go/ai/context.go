@@ -387,6 +387,26 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 		}
 		return "Focused tab: " + path, false
 
+	case "test.run":
+		// Run a test command and observe terminal output
+		// The client will stream output back via WebSocket
+		terminalID := str("terminalId")
+		command := str("command")
+		issue := str("issue")
+		
+		if ctx.SendToClient == nil {
+			return "No client available to run terminal command", true
+		}
+		
+		// Notify client to run the command and observe
+		ctx.SendToClient("test.run", map[string]interface{}{
+			"terminalId": terminalID,
+			"command":    command,
+			"issue":      issue,
+		})
+		
+		return fmt.Sprintf("Test command queued: %s\nIssue context: %s\nMonitoring for issue resolution...", command, issue), false
+
 	default:
 		return "Unknown tool: " + name, true
 	}
