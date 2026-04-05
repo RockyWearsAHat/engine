@@ -162,7 +162,12 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
             </button>
           </div>
           
-          <div className="sidebar-body">
+          <div className="sidebar-body" onContextMenu={(e) => {
+            e.preventDefault();
+            if (visibleTree) {
+              setContextMenu({ x: e.clientX, y: e.clientY, dirPath: activeSession?.projectPath ?? '' });
+            }
+          }}>
             {visibleTree ? (
               <>
                 <TreeDir node={visibleTree} depth={0} defaultOpen activePath={activeFilePath} statusMap={statusMap} dirStatusMap={dirStatusMap} showDotfiles={showDotfiles} onContextMenu={(x, y, path) => setContextMenu({ x, y, dirPath: path })} />
@@ -358,7 +363,7 @@ function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirS
     }
   }, []);
 
-  if (node.type === 'file') return <TreeFile node={node} depth={depth} activePath={activePath} statusMap={statusMap} showDotfiles={showDotfiles} />;
+  if (node.type === 'file') return <TreeFile node={node} depth={depth} activePath={activePath} statusMap={statusMap} showDotfiles={showDotfiles} onContextMenu={onContextMenu} />;
 
   // Only dim entries that were hidden by default and revealed via Cmd+.
   const isRevealedHidden = showDotfiles && node.name === '.git';
@@ -431,9 +436,10 @@ const GIT_BADGE: Record<string, string> = {
   ignored: 'I',
 };
 
-function TreeFile({ node, depth, activePath, statusMap, showDotfiles }: {
+function TreeFile({ node, depth, activePath, statusMap, showDotfiles, onContextMenu }: {
   node: FileNode; depth: number; activePath: string | null;
   statusMap: Map<string, GitFileStatus>; showDotfiles: boolean;
+  onContextMenu?: (x: number, y: number, path: string) => void;
 }) {
   const isActive = activePath === node.path;
   const { color, Icon } = getFileStyle(node.name);
@@ -454,6 +460,12 @@ function TreeFile({ node, depth, activePath, statusMap, showDotfiles }: {
       className={nodeClass}
       style={{ paddingLeft: 6 + depth * 14 + 16 }}
       onClick={() => wsClient.send({ type: 'file.read', path: node.path })}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        if (onContextMenu) {
+          onContextMenu(e.clientX, e.clientY, node.path.substring(0, node.path.lastIndexOf('/')));
+        }
+      }}
     >
       <Icon size={13} style={{ color, flexShrink: 0 }} />
       <span className="tree-name">{node.name}</span>
