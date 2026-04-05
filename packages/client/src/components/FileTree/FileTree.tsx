@@ -94,16 +94,6 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
     });
   }, []);
 
-  // Memoize context menu handler to prevent infinite re-renders
-  const onContextMenu = useCallback((x: number, y: number, path: string, type: 'file' | 'folder' | 'empty') => {
-    const items = [
-      ['New File', 'new-file'],
-      ['New Folder', 'new-folder'],
-      ['Group Folders', 'group-folders'],
-    ];
-    invoke('show_context_menu', { x, y, items }).catch(err => console.error('Menu error:', err));
-  }, []);
-
   // Sort children: directories first (alphabetical) if grouping, then files (alphabetical)
   const sortNode = (node: FileNode): FileNode => {
     if (node.type === 'directory' && node.children) {
@@ -133,6 +123,66 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
     return node;
   };
   const visibleTree = fileTree ? sortNode(filterTree(fileTree) || fileTree) : null;
+
+  // Check if a folder has any collapsed children recursively
+  const hasFolderWithCollapsedChildren = useCallback((folderPath: string, node: FileNode | undefined): boolean => {
+    if (!node || node.type === 'file') return false;
+    
+    if (node.children) {
+      for (const child of node.children) {
+        if (child.type === 'directory') {
+          // If this child folder is not expanded, we found a collapsed folder
+          if (!expandedFolders.has(child.path)) {
+            return true;
+          }
+          // Otherwise recurse into it
+          if (hasFolderWithCollapsedChildren(folderPath, child)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }, [expandedFolders]);
+
+  // Find node by path for context menu logic
+  const findNodeByPath = useCallback((path: string, node: FileNode | null | undefined): FileNode | undefined => {
+    if (!node) return undefined;
+    if (node.path === path) return node;
+    if (node.children) {
+      for (const child of node.children) {
+        const found = findNodeByPath(path, child);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  }, []);
+
+  // Memoize context menu handler to prevent infinite re-renders
+  const onContextMenu = useCallback((x: number, y: number, path: string, type: 'file' | 'folder' | 'empty') => {
+    const items: [string, string][] = [
+      ['New File', 'new-file'],
+      ['New Folder', 'new-folder'],
+    ];
+
+    // For folder right-clicks, check if we should show expand/collapse options
+    if (type === 'folder') {
+      const node = findNodeByPath(path, visibleTree);
+      // Show Expand All if this folder has collapsed children
+      if (node && hasFolderWithCollapsedChildren(path, node)) {
+        items.push(['Expand All', 'expand-all']);
+      }
+    }
+
+    // Always show Collapse All if any folder beyond root is expanded
+    if (expandedFolders.size > 0) {
+      items.push(['Collapse All', 'collapse-all']);
+    }
+
+    items.push(['Group Folders', 'group-folders']);
+
+    invoke('show_context_menu', { x, y, items }).catch(err => console.error('Menu error:', err));
+  }, [expandedFolders, visibleTree, findNodeByPath, hasFolderWithCollapsedChildren]);
 
   const statusMap = useMemo(
     () => buildStatusMap(gitStatus, activeSession?.projectPath ?? null),
@@ -273,14 +323,14 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
                 ['New Folder', 'new-folder'],
               ];
               
-              // Only show collapse if there are folders and some are expanded
-              if (totalFolders > 0 && expandedCount > 0) {
-                items.push(['Collapse All', 'collapse-all']);
-              }
-              
-              // Only show expand if there are folders and some are collapsed
+              // Show Expand All if there are collapsed folders
               if (totalFolders > 0 && expandedCount < totalFolders) {
                 items.push(['Expand All', 'expand-all']);
+              }
+              
+              // Always show Collapse All if any folder beyond root is expanded
+              if (expandedFolders.size > 0) {
+                items.push(['Collapse All', 'collapse-all']);
               }
               
               items.push(['Group Folders', 'group-folders']);
