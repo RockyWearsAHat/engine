@@ -128,72 +128,62 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
     clearSearch();
   }, [activeSession?.id]);
 
-  // Handle native context menu events
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-
-    const setupMenuListener = async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      console.log('[FRONTEND] Setting up context menu listener...');
-      unlisten = await listen<string>('engine-context-menu', (event) => {
-        const itemId = event.payload;
-        console.log('[FRONTEND] Context menu event received:', itemId);
-        switch (itemId) {
-          case 'new-file': {
-            const name = prompt('New file name:');
-            if (name && activeSession) {
-              const path = activeSession.projectPath.endsWith('/') 
-                ? activeSession.projectPath + name 
-                : activeSession.projectPath + '/' + name;
-              wsClient.send({ type: 'file.create', path });
-            }
-            break;
-          }
-          case 'new-folder': {
-            const name = prompt('New folder name:');
-            if (name && activeSession) {
-              const path = activeSession.projectPath.endsWith('/') 
-                ? activeSession.projectPath + name 
-                : activeSession.projectPath + '/' + name;
-              wsClient.send({ type: 'folder.create', path });
-            }
-            break;
-          }
-          case 'group-folders': {
-            setGroupFolders(!groupFolders);
-            break;
-          }
-          case 'expand-all': {
-            // Expand all folders by finding all .tree-node elements and clicking chevrons if closed
-            const chevrons = document.querySelectorAll('.tree-chevron:not(.open)');
-            chevrons.forEach(chevron => {
-              const parent = chevron.closest('.tree-node');
-              if (parent) {
-                (parent as HTMLElement).click();
-              }
-            });
-            break;
-          }
-          case 'collapse-all': {
-            // Collapse all folders by finding all .tree-node elements and clicking chevrons if open
-            const chevrons = document.querySelectorAll('.tree-chevron.open');
-            chevrons.forEach(chevron => {
-              const parent = chevron.closest('.tree-node');
-              if (parent) {
-                (parent as HTMLElement).click();
-              }
-            });
-            break;
-          }
+  // Handle context menu actions via invoke
+  const handleContextMenuAction = async (action: string) => {
+    console.log('[FRONTEND] Context menu action:', action);
+    switch (action) {
+      case 'new-file': {
+        const name = prompt('New file name:');
+        if (name && activeSession) {
+          const path = activeSession.projectPath.endsWith('/') 
+            ? activeSession.projectPath + name 
+            : activeSession.projectPath + '/' + name;
+          wsClient.send({ type: 'file.create', path });
         }
-      });
-    };
+        break;
+      }
+      case 'new-folder': {
+        const name = prompt('New folder name:');
+        if (name && activeSession) {
+          const path = activeSession.projectPath.endsWith('/') 
+            ? activeSession.projectPath + name 
+            : activeSession.projectPath + '/' + name;
+          wsClient.send({ type: 'folder.create', path });
+        }
+        break;
+      }
+      case 'group-folders': {
+        setGroupFolders(!groupFolders);
+        break;
+      }
+      case 'expand-all': {
+        const chevrons = document.querySelectorAll('.tree-chevron:not(.open)');
+        console.log('[FRONTEND] Expanding', chevrons.length, 'folders');
+        chevrons.forEach(chevron => {
+          const parent = chevron.closest('.tree-node');
+          if (parent) {
+            (parent as HTMLElement).click();
+          }
+        });
+        break;
+      }
+      case 'collapse-all': {
+        const chevrons = document.querySelectorAll('.tree-chevron.open');
+        console.log('[FRONTEND] Collapsing', chevrons.length, 'folders');
+        chevrons.forEach(chevron => {
+          const parent = chevron.closest('.tree-node');
+          if (parent) {
+            (parent as HTMLElement).click();
+          }
+        });
+        break;
+      }
+    }
+  };
 
-    setupMenuListener().catch(err => console.error('[FRONTEND] Failed to setup menu listener:', err));
-
-    return () => {
-      if (unlisten) unlisten();
-    };
+  // Store handler in window so Rust can call it
+  useEffect(() => {
+    (window as any).__engineContextMenuHandler = handleContextMenuAction;
   }, [activeSession, groupFolders]);
 
 
