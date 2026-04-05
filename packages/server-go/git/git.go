@@ -13,6 +13,7 @@ type GitStatus struct {
 	Staged    []string `json:"staged"`
 	Unstaged  []string `json:"unstaged"`
 	Untracked []string `json:"untracked"`
+	Ignored   []string `json:"ignored"`
 	Ahead     int      `json:"ahead"`
 	Behind    int      `json:"behind"`
 }
@@ -47,7 +48,7 @@ func GetStatus(cwd string) (*GitStatus, error) {
 
 	porcelain, err := run(cwd, "status", "--porcelain=v1")
 	if err != nil {
-		return &GitStatus{Branch: branch, Staged: []string{}, Unstaged: []string{}, Untracked: []string{}}, nil
+		return &GitStatus{Branch: branch, Staged: []string{}, Unstaged: []string{}, Untracked: []string{}, Ignored: []string{}}, nil
 	}
 
 	status := &GitStatus{
@@ -55,6 +56,7 @@ func GetStatus(cwd string) (*GitStatus, error) {
 		Staged:    []string{},
 		Unstaged:  []string{},
 		Untracked: []string{},
+		Ignored:   []string{},
 	}
 
 	for _, line := range strings.Split(porcelain, "\n") {
@@ -67,11 +69,11 @@ func GetStatus(cwd string) (*GitStatus, error) {
 			status.Untracked = append(status.Untracked, file)
 		case x != ' ' && x != '?':
 			status.Staged = append(status.Staged, file)
-			fallthrough
-		case y != ' ' && y != '?':
-			if x == ' ' {
+			if y != ' ' && y != '?' {
 				status.Unstaged = append(status.Unstaged, file)
 			}
+		case y != ' ' && y != '?':
+			status.Unstaged = append(status.Unstaged, file)
 		}
 	}
 

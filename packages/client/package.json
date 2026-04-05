@@ -9,18 +9,21 @@
     "typecheck": "pnpm -C ../.. --filter @engine/shared build && tsc --noEmit"
   },
   "dependencies": {
-    "@monaco-editor/react": "^4.7.0",
     "@engine/shared": "workspace:*",
+    "@tauri-apps/api": "^2.10.1",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
     "lucide-react": "^0.487.0",
-    "monaco-editor": "^0.52.2",
+    "prismjs": "^1.30.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "zustand": "^5.0.3"
   },
   "devDependencies": {
+    "@types/prismjs": "^1.26.6",
     "@types/react": "^18.3.20",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",

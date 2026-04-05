@@ -6,7 +6,7 @@
   "build": {
     "frontendDist": "../../client/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "pnpm -C ../.. build:go && pnpm --filter @engine/client dev -- --host 127.0.0.1 --port 5173",
+    "beforeDevCommand": "pnpm -C ../.. build:go && node ../../scripts/ensure-client-dev.mjs",
     "beforeBuildCommand": "pnpm -C ../.. build:go && pnpm --filter @engine/client build"
   },
   "app": {
@@ -19,9 +19,12 @@
         "height": 900,
         "minWidth": 800,
         "minHeight": 600,
-        "decorations": false,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
         "transparent": false,
-        "center": true
+        "center": true,
+        "fullscreen": false
       }
     ],
     "security": {

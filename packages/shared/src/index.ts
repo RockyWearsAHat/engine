@@ -32,6 +32,8 @@ export interface FileNode {
   path: string;
   type: 'file' | 'directory';
   children?: FileNode[];
+  loaded?: boolean;
+  hasChildren?: boolean;
   size?: number;
   modified?: string;
 }
@@ -41,6 +43,15 @@ export interface FileContent {
   content: string;
   language: string;
   size: number;
+}
+
+export interface ApprovalRequest {
+  id: string;
+  sessionId: string;
+  kind: 'shell' | 'git_commit';
+  title: string;
+  message: string;
+  command: string;
 }
 
 export interface SearchResult {
@@ -65,6 +76,7 @@ export interface GitStatus {
   staged: string[];
   unstaged: string[];
   untracked: string[];
+  ignored: string[];
   ahead: number;
   behind: number;
 }
@@ -74,6 +86,15 @@ export interface GitCommit {
   message: string;
   author: string;
   date: string;
+}
+
+export interface WorkspaceTask {
+  id: string;
+  label: string;
+  command: string;
+  kind: 'build' | 'run' | 'check' | 'test';
+  source: 'package-json' | 'go' | 'cargo';
+  description?: string;
 }
 
 // Terminal types
@@ -93,14 +114,19 @@ export type ClientMessage =
   | { type: 'session.list' }
   | { type: 'file.read'; path: string }
   | { type: 'file.save'; path: string; content: string }
+  | { type: 'file.create'; path: string }
+  | { type: 'folder.create'; path: string }
   | { type: 'file.tree'; path: string }
   | { type: 'file.search'; query: string; root?: string; fileGlob?: string }
   | { type: 'git.status' }
   | { type: 'git.diff'; path?: string }
   | { type: 'git.log'; limit?: number }
+  | { type: 'git.commit'; message: string }
+  | { type: 'workspace.tasks'; path?: string }
   | { type: 'config.sync'; config: RuntimeConfig }
   | { type: 'github.user' }
   | { type: 'github.issues'; projectPath: string }
+  | { type: 'approval.respond'; id: string; allow: boolean }
   | { type: 'terminal.create'; cwd: string }
   | { type: 'terminal.input'; terminalId: string; data: string }
   | { type: 'terminal.resize'; terminalId: string; cols: number; rows: number }
@@ -115,16 +141,20 @@ export type ServerMessage =
   | { type: 'chat.error'; sessionId: string; error: string }
   | { type: 'session.list'; sessions: Session[] }
   | { type: 'session.created'; session: Session }
+  | { type: 'session.updated'; session: Session }
   | { type: 'session.loaded'; session: Session; messages: Message[] }
-  | { type: 'file.content'; path: string; content: string; language: string }
+  | { type: 'file.content'; path: string; content: string; language: string; size: number }
   | { type: 'file.saved'; path: string }
   | { type: 'file.tree'; tree: FileNode }
   | { type: 'search.results'; query: string; results: SearchResult[]; error?: string }
   | { type: 'git.status'; status: GitStatus }
   | { type: 'git.diff'; path?: string; diff: string }
   | { type: 'git.log'; commits: GitCommit[] }
+  | { type: 'git.commit.result'; ok: boolean; hash?: string; message: string }
+  | { type: 'workspace.tasks'; tasks: WorkspaceTask[]; defaultBuildTaskId?: string | null; defaultRunTaskId?: string | null }
   | { type: 'github.user'; user: GitHubUser | null; error?: string }
   | { type: 'github.issues'; issues: GitHubIssue[]; error?: string }
+  | { type: 'approval.request'; request: ApprovalRequest }
   | { type: 'terminal.created'; terminalId: string; cwd: string }
   | { type: 'terminal.output'; terminalId: string; data: string }
   | { type: 'terminal.closed'; terminalId: string }
@@ -138,12 +168,6 @@ export interface TabInfo {
   path: string;
   isActive: boolean;
   isDirty: boolean;
-}
-
-export interface SystemInfo {
-  memory: { usedMB: number; totalMB: number; percentUsed: number };
-  cpuPercent: number;
-  disk: { usedGB: number; totalGB: number; percentUsed: number };
 }
 
 // GitHub types
@@ -163,15 +187,6 @@ export interface GitHubIssue {
   labels: { name: string; color: string }[];
   createdAt: string;
   updatedAt: string;
-}
-
-export interface GitHubRepo {
-  name: string;
-  fullName: string;
-  htmlUrl: string;
-  cloneUrl: string;
-  defaultBranch: string;
-  private: boolean;
 }
 
 // Agent monitor types
@@ -199,4 +214,18 @@ export interface LiveToolCall {
   pending: boolean;
   startedAt: number;
   durationMs?: number;
+}
+
+// Remote connection types
+export interface RemoteServerInfo {
+  host: string;
+  port: string;
+  name?: string;
+}
+
+export interface PairingResult {
+  ok: boolean;
+  token?: string;
+  deviceId?: string;
+  error?: string;
 }
