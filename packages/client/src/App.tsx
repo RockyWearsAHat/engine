@@ -26,10 +26,10 @@ import {
 import {
   FolderOpen, GitBranch, AlertCircle, Settings2, Activity,
   Search, ServerCog,
-  Minus, Square, X, FileText, Hammer, Play, Terminal as TerminalIcon, Menu,
+  Minus, Square, X, FileText, Hammer, Play, Terminal as TerminalIcon, Menu, FileStack,
 } from 'lucide-react';
 
-type ActivityTab = 'explorer' | 'git' | 'issues' | 'search';
+type ActivityTab = 'explorer' | 'open-editors' | 'git' | 'search' | 'issues';
 type RightTab = 'chat' | 'agent';
 type NoticeTone = 'info' | 'error';
 type WindowAction = 'minimize' | 'toggle-maximize' | 'toggle-fullscreen' | 'close';
@@ -1330,6 +1330,7 @@ export default function App() {
           <div className="activity-bar">
             {([
               ['explorer', FolderOpen],
+              ['open-editors', FileStack],
               ['git', GitBranch],
               ['search', Search],
               ['issues', AlertCircle],
@@ -1338,7 +1339,7 @@ export default function App() {
                 key={id}
                 className={`activity-btn ${activityTab === id && showSidebar ? 'active' : ''}`}
                 onClick={() => toggleActivity(id)}
-                title={id.charAt(0).toUpperCase() + id.slice(1)}
+                title={id === 'open-editors' ? 'Open Editors' : id.charAt(0).toUpperCase() + id.slice(1)}
               >
                 <Icon size={17} />
               </button>
@@ -1360,6 +1361,9 @@ export default function App() {
                   activityTab={activityTab}
                   onOpenFolder={() => openFolder()}
                   onOpenFile={() => openFileFromPath()}
+                  openFiles={openFiles}
+                  activeFilePath={activeFilePath}
+                  onSetActiveFile={setActiveFile}
                 />
               </div>
               <div
