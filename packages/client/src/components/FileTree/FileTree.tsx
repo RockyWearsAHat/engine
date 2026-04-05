@@ -77,7 +77,6 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
           searchQuery, searchResults, searchLoading, searchError,
           setSearchQuery, setSearchLoading, clearSearch, showDotfiles } = useStore();
 
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; dirPath: string } | null>(null);
   const [groupFolders, setGroupFolders] = useState(true);
 
   // Sort children: directories first (alphabetical) if grouping, then files (alphabetical)
@@ -162,27 +161,9 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
             </button>
           </div>
           
-          <div className="sidebar-body" onContextMenu={(e) => {
-            e.preventDefault();
-            if (visibleTree) {
-              setContextMenu({ x: e.clientX, y: e.clientY, dirPath: activeSession?.projectPath ?? '' });
-            }
-          }}>
+          <div className="sidebar-body">
             {visibleTree ? (
-              <>
-                <TreeDir node={visibleTree} depth={0} defaultOpen activePath={activeFilePath} statusMap={statusMap} dirStatusMap={dirStatusMap} showDotfiles={showDotfiles} onContextMenu={(x, y, path) => setContextMenu({ x, y, dirPath: path })} />
-                {contextMenu && (
-                  <TreeContextMenu
-                    x={contextMenu.x}
-                    y={contextMenu.y}
-                    dirPath={contextMenu.dirPath}
-                    onClose={() => setContextMenu(null)}
-                    projectPath={activeSession?.projectPath ?? ''}
-                    groupFolders={groupFolders}
-                    onToggleGroupFolders={() => setGroupFolders(!groupFolders)}
-                  />
-                )}
-              </>
+              <TreeDir node={visibleTree} depth={0} defaultOpen activePath={activeFilePath} statusMap={statusMap} dirStatusMap={dirStatusMap} showDotfiles={showDotfiles} />
             ) : (
               <div style={{ padding: '20px 12px', textAlign: 'center' }}>
                 <div style={{ color: 'var(--tx-3)', fontSize: 12, marginBottom: 12 }}>No folder open</div>
@@ -337,10 +318,9 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
 
 // Tree
 
-function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirStatusMap, showDotfiles, onContextMenu }: {
+function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirStatusMap, showDotfiles }: {
   node: FileNode; depth: number; defaultOpen?: boolean; activePath: string | null;
   statusMap: Map<string, GitFileStatus>; dirStatusMap: Map<string, GitFileStatus>; showDotfiles: boolean;
-  onContextMenu?: (x: number, y: number, path: string) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen || depth < 1);
   const [loading, setLoading] = useState(false);
@@ -363,7 +343,7 @@ function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirS
     }
   }, []);
 
-  if (node.type === 'file') return <TreeFile node={node} depth={depth} activePath={activePath} statusMap={statusMap} showDotfiles={showDotfiles} onContextMenu={onContextMenu} />;
+  if (node.type === 'file') return <TreeFile node={node} depth={depth} activePath={activePath} statusMap={statusMap} showDotfiles={showDotfiles} />;
 
   // Only dim entries that were hidden by default and revealed via Cmd+.
   const isRevealedHidden = showDotfiles && node.name === '.git';
@@ -400,12 +380,6 @@ function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirS
         className={nodeClass}
         style={{ paddingLeft: 6 + depth * 14 }}
         onClick={toggleNode}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          if (onContextMenu) {
-            onContextMenu(e.clientX, e.clientY, node.path);
-          }
-        }}
       >
         {canExpand ? (
           <ChevronRight size={12} className={`tree-chevron ${open ? 'open' : ''}`} />
@@ -423,7 +397,7 @@ function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirS
         </div>
       )}
       {open && node.children?.map(child => (
-        <TreeDir key={child.path} node={child} depth={depth + 1} activePath={activePath} statusMap={statusMap} dirStatusMap={dirStatusMap} showDotfiles={showDotfiles} onContextMenu={onContextMenu} />
+        <TreeDir key={child.path} node={child} depth={depth + 1} activePath={activePath} statusMap={statusMap} dirStatusMap={dirStatusMap} showDotfiles={showDotfiles} />
       ))}
     </>
   );
@@ -436,10 +410,9 @@ const GIT_BADGE: Record<string, string> = {
   ignored: 'I',
 };
 
-function TreeFile({ node, depth, activePath, statusMap, showDotfiles, onContextMenu }: {
+function TreeFile({ node, depth, activePath, statusMap, showDotfiles }: {
   node: FileNode; depth: number; activePath: string | null;
   statusMap: Map<string, GitFileStatus>; showDotfiles: boolean;
-  onContextMenu?: (x: number, y: number, path: string) => void;
 }) {
   const isActive = activePath === node.path;
   const { color, Icon } = getFileStyle(node.name);
@@ -460,12 +433,6 @@ function TreeFile({ node, depth, activePath, statusMap, showDotfiles, onContextM
       className={nodeClass}
       style={{ paddingLeft: 6 + depth * 14 + 16 }}
       onClick={() => wsClient.send({ type: 'file.read', path: node.path })}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        if (onContextMenu) {
-          onContextMenu(e.clientX, e.clientY, node.path.substring(0, node.path.lastIndexOf('/')));
-        }
-      }}
     >
       <Icon size={13} style={{ color, flexShrink: 0 }} />
       <span className="tree-name">{node.name}</span>
@@ -898,131 +865,6 @@ function SearchPanel({
   );
 }
 
-function TreeContextMenu({ x, y, dirPath, onClose, projectPath, groupFolders, onToggleGroupFolders }: { x: number; y: number; dirPath: string; onClose: () => void; projectPath: string; groupFolders: boolean; onToggleGroupFolders: () => void }) {
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        onClose();
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [onClose]);
-
-  const createNewFile = () => {
-    const name = prompt('New file name:');
-    if (name) {
-      const path = dirPath.endsWith('/') ? dirPath + name : dirPath + '/' + name;
-      wsClient.send({ type: 'file.create', path });
-    }
-    onClose();
-  };
-
-  const createNewFolder = () => {
-    const name = prompt('New folder name:');
-    if (name) {
-      const path = dirPath.endsWith('/') ? dirPath + name : dirPath + '/' + name;
-      wsClient.send({ type: 'folder.create', path });
-    }
-    onClose();
-  };
-
-  const handleGroupFolders = () => {
-    onToggleGroupFolders();
-    onClose();
-  };
-
-  return (
-    <div
-      ref={menuRef}
-      className="tree-context-menu"
-      style={{
-        position: 'fixed',
-        left: `${x}px`,
-        top: `${y}px`,
-        background: 'var(--surface)',
-        border: '1px solid var(--border)',
-        borderRadius: '6px',
-        boxShadow: '0 8px 16px rgba(0,0,0,0.25)',
-        zIndex: 10000,
-        minWidth: '220px',
-        overflow: 'hidden',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
-      }}
-    >
-      <button
-        onClick={createNewFile}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px',
-          width: '100%',
-          padding: '10px 12px',
-          textAlign: 'left',
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          fontSize: '12px',
-          color: 'var(--tx)',
-          borderBottom: '1px solid var(--border)',
-          transition: 'background-color 0.15s ease',
-        }}
-        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--accent-light)'}
-        onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
-      >
-        <FilePlus size={14} style={{ flexShrink: 0, color: 'var(--accent-2)' }} />
-        <span>New File</span>
-      </button>
-      <button
-        onClick={createNewFolder}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px',
-          width: '100%',
-          padding: '10px 12px',
-          textAlign: 'left',
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          fontSize: '12px',
-          color: 'var(--tx)',
-          borderBottom: '1px solid var(--border)',
-          transition: 'background-color 0.15s ease',
-        }}
-        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--accent-light)'}
-        onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
-      >
-        <FolderPlus size={14} style={{ flexShrink: 0, color: 'var(--accent-2)' }} />
-        <span>New Folder</span>
-      </button>
-      <button
-        onClick={handleGroupFolders}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px',
-          width: '100%',
-          padding: '10px 12px',
-          textAlign: 'left',
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          fontSize: '12px',
-          color: 'var(--tx)',
-          transition: 'background-color 0.15s ease',
-        }}
-        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--accent-light)'}
-        onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
-      >
-        <ChevronDown size={14} style={{ flexShrink: 0, color: groupFolders ? 'var(--accent-2)' : 'var(--tx-3)' }} />
-        <span>{groupFolders ? '✓ ' : ''}Group Folders</span>
-      </button>
-    </div>
-  );
-}
 
 // File style helpers
 
