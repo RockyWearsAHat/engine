@@ -27,7 +27,6 @@ const STARTUP_REG_NAME_ENV: &str = "ENGINE_STARTUP_REG_NAME";
 #[cfg(target_os = "macos")]
 const STARTUP_TEST_MODE_ENV: &str = "ENGINE_STARTUP_TEST_MODE";
 const FRONTEND_MENU_EVENT: &str = "engine-shell-menu";
-const CONTEXT_MENU_EVENT: &str = "engine-context-menu";
 
 struct ServerProcess {
     child: Mutex<Option<Child>>,
