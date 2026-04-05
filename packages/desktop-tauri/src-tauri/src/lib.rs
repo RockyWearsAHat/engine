@@ -938,20 +938,27 @@ fn agent_service_status() -> ServiceStatus {
 fn show_context_menu(app: AppHandle, x: i32, y: i32, items: Vec<(String, String)>) -> Result<(), String> {
     use tauri::Position;
     
+    eprintln!("[CONTEXT MENU] show_context_menu called with {} items at ({}, {})", items.len(), x, y);
+    
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
 
     let mut menu = MenuBuilder::new(&app);
     
-    for (label, id) in items {
+    for (label, id) in items.iter() {
+        eprintln!("[CONTEXT MENU] Adding item: label='{}', id='{}'", label, id);
         let item = MenuItemBuilder::new(&label).id(&id).build(&app).map_err(|e| e.to_string())?;
         menu = menu.item(&item);
     }
 
     let context_menu = menu.build().map_err(|e| e.to_string())?;
     let pos = Position::Logical((x as f64, y as f64).into());
-    window.popup_menu_at(&context_menu, pos).map_err(|e| e.to_string())
+    eprintln!("[CONTEXT MENU] Showing menu at LogicalPosition({}, {})", x, y);
+    window.popup_menu_at(&context_menu, pos).map_err(|e| {
+        eprintln!("[CONTEXT MENU] popup_menu_at failed: {}", e);
+        e.to_string()
+    })
 }
 
 // ── App entry point ───────────────────────────────────────────────────────────
@@ -1101,6 +1108,14 @@ pub fn run() {
                 .build()?;
 
             app.set_menu(menu)?;
+            
+            // Open devtools in dev builds
+            if cfg!(debug_assertions) {
+                if let Some(window) = app.get_webview_window("main") {
+                    window.open_devtools();
+                }
+            }
+            
             Ok(())
         })
         .manage(ServerProcess {
@@ -1142,57 +1157,67 @@ pub fn run() {
             eprintln!("[MENU EVENT] id={}", event.id().0);
             match event.id().0.as_str() {
             "open-folder" => {
-                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "open-folder");
+                let _ = app.emit(FRONTEND_MENU_EVENT, "open-folder");
             }
             "open-file" => {
-                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "open-file");
+                let _ = app.emit(FRONTEND_MENU_EVENT, "open-file");
             }
             "build-workspace" => {
-                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "build-workspace");
+                let _ = app.emit(FRONTEND_MENU_EVENT, "build-workspace");
             }
             "run-workspace" => {
-                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "run-workspace");
+                let _ = app.emit(FRONTEND_MENU_EVENT, "run-workspace");
             }
             "save-file" => {
-                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "save-file");
+                let _ = app.emit(FRONTEND_MENU_EVENT, "save-file");
             }
             "save-all-files" => {
-                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "save-all-files");
+                let _ = app.emit(FRONTEND_MENU_EVENT, "save-all-files");
             }
             "open-preferences" => {
-                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "open-preferences");
+                let _ = app.emit(FRONTEND_MENU_EVENT, "open-preferences");
             }
             "toggle-sidebar" => {
-                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "toggle-sidebar");
+                let _ = app.emit(FRONTEND_MENU_EVENT, "toggle-sidebar");
             }
             "toggle-terminal" => {
-                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "toggle-terminal");
+                let _ = app.emit(FRONTEND_MENU_EVENT, "toggle-terminal");
             }
             "focus-chat" => {
-                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "focus-chat");
+                let _ = app.emit(FRONTEND_MENU_EVENT, "focus-chat");
             }
             "open-project-page" => {
-                let _ = app.emit_to("main", FRONTEND_MENU_EVENT, "open-project-page");
+                let _ = app.emit(FRONTEND_MENU_EVENT, "open-project-page");
             }
             "new-file" => {
-                eprintln!("[CONTEXT MENU] emitting new-file to main window");
-                let _ = app.emit_to("main", CONTEXT_MENU_EVENT, "new-file");
+                eprintln!("[CONTEXT MENU] calling handler for new-file");
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval("window.__engineContextMenuHandler && window.__engineContextMenuHandler('new-file')");
+                }
             }
             "new-folder" => {
-                eprintln!("[CONTEXT MENU] emitting new-folder to main window");
-                let _ = app.emit_to("main", CONTEXT_MENU_EVENT, "new-folder");
+                eprintln!("[CONTEXT MENU] calling handler for new-folder");
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval("window.__engineContextMenuHandler && window.__engineContextMenuHandler('new-folder')");
+                }
             }
             "group-folders" => {
-                eprintln!("[CONTEXT MENU] emitting group-folders to main window");
-                let _ = app.emit_to("main", CONTEXT_MENU_EVENT, "group-folders");
+                eprintln!("[CONTEXT MENU] calling handler for group-folders");
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval("window.__engineContextMenuHandler && window.__engineContextMenuHandler('group-folders')");
+                }
             }
             "expand-all" => {
-                eprintln!("[CONTEXT MENU] emitting expand-all to main window");
-                let _ = app.emit_to("main", CONTEXT_MENU_EVENT, "expand-all");
+                eprintln!("[CONTEXT MENU] calling handler for expand-all");
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval("window.__engineContextMenuHandler && window.__engineContextMenuHandler('expand-all')");
+                }
             }
             "collapse-all" => {
-                eprintln!("[CONTEXT MENU] emitting collapse-all to main window");
-                let _ = app.emit_to("main", CONTEXT_MENU_EVENT, "collapse-all");
+                eprintln!("[CONTEXT MENU] calling handler for collapse-all");
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval("window.__engineContextMenuHandler && window.__engineContextMenuHandler('collapse-all')");
+                }
             }
             _ => {
                 eprintln!("[MENU EVENT] unhandled id: {}", event.id().0);

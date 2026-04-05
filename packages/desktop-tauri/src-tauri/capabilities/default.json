@@ -1,0 +1,11 @@
+{
+  "identifier": "default",
+  "description": "Default capability with all permissions",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-emit",
+    "core:menu:allow-*",
+    "core:window:allow-*"
+  ]
+}
