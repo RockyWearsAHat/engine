@@ -162,18 +162,6 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
             </button>
           </div>
           
-          {activeSession && (
-            <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }} onClick={onOpenFolder}>
-                <FolderOpen size={14} style={{ color: 'var(--accent-2)', flexShrink: 0 }} />
-                <div style={{ fontSize: '11px', color: 'var(--tx-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                  {activeSession.projectPath.split('/').pop() || 'Workspace'}
-                </div>
-                <span style={{ fontSize: '10px', color: 'var(--tx-4)', cursor: 'pointer' }} title="Change workspace">⋯</span>
-              </div>
-            </div>
-          )}
-          
           <div className="sidebar-body">
             {visibleTree ? (
               <>
@@ -220,21 +208,21 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
                       style={{
                         display: 'flex',
                         alignItems: 'center',
-                        padding: '6px 8px',
+                        padding: '4px 8px',
+                        margin: '1px 4px',
                         cursor: 'pointer',
-                        background: file.path === activePath ? 'var(--surface)' : 'transparent',
-                        borderLeft: file.path === activePath ? '3px solid var(--accent-2)' : '3px solid transparent',
-                        paddingLeft: '5px',
-                        transition: 'all 0.15s ease',
+                        background: file.path === activePath ? 'rgba(255,255,255,0.08)' : 'transparent',
+                        borderRadius: '3px',
+                        transition: 'background 0.15s ease',
                       }}
                       onClick={() => onSetActiveFile?.(file.path)}
                       title={file.path}
                     >
                       <FileText size={11} style={{ color, marginRight: '6px', flexShrink: 0 }} />
-                      <span style={{ fontSize: '11px', color: 'var(--tx)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <span style={{ fontSize: '11px', color: file.path === activePath ? 'var(--accent-2)' : 'var(--tx)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {fileName}
                       </span>
-                      {file.dirty && <Circle size={5} style={{ color: 'var(--accent-2)', marginLeft: '4px', fill: 'var(--accent-2)', flexShrink: 0 }} />}
+                      {file.dirty && <Circle size={4} style={{ color: 'var(--accent-2)', marginLeft: '4px', fill: 'var(--accent-2)', flexShrink: 0 }} />}
                     </div>
                   );
                 })}
