@@ -1,11 +1,11 @@
 {
   "identifier": "default",
-  "description": "Default capability with all permissions",
+  "description": "Default capability with all necessary permissions",
   "windows": ["main"],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-emit",
-    "core:menu:allow-*",
-    "core:window:allow-*"
+    "core:menu:allow-popup",
+    "core:window:allow-internal-toggle-maximize"
   ]
 }
