@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { GitCommit, GitStatus } from '@engine/shared';
 import { useStore } from '../../store/index.js';
@@ -80,6 +80,29 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
 
   const [groupFolders, setGroupFolders] = useState(true);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+
+  // Memoize onToggleFolder to prevent infinite re-renders in TreeDir
+  const onToggleFolder = useCallback((path: string, isOpen: boolean) => {
+    setExpandedFolders(prev => {
+      const next = new Set(prev);
+      if (isOpen) {
+        next.add(path);
+      } else {
+        next.delete(path);
+      }
+      return next;
+    });
+  }, []);
+
+  // Memoize context menu handler to prevent infinite re-renders
+  const onContextMenu = useCallback((x: number, y: number, path: string, type: 'file' | 'folder' | 'empty') => {
+    const items = [
+      ['New File', 'new-file'],
+      ['New Folder', 'new-folder'],
+      ['Group Folders', 'group-folders'],
+    ];
+    invoke('show_context_menu', { x, y, items }).catch(err => console.error('Menu error:', err));
+  }, []);
 
   // Sort children: directories first (alphabetical) if grouping, then files (alphabetical)
   const sortNode = (node: FileNode): FileNode => {
@@ -274,25 +297,8 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
                 statusMap={statusMap} 
                 dirStatusMap={dirStatusMap} 
                 showDotfiles={showDotfiles} 
-                onContextMenu={(x, y, path, type) => {
-                  const items = [
-                    ['New File', 'new-file'],
-                    ['New Folder', 'new-folder'],
-                    ['Group Folders', 'group-folders'],
-                  ];
-                  invoke('show_context_menu', { x, y, items }).catch(err => console.error('Menu error:', err));
-                }}
-                onToggleFolder={(path, isOpen) => {
-                  setExpandedFolders(prev => {
-                    const next = new Set(prev);
-                    if (isOpen) {
-                      next.add(path);
-                    } else {
-                      next.delete(path);
-                    }
-                    return next;
-                  });
-                }}
+                onContextMenu={onContextMenu}
+                onToggleFolder={onToggleFolder}
               />
             ) : (
               <div style={{ padding: '20px 12px', textAlign: 'center' }}>
