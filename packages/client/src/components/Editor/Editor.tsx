@@ -852,7 +852,7 @@ export default function Editor() {
                         return;
                       }
 
-                      if ((event.metaKey || event.ctrlKey) && event.key === '/') {
+                      if ((event.metaKey || event.ctrlKey) && (event.key === '/' || event.code === 'Slash')) {
                         event.preventDefault();
                         const textarea = event.currentTarget;
                         const syntax = getCommentSyntax(activeFile?.language ?? '');
