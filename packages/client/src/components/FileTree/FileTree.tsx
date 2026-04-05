@@ -14,9 +14,19 @@ import {
 import {
   countFolders,
   hasFolderWithCollapsedChildren,
+  hasFolderWithExpandedChildren,
+  nodeHasCollapsedChildren,
+  nodeHasExpandedChildren,
+  allChildrenExpanded,
   findNodeByPath,
   shouldShowExpandAll,
   shouldShowCollapseAll,
+  expandAllFolders,
+  expandFoldersWithin,
+  collapseAllFolders,
+  collapseFoldersWithin,
+  hasSiblingFoldersCollapsed,
+  hasSiblingFoldersExpanded,
 } from './folderUtils';
 
 type ActivityTab = 'explorer' | 'open-editors' | 'git' | 'search' | 'issues';
@@ -86,7 +96,30 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
           setSearchQuery, setSearchLoading, clearSearch, showDotfiles } = useStore();
 
   const [groupFolders, setGroupFolders] = useState(true);
-  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  
+  // Initialize expandedFolders from localStorage, or empty set if not found
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => {
+    // TEMPORARILY DISABLED PERSISTENCE FOR DEBUGGING
+    // try {
+    //   const saved = localStorage.getItem('engine:expandedFolders');
+    //   if (saved) {
+    //     return new Set(JSON.parse(saved));
+    //   }
+    // } catch (e) {
+    //   console.warn('[FileTree] Failed to load expandedFolders from localStorage:', e);
+    // }
+    return new Set();
+  });
+
+  // Save expandedFolders to localStorage whenever it changes
+  useEffect(() => {
+    // TEMPORARILY DISABLED PERSISTENCE FOR DEBUGGING
+    // try {
+    //   localStorage.setItem('engine:expandedFolders', JSON.stringify(Array.from(expandedFolders)));
+    // } catch (e) {
+    //   console.warn('[FileTree] Failed to save expandedFolders to localStorage:', e);
+    // }
+  }, [expandedFolders]);
 
   // Memoize onToggleFolder to prevent infinite re-renders in TreeDir
   const onToggleFolder = useCallback((path: string, isOpen: boolean) => {
@@ -132,43 +165,89 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
   const visibleTree = fileTree ? sortNode(filterTree(fileTree) || fileTree) : null;
 
   // Wrapper to match FileTree's expected signature while using tested utility
-  // The utility expects to search for the node, but FileTree pre-finds it
+  // Check if a node has collapsed children (directly on the node, no tree search)
   const checkHasCollapsedChildren = useCallback((node: FileNode | undefined): boolean => {
-    if (!node) return false;
-    // Use utility: check if node has collapsed children
-    return hasFolderWithCollapsedChildren(node.path, visibleTree, expandedFolders);
-  }, [expandedFolders, visibleTree]);
+    return nodeHasCollapsedChildren(node, expandedFolders);
+  }, [expandedFolders]);
+
+  // Check if a node has expanded children (directly on the node, no tree search)
+  const checkHasExpandedChildren = useCallback((node: FileNode | undefined): boolean => {
+    return nodeHasExpandedChildren(node, expandedFolders);
+  }, [expandedFolders]);
 
   // Wrapper to match FileTree's expected signature while using tested utility
   const findNode = useCallback((path: string): FileNode | undefined => {
-    return findNodeByPath(path, visibleTree);
-  }, [visibleTree]);
+    // Search in fileTree (unfiltered) to find all nodes, but only check if they're visible
+    const found = findNodeByPath(path, fileTree || visibleTree);
+    return found;
+  }, [fileTree, visibleTree]);
 
   // Memoize context menu handler to prevent infinite re-renders
-  const onContextMenu = useCallback((x: number, y: number, path: string, type: 'file' | 'folder' | 'empty') => {
+  const onContextMenu = useCallback((x: number, y: number, node: FileNode, type: 'file' | 'folder' | 'empty') => {
     const items: [string, string][] = [
       ['New File', 'new-file'],
       ['New Folder', 'new-folder'],
     ];
 
-    // For folder right-clicks, check if we should show expand/collapse options
     if (type === 'folder') {
-      const node = findNode(path);
-      // Show Expand All if this folder has collapsed children
-      if (node && checkHasCollapsedChildren(node)) {
-        items.push(['Expand All', 'expand-all']);
+      // Folder: show expand/collapse for that folder's children
+      if (nodeHasCollapsedChildren(node, expandedFolders)) {
+        items.push(['Expand All', `expand-all|${node.path}`]);
+      }
+      if (nodeHasExpandedChildren(node, expandedFolders)) {
+        items.push(['Collapse All', `collapse-all|${node.path}`]);
+      }
+    } else if (type === 'file') {
+      // File: show expand/collapse for sibling folders at that level
+      const hasSiblingCollapsed = hasSiblingFoldersCollapsed(node.path, visibleTree, expandedFolders);
+      const hasSiblingExpanded = hasSiblingFoldersExpanded(node.path, visibleTree, expandedFolders);
+      
+      console.log('[MENU] File right-click:', { filePath: node.path, hasSiblingCollapsed, hasSiblingExpanded });
+      
+      if (hasSiblingCollapsed) {
+        items.push(['Expand All', `expand-all|${node.path.substring(0, node.path.lastIndexOf('/'))}`]);
+      }
+      if (hasSiblingExpanded) {
+        items.push(['Collapse All', `collapse-all|${node.path.substring(0, node.path.lastIndexOf('/'))}`]);
+      }
+    } else if (type === 'empty') {
+      // For empty space, show global expand/collapse options
+      // Count folders in tree to show Expand All if any are collapsed
+      const countFolders = (n: FileNode, isRoot: boolean = false): { total: number; expanded: number } => {
+        if (n.type === 'file') return { total: 0, expanded: 0 };
+        
+        let total = isRoot ? 0 : 1;
+        let expanded = (isRoot ? false : expandedFolders.has(n.path)) ? 1 : 0;
+        
+        if (n.children) {
+          for (const child of n.children) {
+            const count = countFolders(child, false);
+            total += count.total;
+            expanded += count.expanded;
+          }
+        }
+        return { total, expanded };
+      };
+      
+      if (visibleTree) {
+        const { total: totalFolders, expanded: expandedCount } = countFolders(visibleTree, true);
+        if (totalFolders > 0 && expandedCount < totalFolders) {
+          items.push(['Expand All', 'expand-all']);
+        }
+      }
+      
+      // Show Collapse All only if folders beyond root are expanded
+      if (expandedFolders.size > 1) {
+        items.push(['Collapse All', 'collapse-all']);
       }
     }
 
-    // Always show Collapse All if any folder beyond root is expanded
-    if (shouldShowCollapseAll(expandedFolders)) {
-      items.push(['Collapse All', 'collapse-all']);
-    }
-
-    items.push(['Group Folders', 'group-folders']);
+    // Add Group Folders with checkmark if enabled
+    const groupFoldersLabel = groupFolders ? '✓ Group Folders' : 'Group Folders';
+    items.push([groupFoldersLabel, 'group-folders']);
 
     invoke('show_context_menu', { x, y, items }).catch(err => console.error('Menu error:', err));
-  }, [expandedFolders, findNode, checkHasCollapsedChildren]);
+  }, [expandedFolders, groupFolders, nodeHasCollapsedChildren, nodeHasExpandedChildren, visibleTree]);
 
   const statusMap = useMemo(
     () => buildStatusMap(gitStatus, activeSession?.projectPath ?? null),
@@ -187,63 +266,112 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
     clearSearch();
   }, [activeSession?.id]);
 
-  // Handle context menu actions via invoke
-  const handleContextMenuAction = async (action: string) => {
-    console.log('[FRONTEND] Context menu action:', action);
-    switch (action) {
-      case 'new-file': {
-        const name = prompt('New file name:');
-        if (name && activeSession) {
-          const path = activeSession.projectPath.endsWith('/') 
-            ? activeSession.projectPath + name 
-            : activeSession.projectPath + '/' + name;
-          wsClient.send({ type: 'file.create', path });
-        }
-        break;
-      }
-      case 'new-folder': {
-        const name = prompt('New folder name:');
-        if (name && activeSession) {
-          const path = activeSession.projectPath.endsWith('/') 
-            ? activeSession.projectPath + name 
-            : activeSession.projectPath + '/' + name;
-          wsClient.send({ type: 'folder.create', path });
-        }
-        break;
-      }
-      case 'group-folders': {
-        setGroupFolders(!groupFolders);
-        break;
-      }
-      case 'expand-all': {
-        const chevrons = document.querySelectorAll('.tree-chevron:not(.open)');
-        console.log('[FRONTEND] Expanding', chevrons.length, 'folders');
-        chevrons.forEach(chevron => {
-          const parent = chevron.closest('.tree-node');
-          if (parent) {
-            (parent as HTMLElement).click();
-          }
-        });
-        break;
-      }
-      case 'collapse-all': {
-        const chevrons = document.querySelectorAll('.tree-chevron.open');
-        console.log('[FRONTEND] Collapsing', chevrons.length, 'folders');
-        chevrons.forEach(chevron => {
-          const parent = chevron.closest('.tree-node');
-          if (parent) {
-            (parent as HTMLElement).click();
-          }
-        });
-        break;
-      }
+  // Ensure root folder is always in expandedFolders so it stays open
+  useEffect(() => {
+    if (!visibleTree) return;
+    if (!expandedFolders.has(visibleTree.path)) {
+      setExpandedFolders(prev => {
+        const next = new Set(prev);
+        next.add(visibleTree.path);
+        return next;
+      });
     }
-  };
+  }, [visibleTree?.path, expandedFolders]);
+
+  // Handle context menu actions via invoke
+  const handleContextMenuAction = useCallback(async (actionId: string) => {
+    try {
+      console.log('[FRONTEND] Context menu action:', actionId);
+      
+      // Also log via Tauri to ensure we see it
+      await invoke('log_frontend_action', { action: actionId });
+      
+      // Parse action and context from ID
+      // Format: "action|context" for scoped actions, "action" for global
+      const [action, context] = actionId.split('|');
+      console.log('[FRONTEND] Parsed action:', action, 'context:', context);
+      
+      switch (action) {
+        case 'new-file': {
+          console.log('[FRONTEND] new-file action');
+          const name = prompt('New file name:');
+          if (name && activeSession) {
+            const path = activeSession.projectPath.endsWith('/') 
+              ? activeSession.projectPath + name 
+              : activeSession.projectPath + '/' + name;
+            wsClient.send({ type: 'file.create', path });
+          }
+          break;
+        }
+        case 'new-folder': {
+          console.log('[FRONTEND] new-folder action');
+          const name = prompt('New folder name:');
+          if (name && activeSession) {
+            const path = activeSession.projectPath.endsWith('/') 
+              ? activeSession.projectPath + name 
+              : activeSession.projectPath + '/' + name;
+            wsClient.send({ type: 'folder.create', path });
+          }
+          break;
+        }
+        case 'group-folders': {
+          console.log('[FRONTEND] group-folders action');
+          setGroupFolders(!groupFolders);
+          break;
+        }
+        case 'expand-all': {
+          console.log('[FRONTEND] expand-all action, context:', context, 'visibleTree:', visibleTree ? 'exists' : 'NULL');
+          if (!visibleTree) {
+            await invoke('log_frontend_action', { action: 'expand-all-no-tree' });
+            break;
+          }
+          setExpandedFolders(prev => {
+            const next = new Set(prev);
+            if (context) {
+              // Scoped expand: expand only within this folder
+              console.log('[FRONTEND] expanding within folder:', context);
+              expandFoldersWithin(context, visibleTree, next);
+            } else {
+              // Global expand: expand entire tree
+              console.log('[FRONTEND] expanding all folders');
+              expandAllFolders(visibleTree, next);
+            }
+            console.log('[FRONTEND] expanded set now has', next.size, 'items');
+            return next;
+          });
+          invoke('log_frontend_action', { action: `expand-all-called` });
+          break;
+        }
+        case 'collapse-all': {
+          console.log('[FRONTEND] collapse-all action, context:', context);
+          setExpandedFolders(prev => {
+            const next = new Set(prev);
+            if (context) {
+              // Scoped collapse: collapse only within this folder
+              console.log('[FRONTEND] collapsing within folder:', context);
+              collapseFoldersWithin(context, next);
+            } else {
+              // Global collapse: collapse entire tree
+              console.log('[FRONTEND] collapsing all folders');
+              collapseAllFolders(next);
+            }
+            console.log('[FRONTEND] expanded set now has', next.size, 'items');
+            return next;
+          });
+          break;
+        }
+        default:
+          console.log('[FRONTEND] unknown action:', action);
+      }
+    } catch (err) {
+      console.error('[FRONTEND] Error in handleContextMenuAction:', err);
+    }
+  }, [activeSession, groupFolders, visibleTree]);
 
   // Store handler in window so Rust can call it
   useEffect(() => {
     (window as any).__engineContextMenuHandler = handleContextMenuAction;
-  }, [activeSession, groupFolders]);
+  }, [handleContextMenuAction]);
 
 
 
@@ -314,8 +442,9 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
                 items.push(['Expand All', 'expand-all']);
               }
               
-              // Always show Collapse All if any folder beyond root is expanded
-              if (expandedFolders.size > 0) {
+              // Show Collapse All only if folders beyond root are expanded
+              // (expandedFolders.size > 1 because root is always in the set)
+              if (expandedFolders.size > 1) {
                 items.push(['Collapse All', 'collapse-all']);
               }
               
@@ -328,11 +457,12 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
               <TreeDir 
                 node={visibleTree} 
                 depth={0} 
-                defaultOpen 
+                defaultOpen={true}
                 activePath={activeFilePath} 
                 statusMap={statusMap} 
                 dirStatusMap={dirStatusMap} 
                 showDotfiles={showDotfiles} 
+                expandedFolders={expandedFolders}
                 onContextMenu={onContextMenu}
                 onToggleFolder={onToggleFolder}
               />
@@ -490,24 +620,81 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
 
 // Tree
 
-function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirStatusMap, showDotfiles, onContextMenu, onToggleFolder }: {
+function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirStatusMap, showDotfiles, expandedFolders, onContextMenu, onToggleFolder }: {
   node: FileNode; depth: number; defaultOpen?: boolean; activePath: string | null;
   statusMap: Map<string, GitFileStatus>; dirStatusMap: Map<string, GitFileStatus>; showDotfiles: boolean;
-  onContextMenu?: (x: number, y: number, path: string, type: 'file' | 'folder' | 'empty') => void;
+  expandedFolders: Set<string>;
+  onContextMenu?: (x: number, y: number, node: FileNode, type: 'file' | 'folder' | 'empty') => void;
   onToggleFolder?: (path: string, isOpen: boolean) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen || depth < 1);
   const [loading, setLoading] = useState(false);
+  const [showLoadingDelay, setShowLoadingDelay] = useState(false);
   const loadTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const showLoadingTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const prevExpandedRef = useRef<boolean>(expandedFolders.has(node.path));
+  const syncFromParentRef = useRef(false); // Track if state was just synced from parent
   const canExpand = Boolean(node.hasChildren || node.children?.length);
 
+  // Sync local state ONLY when expandedFolders changes for this specific node from context menu
   useEffect(() => {
-    onToggleFolder?.(node.path, open);
-  }, [open, node.path, onToggleFolder]);
+    const nowInExpanded = expandedFolders.has(node.path);
+    const wasInExpanded = prevExpandedRef.current;
+    prevExpandedRef.current = nowInExpanded;
+    
+    // Only sync if expandedFolders state actually changed (from context menu action)
+    if (nowInExpanded !== wasInExpanded) {
+      syncFromParentRef.current = true; // Mark that we're syncing from parent
+      setOpen(nowInExpanded);
+      
+      // If opening and not yet loaded, trigger loading of children
+      if (nowInExpanded && !node.loaded && !loading) {
+        setLoading(true);
+        setShowLoadingDelay(false);
+        
+        if (loadTimerRef.current) {
+          window.clearTimeout(loadTimerRef.current);
+        }
+        if (showLoadingTimerRef.current) {
+          window.clearTimeout(showLoadingTimerRef.current);
+        }
+        
+        // Only show loading indicator after 300ms (debounce brief loads)
+        showLoadingTimerRef.current = window.setTimeout(() => {
+          setShowLoadingDelay(true);
+        }, 300);
+        
+        // Timeout for loading (15s)
+        loadTimerRef.current = window.setTimeout(() => {
+          setLoading(false);
+          setShowLoadingDelay(false);
+          loadTimerRef.current = null;
+        }, 15000);
+        
+        wsClient.send({ type: 'file.tree', path: node.path });
+      }
+    }
+  }, [expandedFolders, node.path, node.loaded, loading]);
+
+  // Report manual toggles to parent (will update expandedFolders)
+  // Only fire when user manually clicks, NOT when parent syncs
+  useEffect(() => {
+    if (syncFromParentRef.current) {
+      syncFromParentRef.current = false;
+      return; // Skip if we just synced from parent
+    }
+    const isInExpanded = expandedFolders.has(node.path);
+    if (open !== isInExpanded) {
+      onToggleFolder?.(node.path, open);
+    }
+  }, [open, node.path, expandedFolders, onToggleFolder]);
 
   useEffect(() => () => {
     if (loadTimerRef.current) {
       window.clearTimeout(loadTimerRef.current);
+    }
+    if (showLoadingTimerRef.current) {
+      window.clearTimeout(showLoadingTimerRef.current);
     }
   }, []);
 
@@ -551,7 +738,7 @@ function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirS
         onContextMenu={(e) => {
           e.preventDefault();
           if (onContextMenu) {
-            onContextMenu(Math.round(e.clientX), Math.round(e.clientY), node.path, 'folder');
+            onContextMenu(Math.round(e.clientX), Math.round(e.clientY), node, 'folder');
           }
         }}
       >
@@ -564,14 +751,8 @@ function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirS
                : <Folder size={13} style={{ color: 'var(--accent-2)', flexShrink: 0 }} />}
         <span className="tree-name">{node.name}</span>
       </div>
-      {open && loading && !node.loaded && (
-        <div className="tree-node tree-loading" style={{ paddingLeft: 6 + (depth + 1) * 14 + 16 }}>
-          <Loader2 size={12} className="animate-spin" />
-          <span className="tree-name">Loading…</span>
-        </div>
-      )}
       {open && node.children?.map(child => (
-        <TreeDir key={child.path} node={child} depth={depth + 1} activePath={activePath} statusMap={statusMap} dirStatusMap={dirStatusMap} showDotfiles={showDotfiles} onContextMenu={onContextMenu} onToggleFolder={onToggleFolder} />
+        <TreeDir key={child.path} node={child} depth={depth + 1} activePath={activePath} statusMap={statusMap} dirStatusMap={dirStatusMap} showDotfiles={showDotfiles} expandedFolders={expandedFolders} onContextMenu={onContextMenu} onToggleFolder={onToggleFolder} />
       ))}
     </>
   );
@@ -587,7 +768,7 @@ const GIT_BADGE: Record<string, string> = {
 function TreeFile({ node, depth, activePath, statusMap, showDotfiles, onContextMenu }: {
   node: FileNode; depth: number; activePath: string | null;
   statusMap: Map<string, GitFileStatus>; showDotfiles: boolean;
-  onContextMenu?: (x: number, y: number, path: string, type: 'file' | 'folder' | 'empty') => void;
+  onContextMenu?: (x: number, y: number, node: FileNode, type: 'file' | 'folder' | 'empty') => void;
 }) {
   const isActive = activePath === node.path;
   const { color, Icon } = getFileStyle(node.name);
@@ -611,7 +792,7 @@ function TreeFile({ node, depth, activePath, statusMap, showDotfiles, onContextM
       onContextMenu={(e) => {
         e.preventDefault();
         if (onContextMenu) {
-          onContextMenu(Math.round(e.clientX), Math.round(e.clientY), node.path.substring(0, node.path.lastIndexOf('/')), 'file');
+          onContextMenu(Math.round(e.clientX), Math.round(e.clientY), node, 'file');
         }
       }}
     >

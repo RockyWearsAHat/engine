@@ -6,6 +6,12 @@ import {
   findNodeByPath,
   shouldShowExpandAll,
   shouldShowCollapseAll,
+  getAllCollapsedFolders,
+  getCollapsedWithinFolder,
+  expandAllFolders,
+  expandFoldersWithin,
+  collapseAllFolders,
+  collapseFoldersWithin,
 } from '../components/FileTree/folderUtils';
 
 /**
@@ -341,6 +347,354 @@ describe('folderUtils - Real Production Code Tests', () => {
       expect(expanded.has('/project/src')).toBe(true);
       expect(expanded.has('/project/public')).toBe(false);
       expect(expanded.has('/project/src/components')).toBe(false);
+    });
+  });
+});
+
+/**
+ * Integration Tests - Using scoped expand/collapse functions
+ */
+describe('Scoped Expand/Collapse Functions - Integration', () => {
+  const createTestTree = (): FileNode => ({
+    name: 'project',
+    path: '/project',
+    type: 'directory',
+    children: [
+      {
+        name: 'src',
+        path: '/project/src',
+        type: 'directory',
+        children: [
+          {
+            name: 'components',
+            path: '/project/src/components',
+            type: 'directory',
+            children: [
+              { name: 'App.tsx', path: '/project/src/components/App.tsx', type: 'file' },
+            ],
+          },
+          {
+            name: 'utils',
+            path: '/project/src/utils',
+            type: 'directory',
+            children: [
+              { name: 'helpers.ts', path: '/project/src/utils/helpers.ts', type: 'file' },
+            ],
+          },
+        ],
+      },
+      {
+        name: 'public',
+        path: '/project/public',
+        type: 'directory',
+        children: [
+          { name: 'index.html', path: '/project/public/index.html', type: 'file' },
+        ],
+      },
+    ],
+  });
+
+  describe('getAllCollapsedFolders - Global scope', () => {
+    it('returns all collapsed folders when nothing is expanded', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>();
+      
+      const collapsed = getAllCollapsedFolders(tree, expanded);
+      // Should find src and public as collapsed at root level
+      expect(collapsed).toContain('/project/src');
+      expect(collapsed).toContain('/project/public');
+    });
+
+    it('returns only collapsed folders when some are expanded', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>(['/project/src']);
+      
+      const collapsed = getAllCollapsedFolders(tree, expanded);
+      // src is expanded, so we can see its children
+      // components and utils are collapsed
+      expect(collapsed).toContain('/project/src/components');
+      expect(collapsed).toContain('/project/src/utils');
+      // public is still collapsed
+      expect(collapsed).toContain('/project/public');
+    });
+  });
+
+  describe('getCollapsedWithinFolder - Scoped to target folder', () => {
+    it('returns only direct collapsed children of target folder', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>(['/project/src']);
+      
+      const collapsed = getCollapsedWithinFolder('/project/src', tree, expanded);
+      // Only direct children of src
+      expect(collapsed).toContain('/project/src/components');
+      expect(collapsed).toContain('/project/src/utils');
+      expect(collapsed.length).toBe(2);
+    });
+
+    it('returns empty array for folders with no collapsed children', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>([
+        '/project/src',
+        '/project/src/components',
+        '/project/src/utils',
+      ]);
+      
+      const collapsed = getCollapsedWithinFolder('/project/src', tree, expanded);
+      expect(collapsed).toEqual([]);
+    });
+
+    it('returns empty array when folder not found', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>(['/project/src']);
+      
+      const collapsed = getCollapsedWithinFolder('/nonexistent', tree, expanded);
+      expect(collapsed).toEqual([]);
+    });
+
+    it('returns empty array when target is a file', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>(['/project/src']);
+      
+      const collapsed = getCollapsedWithinFolder('/project/src/components/App.tsx', tree, expanded);
+      expect(collapsed).toEqual([]);
+    });
+  });
+
+  describe('expandAllFolders - Global expand', () => {
+    it('expands all collapsed folders in tree', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>();
+      
+      expandAllFolders(tree, expanded);
+      
+      // All folders should be expanded
+      expect(expanded.has('/project/src')).toBe(true);
+      expect(expanded.has('/project/public')).toBe(true);
+      expect(expanded.has('/project/src/components')).toBe(true);
+      expect(expanded.has('/project/src/utils')).toBe(true);
+    });
+
+    it('handles partial expansion correctly', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>(['/project/src']);
+      
+      expandAllFolders(tree, expanded);
+      
+      // All should be expanded now
+      const { total, expanded: expandedCount } = countFolders(tree, expanded, true);
+      expect(expandedCount).toBe(total);
+    });
+
+    it('handles null tree gracefully', () => {
+      const expanded = new Set<string>();
+      
+      expandAllFolders(null, expanded);
+      
+      expect(expanded.size).toBe(0);
+    });
+
+    it('handles undefined tree gracefully', () => {
+      const expanded = new Set<string>();
+      
+      expandAllFolders(undefined, expanded);
+      
+      expect(expanded.size).toBe(0);
+    });
+  });
+
+  describe('expandFoldersWithin - Scoped expand', () => {
+    it('expands only collapsed folders within target folder', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>(['/project/src']);
+      
+      expandFoldersWithin('/project/src', tree, expanded);
+      
+      // src's children should be expanded
+      expect(expanded.has('/project/src/components')).toBe(true);
+      expect(expanded.has('/project/src/utils')).toBe(true);
+      // But public should still be collapsed
+      expect(expanded.has('/project/public')).toBe(false);
+    });
+
+    it('does not affect other branches', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>([
+        '/project/src',
+        '/project/public',
+      ]);
+      
+      expandFoldersWithin('/project/src', tree, expanded);
+      
+      // src's children expanded
+      expect(expanded.has('/project/src/components')).toBe(true);
+      // public state unchanged
+      expect(expanded.has('/project/public')).toBe(true);
+    });
+  });
+
+  describe('collapseAllFolders - Global collapse', () => {
+    it('collapses entire tree by clearing expanded set', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>([
+        '/project/src',
+        '/project/src/components',
+        '/project/src/utils',
+        '/project/public',
+      ]);
+      
+      collapseAllFolders(expanded);
+      
+      expect(expanded.size).toBe(0);
+      
+      const { expanded: expandedCount } = countFolders(tree, expanded, true);
+      expect(expandedCount).toBe(0);
+    });
+  });
+
+  describe('collapseFoldersWithin - Scoped collapse', () => {
+    it('collapses only folders within target folder', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>([
+        '/project/src',
+        '/project/src/components',
+        '/project/src/utils',
+        '/project/public',
+      ]);
+      
+      collapseFoldersWithin('/project/src', expanded);
+      
+      // src's children should be collapsed
+      expect(expanded.has('/project/src/components')).toBe(false);
+      expect(expanded.has('/project/src/utils')).toBe(false);
+      // But src itself and public should remain
+      expect(expanded.has('/project/src')).toBe(true);
+      expect(expanded.has('/project/public')).toBe(true);
+    });
+
+    it('does not affect other branches', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>([
+        '/project/src',
+        '/project/src/components',
+        '/project/public',
+      ]);
+      
+      collapseFoldersWithin('/project/src', expanded);
+      
+      // src's children collapsed
+      expect(expanded.has('/project/src/components')).toBe(false);
+      // public unaffected
+      expect(expanded.has('/project/public')).toBe(true);
+    });
+  });
+
+  describe('End-to-End Workflow - User interactions', () => {
+    it('workflow: expand entire tree from root', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>();
+      
+      // User right-clicks on root/empty space
+      // Context type is 'empty', so use global expand
+      expandAllFolders(tree, expanded);
+      
+      // All folders now expanded
+      const { total, expanded: expandedCount } = countFolders(tree, expanded, true);
+      expect(expandedCount).toBe(total);
+    });
+
+    it('workflow: expand only within src folder', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>(['/project/src']);
+      
+      // User right-clicks on src folder
+      // Context type is 'folder', so use scoped expand
+      expandFoldersWithin('/project/src', tree, expanded);
+      
+      // src's children expanded, but public remains collapsed
+      expect(expanded.has('/project/src/components')).toBe(true);
+      expect(expanded.has('/project/src/utils')).toBe(true);
+      expect(expanded.has('/project/public')).toBe(false);
+    });
+
+    it('workflow: collapse entire tree from root', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>([
+        '/project/src',
+        '/project/src/components',
+        '/project/src/utils',
+        '/project/public',
+      ]);
+      
+      // User right-clicks on root/empty space
+      // Context type is 'empty', so use global collapse
+      collapseAllFolders(expanded);
+      
+      // Everything collapsed
+      expect(expanded.size).toBe(0);
+    });
+
+    it('workflow: collapse only within src folder', () => {
+      const tree = createTestTree();
+      const expanded = new Set<string>([
+        '/project/src',
+        '/project/src/components',
+        '/project/src/utils',
+        '/project/public',
+      ]);
+      
+      // User right-clicks on src folder
+      // Context type is 'folder', so use scoped collapse
+      collapseFoldersWithin('/project/src', expanded);
+      
+      // src's children collapsed, but src and public remain
+      expect(expanded.has('/project/src/components')).toBe(false);
+      expect(expanded.has('/project/src/utils')).toBe(false);
+      expect(expanded.has('/project/src')).toBe(true);
+      expect(expanded.has('/project/public')).toBe(true);
+    });
+  });
+
+  describe('Edge case - Deeply nested collapsed folders', () => {
+    it('getAllCollapsedFolders finds ALL collapsed folders including nested ones', () => {
+      // Create a tree where a collapsed folder has subfolders inside
+      const treeWithNestedCollapsed: FileNode = {
+        name: 'project',
+        path: '/project',
+        type: 'directory',
+        children: [
+          {
+            name: 'src',
+            path: '/project/src',
+            type: 'directory',
+            children: [
+              {
+                name: 'deeply',
+                path: '/project/src/deeply',
+                type: 'directory',
+                children: [
+                  {
+                    name: 'nested',
+                    path: '/project/src/deeply/nested',
+                    type: 'directory',
+                    children: [
+                      { name: 'file.ts', path: '/project/src/deeply/nested/file.ts', type: 'file' },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+      
+      // Only src is expanded, deeply and nested are collapsed
+      const expanded = new Set<string>(['/project/src']);
+      
+      const collapsed = getAllCollapsedFolders(treeWithNestedCollapsed, expanded, true);
+      
+      // Should find deeply and nested even though deeply is inside another collapsed folder
+      expect(collapsed).toContain('/project/src/deeply');
+      expect(collapsed).toContain('/project/src/deeply/nested');
     });
   });
 });
