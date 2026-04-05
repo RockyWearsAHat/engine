@@ -13,14 +13,9 @@ import {
 } from 'lucide-react';
 import {
   countFolders,
-  hasFolderWithCollapsedChildren,
-  hasFolderWithExpandedChildren,
   nodeHasCollapsedChildren,
   nodeHasExpandedChildren,
-  allChildrenExpanded,
   findNodeByPath,
-  shouldShowExpandAll,
-  shouldShowCollapseAll,
   expandAllFolders,
   expandFoldersWithin,
   collapseAllFolders,
@@ -99,26 +94,24 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
   
   // Initialize expandedFolders from localStorage, or empty set if not found
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => {
-    // TEMPORARILY DISABLED PERSISTENCE FOR DEBUGGING
-    // try {
-    //   const saved = localStorage.getItem('engine:expandedFolders');
-    //   if (saved) {
-    //     return new Set(JSON.parse(saved));
-    //   }
-    // } catch (e) {
-    //   console.warn('[FileTree] Failed to load expandedFolders from localStorage:', e);
-    // }
+    try {
+      const saved = localStorage.getItem('engine:expandedFolders');
+      if (saved) {
+        return new Set(JSON.parse(saved));
+      }
+    } catch (e) {
+      console.warn('[FileTree] Failed to load expandedFolders from localStorage:', e);
+    }
     return new Set();
   });
 
   // Save expandedFolders to localStorage whenever it changes
   useEffect(() => {
-    // TEMPORARILY DISABLED PERSISTENCE FOR DEBUGGING
-    // try {
-    //   localStorage.setItem('engine:expandedFolders', JSON.stringify(Array.from(expandedFolders)));
-    // } catch (e) {
-    //   console.warn('[FileTree] Failed to save expandedFolders to localStorage:', e);
-    // }
+    try {
+      localStorage.setItem('engine:expandedFolders', JSON.stringify(Array.from(expandedFolders)));
+    } catch (e) {
+      console.warn('[FileTree] Failed to save expandedFolders to localStorage:', e);
+    }
   }, [expandedFolders]);
 
   // Memoize onToggleFolder to prevent infinite re-renders in TreeDir
@@ -202,8 +195,6 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
       const hasSiblingCollapsed = hasSiblingFoldersCollapsed(node.path, visibleTree, expandedFolders);
       const hasSiblingExpanded = hasSiblingFoldersExpanded(node.path, visibleTree, expandedFolders);
       
-      console.log('[MENU] File right-click:', { filePath: node.path, hasSiblingCollapsed, hasSiblingExpanded });
-      
       if (hasSiblingCollapsed) {
         items.push(['Expand All', `expand-all|${node.path.substring(0, node.path.lastIndexOf('/'))}`]);
       }
@@ -281,19 +272,12 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
   // Handle context menu actions via invoke
   const handleContextMenuAction = useCallback(async (actionId: string) => {
     try {
-      console.log('[FRONTEND] Context menu action:', actionId);
-      
-      // Also log via Tauri to ensure we see it
-      await invoke('log_frontend_action', { action: actionId });
-      
       // Parse action and context from ID
       // Format: "action|context" for scoped actions, "action" for global
       const [action, context] = actionId.split('|');
-      console.log('[FRONTEND] Parsed action:', action, 'context:', context);
       
       switch (action) {
         case 'new-file': {
-          console.log('[FRONTEND] new-file action');
           const name = prompt('New file name:');
           if (name && activeSession) {
             const path = activeSession.projectPath.endsWith('/') 
@@ -304,7 +288,6 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
           break;
         }
         case 'new-folder': {
-          console.log('[FRONTEND] new-folder action');
           const name = prompt('New folder name:');
           if (name && activeSession) {
             const path = activeSession.projectPath.endsWith('/') 
@@ -315,56 +298,43 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
           break;
         }
         case 'group-folders': {
-          console.log('[FRONTEND] group-folders action');
           setGroupFolders(!groupFolders);
           break;
         }
         case 'expand-all': {
-          console.log('[FRONTEND] expand-all action, context:', context, 'visibleTree:', visibleTree ? 'exists' : 'NULL');
           if (!visibleTree) {
-            await invoke('log_frontend_action', { action: 'expand-all-no-tree' });
             break;
           }
           setExpandedFolders(prev => {
             const next = new Set(prev);
             if (context) {
               // Scoped expand: expand only within this folder
-              console.log('[FRONTEND] expanding within folder:', context);
               expandFoldersWithin(context, visibleTree, next);
             } else {
               // Global expand: expand entire tree
-              console.log('[FRONTEND] expanding all folders');
               expandAllFolders(visibleTree, next);
             }
-            console.log('[FRONTEND] expanded set now has', next.size, 'items');
             return next;
           });
-          invoke('log_frontend_action', { action: `expand-all-called` });
           break;
         }
         case 'collapse-all': {
-          console.log('[FRONTEND] collapse-all action, context:', context);
           setExpandedFolders(prev => {
             const next = new Set(prev);
             if (context) {
               // Scoped collapse: collapse only within this folder
-              console.log('[FRONTEND] collapsing within folder:', context);
               collapseFoldersWithin(context, next);
             } else {
               // Global collapse: collapse entire tree
-              console.log('[FRONTEND] collapsing all folders');
               collapseAllFolders(next);
             }
-            console.log('[FRONTEND] expanded set now has', next.size, 'items');
             return next;
           });
           break;
         }
-        default:
-          console.log('[FRONTEND] unknown action:', action);
       }
     } catch (err) {
-      console.error('[FRONTEND] Error in handleContextMenuAction:', err);
+      console.error('Error in handleContextMenuAction:', err);
     }
   }, [activeSession, groupFolders, visibleTree]);
 
