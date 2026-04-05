@@ -51,7 +51,7 @@ function SessionCard({
       onClick={onClick}
       style={{
         margin: '0 8px 6px',
-        borderRadius: 8,
+        borderRadius: 3,
         border: isSelected ? '1px solid rgba(77,127,255,0.3)' : '1px solid var(--border)',
         background: isSelected ? 'rgba(77,127,255,0.05)' : 'rgba(255,255,255,0.01)',
         cursor: 'pointer',
@@ -91,6 +91,23 @@ function SessionCard({
               ? agentData.currentActivity
               : `${session.messageCount} msg${session.messageCount === 1 ? '' : 's'} · ${new Date(session.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
           </div>
+          {session.summary && (
+            <div
+              style={{
+                fontSize: '10px',
+                color: 'var(--tx-3)',
+                marginTop: 5,
+                lineHeight: 1.45,
+                whiteSpace: 'pre-line',
+                display: '-webkit-box',
+                WebkitBoxOrient: 'vertical',
+                WebkitLineClamp: 2,
+                overflow: 'hidden',
+              }}
+            >
+              {session.summary}
+            </div>
+          )}
         </div>
       </div>
 

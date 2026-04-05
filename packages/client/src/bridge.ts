@@ -5,6 +5,13 @@
  * directly, so the client code is platform-agnostic.
  */
 
+import {
+  DEFAULT_EDITOR_PREFERENCES,
+  normalizeEditorPreferences,
+  type EditorPreferences,
+} from './editorPreferences.js';
+import { loadActiveConnectionProfile } from './connectionProfiles.js';
+
 // Tauri's invoke is injected at runtime via the Tauri webview bridge.
 // We declare only the shape we need to avoid a hard dependency on the npm pkg.
 declare global {
@@ -28,6 +35,19 @@ declare global {
 
 const githubRepoOwnerStorageKey = 'engine.githubRepoOwner';
 const githubRepoNameStorageKey = 'engine.githubRepoName';
+const githubTokenStorageKey = 'engine.githubToken';
+const anthropicKeyStorageKey = 'engine.anthropicKey';
+const openAiKeyStorageKey = 'engine.openaiKey';
+const modelStorageKey = 'engine.model';
+const lastProjectPathStorageKey = 'engine.lastProjectPath';
+const editorPreferencesStorageKey = 'engine.editorPreferences';
+
+export interface InspectedPath {
+  path: string;
+  name: string;
+  kind: 'file' | 'directory';
+  parentPath: string | null;
+}
 
 function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI__' in window;
@@ -35,6 +55,11 @@ function isTauri(): boolean {
 
 function isElectron(): boolean {
   return typeof window !== 'undefined' && !!window.electronAPI?.isElectron;
+}
+
+async function getCurrentTauriWindow() {
+  const { getCurrentWindow } = await import('@tauri-apps/api/window');
+  return getCurrentWindow();
 }
 
 function getBrowserSetting(key: string): string | null {
@@ -68,6 +93,35 @@ function setBrowserSetting(key: string, value: string): boolean {
   }
 }
 
+function getBrowserJson<T>(key: string): T | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) {
+      return null;
+    }
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function setBrowserJson(key: string, value: unknown): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface BackgroundServiceStatus {
   platform: string;
   installed: boolean;
@@ -83,6 +137,14 @@ export const bridge = {
     if (isElectron()) {
       return window.electronAPI!.getProjectPath();
     }
+    const remoteWorkspacePath = loadActiveConnectionProfile()?.workspacePath?.trim();
+    if (remoteWorkspacePath) {
+      return remoteWorkspacePath;
+    }
+    const lastProjectPath = getBrowserSetting(lastProjectPathStorageKey);
+    if (lastProjectPath) {
+      return lastProjectPath;
+    }
     // Plain web / dev server — fall back to env var injected by Vite or '.'
     return (import.meta as { env?: Record<string, string> }).env?.VITE_PROJECT_PATH ?? '.';
   },
@@ -94,7 +156,7 @@ export const bridge = {
     if (isElectron()) {
       return window.electronAPI!.getGithubToken();
     }
-    return null;
+    return getBrowserSetting(githubTokenStorageKey);
   },
 
   async setGithubToken(token: string): Promise<boolean> {
@@ -104,7 +166,7 @@ export const bridge = {
     if (isElectron()) {
       return window.electronAPI!.setGithubToken(token);
     }
-    return false;
+    return setBrowserSetting(githubTokenStorageKey, token);
   },
 
   async getGithubRepoOwner(): Promise<string | null> {
@@ -142,11 +204,18 @@ export const bridge = {
     return null;
   },
 
+  async openFileDialog(): Promise<string | null> {
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<string | null>('open_file_dialog');
+    }
+    return null;
+  },
+
   async setLastProjectPath(path: string): Promise<boolean> {
     if (isTauri()) {
       return window.__TAURI__!.core.invoke<boolean>('set_last_project_path', { path });
     }
-    return false;
+    return setBrowserSetting(lastProjectPathStorageKey, path);
   },
 
   async openExternal(url: string): Promise<void> {
@@ -166,32 +235,67 @@ export const bridge = {
 
   async getAnthropicKey(): Promise<string | null> {
     if (isTauri()) return window.__TAURI__!.core.invoke<string | null>('get_anthropic_key');
-    return null;
+    return getBrowserSetting(anthropicKeyStorageKey);
   },
 
   async setAnthropicKey(key: string): Promise<boolean> {
     if (isTauri()) return window.__TAURI__!.core.invoke<boolean>('set_anthropic_key', { key });
-    return false;
+    return setBrowserSetting(anthropicKeyStorageKey, key);
   },
 
   async getOpenAiKey(): Promise<string | null> {
     if (isTauri()) return window.__TAURI__!.core.invoke<string | null>('get_openai_key');
-    return null;
+    return getBrowserSetting(openAiKeyStorageKey);
   },
 
   async setOpenAiKey(key: string): Promise<boolean> {
     if (isTauri()) return window.__TAURI__!.core.invoke<boolean>('set_openai_key', { key });
-    return false;
+    return setBrowserSetting(openAiKeyStorageKey, key);
   },
 
   async getModel(): Promise<string | null> {
     if (isTauri()) return window.__TAURI__!.core.invoke<string | null>('get_model');
-    return null;
+    return getBrowserSetting(modelStorageKey);
   },
 
   async setModel(model: string): Promise<boolean> {
     if (isTauri()) return window.__TAURI__!.core.invoke<boolean>('set_model', { model });
-    return false;
+    return setBrowserSetting(modelStorageKey, model);
+  },
+
+  async getEditorPreferences(): Promise<EditorPreferences> {
+    if (isTauri()) {
+      const stored = await window.__TAURI__!.core.invoke<Partial<EditorPreferences>>('get_editor_preferences');
+      return normalizeEditorPreferences(stored);
+    }
+
+    return normalizeEditorPreferences(getBrowserJson<EditorPreferences>(editorPreferencesStorageKey) ?? DEFAULT_EDITOR_PREFERENCES);
+  },
+
+  async setEditorPreferences(settings: EditorPreferences): Promise<boolean> {
+    const nextSettings = normalizeEditorPreferences(settings);
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<boolean>('set_editor_preferences', { settings: nextSettings });
+    }
+    return setBrowserJson(editorPreferencesStorageKey, nextSettings);
+  },
+
+  async inspectPath(path: string): Promise<InspectedPath> {
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<InspectedPath>('inspect_path', { path });
+    }
+
+    const normalizedPath = path.trim();
+    const name = normalizedPath.split(/[\\/]/).pop() || normalizedPath;
+    const parentPath = normalizedPath.includes('/')
+      ? normalizedPath.replace(/[/\\][^/\\]+$/, '')
+      : null;
+    return {
+      path: normalizedPath,
+      name,
+      kind: 'file',
+      parentPath,
+    };
   },
 
   async installAgentService(): Promise<string> {
@@ -228,6 +332,24 @@ export const bridge = {
     }
   },
 
+  async toggleFullscreenWindow(): Promise<void> {
+    if (isTauri()) {
+      await window.__TAURI__!.core.invoke('window_toggle_fullscreen');
+    }
+  },
+
+  async isWindowFullscreen(): Promise<boolean> {
+    if (isTauri()) {
+      try {
+        const currentWindow = await getCurrentTauriWindow();
+        return await currentWindow.isFullscreen();
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  },
+
   async closeWindow(): Promise<void> {
     if (isTauri()) {
       await window.__TAURI__!.core.invoke('window_close');
@@ -236,6 +358,22 @@ export const bridge = {
 
   async startWindowDrag(): Promise<void> {
     if (isTauri()) {
+      const currentWindow = await getCurrentTauriWindow();
+      if ('startDragging' in currentWindow && typeof currentWindow.startDragging === 'function') {
+        try {
+          await currentWindow.startDragging();
+          return;
+        } catch (windowApiError) {
+          try {
+            await window.__TAURI__!.core.invoke('window_start_drag');
+            return;
+          } catch (commandError) {
+            const primaryMessage = windowApiError instanceof Error ? windowApiError.message : String(windowApiError);
+            const fallbackMessage = commandError instanceof Error ? commandError.message : String(commandError);
+            throw new Error(`Window dragging failed via the Tauri window API (${primaryMessage}) and the command fallback (${fallbackMessage}).`);
+          }
+        }
+      }
       await window.__TAURI__!.core.invoke('window_start_drag');
     }
   },

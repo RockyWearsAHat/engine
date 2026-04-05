@@ -1,6 +1,13 @@
 import type { ClientMessage, ServerMessage } from '@engine/shared';
+import { loadActiveConnectionProfile } from '../connectionProfiles.js';
 
 type MessageHandler = (msg: ServerMessage) => void;
+
+export interface RemoteConfig {
+  host: string;
+  port: string;
+  token: string;
+}
 
 class WSClient {
   private ws: WebSocket | null = null;
@@ -9,15 +16,34 @@ class WSClient {
   private reconnectDelay = 1000;
   private maxDelay = 16000;
   private shouldConnect = false;
+  private remoteConfig: RemoteConfig | null = null;
 
-  connect(): void {
+  connect(remote?: RemoteConfig): void {
     this.shouldConnect = true;
+    if (remote) {
+      this.remoteConfig = remote;
+    } else if (!this.remoteConfig) {
+      const activeProfile = loadActiveConnectionProfile();
+      if (activeProfile?.host && activeProfile.port && activeProfile.token) {
+        this.remoteConfig = {
+          host: activeProfile.host,
+          port: activeProfile.port,
+          token: activeProfile.token,
+        };
+      }
+    }
     this.doConnect();
   }
 
   private doConnect(): void {
     if (!this.shouldConnect) return;
-    const url = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
+    let url: string;
+    if (this.remoteConfig) {
+      const { host, port, token } = this.remoteConfig;
+      url = `wss://${host}:${port}/ws?token=${encodeURIComponent(token)}`;
+    } else {
+      url = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
+    }
     const ws = new WebSocket(url);
     this.ws = ws;
 
@@ -46,9 +72,14 @@ class WSClient {
 
   disconnect(): void {
     this.shouldConnect = false;
+    this.remoteConfig = null;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.ws?.close();
     this.ws = null;
+  }
+
+  get isRemote(): boolean {
+    return this.remoteConfig !== null;
   }
 
   send(msg: ClientMessage): void {

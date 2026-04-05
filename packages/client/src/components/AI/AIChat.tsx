@@ -52,18 +52,56 @@ export default function AIChat() {
   return (
     <div className="chat-container">
       {activeSession && (
-        <div style={{
-          padding: '6px 12px', borderBottom: '1px solid var(--border)',
-          fontSize: 11, color: 'var(--tx-3)', display: 'flex', alignItems: 'center', gap: 5,
-        }}>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {activeSession.projectPath.split('/').pop()}
-          </span>
-          {activeSession.branchName && (
-            <>
-              <span>{'·'}</span>
-              <span style={{ color: 'var(--accent-2)', fontWeight: 500 }}>{activeSession.branchName}</span>
-            </>
+        <div style={{ borderBottom: '1px solid var(--border)' }}>
+          <div style={{
+            padding: '6px 12px',
+            fontSize: 11,
+            color: 'var(--tx-3)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+          }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {activeSession.projectPath.split('/').pop()}
+            </span>
+            {activeSession.branchName && (
+              <>
+                <span>{'·'}</span>
+                <span style={{ color: 'var(--accent-2)', fontWeight: 500 }}>{activeSession.branchName}</span>
+              </>
+            )}
+          </div>
+          {activeSession.summary && (
+            <div style={{
+              margin: '0 12px 10px',
+              padding: '10px 12px',
+              borderRadius: 3,
+              border: '1px solid rgba(125, 211, 252, 0.14)',
+              background: 'rgba(125,211,252,0.06)',
+            }}>
+              <div style={{
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: '0.12em',
+                textTransform: 'uppercase',
+                color: '#7dd3fc',
+                marginBottom: 6,
+              }}>
+                Project memory
+              </div>
+              <div style={{
+                fontSize: 11,
+                color: 'var(--tx-2)',
+                lineHeight: 1.6,
+                whiteSpace: 'pre-line',
+                display: '-webkit-box',
+                WebkitBoxOrient: 'vertical',
+                WebkitLineClamp: 4,
+                overflow: 'hidden',
+              }}>
+                {activeSession.summary}
+              </div>
+            </div>
           )}
         </div>
       )}

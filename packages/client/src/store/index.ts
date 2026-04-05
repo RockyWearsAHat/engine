@@ -1,6 +1,10 @@
 import { create } from 'zustand';
 import type { Session, Message, FileNode, GitStatus, GitHubUser, GitHubIssue, AgentSession, LiveToolCall, TabInfo, SearchResult } from '@engine/shared';
 import { wsClient } from '../ws/client';
+import {
+  DEFAULT_EDITOR_PREFERENCES,
+  type EditorPreferences,
+} from '../editorPreferences.js';
 
 export interface ToolCallDisplay {
   id: string;
@@ -24,6 +28,8 @@ export interface OpenFile {
   path: string;
   content: string;
   language: string;
+  size: number;
+  largeFile: boolean;
   dirty: boolean;
 }
 
@@ -52,15 +58,22 @@ interface EditorStore {
   // File tree
   fileTree: FileNode | null;
   setFileTree: (tree: FileNode | null) => void;
+  mergeFileTree: (tree: FileNode) => void;
 
   // Open files
   openFiles: OpenFile[];
   activeFilePath: string | null;
-  openFile: (path: string, content: string, language: string) => void;
+  openFile: (path: string, content: string, language: string, size: number) => void;
   closeFile: (path: string) => void;
+  clearOpenFiles: () => void;
   setActiveFile: (path: string) => void;
-  markFileDirty: (path: string, content: string) => void;
+  syncFileContent: (path: string, content: string) => void;
+  markFileDirty: (path: string) => void;
   markFileSaved: (path: string) => void;
+
+  // Editor preferences
+  editorPreferences: EditorPreferences;
+  setEditorPreferences: (settings: EditorPreferences) => void;
 
   // Git
   gitStatus: GitStatus | null;
@@ -98,13 +111,9 @@ interface EditorStore {
   resolveLiveToolCall: (sessionId: string, toolId: string, result: unknown, isError: boolean, durationMs: number) => void;
   setActiveAgentSession: (id: string | null) => void;
 
-  // Layout
-  showFileTree: boolean;
-  showTerminal: boolean;
-  bottomPanel: 'chat' | 'terminal';
-  toggleFileTree: () => void;
-  toggleTerminal: () => void;
-  setBottomPanel: (p: 'chat' | 'terminal') => void;
+  // File visibility
+  showDotfiles: boolean;
+  toggleDotfiles: () => void;
 }
 
 // Pushes current open tab state to the Go server so the agent can introspect it.
@@ -135,6 +144,117 @@ function mergeAgentSessions(sessions: Session[], previous: AgentSession[]): Agen
       ...session,
     };
   });
+}
+
+function mergeFileTreeNode(current: FileNode | null, next: FileNode): FileNode {
+  if (!current) return next;
+
+  // Same node — preserve previously-loaded children that the shallow refresh lost
+  if (current.path === next.path) {
+    if (
+      current.type === 'directory' &&
+      next.type === 'directory' &&
+      current.children?.length &&
+      next.children?.length
+    ) {
+      const nextByPath = new Map(next.children.map(c => [c.path, c]));
+      const preserved: FileNode[] = [];
+      for (const child of next.children) {
+        const prev = current.children?.find(c => c.path === child.path);
+        // If the previous child was loaded (has deep children), keep that data
+        if (prev && prev.type === 'directory' && prev.loaded && prev.children?.length && !child.loaded) {
+          preserved.push(prev);
+        } else {
+          preserved.push(child);
+        }
+      }
+      // Keep children from current that are not in next (shouldn't happen, but safe)
+      return { ...next, children: preserved };
+    }
+    return next;
+  }
+
+  if (current.type !== 'directory' || !current.children?.length) {
+    return current;
+  }
+
+  let replaced = false;
+  const children = current.children.map((child) => {
+    const merged = mergeFileTreeNode(child, next);
+    if (merged !== child) {
+      replaced = true;
+    }
+    return merged;
+  });
+
+  if (!replaced) {
+    return current;
+  }
+
+  return {
+    ...current,
+    children,
+  };
+}
+
+function isPathWithinTree(rootPath: string, nextPath: string): boolean {
+  return nextPath === rootPath
+    || nextPath.startsWith(`${rootPath}/`)
+    || nextPath.startsWith(`${rootPath}\\`);
+}
+
+function parentPathForTreeNode(path: string): string {
+  const separatorIndex = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  return separatorIndex === -1 ? '' : path.slice(0, separatorIndex);
+}
+
+function compareTreeNodes(a: FileNode, b: FileNode): number {
+  if (a.type !== b.type) {
+    return a.type === 'directory' ? -1 : 1;
+  }
+  return a.name.localeCompare(b.name);
+}
+
+function attachFileTreeNode(current: FileNode, next: FileNode): FileNode {
+  if (current.type !== 'directory') {
+    return current;
+  }
+
+  const parentPath = parentPathForTreeNode(next.path);
+  if (current.path === parentPath) {
+    const existingChildren = current.children ?? [];
+    const nextChildren = existingChildren
+      .filter((child) => child.path !== next.path)
+      .concat(next)
+      .sort(compareTreeNodes);
+
+    return {
+      ...current,
+      children: nextChildren,
+    };
+  }
+
+  if (!current.children?.length) {
+    return current;
+  }
+
+  let changed = false;
+  const children = current.children.map((child) => {
+    const attached = attachFileTreeNode(child, next);
+    if (attached !== child) {
+      changed = true;
+    }
+    return attached;
+  });
+
+  if (!changed) {
+    return current;
+  }
+
+  return {
+    ...current,
+    children,
+  };
 }
 
 export const useStore = create<EditorStore>((set, get) => ({
@@ -214,16 +334,40 @@ export const useStore = create<EditorStore>((set, get) => ({
 
   fileTree: null,
   setFileTree: (tree) => set({ fileTree: tree }),
+  mergeFileTree: (tree) => set((state) => {
+    if (!state.fileTree) {
+      return { fileTree: tree };
+    }
+
+    const merged = mergeFileTreeNode(state.fileTree, tree);
+    if (merged !== state.fileTree) {
+      return { fileTree: merged };
+    }
+
+    if (!isPathWithinTree(state.fileTree.path, tree.path)) {
+      return { fileTree: tree };
+    }
+
+    return {
+      fileTree: attachFileTreeNode(state.fileTree, tree),
+    };
+  }),
 
   openFiles: [],
   activeFilePath: null,
 
-  openFile: (path, content, language) => {
+  openFile: (path, content, language, size) => {
+    const largeFile = size >= 2 * 1024 * 1024;
     const existing = get().openFiles.find(f => f.path === path);
     if (!existing) {
-      set(s => ({ openFiles: [...s.openFiles, { path, content, language, dirty: false }], activeFilePath: path }));
+      set(s => ({ openFiles: [...s.openFiles, { path, content, language, size, largeFile, dirty: false }], activeFilePath: path }));
     } else {
-      set({ activeFilePath: path });
+      set(s => ({
+        openFiles: s.openFiles.map(f => (
+          f.path === path ? { ...f, content, language, size, largeFile } : f
+        )),
+        activeFilePath: path,
+      }));
     }
     syncTabs(get);
   },
@@ -237,18 +381,38 @@ export const useStore = create<EditorStore>((set, get) => ({
     return { openFiles: files, activeFilePath: active };
   }),
 
+  clearOpenFiles: () => {
+    set({ openFiles: [], activeFilePath: null });
+    syncTabs(get);
+  },
+
   setActiveFile: (path) => {
     set({ activeFilePath: path });
     syncTabs(get);
   },
 
-  markFileDirty: (path, content) => set(s => ({
-    openFiles: s.openFiles.map(f => f.path === path ? { ...f, content, dirty: true } : f),
+  syncFileContent: (path, content) => set(s => ({
+    openFiles: s.openFiles.map(f => f.path === path ? { ...f, content } : f),
   })),
 
-  markFileSaved: (path) => set(s => ({
-    openFiles: s.openFiles.map(f => f.path === path ? { ...f, dirty: false } : f),
-  })),
+  markFileDirty: (path) => {
+    set(s => ({
+      openFiles: s.openFiles.map(f => (
+        f.path === path && !f.dirty ? { ...f, dirty: true } : f
+      )),
+    }));
+    syncTabs(get);
+  },
+
+  markFileSaved: (path) => {
+    set(s => ({
+      openFiles: s.openFiles.map(f => f.path === path ? { ...f, dirty: false } : f),
+    }));
+    syncTabs(get);
+  },
+
+  editorPreferences: DEFAULT_EDITOR_PREFERENCES,
+  setEditorPreferences: (settings) => set({ editorPreferences: settings }),
 
   gitStatus: null,
   setGitStatus: (s) => set({ gitStatus: s }),
@@ -337,10 +501,7 @@ export const useStore = create<EditorStore>((set, get) => ({
     ),
   })),
 
-  showFileTree: true,
-  showTerminal: true,
-  bottomPanel: 'chat',
-  toggleFileTree: () => set(s => ({ showFileTree: !s.showFileTree })),
-  toggleTerminal: () => set(s => ({ showTerminal: !s.showTerminal })),
-  setBottomPanel: (p) => set({ bottomPanel: p }),
+  showDotfiles: false,
+  toggleDotfiles: () => set(s => ({ showDotfiles: !s.showDotfiles })),
+
 }));

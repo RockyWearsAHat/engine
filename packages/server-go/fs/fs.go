@@ -12,12 +12,6 @@ import (
 	"strings"
 )
 
-var ignoreDirs = map[string]bool{
-	".git": true, "node_modules": true, "dist": true, "out": true,
-	"build": true, ".engine": true, ".DS_Store": true,
-	"target": true, "__pycache__": true, ".next": true, ".nuxt": true,
-}
-
 var binaryExts = map[string]bool{
 	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true,
 	".svg": true, ".ico": true, ".bmp": true, ".tiff": true,
@@ -47,12 +41,14 @@ var langMap = map[string]string{
 
 // FileNode represents a file or directory in the tree.
 type FileNode struct {
-	Name     string      `json:"name"`
-	Path     string      `json:"path"`
-	Type     string      `json:"type"` // "file" | "directory"
-	Children []*FileNode `json:"children,omitempty"`
-	Size     int64       `json:"size,omitempty"`
-	Modified string      `json:"modified,omitempty"`
+	Name        string      `json:"name"`
+	Path        string      `json:"path"`
+	Type        string      `json:"type"` // "file" | "directory"
+	Children    []*FileNode `json:"children,omitempty"`
+	Loaded      bool        `json:"loaded,omitempty"`
+	HasChildren bool        `json:"hasChildren,omitempty"`
+	Size        int64       `json:"size,omitempty"`
+	Modified    string      `json:"modified,omitempty"`
 }
 
 // FileContent holds the result of reading a file.
@@ -122,17 +118,17 @@ func buildTree(path string, depth, maxDepth int) (*FileNode, error) {
 	}
 	if info.IsDir() {
 		node.Type = "directory"
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			node.Loaded = true
+			return node, nil
+		}
+		node.HasChildren = len(entries) > 0
 		if depth >= maxDepth {
 			return node, nil
 		}
-		entries, err := os.ReadDir(path)
-		if err != nil {
-			return node, nil
-		}
+		node.Loaded = true
 		for _, e := range entries {
-			if ignoreDirs[e.Name()] || strings.HasPrefix(e.Name(), ".") && e.Name() != ".env" {
-				continue
-			}
 			child, err := buildTree(filepath.Join(path, e.Name()), depth+1, maxDepth)
 			if err == nil {
 				node.Children = append(node.Children, child)
@@ -238,7 +234,7 @@ func SearchMatches(pattern, dir, fileGlob string) ([]SearchResult, error) {
 	return results, nil
 }
 
-// DetectLanguage returns the Monaco language ID for a file path.
+// DetectLanguage returns the language identifier for a file path.
 func DetectLanguage(path string) string {
 	ext := strings.ToLower(filepath.Ext(path))
 	if lang, ok := langMap[ext]; ok {

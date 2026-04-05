@@ -10,19 +10,35 @@ import { Plus, X } from 'lucide-react';
 interface TermTab {
   id: string;
   cwd: string;
+  label: string;
   xterm: XTerm;
   fitAddon: FitAddon;
 }
 
-export default function Terminal() {
+interface CommandRequest {
+  id: string;
+  command: string;
+  cwd: string;
+  label: string;
+}
+
+export default function Terminal({
+  commandRequest,
+  onCommandHandled,
+}: {
+  commandRequest?: CommandRequest | null;
+  onCommandHandled?: (id: string) => void;
+}) {
   const { activeSession } = useStore();
   const [tabs, setTabs] = useState<TermTab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<TermTab[]>([]);
+  const pendingLaunchesRef = useRef<Array<CommandRequest>>([]);
+  const handledRequestIdsRef = useRef<Set<string>>(new Set());
   tabsRef.current = tabs;
 
-  const createTerminal = (terminalId: string, cwd: string) => {
+  const createTerminal = (terminalId: string, cwd: string, label: string) => {
     const xterm = new XTerm({
       theme: {
         background: '#0d0d0d',
@@ -39,7 +55,7 @@ export default function Terminal() {
     xterm.loadAddon(fitAddon);
     xterm.loadAddon(new WebLinksAddon());
 
-    const tab: TermTab = { id: terminalId, cwd, xterm, fitAddon };
+    const tab: TermTab = { id: terminalId, cwd, label, xterm, fitAddon };
     setTabs(prev => [...prev, tab]);
     setActiveId(terminalId);
   };
@@ -47,12 +63,20 @@ export default function Terminal() {
   useEffect(() => {
     const off = wsClient.onMessage(msg => {
       if (msg.type === 'terminal.created') {
-        createTerminal(msg.terminalId, msg.cwd);
+        const nextLaunch = pendingLaunchesRef.current.shift();
+        createTerminal(msg.terminalId, msg.cwd, nextLaunch?.label ?? 'shell');
+        if (nextLaunch) {
+          window.setTimeout(() => {
+            wsClient.send({ type: 'terminal.input', terminalId: msg.terminalId, data: `${nextLaunch.command}\n` });
+          }, 40);
+        }
       } else if (msg.type === 'terminal.output') {
         const tab = tabsRef.current.find(t => t.id === msg.terminalId);
         tab?.xterm.write(msg.data);
       } else if (msg.type === 'terminal.closed') {
         setTabs(prev => {
+          const tab = prev.find(t => t.id === msg.terminalId);
+          tab?.xterm.dispose();
           const next = prev.filter(t => t.id !== msg.terminalId);
           setActiveId(next[next.length - 1]?.id ?? null);
           return next;
@@ -61,6 +85,16 @@ export default function Terminal() {
     });
     return () => off();
   }, []);
+
+  useEffect(() => {
+    if (!commandRequest || handledRequestIdsRef.current.has(commandRequest.id)) {
+      return;
+    }
+    handledRequestIdsRef.current.add(commandRequest.id);
+    onCommandHandled?.(commandRequest.id);
+    pendingLaunchesRef.current.push(commandRequest);
+    wsClient.send({ type: 'terminal.create', cwd: commandRequest.cwd });
+  }, [commandRequest, onCommandHandled]);
 
   // Mount active xterm to DOM
   useEffect(() => {
@@ -72,7 +106,7 @@ export default function Terminal() {
     tab.xterm.open(containerRef.current);
     tab.fitAddon.fit();
 
-    tab.xterm.onData(data => {
+    const inputDisposable = tab.xterm.onData(data => {
       wsClient.send({ type: 'terminal.input', terminalId: activeId, data });
     });
 
@@ -84,7 +118,10 @@ export default function Terminal() {
       }
     });
     ro.observe(containerRef.current);
-    return () => ro.disconnect();
+    return () => {
+      inputDisposable.dispose();
+      ro.disconnect();
+    };
   }, [activeId, tabs.length]);
 
   const newTerminal = () => {
@@ -108,7 +145,7 @@ export default function Terminal() {
               tab.id === activeId ? 'bg-editor-bg text-gray-200' : 'text-gray-500 hover:bg-editor-hover'
             }`}
           >
-            <span>bash</span>
+            <span>{tab.label}</span>
             <button onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }} className="hover:text-red-400">
               <X size={10} />
             </button>

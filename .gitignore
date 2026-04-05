@@ -58,3 +58,4 @@ coverage/
 
 # Rust build artifacts
 packages/desktop-tauri/src-tauri/target/
+engine-45mb-test.ts

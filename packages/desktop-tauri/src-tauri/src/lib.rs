@@ -10,7 +10,10 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{
+    menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
+    AppHandle, Emitter, Manager,
+};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -23,6 +26,7 @@ const STARTUP_REG_PATH_ENV: &str = "ENGINE_STARTUP_REG_PATH";
 const STARTUP_REG_NAME_ENV: &str = "ENGINE_STARTUP_REG_NAME";
 #[cfg(target_os = "macos")]
 const STARTUP_TEST_MODE_ENV: &str = "ENGINE_STARTUP_TEST_MODE";
+const FRONTEND_MENU_EVENT: &str = "engine-shell-menu";
 
 struct ServerProcess {
     child: Mutex<Option<Child>>,
@@ -43,7 +47,27 @@ struct ServiceStatus {
     startup_target: String,
 }
 
-#[derive(Serialize, Deserialize, Default, Clone)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EditorPreferences {
+    font_family: String,
+    font_size: u16,
+    line_height: f32,
+    tab_size: u8,
+    word_wrap: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PathInspection {
+    path: String,
+    name: String,
+    kind: String,
+    parent_path: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(default)]
 struct AppConfig {
     github_token: Option<String>,
     github_owner: Option<String>,
@@ -52,6 +76,11 @@ struct AppConfig {
     openai_api_key: Option<String>,
     model: Option<String>,
     last_project_path: Option<String>,
+    editor_font_family: String,
+    editor_font_size: u16,
+    editor_line_height: f32,
+    editor_tab_size: u8,
+    editor_word_wrap: bool,
 }
 
 enum CliAction {
@@ -59,6 +88,29 @@ enum CliAction {
     InstallService,
     UninstallService,
     ServiceStatus,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            github_token: None,
+            github_owner: None,
+            github_repo: None,
+            anthropic_api_key: None,
+            openai_api_key: None,
+            model: None,
+            last_project_path: None,
+            editor_font_family: default_editor_font_family(),
+            editor_font_size: 13,
+            editor_line_height: 1.6,
+            editor_tab_size: 2,
+            editor_word_wrap: false,
+        }
+    }
+}
+
+fn default_editor_font_family() -> String {
+    "\"JetBrains Mono\", \"IBM Plex Mono\", Menlo, Monaco, monospace".to_string()
 }
 
 fn config_root() -> PathBuf {
@@ -90,6 +142,49 @@ fn write_config(cfg: &AppConfig) -> bool {
     } else {
         false
     }
+}
+
+fn normalize_editor_preferences(settings: EditorPreferences) -> EditorPreferences {
+    let font_family = match settings.font_family.as_str() {
+        "\"JetBrains Mono\", \"IBM Plex Mono\", Menlo, Monaco, monospace"
+        | "\"IBM Plex Mono\", \"JetBrains Mono\", Menlo, Monaco, monospace"
+        | "\"Fira Code\", \"JetBrains Mono\", Menlo, Monaco, monospace"
+        | "Menlo, Monaco, \"JetBrains Mono\", monospace" => settings.font_family,
+        _ => default_editor_font_family(),
+    };
+
+    let line_height = settings.line_height.clamp(1.35, 2.05);
+    let tab_size = match settings.tab_size {
+        4 | 8 => settings.tab_size,
+        _ => 2,
+    };
+
+    EditorPreferences {
+        font_family,
+        font_size: settings.font_size.clamp(11, 20),
+        line_height: (line_height * 100.0).round() / 100.0,
+        tab_size,
+        word_wrap: settings.word_wrap,
+    }
+}
+
+fn editor_preferences_from_config(cfg: &AppConfig) -> EditorPreferences {
+    normalize_editor_preferences(EditorPreferences {
+        font_family: cfg.editor_font_family.clone(),
+        font_size: cfg.editor_font_size,
+        line_height: cfg.editor_line_height,
+        tab_size: cfg.editor_tab_size,
+        word_wrap: cfg.editor_word_wrap,
+    })
+}
+
+fn apply_editor_preferences(cfg: &mut AppConfig, settings: EditorPreferences) {
+    let normalized = normalize_editor_preferences(settings);
+    cfg.editor_font_family = normalized.font_family;
+    cfg.editor_font_size = normalized.font_size;
+    cfg.editor_line_height = normalized.line_height;
+    cfg.editor_tab_size = normalized.tab_size;
+    cfg.editor_word_wrap = normalized.word_wrap;
 }
 
 fn default_project_path() -> String {
@@ -670,6 +765,44 @@ fn set_model(model: String) -> bool {
 }
 
 #[tauri::command]
+fn get_editor_preferences() -> EditorPreferences {
+    editor_preferences_from_config(&read_config())
+}
+
+#[tauri::command]
+fn set_editor_preferences(settings: EditorPreferences) -> bool {
+    let mut cfg = read_config();
+    apply_editor_preferences(&mut cfg, settings);
+    write_config(&cfg)
+}
+
+#[tauri::command]
+fn inspect_path(path: String) -> Result<PathInspection, String> {
+    let trimmed_path = path.trim();
+    if trimmed_path.is_empty() {
+        return Err("path must not be empty".to_string());
+    }
+
+    let resolved = PathBuf::from(trimmed_path);
+    let metadata = fs::metadata(&resolved).map_err(|error| error.to_string())?;
+    let kind = if metadata.is_dir() {
+        "directory".to_string()
+    } else {
+        "file".to_string()
+    };
+
+    Ok(PathInspection {
+        path: resolved.to_string_lossy().to_string(),
+        name: resolved
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| resolved.to_string_lossy().to_string()),
+        kind,
+        parent_path: resolved.parent().map(|parent| parent.to_string_lossy().to_string()),
+    })
+}
+
+#[tauri::command]
 async fn open_folder_dialog(app: AppHandle) -> Option<String> {
     let cfg = read_config();
     let mut dialog = app.dialog().file().set_title("Open workspace");
@@ -696,6 +829,27 @@ async fn open_folder_dialog(app: AppHandle) -> Option<String> {
     }
 
     folder
+}
+
+#[tauri::command]
+async fn open_file_dialog(app: AppHandle) -> Option<String> {
+    let cfg = read_config();
+    let mut dialog = app.dialog().file().set_title("Open file");
+    if let Some(dir) = cfg
+        .last_project_path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| app.path().home_dir().ok())
+    {
+        dialog = dialog.set_directory(dir);
+    }
+
+    dialog.blocking_pick_file().map(|path| {
+        path.as_path()
+            .map(|resolved| resolved.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string())
+    })
 }
 
 #[tauri::command]
@@ -728,6 +882,16 @@ fn window_toggle_maximize(app: AppHandle) -> Result<(), String> {
     } else {
         window.maximize().map_err(|e| e.to_string())
     }
+}
+
+#[tauri::command]
+fn window_toggle_fullscreen(app: AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    
+    let is_fs = window.is_fullscreen().map_err(|e| e.to_string())?;
+    window.set_fullscreen(!is_fs).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -817,6 +981,107 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            let open_folder = MenuItemBuilder::new("Open Folder…")
+                .id("open-folder")
+                .accelerator("CmdOrCtrl+O")
+                .build(app)?;
+            let open_file = MenuItemBuilder::new("Open File…")
+                .id("open-file")
+                .accelerator("CmdOrCtrl+Shift+O")
+                .build(app)?;
+            let build_workspace = MenuItemBuilder::new("Build Workspace")
+                .id("build-workspace")
+                .build(app)?;
+            let run_workspace = MenuItemBuilder::new("Run Workspace")
+                .id("run-workspace")
+                .accelerator("CmdOrCtrl+Shift+B")
+                .build(app)?;
+            let save_file = MenuItemBuilder::new("Save")
+                .id("save-file")
+                .accelerator("CmdOrCtrl+S")
+                .build(app)?;
+            let save_all_files = MenuItemBuilder::new("Save All")
+                .id("save-all-files")
+                .accelerator("CmdOrCtrl+Shift+S")
+                .build(app)?;
+            let open_preferences = MenuItemBuilder::new("Preferences…")
+                .id("open-preferences")
+                .accelerator("CmdOrCtrl+,")
+                .build(app)?;
+            let toggle_sidebar = MenuItemBuilder::new("Toggle Sidebar")
+                .id("toggle-sidebar")
+                .accelerator("CmdOrCtrl+B")
+                .build(app)?;
+            let toggle_terminal = MenuItemBuilder::new("Toggle Terminal")
+                .id("toggle-terminal")
+                .accelerator("CmdOrCtrl+J")
+                .build(app)?;
+            let focus_chat = MenuItemBuilder::new("Focus Chat")
+                .id("focus-chat")
+                .accelerator("CmdOrCtrl+L")
+                .build(app)?;
+            let open_project_page = MenuItemBuilder::new("Project Home")
+                .id("open-project-page")
+                .build(app)?;
+
+            let app_submenu = SubmenuBuilder::new(app, "Engine")
+                .about(Some(AboutMetadata {
+                    name: Some("Engine".to_string()),
+                    version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                    comments: Some("AI-native code editor".to_string()),
+                    ..Default::default()
+                }))
+                .separator()
+                .item(&open_preferences)
+                .separator()
+                .quit()
+                .build()?;
+
+            let file_submenu = SubmenuBuilder::new(app, "File")
+                .item(&open_folder)
+                .item(&open_file)
+                .separator()
+                .item(&build_workspace)
+                .item(&run_workspace)
+                .separator()
+                .item(&save_file)
+                .item(&save_all_files)
+                .build()?;
+
+            let edit_submenu = SubmenuBuilder::new(app, "Edit")
+                .undo()
+                .redo()
+                .separator()
+                .cut()
+                .copy()
+                .paste()
+                .select_all()
+                .build()?;
+
+            let view_submenu = SubmenuBuilder::new(app, "View")
+                .item(&toggle_sidebar)
+                .item(&toggle_terminal)
+                .item(&focus_chat)
+                .build()?;
+
+            let help_submenu = SubmenuBuilder::new(app, "Help")
+                .item(&open_project_page)
+                .build()?;
+
+            let menu = MenuBuilder::new(app)
+                .items(&[
+                    &app_submenu,
+                    &file_submenu,
+                    &edit_submenu,
+                    &view_submenu,
+                    &help_submenu,
+                ])
+                .build()?;
+
+            app.set_menu(menu)?;
+            Ok(())
+        })
         .manage(ServerProcess {
             child: Mutex::new(server.child),
             managed: server.managed,
@@ -835,17 +1100,58 @@ pub fn run() {
             set_openai_key,
             get_model,
             set_model,
+            get_editor_preferences,
+            set_editor_preferences,
+            inspect_path,
             set_last_project_path,
             install_agent_service,
             uninstall_agent_service,
             agent_service_status,
             open_external,
             open_folder_dialog,
+            open_file_dialog,
             window_minimize,
             window_toggle_maximize,
+            window_toggle_fullscreen,
             window_close,
             window_start_drag,
         ])
+        .on_menu_event(|app, event| match event.id().0.as_str() {
+            "open-folder" => {
+                let _ = app.emit(FRONTEND_MENU_EVENT, "open-folder");
+            }
+            "open-file" => {
+                let _ = app.emit(FRONTEND_MENU_EVENT, "open-file");
+            }
+            "build-workspace" => {
+                let _ = app.emit(FRONTEND_MENU_EVENT, "build-workspace");
+            }
+            "run-workspace" => {
+                let _ = app.emit(FRONTEND_MENU_EVENT, "run-workspace");
+            }
+            "save-file" => {
+                let _ = app.emit(FRONTEND_MENU_EVENT, "save-file");
+            }
+            "save-all-files" => {
+                let _ = app.emit(FRONTEND_MENU_EVENT, "save-all-files");
+            }
+            "open-preferences" => {
+                let _ = app.emit(FRONTEND_MENU_EVENT, "open-preferences");
+            }
+            "toggle-sidebar" => {
+                let _ = app.emit(FRONTEND_MENU_EVENT, "toggle-sidebar");
+            }
+            "toggle-terminal" => {
+                let _ = app.emit(FRONTEND_MENU_EVENT, "toggle-terminal");
+            }
+            "focus-chat" => {
+                let _ = app.emit(FRONTEND_MENU_EVENT, "focus-chat");
+            }
+            "open-project-page" => {
+                let _ = app.emit(FRONTEND_MENU_EVENT, "open-project-page");
+            }
+            _ => {}
+        })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 if let Some(state) = window.try_state::<ServerProcess>() {

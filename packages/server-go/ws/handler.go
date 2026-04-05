@@ -15,11 +15,12 @@ import (
 	gofs "github.com/engine/server/fs"
 	gogit "github.com/engine/server/git"
 	"github.com/engine/server/terminal"
+	"github.com/engine/server/workspace"
 	"github.com/gorilla/websocket"
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin:     func(r *http.Request) bool { return true },
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
 }
@@ -51,8 +52,10 @@ type conn struct {
 	projectPath string
 	sessionID   string
 
-	termMgr  *terminal.Manager
-	termIDs  map[string]bool
+	termMgr         *terminal.Manager
+	termIDs         map[string]bool
+	approvalMu      sync.Mutex
+	approvalWaiters map[string]chan bool
 
 	// openTabs is the client's current set of open editor tabs (updated via editor.tabs.sync).
 	tabsMu   sync.RWMutex
@@ -72,10 +75,11 @@ type runtimeConfig struct {
 
 func newConn(ws *websocket.Conn, projectPath string) *conn {
 	return &conn{
-		ws:          ws,
-		projectPath: projectPath,
-		termMgr:     terminal.NewManager(),
-		termIDs:     make(map[string]bool),
+		ws:              ws,
+		projectPath:     projectPath,
+		termMgr:         terminal.NewManager(),
+		termIDs:         make(map[string]bool),
+		approvalWaiters: make(map[string]chan bool),
 	}
 }
 
@@ -97,9 +101,67 @@ func (c *conn) sendErr(message, code string) {
 	c.send(map[string]string{"type": "error", "message": message, "code": code})
 }
 
+func (c *conn) requestApproval(sessionID, kind, title, message, command string) (bool, error) {
+	id := newID()
+	waiter := make(chan bool, 1)
+
+	c.approvalMu.Lock()
+	c.approvalWaiters[id] = waiter
+	c.approvalMu.Unlock()
+
+	c.send(map[string]interface{}{
+		"type": "approval.request",
+		"request": map[string]string{
+			"id":        id,
+			"sessionId": sessionID,
+			"kind":      kind,
+			"title":     title,
+			"message":   message,
+			"command":   command,
+		},
+	})
+
+	select {
+	case allow := <-waiter:
+		return allow, nil
+	case <-time.After(5 * time.Minute):
+		c.approvalMu.Lock()
+		delete(c.approvalWaiters, id)
+		c.approvalMu.Unlock()
+		return false, fmt.Errorf("approval timed out")
+	}
+}
+
+func (c *conn) resolveApproval(id string, allow bool) {
+	c.approvalMu.Lock()
+	waiter, ok := c.approvalWaiters[id]
+	if ok {
+		delete(c.approvalWaiters, id)
+	}
+	c.approvalMu.Unlock()
+	if !ok {
+		return
+	}
+	waiter <- allow
+	close(waiter)
+}
+
+func (c *conn) resolveAllApprovals(allow bool) {
+	c.approvalMu.Lock()
+	waiters := c.approvalWaiters
+	c.approvalWaiters = make(map[string]chan bool)
+	c.approvalMu.Unlock()
+
+	for _, waiter := range waiters {
+		waiter <- allow
+		close(waiter)
+	}
+}
+
 func (c *conn) run() {
 	defer func() {
 		c.termMgr.KillAll()
+		c.resolveAllApprovals(false)
 		c.ws.Close()
 	}()
 
@@ -127,7 +189,9 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 	// ── Project ───────────────────────────────────────────────────────────────
 
 	case "project.open":
-		var msg struct{ Path string `json:"path"` }
+		var msg struct {
+			Path string `json:"path"`
+		}
 		json.Unmarshal(raw, &msg) //nolint:errcheck
 		if msg.Path == "" {
 			c.sendErr("Path required", "BAD_PAYLOAD")
@@ -141,10 +205,13 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr(err.Error(), "DB_ERROR")
 			return
 		}
+		if summary := ai.BuildInitialSessionSummary(msg.Path); summary != "" {
+			db.UpdateSessionSummary(id, summary) //nolint:errcheck
+		}
 		c.sessionID = id
 		session, _ := db.GetSession(id)
 		c.send(map[string]interface{}{"type": "session.created", "session": session})
-		tree, err := gofs.GetTree(msg.Path, 4)
+		tree, err := gofs.GetTree(msg.Path, 1)
 		if err == nil {
 			c.send(map[string]interface{}{"type": "file.tree", "tree": tree})
 		}
@@ -180,6 +247,9 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		if err := db.CreateSession(id, projectPath, branch); err != nil {
 			c.sendErr(err.Error(), "DB_ERROR")
 			return
+		}
+		if summary := ai.BuildInitialSessionSummary(projectPath); summary != "" {
+			db.UpdateSessionSummary(id, summary) //nolint:errcheck
 		}
 		c.sessionID = id
 		session, _ := db.GetSession(id)
@@ -234,10 +304,16 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			OnError: func(errMsg string) {
 				c.send(map[string]interface{}{"type": "chat.error", "sessionId": sessionID, "error": errMsg})
 			},
+			OnSessionUpdated: func(session *db.Session) {
+				c.send(map[string]interface{}{"type": "session.updated", "session": session})
+			},
 			GetOpenTabs: func() []ai.TabInfo {
 				c.tabsMu.RLock()
 				defer c.tabsMu.RUnlock()
 				return c.openTabs
+			},
+			RequestApproval: func(kind, title, message, command string) (bool, error) {
+				return c.requestApproval(sessionID, kind, title, message, command)
 			},
 			SendToClient: func(msgType string, payload interface{}) {
 				m := map[string]interface{}{"type": msgType}
@@ -250,34 +326,78 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			},
 		}, msg.Content)
 
+	case "approval.respond":
+		var msg struct {
+			ID    string `json:"id"`
+			Allow bool   `json:"allow"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.sendErr("Bad payload", "BAD_PAYLOAD")
+			return
+		}
+		if msg.ID == "" {
+			c.sendErr("Approval id required", "BAD_PAYLOAD")
+			return
+		}
+		c.resolveApproval(msg.ID, msg.Allow)
+
 	// ── Files ─────────────────────────────────────────────────────────────────
 
 	case "file.read":
-		var msg struct{ Path string `json:"path"` }
+		var msg struct {
+			Path string `json:"path"`
+		}
 		json.Unmarshal(raw, &msg) //nolint:errcheck
 		fc, err := gofs.ReadFile(msg.Path)
 		if err != nil {
 			c.sendErr(err.Error(), "FILE_ERROR")
 			return
 		}
-		c.send(map[string]interface{}{"type": "file.content", "path": msg.Path, "content": fc.Content, "language": fc.Language})
+		c.send(map[string]interface{}{"type": "file.content", "path": msg.Path, "content": fc.Content, "language": fc.Language, "size": fc.Size})
 
 	case "file.save":
 		var msg struct {
 			Path    string `json:"path"`
 			Content string `json:"content"`
 		}
-		json.Unmarshal(raw, &msg) //nolint:errcheck
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.sendErr("Invalid file.save payload", "INVALID_PAYLOAD")
+			return
+		}
 		if err := gofs.WriteFile(msg.Path, msg.Content); err != nil {
 			c.sendErr(err.Error(), "FILE_ERROR")
 			return
 		}
 		c.send(map[string]interface{}{"type": "file.saved", "path": msg.Path})
 
-	case "file.tree":
-		var msg struct{ Path string `json:"path"` }
+	case "file.create":
+		var msg struct {
+			Path string `json:"path"`
+		}
 		json.Unmarshal(raw, &msg) //nolint:errcheck
-		tree, err := gofs.GetTree(msg.Path, 4)
+		if err := gofs.WriteFile(msg.Path, ""); err != nil {
+			c.sendErr(err.Error(), "FILE_ERROR")
+			return
+		}
+		c.send(map[string]interface{}{"type": "file.created", "path": msg.Path})
+
+	case "folder.create":
+		var msg struct {
+			Path string `json:"path"`
+		}
+		json.Unmarshal(raw, &msg) //nolint:errcheck
+		if err := os.MkdirAll(msg.Path, 0755); err != nil {
+			c.sendErr(err.Error(), "FILE_ERROR")
+			return
+		}
+		c.send(map[string]interface{}{"type": "folder.created", "path": msg.Path})
+
+	case "file.tree":
+		var msg struct {
+			Path string `json:"path"`
+		}
+		json.Unmarshal(raw, &msg) //nolint:errcheck
+		tree, err := gofs.GetTree(msg.Path, 1)
 		if err != nil {
 			c.sendErr(err.Error(), "FILE_ERROR")
 			return
@@ -313,27 +433,76 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 	// ── Git ───────────────────────────────────────────────────────────────────
 
 	case "git.status":
-		status, err := gogit.GetStatus(projectPath)
-		if err != nil {
-			c.sendErr(err.Error(), "GIT_ERROR")
-			return
-		}
-		c.send(map[string]interface{}{"type": "git.status", "status": status})
+		go func() {
+			status, err := gogit.GetStatus(projectPath)
+			if err != nil {
+				c.sendErr(err.Error(), "GIT_ERROR")
+				return
+			}
+			c.send(map[string]interface{}{"type": "git.status", "status": status})
+		}()
 
 	case "git.diff":
-		var msg struct{ Path string `json:"path"` }
+		var msg struct {
+			Path string `json:"path"`
+		}
 		json.Unmarshal(raw, &msg) //nolint:errcheck
 		diff, _ := gogit.GetDiff(projectPath, msg.Path)
 		c.send(map[string]interface{}{"type": "git.diff", "path": msg.Path, "diff": diff})
 
 	case "git.log":
-		var msg struct{ Limit int `json:"limit"` }
+		var msg struct {
+			Limit int `json:"limit"`
+		}
 		json.Unmarshal(raw, &msg) //nolint:errcheck
 		if msg.Limit <= 0 {
 			msg.Limit = 20
 		}
 		commits, _ := gogit.GetLog(projectPath, msg.Limit)
 		c.send(map[string]interface{}{"type": "git.log", "commits": commits})
+
+	case "git.commit":
+		var msg struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.send(map[string]interface{}{"type": "git.commit.result", "ok": false, "message": "Bad payload"})
+			return
+		}
+		message := strings.TrimSpace(msg.Message)
+		if message == "" {
+			c.send(map[string]interface{}{"type": "git.commit.result", "ok": false, "message": "Commit message required"})
+			return
+		}
+		hash, err := gogit.Commit(projectPath, message)
+		if err != nil {
+			c.send(map[string]interface{}{"type": "git.commit.result", "ok": false, "message": err.Error()})
+			return
+		}
+		c.send(map[string]interface{}{"type": "git.commit.result", "ok": true, "hash": hash, "message": message})
+		if status, err := gogit.GetStatus(projectPath); err == nil {
+			c.send(map[string]interface{}{"type": "git.status", "status": status})
+		}
+		if commits, err := gogit.GetLog(projectPath, 8); err == nil {
+			c.send(map[string]interface{}{"type": "git.log", "commits": commits})
+		}
+
+	case "workspace.tasks":
+		var msg struct {
+			Path string `json:"path"`
+		}
+		json.Unmarshal(raw, &msg) //nolint:errcheck
+		root := projectPath
+		if strings.TrimSpace(msg.Path) != "" {
+			root = msg.Path
+		}
+		detected := workspace.DetectTasks(root)
+		c.send(map[string]interface{}{
+			"type":               "workspace.tasks",
+			"tasks":              detected.Tasks,
+			"defaultBuildTaskId": detected.DefaultBuildTask,
+			"defaultRunTaskId":   detected.DefaultRunTask,
+		})
 
 	case "config.sync":
 		var msg struct {
@@ -351,7 +520,9 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		c.handleGitHubUser()
 
 	case "github.issues":
-		var msg struct{ ProjectPath string `json:"projectPath"` }
+		var msg struct {
+			ProjectPath string `json:"projectPath"`
+		}
 		json.Unmarshal(raw, &msg) //nolint:errcheck
 		pp := msg.ProjectPath
 		if pp == "" {
@@ -362,7 +533,9 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 	// ── Terminals ─────────────────────────────────────────────────────────────
 
 	case "terminal.create":
-		var msg struct{ Cwd string `json:"cwd"` }
+		var msg struct {
+			Cwd string `json:"cwd"`
+		}
 		json.Unmarshal(raw, &msg) //nolint:errcheck
 		id := newID()
 		cwd := msg.Cwd
@@ -403,7 +576,9 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		c.termMgr.Resize(msg.TerminalID, msg.Cols, msg.Rows)
 
 	case "terminal.close":
-		var msg struct{ TerminalID string `json:"terminalId"` }
+		var msg struct {
+			TerminalID string `json:"terminalId"`
+		}
 		json.Unmarshal(raw, &msg) //nolint:errcheck
 		c.termMgr.Kill(msg.TerminalID)
 		delete(c.termIDs, msg.TerminalID)
@@ -462,13 +637,13 @@ func (c *conn) handleGitHubUser() {
 }
 
 type githubIssue struct {
-	Number    int    `json:"number"`
-	Title     string `json:"title"`
-	Body      string `json:"body"`
-	HtmlURL   string `json:"htmlUrl"`
-	State     string `json:"state"`
-	Author    string `json:"author"`
-	Labels    []struct {
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	Body    string `json:"body"`
+	HtmlURL string `json:"htmlUrl"`
+	State   string `json:"state"`
+	Author  string `json:"author"`
+	Labels  []struct {
 		Name  string `json:"name"`
 		Color string `json:"color"`
 	} `json:"labels"`

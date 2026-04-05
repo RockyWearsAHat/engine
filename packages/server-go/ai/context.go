@@ -40,10 +40,13 @@ type ChatContext struct {
 	OnToolCall  func(name string, input interface{})
 	OnToolResult func(name string, result interface{}, isError bool)
 	OnError     func(err string)
+	OnSessionUpdated func(session *db.Session)
 	// GetOpenTabs returns the client's currently open editor tabs.
 	GetOpenTabs func() []TabInfo
 	// SendToClient sends an arbitrary message back to the WS client.
 	SendToClient func(msgType string, payload interface{})
+	// RequestApproval asks the client to elevate a risky action and blocks until the user responds.
+	RequestApproval func(kind, title, message, command string) (bool, error)
 }
 
 // TabInfo represents an open editor tab (pushed by client via editor.tabs.sync).
@@ -213,29 +216,58 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 
 	switch name {
 	case "read_file":
-		fc, err := gofs.ReadFile(str("path"))
+		path, err := resolveWorkspacePath(ctx.ProjectPath, str("path"))
+		if err != nil {
+			return err.Error(), true
+		}
+		fc, err := gofs.ReadFile(path)
 		if err != nil {
 			return err.Error(), true
 		}
 		return fc.Content, false
 
 	case "write_file":
-		if err := gofs.WriteFile(str("path"), str("content")); err != nil {
+		path, err := resolveWorkspacePath(ctx.ProjectPath, str("path"))
+		if err != nil {
 			return err.Error(), true
 		}
-		return "File written: " + str("path"), false
+		if err := gofs.WriteFile(path, str("content")); err != nil {
+			return err.Error(), true
+		}
+		return "File written: " + path, false
 
 	case "list_directory":
-		tree, err := gofs.GetTree(str("path"), 4)
+		path, err := resolveWorkspaceDirectory(ctx.ProjectPath, str("path"))
+		if err != nil {
+			return err.Error(), true
+		}
+		tree, err := gofs.GetTree(path, 4)
 		if err != nil {
 			return err.Error(), true
 		}
 		return formatTree(tree, 0), false
 
 	case "shell":
+		command := str("command")
+		if title, message, needsApproval := requiresShellApproval(ctx.ProjectPath, command); needsApproval {
+			if ctx.RequestApproval == nil {
+				return "This shell command requires explicit approval, but no approval handler is available.", true
+			}
+			allowed, err := ctx.RequestApproval("shell", title, message, command)
+			if err != nil {
+				return err.Error(), true
+			}
+			if !allowed {
+				return "The user denied this shell command.", true
+			}
+		}
 		cwd := str("cwd")
 		if cwd == "" {
 			cwd = ctx.ProjectPath
+		}
+		cwd, err := resolveWorkspaceDirectory(ctx.ProjectPath, cwd)
+		if err != nil {
+			return err.Error(), true
 		}
 		cmd := exec.Command("bash", "-c", str("command"))
 		cmd.Dir = cwd
@@ -254,6 +286,10 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 		if dir == "" {
 			dir = ctx.ProjectPath
 		}
+		dir, err := resolveWorkspaceDirectory(ctx.ProjectPath, dir)
+		if err != nil {
+			return err.Error(), true
+		}
 		result, _ := gofs.SearchFiles(str("pattern"), dir, str("file_pattern"))
 		return result, false
 
@@ -266,13 +302,36 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 		return string(b), false
 
 	case "git_diff":
-		diff, err := gogit.GetDiff(ctx.ProjectPath, str("path"))
+		diffPath := str("path")
+		if diffPath != "" {
+			resolvedDiffPath, err := workspaceRelativePath(ctx.ProjectPath, diffPath)
+			if err != nil {
+				return err.Error(), true
+			}
+			diffPath = resolvedDiffPath
+		}
+		diff, err := gogit.GetDiff(ctx.ProjectPath, diffPath)
 		if err != nil {
 			return err.Error(), true
 		}
 		return diff, false
 
 	case "git_commit":
+		if ctx.RequestApproval == nil {
+			return "Git commits require explicit approval, but no approval handler is available.", true
+		}
+		allowed, err := ctx.RequestApproval(
+			"git_commit",
+			"Approve git commit",
+			"The assistant wants to stage all current changes and create a git commit. Review the proposed message before allowing it.",
+			str("message"),
+		)
+		if err != nil {
+			return err.Error(), true
+		}
+		if !allowed {
+			return "The user denied the git commit.", true
+		}
 		hash, err := gogit.Commit(ctx.ProjectPath, str("message"))
 		if err != nil {
 			return err.Error(), true
@@ -280,10 +339,14 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 		return "Committed: " + hash, false
 
 	case "open_file":
-		if ctx.SendToClient != nil {
-			ctx.SendToClient("editor.open", map[string]string{"path": str("path")})
+		path, err := resolveWorkspacePath(ctx.ProjectPath, str("path"))
+		if err != nil {
+			return err.Error(), true
 		}
-		return "Opening " + str("path"), false
+		if ctx.SendToClient != nil {
+			ctx.SendToClient("editor.open", map[string]string{"path": path})
+		}
+		return "Opening " + path, false
 
 	case "get_system_info":
 		return getSystemInfo(ctx.ProjectPath), false
@@ -297,7 +360,10 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 		return string(b), false
 
 	case "close_tab":
-		path := str("path")
+		path, err := resolveWorkspacePath(ctx.ProjectPath, str("path"))
+		if err != nil {
+			return err.Error(), true
+		}
 		force := boolVal("force")
 		if ctx.GetOpenTabs != nil && !force {
 			for _, t := range ctx.GetOpenTabs() {
@@ -312,10 +378,14 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 		return "Closed tab: " + path, false
 
 	case "focus_tab":
-		if ctx.SendToClient != nil {
-			ctx.SendToClient("editor.tab.focus", map[string]string{"path": str("path")})
+		path, err := resolveWorkspacePath(ctx.ProjectPath, str("path"))
+		if err != nil {
+			return err.Error(), true
 		}
-		return "Focused tab: " + str("path"), false
+		if ctx.SendToClient != nil {
+			ctx.SendToClient("editor.tab.focus", map[string]string{"path": path})
+		}
+		return "Focused tab: " + path, false
 
 	default:
 		return "Unknown tool: " + name, true
@@ -404,8 +474,11 @@ func Chat(ctx *ChatContext, userMessage string) {
 		fmt.Sprintf("Project: %s", ctx.ProjectPath),
 		fmt.Sprintf("Branch: %s", branch),
 	}
+	if workspaceGuide := BuildWorkspacePromptContext(ctx.ProjectPath); workspaceGuide != "" {
+		systemLines = append(systemLines, "Workspace direction: "+workspaceGuide)
+	}
 	if session != nil && session.Summary != "" {
-		systemLines = append(systemLines, "Project context: "+session.Summary)
+		systemLines = append(systemLines, "Session memory: "+session.Summary)
 	}
 	systemLines = append(systemLines,
 		"",
@@ -414,7 +487,9 @@ func Chat(ctx *ChatContext, userMessage string) {
 		"- Use shell to run tests, builds, and observe real output",
 		"- Use get_system_info to check resource pressure before intensive operations",
 		"- Use list_open_tabs to understand what the user is focused on",
-		"- When you open a file, the user sees it in Monaco immediately",
+		"- File operations are confined to the current project root unless the user explicitly elevates them",
+		"- Risky shell commands and git commits require explicit user approval",
+		"- When you open a file, the user sees it in Engine immediately",
 		"- Be decisive: fix problems completely, not just symptoms",
 	)
 	systemPrompt := strings.Join(systemLines, "\n")
@@ -492,6 +567,19 @@ func Chat(ctx *ChatContext, userMessage string) {
 		tc = allToolCalls
 	}
 	db.SaveMessage(newID(), ctx.SessionID, "assistant", finalText.String(), tc) //nolint:errcheck
+	if summary := BuildUpdatedSessionSummary(func() string {
+		if session == nil {
+			return ""
+		}
+		return session.Summary
+	}(), userMessage, finalText.String(), allToolCalls); summary != "" {
+		db.UpdateSessionSummary(ctx.SessionID, summary) //nolint:errcheck
+		if ctx.OnSessionUpdated != nil {
+			if updatedSession, err := db.GetSession(ctx.SessionID); err == nil && updatedSession != nil {
+				ctx.OnSessionUpdated(updatedSession)
+			}
+		}
+	}
 	ctx.OnChunk("", true)
 }
 
