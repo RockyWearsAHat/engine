@@ -6,7 +6,10 @@
     "dev": "vite",
     "build": "pnpm -C ../.. --filter @engine/shared build && tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "pnpm -C ../.. --filter @engine/shared build && tsc --noEmit"
+    "typecheck": "pnpm -C ../.. --filter @engine/shared build && tsc --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@engine/shared": "workspace:*",
