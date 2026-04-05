@@ -60,43 +60,212 @@ type TestSummary struct {
 	Success    bool     `json:"success"`
 }
 
-// IsErrorLine detects if a line contains an error.
+// IsErrorLine detects if a line contains an error using language-aware patterns.
 func IsErrorLine(line string) bool {
-	line = strings.ToLower(line)
-	errorPatterns := []string{
-		"error",
-		"failed",
-		"panic",
-		"exception",
-		"fatal",
-		"crash",
-		"abort",
-		"segfault",
+	lower := strings.ToLower(line)
+
+	// Skip known false positives
+	for _, fp := range falsePositivePatterns {
+		if fp.MatchString(lower) {
+			return false
+		}
 	}
-	for _, pattern := range errorPatterns {
-		if strings.Contains(line, pattern) {
+
+	// Check compiled regex patterns first (more precise)
+	for _, p := range errorRegexPatterns {
+		if p.MatchString(line) {
+			return true
+		}
+	}
+
+	// Fall back to keyword matching
+	for _, keyword := range errorKeywords {
+		if strings.Contains(lower, keyword) {
 			return true
 		}
 	}
 	return false
 }
 
-// IsWarningLine detects if a line contains a warning.
+// IsWarningLine detects if a line contains a warning using language-aware patterns.
 func IsWarningLine(line string) bool {
-	line = strings.ToLower(line)
-	warningPatterns := []string{
-		"warning",
-		"deprecated",
-		"todo",
-		"fixme",
-		"xxx",
+	lower := strings.ToLower(line)
+	for _, keyword := range warningKeywords {
+		if strings.Contains(lower, keyword) {
+			return true
+		}
 	}
-	for _, pattern := range warningPatterns {
-		if strings.Contains(line, pattern) {
+	for _, p := range warningRegexPatterns {
+		if p.MatchString(line) {
 			return true
 		}
 	}
 	return false
+}
+
+// IsStackTraceLine detects if a line is part of a stack trace.
+func IsStackTraceLine(line string) bool {
+	for _, p := range stackTracePatterns {
+		if p.MatchString(line) {
+			return true
+		}
+	}
+	return false
+}
+
+// DetectExitCode extracts an exit code from a line if present.
+// Returns -1 if no exit code found.
+func DetectExitCode(line string) int {
+	matches := exitCodePattern.FindStringSubmatch(line)
+	if len(matches) >= 2 {
+		code := 0
+		for _, c := range matches[1] {
+			code = code*10 + int(c-'0')
+		}
+		return code
+	}
+	return -1
+}
+
+// ClassifyError attempts to categorize an error line.
+// Returns: "compile", "runtime", "test", "network", "permission", or "unknown".
+func ClassifyError(line string) string {
+	lower := strings.ToLower(line)
+	for _, p := range compileErrorPatterns {
+		if p.MatchString(lower) {
+			return "compile"
+		}
+	}
+	for _, p := range runtimeErrorPatterns {
+		if p.MatchString(lower) {
+			return "runtime"
+		}
+	}
+	for _, p := range testErrorPatterns {
+		if p.MatchString(lower) {
+			return "test"
+		}
+	}
+	for _, p := range networkErrorPatterns {
+		if p.MatchString(lower) {
+			return "network"
+		}
+	}
+	for _, p := range permissionErrorPatterns {
+		if p.MatchString(lower) {
+			return "permission"
+		}
+	}
+	return "unknown"
+}
+
+// --- Pattern definitions ---
+
+var errorKeywords = []string{
+	"error", "failed", "panic", "exception", "fatal",
+	"crash", "abort", "segfault", "segmentation fault",
+	"unhandled", "uncaught", "enoent", "eacces", "eperm",
+	"econnrefused", "econnreset", "etimedout",
+}
+
+var warningKeywords = []string{
+	"warning", "deprecated", "warn:",
+}
+
+// Compiled regex patterns for precise error detection
+var errorRegexPatterns = []*regexp.Regexp{
+	// Go errors
+	regexp.MustCompile(`(?i)^.*\.go:\d+:\d+:.*`),                           // file.go:10:5: error
+	regexp.MustCompile(`(?i)cannot use .* as .* in`),                         // type mismatch
+	regexp.MustCompile(`(?i)undefined: \w+`),                                 // undefined symbol
+	// TypeScript/JavaScript errors
+	regexp.MustCompile(`(?i)TS\d{4,5}:`),                                     // TS2322: ...
+	regexp.MustCompile(`(?i)SyntaxError:`),                                   // SyntaxError: Unexpected token
+	regexp.MustCompile(`(?i)TypeError:`),                                     // TypeError: Cannot read
+	regexp.MustCompile(`(?i)ReferenceError:`),                                // ReferenceError: x is not defined
+	// Rust errors
+	regexp.MustCompile(`(?i)^error\[E\d{4}\]:`),                             // error[E0308]:
+	regexp.MustCompile(`(?i)^error: aborting due to`),                        // error: aborting due to N errors
+	// Python errors
+	regexp.MustCompile(`(?i)Traceback \(most recent call last\)`),            // Python traceback
+	regexp.MustCompile(`(?i)^\w+Error:`),                                     // ValueError: ...
+	regexp.MustCompile(`(?i)^IndentationError:`),                             // IndentationError
+	// Build tool errors
+	regexp.MustCompile(`(?i)FAIL\s+\S+`),                                    // FAIL github.com/...
+	regexp.MustCompile(`(?i)npm ERR!`),                                       // npm ERR!
+	regexp.MustCompile(`(?i)ERR_PNPM_`),                                     // ERR_PNPM_...
+	// Exit codes
+	regexp.MustCompile(`(?i)exit(?:ed with)?\s+(?:code|status)\s+[1-9]\d*`), // exit code 1, exited with code 2
+}
+
+var warningRegexPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)^warning\[`),             // Rust warning[...]
+	regexp.MustCompile(`(?i)^\s*warning:`),            // General warning:
+	regexp.MustCompile(`(?i)DeprecationWarning:`),     // Node deprecation
+}
+
+var stackTracePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`^\s+at\s+\S+\s+\(`),                         // JS/TS: at Function (file:line)
+	regexp.MustCompile(`^\s+at\s+\S+:\d+:\d+`),                      // JS/TS: at file:line:col
+	regexp.MustCompile(`^\s+File ".*", line \d+`),                    // Python: File "x.py", line 10
+	regexp.MustCompile(`^\s+\S+\.go:\d+`),                            // Go: goroutine stack
+	regexp.MustCompile(`^\s+\d+:\s+0x[0-9a-f]+`),                    // Go: frame address
+	regexp.MustCompile(`(?i)^\s+\d+ \|`),                             // Rust source annotation
+	regexp.MustCompile(`^\s+-->.*:\d+:\d+`),                          // Rust: --> file:line:col
+}
+
+var falsePositivePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)error.+handling`),       // "error handling" in comments
+	regexp.MustCompile(`(?i)\bon.?error\b`),           // "onError" callback names
+	regexp.MustCompile(`(?i)error.?boundary`),       // React ErrorBoundary
+	regexp.MustCompile(`(?i)if\s+err\s*!=\s*nil`),   // Go error check pattern
+	regexp.MustCompile(`(?i)catch\s*\(`),             // catch block definition
+	regexp.MustCompile(`(?i)\.error\s*\(`),           // console.error() call
+	regexp.MustCompile(`(?i)"error"\s*:`),            // JSON key "error":
+}
+
+var exitCodePattern = regexp.MustCompile(`(?i)exit(?:ed with)?\s+(?:code|status)\s+(\d+)`)
+
+var compileErrorPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\.go:\d+:\d+:`),
+	regexp.MustCompile(`(?i)TS\d{4,5}:`),
+	regexp.MustCompile(`(?i)error\[E\d{4}\]:`),
+	regexp.MustCompile(`(?i)SyntaxError:`),
+	regexp.MustCompile(`(?i)IndentationError:`),
+	regexp.MustCompile(`(?i)cannot find module`),
+	regexp.MustCompile(`(?i)module not found`),
+}
+
+var runtimeErrorPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)panic:`),
+	regexp.MustCompile(`(?i)segmentation fault`),
+	regexp.MustCompile(`(?i)null pointer`),
+	regexp.MustCompile(`(?i)stack overflow`),
+	regexp.MustCompile(`(?i)out of memory`),
+	regexp.MustCompile(`(?i)TypeError:`),
+	regexp.MustCompile(`(?i)ReferenceError:`),
+}
+
+var testErrorPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)FAIL\s+\S+`),
+	regexp.MustCompile(`(?i)test.*failed`),
+	regexp.MustCompile(`(?i)assertion.*failed`),
+	regexp.MustCompile(`(?i)expect\(.*\)\.to`),
+}
+
+var networkErrorPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)ECONNREFUSED`),
+	regexp.MustCompile(`(?i)ECONNRESET`),
+	regexp.MustCompile(`(?i)ETIMEDOUT`),
+	regexp.MustCompile(`(?i)connection refused`),
+	regexp.MustCompile(`(?i)dns.*resolution.*failed`),
+}
+
+var permissionErrorPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)EACCES`),
+	regexp.MustCompile(`(?i)EPERM`),
+	regexp.MustCompile(`(?i)permission denied`),
+	regexp.MustCompile(`(?i)access denied`),
 }
 
 // BehavioralValidator checks if a fix actually resolved the issue.
