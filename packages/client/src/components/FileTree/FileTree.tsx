@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { GitCommit, GitStatus } from '@engine/shared';
 import { useStore } from '../../store/index.js';
+import type { OpenFile } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
 import { bridge } from '../../bridge.js';
 import type { FileNode, GitHubIssue, SearchResult } from '@engine/shared';
 import {
   FolderOpen, Folder, RefreshCw, GitBranch,
   AlertCircle, FileText, ChevronRight,
-  Loader2, Search, FilePlus, FolderPlus,
+  Loader2, Search, FilePlus, FolderPlus, ChevronDown, Circle,
 } from 'lucide-react';
 
-type ActivityTab = 'explorer' | 'git' | 'issues' | 'search';
+type ActivityTab = 'explorer' | 'open-editors' | 'git' | 'search' | 'issues';
 
 type GitFileStatus = 'modified' | 'staged' | 'untracked' | 'ignored' | null;
 
@@ -18,6 +19,9 @@ interface Props {
   activityTab: ActivityTab;
   onOpenFolder: () => void;
   onOpenFile: () => void;
+  openFiles?: OpenFile[];
+  activeFilePath?: string | null;
+  onSetActiveFile?: (path: string) => void;
 }
 
 /** Normalize file:// URLs to plain paths (Tauri on macOS wraps them). */
@@ -67,20 +71,21 @@ function buildDirStatusMap(
   return dirMap;
 }
 
-export default function FileTree({ activityTab, onOpenFolder, onOpenFile }: Props) {
+export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFiles = [], activeFilePath: activePath, onSetActiveFile }: Props) {
   const { fileTree, activeSession, gitStatus, githubIssues, githubIssuesLoading,
           githubIssuesError, activeFilePath, setGithubIssuesLoading, setGithubIssuesError,
           searchQuery, searchResults, searchLoading, searchError,
           setSearchQuery, setSearchLoading, clearSearch, showDotfiles } = useStore();
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; dirPath: string } | null>(null);
+  const [groupFolders, setGroupFolders] = useState(true);
 
-  // Sort children: directories first (alphabetical), then files (alphabetical)
+  // Sort children: directories first (alphabetical) if grouping, then files (alphabetical)
   const sortNode = (node: FileNode): FileNode => {
     if (node.type === 'directory' && node.children) {
       const sorted = [...node.children].sort((a, b) => {
-        // Directories come first
-        if (a.type !== b.type) {
+        // Directories come first only if grouping is enabled
+        if (groupFolders && a.type !== b.type) {
           return a.type === 'directory' ? -1 : 1;
         }
         // Then sort alphabetically by name (case-insensitive)
@@ -152,13 +157,23 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile }: Prop
             <button className="sidebar-action" onClick={onOpenFile} title="Open File">
               <FileText size={13} />
             </button>
-            <button className="sidebar-action" onClick={onOpenFolder} title="Open Folder">
-              <FolderOpen size={13} />
-            </button>
             <button className="sidebar-action" onClick={refresh} title="Refresh">
               <RefreshCw size={12} />
             </button>
           </div>
+          
+          {activeSession && (
+            <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }} onClick={onOpenFolder}>
+                <FolderOpen size={14} style={{ color: 'var(--accent-2)', flexShrink: 0 }} />
+                <div style={{ fontSize: '11px', color: 'var(--tx-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                  {activeSession.projectPath.split('/').pop() || 'Workspace'}
+                </div>
+                <span style={{ fontSize: '10px', color: 'var(--tx-4)', cursor: 'pointer' }} title="Change workspace">⋯</span>
+              </div>
+            </div>
+          )}
+          
           <div className="sidebar-body">
             {visibleTree ? (
               <>
@@ -170,6 +185,8 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile }: Prop
                     dirPath={contextMenu.dirPath}
                     onClose={() => setContextMenu(null)}
                     projectPath={activeSession?.projectPath ?? ''}
+                    groupFolders={groupFolders}
+                    onToggleGroupFolders={() => setGroupFolders(!groupFolders)}
                   />
                 )}
               </>
@@ -180,6 +197,51 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile }: Prop
                   <FolderOpen size={13} />
                   Open Folder
                 </button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {activityTab === 'open-editors' && (
+        <>
+          <div className="sidebar-header">
+            <span className="sidebar-title">Open Editors</span>
+          </div>
+          <div className="sidebar-body">
+            {openFiles && openFiles.length > 0 ? (
+              <div>
+                {openFiles.map(file => {
+                  const fileName = file.path.split('/').pop() ?? file.path;
+                  const { color } = getFileStyle(fileName);
+                  return (
+                    <div
+                      key={file.path}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        padding: '6px 8px',
+                        cursor: 'pointer',
+                        background: file.path === activePath ? 'var(--surface)' : 'transparent',
+                        borderLeft: file.path === activePath ? '3px solid var(--accent-2)' : '3px solid transparent',
+                        paddingLeft: '5px',
+                        transition: 'all 0.15s ease',
+                      }}
+                      onClick={() => onSetActiveFile?.(file.path)}
+                      title={file.path}
+                    >
+                      <FileText size={11} style={{ color, marginRight: '6px', flexShrink: 0 }} />
+                      <span style={{ fontSize: '11px', color: 'var(--tx)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {fileName}
+                      </span>
+                      {file.dirty && <Circle size={5} style={{ color: 'var(--accent-2)', marginLeft: '4px', fill: 'var(--accent-2)', flexShrink: 0 }} />}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{ padding: '20px 12px', textAlign: 'center', color: 'var(--tx-3)', fontSize: 12 }}>
+                No open editors
               </div>
             )}
           </div>
@@ -836,7 +898,7 @@ function SearchPanel({
   );
 }
 
-function TreeContextMenu({ x, y, dirPath, onClose, projectPath }: { x: number; y: number; dirPath: string; onClose: () => void; projectPath: string }) {
+function TreeContextMenu({ x, y, dirPath, onClose, projectPath, groupFolders, onToggleGroupFolders }: { x: number; y: number; dirPath: string; onClose: () => void; projectPath: string; groupFolders: boolean; onToggleGroupFolders: () => void }) {
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -867,6 +929,11 @@ function TreeContextMenu({ x, y, dirPath, onClose, projectPath }: { x: number; y
     onClose();
   };
 
+  const handleGroupFolders = () => {
+    onToggleGroupFolders();
+    onClose();
+  };
+
   return (
     <div
       ref={menuRef}
@@ -880,7 +947,7 @@ function TreeContextMenu({ x, y, dirPath, onClose, projectPath }: { x: number; y
         borderRadius: '6px',
         boxShadow: '0 8px 16px rgba(0,0,0,0.25)',
         zIndex: 10000,
-        minWidth: '200px',
+        minWidth: '220px',
         overflow: 'hidden',
         fontFamily: 'system-ui, -apple-system, sans-serif',
       }}
@@ -922,6 +989,7 @@ function TreeContextMenu({ x, y, dirPath, onClose, projectPath }: { x: number; y
           cursor: 'pointer',
           fontSize: '12px',
           color: 'var(--tx)',
+          borderBottom: '1px solid var(--border)',
           transition: 'background-color 0.15s ease',
         }}
         onMouseEnter={(e) => e.currentTarget.style.background = 'var(--accent-light)'}
@@ -929,6 +997,28 @@ function TreeContextMenu({ x, y, dirPath, onClose, projectPath }: { x: number; y
       >
         <FolderPlus size={14} style={{ flexShrink: 0, color: 'var(--accent-2)' }} />
         <span>New Folder</span>
+      </button>
+      <button
+        onClick={handleGroupFolders}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          width: '100%',
+          padding: '10px 12px',
+          textAlign: 'left',
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          fontSize: '12px',
+          color: 'var(--tx)',
+          transition: 'background-color 0.15s ease',
+        }}
+        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--accent-light)'}
+        onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+      >
+        <ChevronDown size={14} style={{ flexShrink: 0, color: groupFolders ? 'var(--accent-2)' : 'var(--tx-3)' }} />
+        <span>{groupFolders ? '✓ ' : ''}Group Folders</span>
       </button>
     </div>
   );
