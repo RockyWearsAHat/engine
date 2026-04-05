@@ -234,34 +234,37 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
           <div className="sidebar-body" onContextMenu={(e) => {
             e.preventDefault();
             if (visibleTree) {
-              // Count total folders and expanded folders
-              const countFolders = (node: FileNode): { total: number; expanded: number } => {
+              // Count folders recursively, excluding the root
+              const countFolders = (node: FileNode, isRoot: boolean = false): { total: number; expanded: number } => {
                 if (node.type === 'file') return { total: 0, expanded: 0 };
-                let total = 1;
-                let expanded = expandedFolders.has(node.path) ? 1 : 0;
+                
+                let total = isRoot ? 0 : 1; // Don't count the root folder itself
+                let expanded = (isRoot ? false : expandedFolders.has(node.path)) ? 1 : 0;
+                
                 if (node.children) {
                   for (const child of node.children) {
-                    const count = countFolders(child);
+                    const count = countFolders(child, false);
                     total += count.total;
                     expanded += count.expanded;
                   }
                 }
                 return { total, expanded };
               };
-              const { total: totalFolders, expanded: expandedCount } = countFolders(visibleTree);
+              
+              const { total: totalFolders, expanded: expandedCount } = countFolders(visibleTree, true);
               
               const items: [string, string][] = [
                 ['New File', 'new-file'],
                 ['New Folder', 'new-folder'],
               ];
               
-              // Only show collapse if some folders are expanded
-              if (expandedCount > 0) {
+              // Only show collapse if there are folders and some are expanded
+              if (totalFolders > 0 && expandedCount > 0) {
                 items.push(['Collapse All', 'collapse-all']);
               }
               
-              // Only show expand if some folders are collapsed
-              if (expandedCount < totalFolders) {
+              // Only show expand if there are folders and some are collapsed
+              if (totalFolders > 0 && expandedCount < totalFolders) {
                 items.push(['Expand All', 'expand-all']);
               }
               
