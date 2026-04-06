@@ -329,7 +329,7 @@ export const useStore = create<EditorStore>((set, get) => ({
       })),
       streaming: false,
     }));
-    set({ chatMessages });
+    set({ chatMessages, streamingMessageId: null });
   },
 
   fileTree: null,
@@ -396,18 +396,30 @@ export const useStore = create<EditorStore>((set, get) => ({
   })),
 
   markFileDirty: (path) => {
-    set(s => ({
-      openFiles: s.openFiles.map(f => (
-        f.path === path && !f.dirty ? { ...f, dirty: true } : f
+    const state = get();
+    const target = state.openFiles.find((file) => file.path === path);
+    if (!target || target.dirty) {
+      return;
+    }
+    set({
+      openFiles: state.openFiles.map((file) => (
+        file.path === path ? { ...file, dirty: true } : file
       )),
-    }));
+    });
     syncTabs(get);
   },
 
   markFileSaved: (path) => {
-    set(s => ({
-      openFiles: s.openFiles.map(f => f.path === path ? { ...f, dirty: false } : f),
-    }));
+    const state = get();
+    const target = state.openFiles.find((file) => file.path === path);
+    if (!target || !target.dirty) {
+      return;
+    }
+    set({
+      openFiles: state.openFiles.map((file) => (
+        file.path === path ? { ...file, dirty: false } : file
+      )),
+    });
     syncTabs(get);
   },
 

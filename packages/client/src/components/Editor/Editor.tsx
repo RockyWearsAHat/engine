@@ -1,10 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
 import { X, FileText, Gauge } from 'lucide-react';
 import { basename } from '../../utils.js';
 import { highlightCode, resolveSyntaxLanguage } from './editorSyntax.js';
+import {
+  buildLineBreaks,
+  getHighlightDelayMs,
+  lineColumnFromOffset,
+  updateLineBreaksForEdit,
+} from './editorBuffer.js';
 import MarkdownPreview from './MarkdownPreview.js';
+import SyntacticalPreview from './SyntacticalPreview.js';
 import {
   EDITOR_STATUS_EVENT,
   PERFORM_CLOSE_FILE_EVENT,
@@ -95,63 +103,6 @@ function toggleLineComment(text: string, selStart: number, selEnd: number, comme
   return { text: newText, newStart: selStart, newEnd: Math.min(selEnd, newText.length) };
 }
 
-function buildLineBreaks(text: string): number[] {
-  const breaks: number[] = [];
-  for (let i = 0; i < text.length; i += 1) {
-    if (text.charCodeAt(i) === 10) {
-      breaks.push(i);
-    }
-  }
-  return breaks;
-}
-
-function updateLineBreaksForEdit(lineBreaks: number[], start: number, end: number, insertedText: string): number[] {
-  const nextBreaks: number[] = [];
-  let index = 0;
-
-  while (index < lineBreaks.length && lineBreaks[index] < start) {
-    nextBreaks.push(lineBreaks[index]);
-    index += 1;
-  }
-
-  for (let i = 0; i < insertedText.length; i += 1) {
-    if (insertedText.charCodeAt(i) === 10) {
-      nextBreaks.push(start + i);
-    }
-  }
-
-  const delta = insertedText.length - (end - start);
-  while (index < lineBreaks.length && lineBreaks[index] < end) {
-    index += 1;
-  }
-  while (index < lineBreaks.length) {
-    nextBreaks.push(lineBreaks[index] + delta);
-    index += 1;
-  }
-
-  return nextBreaks;
-}
-
-function lineColumnFromOffset(lineBreaks: number[], offset: number): { line: number; column: number } {
-  let low = 0;
-  let high = lineBreaks.length;
-
-  while (low < high) {
-    const mid = (low + high) >>> 1;
-    if (lineBreaks[mid] < offset) {
-      low = mid + 1;
-    } else {
-      high = mid;
-    }
-  }
-
-  const previousBreak = low === 0 ? -1 : lineBreaks[low - 1];
-  return {
-    line: low + 1,
-    column: offset - previousBreak,
-  };
-}
-
 function trimRenderedLine(rawLine: string): string {
   let nextLine = rawLine;
   if (nextLine.endsWith('\n')) {
@@ -234,7 +185,7 @@ function LargeFileViewport({
   const [viewportHeight, setViewportHeight] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const lineHeightPx = Math.max(18, Math.round(fontSize * lineHeight));
+  const lineHeightPx = Math.max(18, fontSize * lineHeight);
 
   useEffect(() => {
     const cached = largeFileIndexCache.get(path);
@@ -359,7 +310,7 @@ function LargeFileViewport({
   );
 }
 
-export default function Editor() {
+function Editor() {
   const {
     openFiles,
     activeFilePath,
@@ -369,15 +320,26 @@ export default function Editor() {
     markFileDirty,
     markFileSaved,
     editorPreferences,
-    setEditorPreferences,
-  } = useStore();
+  } = useStore(useShallow((state) => ({
+    openFiles: state.openFiles,
+    activeFilePath: state.activeFilePath,
+    setActiveFile: state.setActiveFile,
+    closeFile: state.closeFile,
+    syncFileContent: state.syncFileContent,
+    markFileDirty: state.markFileDirty,
+    markFileSaved: state.markFileSaved,
+    editorPreferences: state.editorPreferences,
+  })));
   const activeFile = openFiles.find(f => f.path === activeFilePath);
-  const [selectionInfo, setSelectionInfo] = useState({ line: 1, column: 1 });
+  const [selectionInfo, setSelectionInfo] = useState({ line: 1, column: 1, endLine: 1 });
   const buffersRef = useRef<Record<string, string>>({});
   const lineBreaksRef = useRef<Record<string, number[]>>({});
   const pendingEditRef = useRef<{ path: string; start: number; end: number } | null>(null);
   const cursorFrameRef = useRef<number | null>(null);
   const highlightFrameRef = useRef<number | null>(null);
+  const highlightTimeoutRef = useRef<number | null>(null);
+  const scrollFrameRef = useRef<number | null>(null);
+  const pendingScrollTopRef = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const highlightOverlayRef = useRef<HTMLDivElement | null>(null);
   const highlightContentRef = useRef<HTMLPreElement | null>(null);
@@ -391,7 +353,10 @@ export default function Editor() {
     ? resolveSyntaxLanguage(activeFile.path, activeFile.language)
     : 'plaintext';
   const markdownFileActive = Boolean(activeFile && activeSyntaxLanguage === 'markdown');
-  const markdownPreviewActive = Boolean(markdownFileActive && editorPreferences.markdownViewMode === 'preview' && !largeFileOptimizationActive);
+  const mdMode = editorPreferences.markdownViewMode;
+  const markdownPreviewActive = Boolean(markdownFileActive && mdMode === 'preview' && !largeFileOptimizationActive);
+  const markdownSplitActive = Boolean(markdownFileActive && mdMode === 'split' && !largeFileOptimizationActive);
+  const markdownSyntacticalActive = Boolean(markdownFileActive && mdMode === 'syntactical' && !largeFileOptimizationActive);
   const currentValue = activeFile
     ? largeFileOptimizationActive
       ? activeFile.content
@@ -409,15 +374,23 @@ export default function Editor() {
     return computed;
   };
 
-  const updateCursorInfo = (textarea: HTMLTextAreaElement, path: string) => {
-    const lineBreaks = ensureLineBreaks(path, textarea.value);
-    setSelectionInfo(lineColumnFromOffset(lineBreaks, textarea.selectionStart ?? 0));
-  };
+  const commitSelectionInfo = useCallback((nextSelection: { line: number; column: number; endLine: number }) => {
+    setSelectionInfo((currentSelection) => (
+      currentSelection.line === nextSelection.line
+      && currentSelection.column === nextSelection.column
+      && currentSelection.endLine === nextSelection.endLine
+        ? currentSelection
+        : nextSelection
+    ));
+  }, []);
 
-  const toggleMarkdownViewMode = useCallback(() => {
-    const nextMode = editorPreferences.markdownViewMode === 'preview' ? 'text' : 'preview';
-    setEditorPreferences({ ...editorPreferences, markdownViewMode: nextMode });
-  }, [editorPreferences, setEditorPreferences]);
+  const updateCursorInfo = (textarea: HTMLTextAreaElement, path: string) => {
+    const lineBreaks = lineBreaksRef.current[path] ?? buildLineBreaks(textarea.value);
+    lineBreaksRef.current[path] = lineBreaks;
+    const start = lineColumnFromOffset(lineBreaks, textarea.selectionStart ?? 0);
+    const end = lineColumnFromOffset(lineBreaks, textarea.selectionEnd ?? 0);
+    commitSelectionInfo({ line: start.line, column: start.column, endLine: end.line });
+  };
 
   const scheduleCursorInfo = (textarea: HTMLTextAreaElement, path: string) => {
     if (cursorFrameRef.current !== null) {
@@ -455,6 +428,17 @@ export default function Editor() {
     markFileDirty(path);
   }, [markFileDirty, markFileSaved]);
 
+  const cancelPendingHighlightWork = useCallback(() => {
+    if (highlightTimeoutRef.current !== null) {
+      window.clearTimeout(highlightTimeoutRef.current);
+      highlightTimeoutRef.current = null;
+    }
+    if (highlightFrameRef.current !== null) {
+      cancelAnimationFrame(highlightFrameRef.current);
+      highlightFrameRef.current = null;
+    }
+  }, []);
+
   const renderHighlightedBuffer = useCallback((path: string, text: string) => {
     if (!activeFile || activeFile.path !== path || !highlightContentRef.current) {
       return;
@@ -464,6 +448,7 @@ export default function Editor() {
       && !activeFile.largeFile
       && activeFile.size <= SYNTAX_HIGHLIGHT_MAX_BYTES;
     if (!syntaxEnabled) {
+      highlightContentRef.current.className = 'editor-highlight-code';
       highlightContentRef.current.textContent = text;
       return;
     }
@@ -473,20 +458,46 @@ export default function Editor() {
     highlightContentRef.current.className = `editor-highlight-code language-${syntaxLanguage}`;
   }, [activeFile]);
 
-  const scheduleHighlightedBuffer = useCallback((path: string, text: string) => {
-    if (highlightFrameRef.current !== null) {
-      cancelAnimationFrame(highlightFrameRef.current);
+  const scheduleHighlightedBuffer = useCallback((path: string, text: string, mode: 'input' | 'sync' = 'sync') => {
+    cancelPendingHighlightWork();
+    const runHighlight = () => {
+      highlightFrameRef.current = requestAnimationFrame(() => {
+        highlightFrameRef.current = null;
+        renderHighlightedBuffer(path, text);
+      });
+    };
+
+    const delay = mode === 'input' ? getHighlightDelayMs(text.length) : 0;
+    if (delay === 0) {
+      runHighlight();
+      return;
     }
 
-    highlightFrameRef.current = requestAnimationFrame(() => {
-      highlightFrameRef.current = null;
-      renderHighlightedBuffer(path, text);
+    highlightTimeoutRef.current = window.setTimeout(() => {
+      highlightTimeoutRef.current = null;
+      runHighlight();
+    }, delay);
+  }, [cancelPendingHighlightWork, renderHighlightedBuffer]);
+
+  const scheduleEditorScrollTop = useCallback((scrollTop: number) => {
+    pendingScrollTopRef.current = scrollTop;
+    if (scrollFrameRef.current !== null) {
+      return;
+    }
+
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      setEditorScrollTop((currentScrollTop) => (
+        currentScrollTop === pendingScrollTopRef.current
+          ? currentScrollTop
+          : pendingScrollTopRef.current
+      ));
     });
-  }, [renderHighlightedBuffer]);
+  }, []);
 
   useEffect(() => {
     if (!activeFile) {
-      setSelectionInfo({ line: 1, column: 1 });
+      setSelectionInfo({ line: 1, column: 1, endLine: 1 });
       return;
     }
 
@@ -500,7 +511,7 @@ export default function Editor() {
     }
 
     if (activeFile.size >= LARGE_FILE_OPTIMIZATION_THRESHOLD) {
-      setSelectionInfo({ line: 1, column: 1 });
+      setSelectionInfo({ line: 1, column: 1, endLine: 1 });
       return;
     }
 
@@ -516,17 +527,18 @@ export default function Editor() {
       syncHighlightScroll(textarea);
       scheduleCursorInfo(textarea, activeFile.path);
     }
-    scheduleHighlightedBuffer(activeFile.path, buffersRef.current[activeFile.path] ?? activeFile.content);
+    scheduleHighlightedBuffer(activeFile.path, buffersRef.current[activeFile.path] ?? activeFile.content, 'sync');
   }, [activeFile?.path, activeFile?.content, activeFile?.dirty, activeFile?.size, scheduleHighlightedBuffer]);
 
   useEffect(() => () => {
+    cancelPendingHighlightWork();
     if (cursorFrameRef.current !== null) {
       cancelAnimationFrame(cursorFrameRef.current);
     }
-    if (highlightFrameRef.current !== null) {
-      cancelAnimationFrame(highlightFrameRef.current);
+    if (scrollFrameRef.current !== null) {
+      cancelAnimationFrame(scrollFrameRef.current);
     }
-  }, []);
+  }, [cancelPendingHighlightWork]);
 
   useEffect(() => {
     const node = contentAreaRef.current;
@@ -541,6 +553,11 @@ export default function Editor() {
   }, [activeFile?.path]);
 
   useEffect(() => {
+    pendingScrollTopRef.current = 0;
+    if (scrollFrameRef.current !== null) {
+      cancelAnimationFrame(scrollFrameRef.current);
+      scrollFrameRef.current = null;
+    }
     setEditorScrollTop(0);
   }, [activeFile?.path]);
 
@@ -629,6 +646,7 @@ export default function Editor() {
   const tabInsertion = ' '.repeat(editorPreferences.tabSize);
   const editorWhiteSpace = wrapEnabled ? 'pre-wrap' : 'pre';
 
+  // Round to integer to eliminate sub-pixel drift between textarea text layout and gutter divs
   const lineHeightPx = Math.round(editorFontSize * editorLineHeight);
   const lineCount = activeFile && !largeFileOptimizationActive
     ? (lineBreaksRef.current[activeFile.path]?.length ?? 0) + 1
@@ -645,19 +663,23 @@ export default function Editor() {
   const syntaxStatus = largeFileOptimizationActive
     ? 'large-file mode'
     : markdownPreviewActive
-      ? 'split preview'
-      : activeFile?.largeFile
-        ? 'optimized text'
-        : syntaxHighlightingEnabled
-          ? 'syntax on'
-          : 'plain text';
+      ? 'preview'
+      : markdownSplitActive
+        ? 'split preview'
+        : markdownSyntacticalActive
+          ? 'syntactical'
+          : activeFile?.largeFile
+            ? 'optimized text'
+            : syntaxHighlightingEnabled
+              ? 'syntax on'
+              : 'plain text';
   const locationLabel = largeFileOptimizationActive
     ? `Top line ${selectionInfo.line}`
     : `Ln ${selectionInfo.line}, Col ${selectionInfo.column}`;
   const wrapLabel = wrapEnabled ? (markdownWrapForced ? 'markdown wrap' : 'wrap on') : 'wrap off';
   const gutterDigits = String(Math.max(lineCount, 1)).length;
   const gutterWidth = Math.max(52, 22 + gutterDigits * Math.max(8, editorFontSize * 0.68));
-  const gutterContentHeight = EDITOR_SURFACE_PADDING * 2 + lineCount * lineHeightPx;
+  const gutterContentHeight = lineCount * lineHeightPx;
 
   useEffect(() => {
     if (!activeFile) {
@@ -749,18 +771,20 @@ export default function Editor() {
                 fontFamily={editorPreferences.fontFamily}
                 fontSize={editorFontSize}
                 lineHeight={editorLineHeight}
-                onVisibleLineChange={(line) => setSelectionInfo({ line, column: 1 })}
+                onVisibleLineChange={(line) => commitSelectionInfo({ line, column: 1, endLine: line })}
               />
             ) : (
               <>
+                {!markdownPreviewActive && !markdownSplitActive && !markdownSyntacticalActive && (
+                <>
                 <div className="editor-gutter" ref={gutterRef} style={{ width: gutterWidth }}>
-                  <div className="editor-gutter-inner" style={{ height: gutterContentHeight }}>
+                  <div className="editor-gutter-inner">
+                    <div style={{ height: (gutterStartLine - 1) * lineHeightPx, flexShrink: 0 }} />
                     {gutterLines.map(n => (
                       <div
                         key={n}
-                        className={`line-num${n === selectionInfo.line ? ' active' : ''}`}
+                        className={`line-num${n >= selectionInfo.line && n <= selectionInfo.endLine ? ' active' : ''}`}
                         style={{
-                          top: EDITOR_SURFACE_PADDING + (n - 1) * lineHeightPx,
                           height: lineHeightPx,
                           lineHeight: `${lineHeightPx}px`,
                           fontSize: editorFontSize,
@@ -770,6 +794,7 @@ export default function Editor() {
                         {n}
                       </div>
                     ))}
+                    <div style={{ height: Math.max(0, lineCount - gutterEndLine) * lineHeightPx, flexShrink: 0 }} />
                   </div>
                 </div>
                 <div className="editor-content-area" ref={contentAreaRef}>
@@ -781,8 +806,9 @@ export default function Editor() {
                         style={{
                           fontFamily: editorPreferences.fontFamily,
                           fontSize: editorFontSize,
-                          lineHeight: editorLineHeight,
+                          lineHeight: `${lineHeightPx}px`,
                           whiteSpace: editorWhiteSpace,
+                          overflowWrap: wrapEnabled ? 'break-word' : 'normal',
                           tabSize: editorPreferences.tabSize,
                         }}
                       />
@@ -795,6 +821,7 @@ export default function Editor() {
                       if (node) {
                         syncHighlightScroll(node);
                         syncGutterScroll(node);
+                        pendingScrollTopRef.current = node.scrollTop;
                         setEditorScrollTop(node.scrollTop);
                         scheduleCursorInfo(node, activeFile.path);
                       }
@@ -835,7 +862,7 @@ export default function Editor() {
                       syncHighlightScroll(event.currentTarget);
                       syncGutterScroll(event.currentTarget);
                       scheduleCursorInfo(event.currentTarget, activeFile.path);
-                      scheduleHighlightedBuffer(activeFile.path, nextValue);
+                      scheduleHighlightedBuffer(activeFile.path, nextValue, 'input');
                     }}
                     onClick={event => scheduleCursorInfo(event.currentTarget, activeFile.path)}
                     onKeyUp={event => scheduleCursorInfo(event.currentTarget, activeFile.path)}
@@ -843,7 +870,7 @@ export default function Editor() {
                     onScroll={event => {
                       syncHighlightScroll(event.currentTarget);
                       syncGutterScroll(event.currentTarget);
-                      setEditorScrollTop(event.currentTarget.scrollTop);
+                      scheduleEditorScrollTop(event.currentTarget.scrollTop);
                     }}
                     onKeyDown={event => {
                       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
@@ -872,7 +899,7 @@ export default function Editor() {
                         syncHighlightScroll(textarea);
                         syncGutterScroll(textarea);
                         scheduleCursorInfo(textarea, activeFile.path);
-                        scheduleHighlightedBuffer(activeFile.path, nextValue);
+                        scheduleHighlightedBuffer(activeFile.path, nextValue, 'input');
                         return;
                       }
 
@@ -891,13 +918,13 @@ export default function Editor() {
                         syncHighlightScroll(textarea);
                         syncGutterScroll(textarea);
                         scheduleCursorInfo(textarea, activeFile.path);
-                        scheduleHighlightedBuffer(activeFile.path, nextValue);
+                        scheduleHighlightedBuffer(activeFile.path, nextValue, 'input');
                       }
                     }}
                     onContextMenu={(event) => event.preventDefault()}
                     style={{
                       fontSize: editorFontSize,
-                      lineHeight: editorLineHeight,
+                      lineHeight: `${lineHeightPx}px`,
                       fontFamily: editorPreferences.fontFamily,
                       whiteSpace: editorWhiteSpace,
                       overflowWrap: wrapEnabled ? 'break-word' : 'normal',
@@ -905,6 +932,8 @@ export default function Editor() {
                     }}
                   />
                 </div>
+                </>
+                )}
               </>
             )}
             {markdownPreviewActive && (
@@ -915,9 +944,48 @@ export default function Editor() {
                 />
               </div>
             )}
+            {markdownSplitActive && (
+              <div className="markdown-split-shell">
+                <div className="markdown-split-raw">
+                  <textarea
+                    className="editor-textarea markdown-split-textarea"
+                    defaultValue={currentValue}
+                    spellCheck={false}
+                    wrap="soft"
+                    onChange={event => {
+                      if (activeFile) {
+                        const nextValue = event.currentTarget.value;
+                        buffersRef.current[activeFile.path] = nextValue;
+                        reconcileDirtyState(activeFile.path, nextValue, activeFile.content);
+                      }
+                    }}
+                    style={{
+                      fontSize: editorFontSize,
+                      lineHeight: `${lineHeightPx}px`,
+                      fontFamily: editorPreferences.fontFamily,
+                      tabSize: editorPreferences.tabSize,
+                    }}
+                  />
+                </div>
+                <div className="markdown-split-divider" />
+                <div className="markdown-split-preview">
+                  <MarkdownPreview
+                    value={currentValue}
+                    className="editor-markdown-preview"
+                  />
+                </div>
+              </div>
+            )}
+            {markdownSyntacticalActive && (
+              <div className="markdown-preview-shell">
+                <SyntacticalPreview value={currentValue} />
+              </div>
+            )}
           </div>
         </div>
       )}
     </div>
   );
 }
+
+export default memo(Editor);

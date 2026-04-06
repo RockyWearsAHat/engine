@@ -572,6 +572,86 @@ html, body, #root {
 
 .sidebar-body { flex: 1; overflow-y: auto; overflow-x: hidden; }
 
+/* Explorer collapsible sections (e.g., Open Editors) */
+.explorer-section-header {
+  display: flex;
+  align-items: center;
+  padding: 4px 10px;
+  cursor: pointer;
+  user-select: none;
+  background: rgba(255,255,255,0.03);
+  border-top: 1px solid rgba(255,255,255,0.06);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  gap: 4px;
+}
+.explorer-section-header:hover {
+  background: rgba(255,255,255,0.06);
+}
+.explorer-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--tx-2);
+  flex: 1;
+}
+.explorer-section-badge {
+  font-size: 10px;
+  color: var(--tx-3);
+  background: rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 0 6px;
+  line-height: 16px;
+}
+.explorer-section-body {
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 2px 0;
+}
+.open-editor-item {
+  display: flex;
+  align-items: center;
+  padding: 3px 8px 3px 18px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--tx);
+  transition: background 80ms;
+  border-radius: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.open-editor-item:hover {
+  background: rgba(255,255,255,0.06);
+}
+.open-editor-item.active {
+  background: rgba(255,255,255,0.08);
+  color: var(--accent-2);
+}
+.open-editor-close {
+  flex-shrink: 0;
+  margin-right: 4px;
+  color: transparent;
+  transition: color 80ms;
+  border-radius: 3px;
+}
+.open-editor-item:hover .open-editor-close {
+  color: var(--tx-3);
+}
+.open-editor-close:hover {
+  color: var(--tx) !important;
+  background: rgba(255,255,255,0.1);
+}
+.open-editor-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.open-editor-dirty {
+  color: var(--accent-2);
+  fill: var(--accent-2);
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
 /* File tree */
 .tree-node {
   display: flex;
@@ -1556,6 +1636,7 @@ html, body, #root {
   background: #0a0a0e;
   border-right: 1px solid rgba(255,255,255,0.06);
   user-select: none;
+  padding: 16px 0;
 }
 
 .editor-gutter-inner {
@@ -1563,15 +1644,12 @@ html, body, #root {
 }
 
 .editor-gutter .line-num {
-  position: absolute;
-  right: 0;
-  left: 0;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
+  display: block;
+  text-align: right;
   padding-right: 14px;
   color: rgba(255,255,255,0.18);
   font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
 
 .editor-gutter .line-num.active {
@@ -1710,6 +1788,140 @@ html, body, #root {
   max-width: 100%;
   height: auto;
   display: block;
+}
+
+/* ---- Markdown Split View ---- */
+.markdown-split-shell {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.markdown-split-raw {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.markdown-split-textarea {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  overflow: auto;
+  background: #0c0c10;
+  color: #d7d7de;
+  padding: 16px;
+  user-select: text;
+}
+
+.markdown-split-divider {
+  width: 1px;
+  flex-shrink: 0;
+  background: var(--border);
+}
+
+.markdown-split-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 28px 32px 40px;
+  background: #0c0c10;
+}
+
+/* ---- Syntactical Preview ---- */
+.syntactical-preview {
+  position: relative;
+}
+
+.syntactical-line {
+  position: relative;
+  display: inline;
+}
+
+.syntactical-annotation {
+  display: inline;
+  margin-left: 8px;
+  font-size: 9px;
+  font-family: 'IBM Plex Mono', monospace;
+  color: rgba(124, 140, 255, 0.35);
+  vertical-align: baseline;
+  pointer-events: none;
+  user-select: none;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.syntactical-preview h1 .syntactical-annotation,
+.syntactical-preview h2 .syntactical-annotation,
+.syntactical-preview h3 .syntactical-annotation { font-size: 9px; }
+
+.syntactical-preview blockquote .syntactical-annotation {
+  opacity: 0.6;
+}
+
+.syntactical-preview .markdown-code-block + .syntactical-annotation {
+  display: block;
+  margin-top: -8px;
+  margin-bottom: 8px;
+}
+
+/* ---- Markdown Mode Popup ---- */
+.md-mode-selector {
+  position: relative;
+  display: inline-flex;
+}
+
+.md-mode-popup {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 4px;
+  min-width: 200px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-lg);
+  padding: 4px;
+  z-index: 100;
+  box-shadow: 0 -4px 16px rgba(0,0,0,0.4);
+}
+
+.md-mode-option {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--tx);
+  cursor: pointer;
+  text-align: left;
+  gap: 1px;
+}
+
+.md-mode-option:hover {
+  background: var(--surface-4);
+}
+
+.md-mode-option.selected {
+  background: rgba(124, 140, 255, 0.12);
+}
+
+.md-mode-option-label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.md-mode-option-desc {
+  font-size: 10px;
+  color: var(--tx-3);
 }
 
 .large-file-shell {
@@ -1872,6 +2084,9 @@ html, body, #root {
   color: #d7d7de;
   padding: 16px;
   user-select: text;
+  -webkit-appearance: none;
+  appearance: none;
+  -webkit-text-size-adjust: none;
 }
 
 .editor-textarea.syntax-enabled {

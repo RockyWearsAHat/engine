@@ -21,9 +21,11 @@ import (
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
-	ReadBufferSize:  4096,
-	WriteBufferSize: 4096,
+	ReadBufferSize:  32 * 1024,
+	WriteBufferSize: 32 * 1024,
 }
+
+var runAIChat = ai.Chat
 
 // Hub manages the WebSocket server and default project path.
 type Hub struct {
@@ -52,6 +54,11 @@ type conn struct {
 	projectPath string
 	sessionID   string
 
+	// done is closed when the connection's read loop exits. All goroutines that
+	// call send() (AI chat, terminal output, etc.) should respect this signal so
+	// they don't write to a closed WebSocket connection.
+	done chan struct{}
+
 	termMgr         *terminal.Manager
 	termIDs         map[string]bool
 	approvalMu      sync.Mutex
@@ -65,18 +72,42 @@ type conn struct {
 }
 
 type runtimeConfig struct {
-	GitHubToken  *string `json:"githubToken"`
-	GitHubOwner  *string `json:"githubOwner"`
-	GitHubRepo   *string `json:"githubRepo"`
-	AnthropicKey *string `json:"anthropicKey"`
-	OpenAIKey    *string `json:"openaiKey"`
-	Model        *string `json:"model"`
+	GitHubToken   *string `json:"githubToken"`
+	GitHubOwner   *string `json:"githubOwner"`
+	GitHubRepo    *string `json:"githubRepo"`
+	AnthropicKey  *string `json:"anthropicKey"`
+	OpenAIKey     *string `json:"openaiKey"`
+	ModelProvider *string `json:"modelProvider"`
+	OllamaBaseURL *string `json:"ollamaBaseUrl"`
+	Model         *string `json:"model"`
+}
+
+func (c *conn) resolveChatSession(requestedSessionID string) (*db.Session, error) {
+	sessionID := strings.TrimSpace(requestedSessionID)
+	if sessionID == "" {
+		sessionID = c.sessionID
+	}
+	if sessionID == "" {
+		return nil, fmt.Errorf("No active session")
+	}
+
+	session, err := db.GetSession(sessionID)
+	if err != nil || session == nil {
+		return nil, fmt.Errorf("Session not found")
+	}
+
+	c.sessionID = sessionID
+	if strings.TrimSpace(session.ProjectPath) != "" {
+		c.projectPath = session.ProjectPath
+	}
+	return session, nil
 }
 
 func newConn(ws *websocket.Conn, projectPath string) *conn {
 	return &conn{
 		ws:              ws,
 		projectPath:     projectPath,
+		done:            make(chan struct{}),
 		termMgr:         terminal.NewManager(),
 		termIDs:         make(map[string]bool),
 		approvalWaiters: make(map[string]chan bool),
@@ -84,6 +115,7 @@ func newConn(ws *websocket.Conn, projectPath string) *conn {
 }
 
 // send marshals and writes a message to the WebSocket client (thread-safe).
+// Returns silently if the connection has already been closed.
 func (c *conn) send(v interface{}) {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -92,8 +124,20 @@ func (c *conn) send(v interface{}) {
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	// Check done INSIDE the lock — this is atomic with ws.Close() in run()'s
+	// defer (which also holds writeMu before closing). Without this, a goroutine
+	// can pass the done check, then run() closes the socket, then the write
+	// hits a closed connection.
+	select {
+	case <-c.done:
+		return
+	default:
+	}
 	if err := c.ws.WriteMessage(websocket.TextMessage, data); err != nil {
-		log.Printf("ws write error: %v", err)
+		if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) &&
+			!strings.Contains(err.Error(), "use of closed network connection") {
+			log.Printf("ws write error: %v", err)
+		}
 	}
 }
 
@@ -160,9 +204,20 @@ func (c *conn) resolveAllApprovals(allow bool) {
 
 func (c *conn) run() {
 	defer func() {
+		// Recover any panic so a single bad connection can't crash the server.
+		if r := recover(); r != nil {
+			log.Printf("[engine] ws: panic in connection handler: %v", r)
+		}
+		// Close done first so all goroutines (AI chat, terminal callbacks, etc.)
+		// stop trying to write. Then acquire writeMu so we wait for any in-flight
+		// write to drain before closing the underlying socket — prevents
+		// write-to-closed-connection errors even with the fixed atomic check.
+		close(c.done)
 		c.termMgr.KillAll()
 		c.resolveAllApprovals(false)
+		c.writeMu.Lock()
 		c.ws.Close()
+		c.writeMu.Unlock()
 	}()
 
 	for {
@@ -284,47 +339,62 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr("Bad payload", "BAD_PAYLOAD")
 			return
 		}
-		if c.sessionID == "" {
-			c.send(map[string]interface{}{"type": "chat.error", "sessionId": msg.SessionID, "error": "No active session"})
+		session, err := c.resolveChatSession(msg.SessionID)
+		if err != nil {
+			c.send(map[string]interface{}{"type": "chat.error", "sessionId": strings.TrimSpace(msg.SessionID), "error": err.Error()})
 			return
 		}
-		sessionID := c.sessionID
-		go ai.Chat(&ai.ChatContext{
-			ProjectPath: projectPath,
-			SessionID:   sessionID,
-			OnChunk: func(content string, done bool) {
-				c.send(map[string]interface{}{"type": "chat.chunk", "sessionId": sessionID, "content": content, "done": done})
-			},
-			OnToolCall: func(name string, input interface{}) {
-				c.send(map[string]interface{}{"type": "chat.tool_call", "sessionId": sessionID, "name": name, "input": input})
-			},
-			OnToolResult: func(name string, result interface{}, isError bool) {
-				c.send(map[string]interface{}{"type": "chat.tool_result", "sessionId": sessionID, "name": name, "result": result, "isError": isError})
-			},
-			OnError: func(errMsg string) {
-				c.send(map[string]interface{}{"type": "chat.error", "sessionId": sessionID, "error": errMsg})
-			},
-			OnSessionUpdated: func(session *db.Session) {
-				c.send(map[string]interface{}{"type": "session.updated", "session": session})
-			},
-			GetOpenTabs: func() []ai.TabInfo {
-				c.tabsMu.RLock()
-				defer c.tabsMu.RUnlock()
-				return c.openTabs
-			},
-			RequestApproval: func(kind, title, message, command string) (bool, error) {
-				return c.requestApproval(sessionID, kind, title, message, command)
-			},
-			SendToClient: func(msgType string, payload interface{}) {
-				m := map[string]interface{}{"type": msgType}
-				if p, ok := payload.(map[string]interface{}); ok {
-					for k, v := range p {
-						m[k] = v
-					}
+		sessionID := session.ID
+		projectPath = session.ProjectPath
+		c.send(map[string]interface{}{"type": "chat.started", "sessionId": sessionID})
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[engine] ws: panic in AI chat goroutine: %v", r)
+					c.send(map[string]interface{}{
+						"type":      "chat.error",
+						"sessionId": sessionID,
+						"error":     "Internal error — please try again",
+					})
 				}
-				c.send(m)
-			},
-		}, msg.Content)
+			}()
+			runAIChat(&ai.ChatContext{
+				ProjectPath: projectPath,
+				SessionID:   sessionID,
+				OnChunk: func(content string, done bool) {
+					c.send(map[string]interface{}{"type": "chat.chunk", "sessionId": sessionID, "content": content, "done": done})
+				},
+				OnToolCall: func(name string, input interface{}) {
+					c.send(map[string]interface{}{"type": "chat.tool_call", "sessionId": sessionID, "name": name, "input": input})
+				},
+				OnToolResult: func(name string, result interface{}, isError bool) {
+					c.send(map[string]interface{}{"type": "chat.tool_result", "sessionId": sessionID, "name": name, "result": result, "isError": isError})
+				},
+				OnError: func(errMsg string) {
+					c.send(map[string]interface{}{"type": "chat.error", "sessionId": sessionID, "error": errMsg})
+				},
+				OnSessionUpdated: func(session *db.Session) {
+					c.send(map[string]interface{}{"type": "session.updated", "session": session})
+				},
+				GetOpenTabs: func() []ai.TabInfo {
+					c.tabsMu.RLock()
+					defer c.tabsMu.RUnlock()
+					return c.openTabs
+				},
+				RequestApproval: func(kind, title, message, command string) (bool, error) {
+					return c.requestApproval(sessionID, kind, title, message, command)
+				},
+				SendToClient: func(msgType string, payload interface{}) {
+					m := map[string]interface{}{"type": msgType}
+					if p, ok := payload.(map[string]interface{}); ok {
+						for k, v := range p {
+							m[k] = v
+						}
+					}
+					c.send(m)
+				},
+			}, msg.Content)
+		}()
 
 	case "approval.respond":
 		var msg struct {
@@ -663,6 +733,8 @@ func applyRuntimeConfig(cfg runtimeConfig) {
 	setRuntimeEnv("ENGINE_GITHUB_REPO", cfg.GitHubRepo)
 	setRuntimeEnv("ANTHROPIC_API_KEY", cfg.AnthropicKey)
 	setRuntimeEnv("OPENAI_API_KEY", cfg.OpenAIKey)
+	setRuntimeEnv("ENGINE_MODEL_PROVIDER", cfg.ModelProvider)
+	setRuntimeEnv("OLLAMA_BASE_URL", cfg.OllamaBaseURL)
 	setRuntimeEnv("ENGINE_MODEL", cfg.Model)
 }
 

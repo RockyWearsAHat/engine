@@ -38,6 +38,8 @@ const githubRepoNameStorageKey = 'engine.githubRepoName';
 const githubTokenStorageKey = 'engine.githubToken';
 const anthropicKeyStorageKey = 'engine.anthropicKey';
 const openAiKeyStorageKey = 'engine.openaiKey';
+const modelProviderStorageKey = 'engine.modelProvider';
+const ollamaBaseUrlStorageKey = 'engine.ollamaBaseUrl';
 const modelStorageKey = 'engine.model';
 const lastProjectPathStorageKey = 'engine.lastProjectPath';
 const editorPreferencesStorageKey = 'engine.editorPreferences';
@@ -251,6 +253,26 @@ export const bridge = {
   async setOpenAiKey(key: string): Promise<boolean> {
     if (isTauri()) return window.__TAURI__!.core.invoke<boolean>('set_openai_key', { key });
     return setBrowserSetting(openAiKeyStorageKey, key);
+  },
+
+  async getModelProvider(): Promise<string | null> {
+    if (isTauri()) return window.__TAURI__!.core.invoke<string | null>('get_model_provider');
+    return getBrowserSetting(modelProviderStorageKey);
+  },
+
+  async setModelProvider(provider: string): Promise<boolean> {
+    if (isTauri()) return window.__TAURI__!.core.invoke<boolean>('set_model_provider', { provider });
+    return setBrowserSetting(modelProviderStorageKey, provider);
+  },
+
+  async getOllamaBaseUrl(): Promise<string | null> {
+    if (isTauri()) return window.__TAURI__!.core.invoke<string | null>('get_ollama_base_url');
+    return getBrowserSetting(ollamaBaseUrlStorageKey);
+  },
+
+  async setOllamaBaseUrl(baseUrl: string): Promise<boolean> {
+    if (isTauri()) return window.__TAURI__!.core.invoke<boolean>('set_ollama_base_url', { baseUrl });
+    return setBrowserSetting(ollamaBaseUrlStorageKey, baseUrl);
   },
 
   async getModel(): Promise<string | null> {
