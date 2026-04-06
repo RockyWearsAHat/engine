@@ -222,6 +222,22 @@ type ChatContext struct {
 	SendToClient func(msgType string, payload interface{})
 	// RequestApproval asks the client to elevate a risky action and blocks until the user responds.
 	RequestApproval func(kind, title, message, command string) (bool, error)
+	// Cancel, when closed, signals the agentic loop to stop at the next safe checkpoint.
+	// The loop sends a final chat.chunk with done=true before exiting.
+	Cancel <-chan struct{}
+}
+
+// isCancelled returns true if the context's cancel channel has been closed.
+func (ctx *ChatContext) isCancelled() bool {
+	if ctx.Cancel == nil {
+		return false
+	}
+	select {
+	case <-ctx.Cancel:
+		return true
+	default:
+		return false
+	}
 }
 
 // TabInfo represents an open editor tab (pushed by client via editor.tabs.sync).
@@ -955,6 +971,10 @@ func runAnthropicLoop(
 ) {
 	messages := history
 	for {
+		if ctx.isCancelled() {
+			return
+		}
+
 		windowed := messages
 		if len(windowed) > 50 {
 			windowed = windowed[len(windowed)-50:]
@@ -1011,6 +1031,10 @@ func runAnthropicLoop(
 		}
 
 		messages = append(messages, anthropicMessage{Role: "user", Content: toolResults})
+
+		if ctx.isCancelled() {
+			return
+		}
 	}
 }
 
@@ -1209,6 +1233,10 @@ func runOpenAICompatibleLoop(
 	oaiTools := openAIToolsFrom(tools)
 
 	for {
+		if ctx.isCancelled() {
+			return
+		}
+
 		windowed := msgs
 		if len(windowed) > 51 { // 1 system + 50 conversation
 			windowed = append(msgs[:1], msgs[len(msgs)-50:]...)
@@ -1379,6 +1407,10 @@ func runOpenAICompatibleLoop(
 				ToolCallID: tcd.id,
 				Content:    result,
 			})
+		}
+
+		if ctx.isCancelled() {
+			return
 		}
 	}
 }
