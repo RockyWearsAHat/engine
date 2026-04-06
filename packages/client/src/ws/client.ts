@@ -2,6 +2,8 @@ import type { ClientMessage, ServerMessage } from '@engine/shared';
 import { loadActiveConnectionProfile } from '../connectionProfiles.js';
 
 type MessageHandler = (msg: ServerMessage) => void;
+type OpenHandler = () => void | Promise<void>;
+type CloseHandler = () => void;
 
 export interface RemoteConfig {
   host: string;
@@ -9,16 +11,42 @@ export interface RemoteConfig {
   token: string;
 }
 
-class WSClient {
+function isDesktopShell(): boolean {
+  return typeof window !== 'undefined' && ('__TAURI__' in window || !!window.electronAPI?.isElectron);
+}
+
+function localDesktopSocketURL(): string {
+  return 'ws://127.0.0.1:3000/ws';
+}
+
+function localDesktopHealthURL(): string {
+  return 'http://127.0.0.1:3000/health';
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export class WSClient {
   private ws: WebSocket | null = null;
   private handlers: Set<MessageHandler> = new Set();
+  private openHandlers: Set<OpenHandler> = new Set();
+  private closeHandlers: Set<CloseHandler> = new Set();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay = 1000;
   private maxDelay = 16000;
+  private disconnectGraceMs = 250;
   private shouldConnect = false;
   private remoteConfig: RemoteConfig | null = null;
+  private connectAttempt = 0;
+  private queuedMessages: ClientMessage[] = [];
 
   connect(remote?: RemoteConfig): void {
+    if (this.disconnectTimer) {
+      clearTimeout(this.disconnectTimer);
+      this.disconnectTimer = null;
+    }
     this.shouldConnect = true;
     if (remote) {
       this.remoteConfig = remote;
@@ -32,24 +60,91 @@ class WSClient {
         };
       }
     }
-    this.doConnect();
+    if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
+      return;
+    }
+    this.scheduleConnect(0);
   }
 
-  private doConnect(): void {
+  private scheduleConnect(delay: number): void {
     if (!this.shouldConnect) return;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
+    const attempt = ++this.connectAttempt;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.doConnect(attempt);
+    }, delay);
+  }
+
+  private async waitForLocalDesktopServer(attempt: number): Promise<boolean> {
+    for (let i = 0; i < 40; i++) {
+      if (!this.shouldConnect || attempt !== this.connectAttempt) {
+        return false;
+      }
+      if (await this.probeLocalDesktopServer()) {
+        return true;
+      }
+      await sleep(100);
+    }
+    if (!this.shouldConnect || attempt !== this.connectAttempt) {
+      return false;
+    }
+    const delay = this.reconnectDelay;
+    this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxDelay);
+    this.scheduleConnect(delay);
+    return false;
+  }
+
+  private async probeLocalDesktopServer(): Promise<boolean> {
+    if (typeof fetch !== 'function') {
+      return false;
+    }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 300);
+    try {
+      await fetch(localDesktopHealthURL(), {
+        method: 'GET',
+        mode: 'no-cors',
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  private async doConnect(attempt: number): Promise<void> {
+    if (!this.shouldConnect || attempt !== this.connectAttempt) return;
     let url: string;
     if (this.remoteConfig) {
       const { host, port, token } = this.remoteConfig;
       url = `wss://${host}:${port}/ws?token=${encodeURIComponent(token)}`;
+    } else if (isDesktopShell()) {
+      if (!(await this.waitForLocalDesktopServer(attempt))) {
+        return;
+      }
+      url = localDesktopSocketURL();
     } else {
       url = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
     }
+
+    if (!this.shouldConnect || attempt !== this.connectAttempt) {
+      return;
+    }
+
     const ws = new WebSocket(url);
     this.ws = ws;
 
     ws.onopen = () => {
-      this.reconnectDelay = 1000;
-      this.emit({ type: 'session.list' });
+      if (this.ws !== ws) {
+        return;
+      }
+      void this.handleOpen(ws);
     };
 
     ws.onmessage = (e) => {
@@ -60,22 +155,82 @@ class WSClient {
     };
 
     ws.onclose = () => {
+      if (this.ws === ws) {
+        this.ws = null;
+      }
+      for (const handler of this.closeHandlers) {
+        handler();
+      }
       if (!this.shouldConnect) return;
-      this.reconnectTimer = setTimeout(() => {
-        this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxDelay);
-        this.doConnect();
-      }, this.reconnectDelay);
+      const delay = this.reconnectDelay;
+      this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxDelay);
+      this.scheduleConnect(delay);
     };
 
-    ws.onerror = () => ws.close();
+    ws.onerror = () => {};
+  }
+
+  private async handleOpen(ws: WebSocket): Promise<void> {
+    this.reconnectDelay = 1000;
+    for (const handler of this.openHandlers) {
+      await handler();
+      if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+    }
+    if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    const queued = this.queuedMessages.splice(0);
+    for (const message of queued) {
+      ws.send(JSON.stringify(message));
+    }
   }
 
   disconnect(): void {
+    if (this.disconnectTimer) {
+      clearTimeout(this.disconnectTimer);
+    }
+    this.disconnectTimer = setTimeout(() => {
+      this.disconnectTimer = null;
+      this.performDisconnect();
+    }, this.disconnectGraceMs);
+  }
+
+  private performDisconnect(): void {
     this.shouldConnect = false;
+    this.connectAttempt += 1;
     this.remoteConfig = null;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.ws?.close();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    const ws = this.ws;
     this.ws = null;
+    if (!ws) {
+      return;
+    }
+
+    if (ws.readyState === WebSocket.CONNECTING) {
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
+      ws.onopen = () => {
+        ws.onopen = null;
+        ws.close();
+      };
+      return;
+    }
+
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onerror = null;
+    ws.onclose = null;
+
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.close();
+    }
   }
 
   get isRemote(): boolean {
@@ -85,6 +240,17 @@ class WSClient {
   send(msg: ClientMessage): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));
+      return;
+    }
+    if (!this.shouldConnect) {
+      return;
+    }
+    this.queuedMessages.push(msg);
+    if (this.queuedMessages.length > 100) {
+      this.queuedMessages.splice(0, this.queuedMessages.length - 100);
+    }
+    if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
+      this.scheduleConnect(0);
     }
   }
 
@@ -95,6 +261,16 @@ class WSClient {
   onMessage(handler: MessageHandler): () => void {
     this.handlers.add(handler);
     return () => this.handlers.delete(handler);
+  }
+
+  onOpen(handler: OpenHandler): () => void {
+    this.openHandlers.add(handler);
+    return () => this.openHandlers.delete(handler);
+  }
+
+  onClose(handler: CloseHandler): () => void {
+    this.closeHandlers.add(handler);
+    return () => this.closeHandlers.delete(handler);
   }
 
   get isConnected(): boolean {

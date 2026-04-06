@@ -3,10 +3,11 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
 #[cfg(target_os = "windows")]
 use std::process::Stdio;
+use std::process::{Child, Command};
 use std::sync::Mutex;
+use std::thread;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -74,6 +75,8 @@ struct AppConfig {
     github_repo: Option<String>,
     anthropic_api_key: Option<String>,
     openai_api_key: Option<String>,
+    model_provider: Option<String>,
+    ollama_base_url: Option<String>,
     model: Option<String>,
     last_project_path: Option<String>,
     editor_font_family: String,
@@ -98,6 +101,8 @@ impl Default for AppConfig {
             github_repo: None,
             anthropic_api_key: None,
             openai_api_key: None,
+            model_provider: Some("ollama".to_string()),
+            ollama_base_url: None,
             model: None,
             last_project_path: None,
             editor_font_family: default_editor_font_family(),
@@ -222,7 +227,8 @@ fn server_running(port: u16) -> bool {
 
     let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
-    let request = format!("GET /health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    let request =
+        format!("GET /health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
     if stream.write_all(request.as_bytes()).is_err() {
         return false;
     }
@@ -233,6 +239,118 @@ fn server_running(port: u16) -> bool {
     }
 
     response.contains("\"status\":\"ok\"")
+}
+
+fn engine_server_health_ok(port: u16) -> bool {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(300)) else {
+        return false;
+    };
+
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
+    let request =
+        format!("GET /health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return false;
+    }
+
+    response.contains("\"status\":\"ok\"") && response.contains("\"projectPath\"")
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn listener_pid(port: u16) -> Option<u32> {
+    let output = Command::new("lsof")
+        .args([
+            "-nP",
+            &format!("-iTCP:{port}"),
+            "-sTCP:LISTEN",
+            "-t",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.trim().parse::<u32>().ok())
+}
+
+#[cfg(target_os = "windows")]
+fn listener_pid(port: u16) -> Option<u32> {
+    let output = Command::new("cmd")
+        .args([
+            "/C",
+            &format!("netstat -ano -p tcp | findstr LISTENING | findstr :{port}"),
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.split_whitespace().last()?.parse::<u32>().ok())
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn terminate_pid(pid: u32, signal: &str) -> bool {
+    Command::new("kill")
+        .args([signal, &pid.to_string()])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn terminate_pid(pid: u32, _signal: &str) -> bool {
+    Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn stop_stale_debug_server(port: u16) -> bool {
+    if !cfg!(debug_assertions) || !engine_server_health_ok(port) {
+        return false;
+    }
+
+    let Some(pid) = listener_pid(port) else {
+        return false;
+    };
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let _ = terminate_pid(pid, "-TERM");
+    #[cfg(target_os = "windows")]
+    let _ = terminate_pid(pid, "");
+
+    for _ in 0..10 {
+        if !server_running(port) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let _ = terminate_pid(pid, "-KILL");
+
+    for _ in 0..10 {
+        if !server_running(port) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    !server_running(port)
 }
 
 fn server_binary_names() -> [&'static str; 2] {
@@ -327,12 +445,22 @@ fn configure_server_command(cmd: &mut Command, project_path: &str, cfg: &AppConf
     if let Some(key) = &cfg.openai_api_key {
         cmd.env("OPENAI_API_KEY", key);
     }
+    if let Some(provider) = &cfg.model_provider {
+        cmd.env("ENGINE_MODEL_PROVIDER", provider);
+    }
+    if let Some(base_url) = &cfg.ollama_base_url {
+        cmd.env("OLLAMA_BASE_URL", base_url);
+    }
     if let Some(model) = &cfg.model {
         cmd.env("ENGINE_MODEL", model);
     }
 }
 
 fn start_go_server(project_path: &str, cfg: &AppConfig) -> ServerLaunch {
+    if cfg!(debug_assertions) && server_running(DEFAULT_PORT) {
+        let _ = stop_stale_debug_server(DEFAULT_PORT);
+    }
+
     if server_running(DEFAULT_PORT) {
         return ServerLaunch {
             child: None,
@@ -370,9 +498,19 @@ fn start_go_server(project_path: &str, cfg: &AppConfig) -> ServerLaunch {
 fn run_background_service() {
     let cfg = read_config();
     let project_path = project_path_for_server(&cfg);
-    let ServerLaunch { child, .. } = start_go_server(&project_path, &cfg);
-    if let Some(mut managed_child) = child {
-        let _ = managed_child.wait();
+    loop {
+        let ServerLaunch { child, .. } = start_go_server(&project_path, &cfg);
+        if let Some(mut managed_child) = child {
+            let _ = managed_child.wait();
+        }
+        // Server exited — wait briefly then restart unless port is already taken
+        // (another process may have grabbed it while we slept).
+        thread::sleep(Duration::from_secs(2));
+        if server_running(DEFAULT_PORT) {
+            // Something else restarted the server; step back.
+            break;
+        }
+        eprintln!("[engine] background service: server exited — restarting");
     }
 }
 
@@ -548,9 +686,13 @@ fn install_startup_service(binary: &Path) -> Result<String, String> {
         .map_err(|e| e.to_string())?;
 
     if status.success() {
-        Ok(String::from("Engine background service will start at login on macOS."))
+        Ok(String::from(
+            "Engine background service will start at login on macOS.",
+        ))
     } else {
-        Err(String::from("launchctl load failed — check ~/Library/Logs/Engine/engine-error.log"))
+        Err(String::from(
+            "launchctl load failed — check ~/Library/Logs/Engine/engine-error.log",
+        ))
     }
 }
 
@@ -566,7 +708,9 @@ fn install_startup_service(binary: &Path) -> Result<String, String> {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     fs::write(&autostart_path, desktop_file).map_err(|e| e.to_string())?;
-    Ok(String::from("Engine background service will start at login on Linux."))
+    Ok(String::from(
+        "Engine background service will start at login on Linux.",
+    ))
 }
 
 #[cfg(target_os = "windows")]
@@ -590,15 +734,21 @@ fn install_startup_service(binary: &Path) -> Result<String, String> {
         .map_err(|e| e.to_string())?;
 
     if status.success() {
-        Ok(String::from("Engine background service will start at login on Windows."))
+        Ok(String::from(
+            "Engine background service will start at login on Windows.",
+        ))
     } else {
-        Err(String::from("Failed to register Engine background service in Windows startup."))
+        Err(String::from(
+            "Failed to register Engine background service in Windows startup.",
+        ))
     }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn install_startup_service(_binary: &Path) -> Result<String, String> {
-    Err(String::from("Startup/background service is not supported on this platform yet."))
+    Err(String::from(
+        "Startup/background service is not supported on this platform yet.",
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -615,7 +765,9 @@ fn uninstall_startup_service() -> Result<String, String> {
     }
 
     fs::remove_file(&plist_path).map_err(|e| e.to_string())?;
-    Ok(String::from("Engine background service removed from macOS login items."))
+    Ok(String::from(
+        "Engine background service removed from macOS login items.",
+    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -626,7 +778,9 @@ fn uninstall_startup_service() -> Result<String, String> {
     }
 
     fs::remove_file(&autostart_path).map_err(|e| e.to_string())?;
-    Ok(String::from("Engine background service removed from Linux login startup."))
+    Ok(String::from(
+        "Engine background service removed from Linux login startup.",
+    ))
 }
 
 #[cfg(target_os = "windows")]
@@ -645,15 +799,21 @@ fn uninstall_startup_service() -> Result<String, String> {
         .map_err(|e| e.to_string())?;
 
     if status.success() {
-        Ok(String::from("Engine background service removed from Windows startup."))
+        Ok(String::from(
+            "Engine background service removed from Windows startup.",
+        ))
     } else {
-        Err(String::from("Failed to remove Engine background service from Windows startup."))
+        Err(String::from(
+            "Failed to remove Engine background service from Windows startup.",
+        ))
     }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn uninstall_startup_service() -> Result<String, String> {
-    Err(String::from("Startup/background service is not supported on this platform yet."))
+    Err(String::from(
+        "Startup/background service is not supported on this platform yet.",
+    ))
 }
 
 fn platform_name() -> String {
@@ -753,6 +913,40 @@ fn set_openai_key(key: String) -> bool {
 }
 
 #[tauri::command]
+fn get_model_provider() -> Option<String> {
+    read_config().model_provider
+}
+
+#[tauri::command]
+fn set_model_provider(provider: String) -> bool {
+    let mut cfg = read_config();
+    let provider = provider.trim().to_string();
+    cfg.model_provider = if provider.is_empty() {
+        None
+    } else {
+        Some(provider)
+    };
+    write_config(&cfg)
+}
+
+#[tauri::command]
+fn get_ollama_base_url() -> Option<String> {
+    read_config().ollama_base_url
+}
+
+#[tauri::command]
+fn set_ollama_base_url(base_url: String) -> bool {
+    let mut cfg = read_config();
+    let base_url = base_url.trim().to_string();
+    cfg.ollama_base_url = if base_url.is_empty() {
+        None
+    } else {
+        Some(base_url)
+    };
+    write_config(&cfg)
+}
+
+#[tauri::command]
 fn get_model() -> Option<String> {
     read_config().model
 }
@@ -798,7 +992,9 @@ fn inspect_path(path: String) -> Result<PathInspection, String> {
             .map(|name| name.to_string_lossy().to_string())
             .unwrap_or_else(|| resolved.to_string_lossy().to_string()),
         kind,
-        parent_path: resolved.parent().map(|parent| parent.to_string_lossy().to_string()),
+        parent_path: resolved
+            .parent()
+            .map(|parent| parent.to_string_lossy().to_string()),
     })
 }
 
@@ -889,7 +1085,7 @@ fn window_toggle_fullscreen(app: AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
-    
+
     let is_fs = window.is_fullscreen().map_err(|e| e.to_string())?;
     window.set_fullscreen(!is_fs).map_err(|e| e.to_string())
 }
@@ -939,26 +1135,46 @@ fn log_frontend_action(action: String) {
 }
 
 #[tauri::command]
-fn show_context_menu(app: AppHandle, x: i32, y: i32, items: Vec<(String, String)>) -> Result<(), String> {
+fn show_context_menu(
+    app: AppHandle,
+    x: i32,
+    y: i32,
+    items: Vec<(String, String)>,
+) -> Result<(), String> {
     use tauri::Position;
-    
-    eprintln!("[CONTEXT MENU] show_context_menu called with {} items at ({}, {})", items.len(), x, y);
-    
+
+    eprintln!(
+        "[CONTEXT MENU] show_context_menu called with {} items at ({}, {})",
+        items.len(),
+        x,
+        y
+    );
+
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
 
     let mut menu = MenuBuilder::new(&app);
-    
+
     for (label, id) in items.iter() {
+        if label == "---" || id == "separator" {
+            menu = menu.separator();
+            continue;
+        }
         eprintln!("[CONTEXT MENU] Adding item: label='{}', id='{}'", label, id);
-        let item = MenuItemBuilder::new(&label).id(&id).build(&app).map_err(|e| e.to_string())?;
+        let item = MenuItemBuilder::new(&label)
+            .id(&id)
+            .build(&app)
+            .map_err(|e| e.to_string())?;
         menu = menu.item(&item);
     }
 
     let context_menu = menu.build().map_err(|e| e.to_string())?;
     let pos = Position::Logical((x as f64, y as f64).into());
-    eprintln!("[CONTEXT MENU] Showing menu at LogicalPosition({}, {})", x, y);
+    eprintln!(
+        "[CONTEXT MENU] Showing menu at LogicalPosition({}, {})",
+        x, y
+    );
     window.popup_menu_at(&context_menu, pos).map_err(|e| {
         eprintln!("[CONTEXT MENU] popup_menu_at failed: {}", e);
         e.to_string()
@@ -1007,6 +1223,23 @@ pub fn run() {
     let cfg = read_config();
     let project_path = project_path_for_server(&cfg);
     let server = start_go_server(&project_path, &cfg);
+
+    // Watchdog: if the Go server exits unexpectedly, restart it. Runs in a
+    // background thread so the Tauri UI is never blocked. Waits up to 2 s
+    // between restart attempts so we don't spin-loop if the binary is broken.
+    {
+        let project_path_wd = project_path.clone();
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_secs(2));
+                if !server_running(DEFAULT_PORT) {
+                    eprintln!("[engine] server watchdog: Go server is down — restarting");
+                    let cfg_wd = read_config();
+                    start_go_server(&project_path_wd, &cfg_wd);
+                }
+            }
+        });
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -1112,14 +1345,14 @@ pub fn run() {
                 .build()?;
 
             app.set_menu(menu)?;
-            
+
             // Open devtools in dev builds
             if cfg!(debug_assertions) {
                 if let Some(window) = app.get_webview_window("main") {
                     window.open_devtools();
                 }
             }
-            
+
             Ok(())
         })
         .manage(ServerProcess {
@@ -1138,6 +1371,10 @@ pub fn run() {
             set_anthropic_key,
             get_openai_key,
             set_openai_key,
+            get_model_provider,
+            set_model_provider,
+            get_ollama_base_url,
+            set_ollama_base_url,
             get_model,
             set_model,
             get_editor_preferences,
@@ -1161,7 +1398,7 @@ pub fn run() {
         .on_menu_event(|app, event| {
             let event_id = event.id().0.as_str();
             eprintln!("[MENU EVENT] id={}", event_id);
-            
+
             // Check if this is a context menu action (new-file, new-folder, group-folders, expand-all, collapse-all)
             // These may have encoded context like "expand-all|/project/src"
             if event_id.starts_with("new-file") || event_id.starts_with("new-folder") || 

@@ -67,6 +67,8 @@ export interface RuntimeConfig {
   githubRepo?: string | null;
   anthropicKey?: string | null;
   openaiKey?: string | null;
+  modelProvider?: string | null;
+  ollamaBaseUrl?: string | null;
   model?: string | null;
 }
 
@@ -135,6 +137,7 @@ export type ClientMessage =
 
 // WebSocket protocol — Server → Client
 export type ServerMessage =
+  | { type: 'chat.started'; sessionId: string }
   | { type: 'chat.chunk'; sessionId: string; content: string; done: boolean }
   | { type: 'chat.tool_call'; sessionId: string; name: string; input: unknown }
   | { type: 'chat.tool_result'; sessionId: string; name: string; result: unknown; isError: boolean }
@@ -161,6 +164,8 @@ export type ServerMessage =
   | { type: 'editor.open'; path: string }
   | { type: 'editor.tab.close'; path: string }
   | { type: 'editor.tab.focus'; path: string }
+  | { type: 'file.created'; path: string }
+  | { type: 'folder.created'; path: string }
   | { type: 'error'; message: string; code?: string };
 
 // Tab and system info types

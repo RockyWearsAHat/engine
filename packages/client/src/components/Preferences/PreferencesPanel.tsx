@@ -77,6 +77,8 @@ export default function PreferencesPanel() {
   const [ghRepoInput, setGhRepoInput] = useState('');
   const [anthropicInput, setAnthropicInput] = useState('');
   const [openaiInput, setOpenaiInput] = useState('');
+  const [providerInput, setProviderInput] = useState<'auto' | 'anthropic' | 'openai' | 'ollama'>('ollama');
+  const [ollamaBaseUrlInput, setOllamaBaseUrlInput] = useState('');
   const [modelInput, setModelInput] = useState('');
   const [saved, setSaved] = useState<string | null>(null);
   const [serviceStatus, setServiceStatus] = useState<BackgroundServiceStatus | null>(null);
@@ -94,6 +96,14 @@ export default function PreferencesPanel() {
     bridge.getGithubRepoName().then(repo => { if (repo) setGhRepoInput(repo); });
     bridge.getAnthropicKey().then(k => { if (k) setAnthropicInput(k); });
     bridge.getOpenAiKey().then(k => { if (k) setOpenaiInput(k); });
+    bridge.getModelProvider().then(provider => {
+      if (provider === 'anthropic' || provider === 'openai' || provider === 'ollama') {
+        setProviderInput(provider);
+        return;
+      }
+      setProviderInput('ollama');
+    });
+    bridge.getOllamaBaseUrl().then(url => { if (url) setOllamaBaseUrlInput(url); });
     bridge.getModel().then(m => { if (m) setModelInput(m); });
     bridge.getEditorPreferences().then(setEditorPreferences);
     bridge.agentServiceStatus().then(setServiceStatus);
@@ -109,19 +119,23 @@ export default function PreferencesPanel() {
   const pushRuntimeConfig = (overrides?: {
     githubToken?: string | null;
     githubOwner?: string | null;
-    githubRepo?: string | null;
-    anthropicKey?: string | null;
-    openaiKey?: string | null;
-    model?: string | null;
-  }) => {
-    const nextConfig = {
-      githubToken: overrides?.githubToken ?? (ghInput.trim() || null),
-      githubOwner: overrides?.githubOwner ?? (ghOwnerInput.trim() || null),
-      githubRepo: overrides?.githubRepo ?? (ghRepoInput.trim() || null),
-      anthropicKey: overrides?.anthropicKey ?? (anthropicInput.trim() || null),
-      openaiKey: overrides?.openaiKey ?? (openaiInput.trim() || null),
-      model: overrides?.model ?? (modelInput.trim() || null),
-    };
+      githubRepo?: string | null;
+      anthropicKey?: string | null;
+      openaiKey?: string | null;
+      modelProvider?: string | null;
+      ollamaBaseUrl?: string | null;
+      model?: string | null;
+    }) => {
+      const nextConfig = {
+        githubToken: overrides?.githubToken ?? (ghInput.trim() || null),
+        githubOwner: overrides?.githubOwner ?? (ghOwnerInput.trim() || null),
+        githubRepo: overrides?.githubRepo ?? (ghRepoInput.trim() || null),
+        anthropicKey: overrides?.anthropicKey ?? (anthropicInput.trim() || null),
+        openaiKey: overrides?.openaiKey ?? (openaiInput.trim() || null),
+        modelProvider: overrides?.modelProvider ?? (providerInput === 'auto' ? null : providerInput),
+        ollamaBaseUrl: overrides?.ollamaBaseUrl ?? (ollamaBaseUrlInput.trim() || null),
+        model: overrides?.model ?? (modelInput.trim() || null),
+      };
 
     setGithubToken(nextConfig.githubToken);
     wsClient.send({ type: 'config.sync', config: nextConfig });
@@ -470,31 +484,63 @@ export default function PreferencesPanel() {
           </div>
 
           <div className="preferences-stack">
-            <label className="preferences-field">
-              <span className="preferences-label">Preferred model</span>
+            <div className="preferences-row two-up">
+              <label className="preferences-field">
+                <span className="preferences-label">Model provider</span>
+                <select
+                  value={providerInput}
+                  onChange={event => setProviderInput(event.target.value as 'auto' | 'anthropic' | 'openai' | 'ollama')}
+                  style={inputStyle}
+                >
+                  <option value="auto">Auto</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="ollama">Ollama</option>
+                </select>
+                <span className="preferences-muted">Auto now infers Ollama for local model names like gemma, llama, qwen, and tagged models such as gemma4:31b.</span>
+              </label>
+              <label className="preferences-field">
+                <span className="preferences-label">Preferred model</span>
               <input
                 type="text"
-                placeholder="claude-sonnet-4-6"
+                placeholder={providerInput === 'ollama' ? 'llama3.2' : 'claude-sonnet-4-6'}
                 value={modelInput}
                 onChange={event => setModelInput(event.target.value)}
                 style={inputStyle}
               />
-              <span className="preferences-muted">Examples: claude-sonnet-4-6, claude-opus-4-5, gpt-4o, o3.</span>
-            </label>
-            <button
-              className="btn-primary"
-              style={{ width: 'fit-content' }}
-              onClick={() => void saveField('model', async () => {
-                const nextModel = modelInput.trim() || '';
-                const ok = await bridge.setModel(nextModel);
-                if (ok) {
-                  pushRuntimeConfig({ model: nextModel || null });
-                }
-                return ok;
-              })}
-            >
-              {saved === 'model' ? <><Check size={12} /> Model saved</> : 'Save model'}
-            </button>
+                <span className="preferences-muted">Examples: claude-sonnet-4-6, gpt-4o, o3, llama3.2, qwen2.5-coder. Leave blank on Ollama to use the running local model first.</span>
+              </label>
+            </div>
+
+            <div className="preferences-inline-actions">
+              <button
+                className="btn-secondary"
+                onClick={() => void saveField('provider', async () => {
+                  const nextProvider = providerInput === 'auto' ? '' : providerInput;
+                  const ok = await bridge.setModelProvider(nextProvider);
+                  if (ok) {
+                    pushRuntimeConfig({ modelProvider: nextProvider || null });
+                  }
+                  return ok;
+                })}
+              >
+                {saved === 'provider' ? <><Check size={12} /> Provider saved</> : 'Save provider'}
+              </button>
+              <button
+                className="btn-primary"
+                style={{ width: 'fit-content' }}
+                onClick={() => void saveField('model', async () => {
+                  const nextModel = modelInput.trim() || '';
+                  const ok = await bridge.setModel(nextModel);
+                  if (ok) {
+                    pushRuntimeConfig({ model: nextModel || null });
+                  }
+                  return ok;
+                })}
+              >
+                {saved === 'model' ? <><Check size={12} /> Model saved</> : 'Save model'}
+              </button>
+            </div>
 
             <div className="preferences-row two-up">
               <label className="preferences-field">
@@ -518,6 +564,18 @@ export default function PreferencesPanel() {
                 />
               </label>
             </div>
+
+            <label className="preferences-field">
+              <span className="preferences-label">Ollama base URL</span>
+              <input
+                type="text"
+                placeholder="http://127.0.0.1:11434"
+                value={ollamaBaseUrlInput}
+                onChange={event => setOllamaBaseUrlInput(event.target.value)}
+                style={inputStyle}
+              />
+              <span className="preferences-muted">Engine uses Ollama&apos;s OpenAI-compatible `/v1/chat/completions` endpoint. Leave blank for the local default.</span>
+            </label>
 
             <div className="preferences-inline-actions">
               <button
@@ -545,6 +603,19 @@ export default function PreferencesPanel() {
                 })}
               >
                 {saved === 'openai' ? <><Check size={12} /> OpenAI saved</> : <><KeyRound size={12} /> Save OpenAI</>}
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={() => void saveField('ollamaUrl', async () => {
+                  const nextBaseUrl = ollamaBaseUrlInput.trim() || '';
+                  const ok = await bridge.setOllamaBaseUrl(nextBaseUrl);
+                  if (ok) {
+                    pushRuntimeConfig({ ollamaBaseUrl: nextBaseUrl || null });
+                  }
+                  return ok;
+                })}
+              >
+                {saved === 'ollamaUrl' ? <><Check size={12} /> Ollama URL saved</> : 'Save Ollama URL'}
               </button>
             </div>
           </div>

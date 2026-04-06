@@ -99,6 +99,25 @@ func migrate() error {
 			created_at  TEXT NOT NULL,
 			FOREIGN KEY(session_id) REFERENCES sessions(id)
 		);
+		CREATE TABLE IF NOT EXISTS attention_residuals (
+			id           TEXT PRIMARY KEY,
+			session_id   TEXT NOT NULL,
+			message_id   TEXT NOT NULL,
+			source_key   TEXT NOT NULL,
+			source_type  TEXT NOT NULL,
+			source_label TEXT NOT NULL DEFAULT '',
+			query_text   TEXT NOT NULL DEFAULT '',
+			weight       REAL NOT NULL DEFAULT 0,
+			score        REAL NOT NULL DEFAULT 0,
+			context      TEXT NOT NULL DEFAULT '',
+			created_at   TEXT NOT NULL,
+			FOREIGN KEY(session_id) REFERENCES sessions(id),
+			FOREIGN KEY(message_id) REFERENCES messages(id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_attention_residuals_session_created
+			ON attention_residuals(session_id, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_attention_residuals_source_key_created
+			ON attention_residuals(source_key, created_at DESC);
 	`)
 	return err
 }

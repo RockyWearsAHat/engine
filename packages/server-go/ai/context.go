@@ -21,26 +21,200 @@ import (
 	"github.com/shirou/gopsutil/v3/mem"
 )
 
-const defaultModel = "claude-opus-4-5"
+const (
+	defaultAnthropicModel = "claude-opus-4-5"
+	defaultOpenAIModel    = "gpt-4o"
+	defaultOllamaModel    = "llama3.2"
+	defaultOllamaBaseURL  = "http://127.0.0.1:11434"
+)
 
-// providerForModel returns "openai" for gpt-* / o1-* / o3-* models, "anthropic" otherwise.
-func providerForModel(model string) string {
-	lower := strings.ToLower(model)
+var ollamaModelPrefixes = []string{
+	"gemma",
+	"llama",
+	"qwen",
+	"mistral",
+	"mixtral",
+	"deepseek",
+	"codellama",
+	"phi",
+	"command-r",
+	"granite",
+	"smollm",
+	"starcoder",
+	"wizard",
+	"dolphin",
+	"yi",
+	"nemotron",
+}
+
+// ollamaWarmKeepInterval is how often we ping Ollama to reset the model TTL.
+// Must be less than OLLAMA_KEEP_ALIVE (default 30m) so the model never expires.
+const ollamaWarmKeepInterval = 20 * time.Minute
+
+func init() {
+	go ollamaWarmKeeper()
+}
+
+// ollamaWarmKeeper periodically sends a no-op generate request to Ollama so the
+// currently loaded model stays in VRAM between user sessions.
+// Uses /api/generate with an empty prompt and keep_alive set — this resets the
+// expiry timer without actually running inference.
+func ollamaWarmKeeper() {
+	for {
+		time.Sleep(ollamaWarmKeepInterval)
+
+		baseURL := os.Getenv("OLLAMA_BASE_URL")
+		rootURL := ollamaRootURL(baseURL)
+
+		keepAlive := os.Getenv("OLLAMA_KEEP_ALIVE")
+		if keepAlive == "" {
+			keepAlive = "30m"
+		}
+
+		// Only ping if a model is actually loaded right now.
+		model := firstOllamaModel(rootURL+"/api/ps", "models", "name")
+		if model == "" {
+			continue
+		}
+
+		payload, _ := json.Marshal(map[string]interface{}{
+			"model":      model,
+			"prompt":     "",
+			"keep_alive": keepAlive,
+		})
+		resp, err := http.Post(rootURL+"/api/generate", "application/json", bytes.NewReader(payload))
+		if err == nil {
+			resp.Body.Close()
+		}
+	}
+}
+
+func inferredProviderForModel(model string) string {
+	lower := strings.ToLower(strings.TrimSpace(model))
+	if lower == "" {
+		return "ollama"
+	}
 	if strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "o1-") ||
 		strings.HasPrefix(lower, "o3-") || strings.HasPrefix(lower, "o4-") {
 		return "openai"
 	}
+	if strings.HasPrefix(lower, "claude") {
+		return "anthropic"
+	}
+	if looksLikeOllamaModel(lower) {
+		return "ollama"
+	}
 	return "anthropic"
+}
+
+func looksLikeOllamaModel(lowerModel string) bool {
+	if strings.Contains(lowerModel, ":") {
+		return true
+	}
+	for _, prefix := range ollamaModelPrefixes {
+		if strings.HasPrefix(lowerModel, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveProvider(explicitProvider string, model string) string {
+	switch strings.ToLower(strings.TrimSpace(explicitProvider)) {
+	case "anthropic", "openai", "ollama":
+		return strings.ToLower(strings.TrimSpace(explicitProvider))
+	case "", "auto":
+		return inferredProviderForModel(model)
+	default:
+		return inferredProviderForModel(model)
+	}
+}
+
+func defaultModelForProvider(provider string) string {
+	switch provider {
+	case "openai":
+		return defaultOpenAIModel
+	case "ollama":
+		return defaultOllamaModel
+	default:
+		return defaultAnthropicModel
+	}
+}
+
+func ollamaChatCompletionsURL(baseURL string) string {
+	normalized := ollamaRootURL(baseURL)
+	switch {
+	case strings.HasSuffix(normalized, "/chat/completions"):
+		return normalized
+	case strings.HasSuffix(normalized, "/v1"):
+		return normalized + "/chat/completions"
+	default:
+		return normalized + "/v1/chat/completions"
+	}
+}
+
+func ollamaRootURL(baseURL string) string {
+	normalized := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if normalized == "" {
+		return defaultOllamaBaseURL
+	}
+	switch {
+	case strings.HasSuffix(normalized, "/v1/chat/completions"):
+		return strings.TrimSuffix(normalized, "/v1/chat/completions")
+	case strings.HasSuffix(normalized, "/v1"):
+		return strings.TrimSuffix(normalized, "/v1")
+	default:
+		return normalized
+	}
+}
+
+func detectOllamaModel(baseURL string) string {
+	rootURL := ollamaRootURL(baseURL)
+	if model := firstOllamaModel(rootURL+"/api/ps", "models", "name"); model != "" {
+		return model
+	}
+	if model := firstOllamaModel(rootURL+"/v1/models", "data", "id"); model != "" {
+		return model
+	}
+	return ""
+}
+
+func firstOllamaModel(url string, listKey string, nameKey string) string {
+	resp, err := http.Get(url)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+
+	var payload map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return ""
+	}
+	items, _ := payload[listKey].([]interface{})
+	for _, item := range items {
+		entry, _ := item.(map[string]interface{})
+		if entry == nil {
+			continue
+		}
+		if name, ok := entry[nameKey].(string); ok && strings.TrimSpace(name) != "" {
+			return strings.TrimSpace(name)
+		}
+	}
+	return ""
 }
 
 // ChatContext carries callbacks for streaming responses to the WebSocket client.
 type ChatContext struct {
-	ProjectPath string
-	SessionID   string
-	OnChunk     func(content string, done bool)
-	OnToolCall  func(name string, input interface{})
-	OnToolResult func(name string, result interface{}, isError bool)
-	OnError     func(err string)
+	ProjectPath      string
+	SessionID        string
+	OnChunk          func(content string, done bool)
+	OnToolCall       func(name string, input interface{})
+	OnToolResult     func(name string, result interface{}, isError bool)
+	OnError          func(err string)
 	OnSessionUpdated func(session *db.Session)
 	// GetOpenTabs returns the client's currently open editor tabs.
 	GetOpenTabs func() []TabInfo
@@ -80,13 +254,13 @@ type anthropicMessage struct {
 }
 
 type contentBlock struct {
-	Type       string      `json:"type"`
-	Text       string      `json:"text,omitempty"`
-	ID         string      `json:"id,omitempty"`
-	Name       string      `json:"name,omitempty"`
-	Input      interface{} `json:"input,omitempty"`
-	ToolUseID  string      `json:"tool_use_id,omitempty"`
-	Content    string      `json:"content,omitempty"`
+	Type      string      `json:"type"`
+	Text      string      `json:"text,omitempty"`
+	ID        string      `json:"id,omitempty"`
+	Name      string      `json:"name,omitempty"`
+	Input     interface{} `json:"input,omitempty"`
+	ToolUseID string      `json:"tool_use_id,omitempty"`
+	Content   string      `json:"content,omitempty"`
 }
 
 type anthropicRequest struct {
@@ -149,6 +323,18 @@ var tools = []anthropicTool{
 			"pattern":      strProp("Regex pattern to search for"),
 			"directory":    strProp("Directory to search in (optional, defaults to project root)"),
 			"file_pattern": strProp("Glob pattern to filter files (e.g. \"*.go\")"),
+		}),
+	},
+	{
+		Name:        "search_history",
+		Description: "Search Engine's stored workspace history across prior sessions, summaries, learnings, and validation evidence.",
+		InputSchema: objSchema([]string{"query"}, map[string]interface{}{
+			"query": strProp("Keywords or question to search for in prior Engine history"),
+			"scope": strProp("Optional scope: project or current-session"),
+			"limit": map[string]interface{}{
+				"type":        "number",
+				"description": "Optional max results to return (default 5, max 10)",
+			},
 		}),
 	},
 	{
@@ -267,6 +453,10 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 		v, _ := input[key].(string)
 		return v
 	}
+	numVal := func(key string) float64 {
+		v, _ := input[key].(float64)
+		return v
+	}
 	boolVal := func(key string) bool {
 		v, _ := input[key].(bool)
 		return v
@@ -327,7 +517,13 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 		if err != nil {
 			return err.Error(), true
 		}
-		cmd := exec.Command("bash", "-c", str("command"))
+		// Use the user's login shell so the AI has the full PATH (Homebrew, nvm,
+		// cargo, etc.). The -l flag sources login scripts (.zprofile, .bash_profile).
+		shell := os.Getenv("SHELL")
+		if shell == "" {
+			shell = "/bin/bash"
+		}
+		cmd := exec.Command(shell, "-l", "-c", command)
 		cmd.Dir = cwd
 		out, err := cmd.CombinedOutput()
 		result := strings.TrimSpace(string(out))
@@ -417,6 +613,30 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 		b, _ := json.MarshalIndent(tabs, "", "  ")
 		return string(b), false
 
+	case "search_history":
+		if ctx == nil {
+			return "History search is unavailable because the chat context is missing.", true
+		}
+		query := strings.TrimSpace(str("query"))
+		if query == "" {
+			return "query is required", true
+		}
+		scope := str("scope")
+		limit := int(numVal("limit"))
+		openTabs := []TabInfo{}
+		if ctx.GetOpenTabs != nil {
+			openTabs = ctx.GetOpenTabs()
+		}
+		residualProfile, err := BuildAttentionResidualProfile(ctx.ProjectPath, ctx.SessionID, query, openTabs)
+		if err != nil {
+			residualProfile = map[string]float64{}
+		}
+		hits, err := SearchHistoryWithResiduals(ctx.ProjectPath, ctx.SessionID, query, openTabs, scope, limit, residualProfile)
+		if err != nil {
+			return err.Error(), true
+		}
+		return FormatHistorySearchResults(query, hits, ctx.SessionID), false
+
 	case "close_tab":
 		path, err := resolveWorkspacePath(ctx.ProjectPath, str("path"))
 		if err != nil {
@@ -451,18 +671,18 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 		terminalID := str("terminalId")
 		command := str("command")
 		issue := str("issue")
-		
+
 		if ctx.SendToClient == nil {
 			return "No client available to run terminal command", true
 		}
-		
+
 		// Notify client to run the command and observe
 		ctx.SendToClient("test.run", map[string]interface{}{
 			"terminalId": terminalID,
 			"command":    command,
 			"issue":      issue,
 		})
-		
+
 		return fmt.Sprintf("Test command queued: %s\nIssue context: %s\nMonitoring for issue resolution...", command, issue), false
 
 	case "github_list_issues":
@@ -609,20 +829,22 @@ func formatTree(node *gofs.FileNode, depth int) string {
 
 // Chat runs the full agentic loop for a user message, streaming results via ctx callbacks.
 func Chat(ctx *ChatContext, userMessage string) {
-	model := os.Getenv("ENGINE_MODEL")
-	if model == "" {
-		model = defaultModel
+	explicitProvider := os.Getenv("ENGINE_MODEL_PROVIDER")
+	model := strings.TrimSpace(os.Getenv("ENGINE_MODEL"))
+	provider := resolveProvider(explicitProvider, model)
+	ollamaBaseURL := os.Getenv("OLLAMA_BASE_URL")
+	if provider == "ollama" && model == "" {
+		model = detectOllamaModel(ollamaBaseURL)
 	}
-	provider := providerForModel(model)
+	if model == "" {
+		model = defaultModelForProvider(provider)
+	}
 
-	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
-	openaiKey := os.Getenv("OPENAI_API_KEY")
-
-	if provider == "anthropic" && anthropicKey == "" {
+	if provider == "anthropic" && os.Getenv("ANTHROPIC_API_KEY") == "" {
 		ctx.OnError("ANTHROPIC_API_KEY not set — configure it in Engine Settings")
 		return
 	}
-	if provider == "openai" && openaiKey == "" {
+	if provider == "openai" && os.Getenv("OPENAI_API_KEY") == "" {
 		ctx.OnError("OPENAI_API_KEY not set — configure it in Engine Settings")
 		return
 	}
@@ -633,16 +855,26 @@ func Chat(ctx *ChatContext, userMessage string) {
 		ctx.OnError("Failed to save message: " + err.Error())
 		return
 	}
+	if ctx.OnSessionUpdated != nil {
+		if updatedSession, err := db.GetSession(ctx.SessionID); err == nil && updatedSession != nil {
+			ctx.OnSessionUpdated(updatedSession)
+		}
+	}
 
 	history, _ := db.GetMessages(ctx.SessionID)
 	session, _ := db.GetSession(ctx.SessionID)
-
-	// Build Anthropic messages from DB history (exclude the just-saved user message)
-	messages := make([]anthropicMessage, 0, len(history))
-	for _, m := range history[:len(history)-1] {
-		messages = append(messages, anthropicMessage{Role: m.Role, Content: m.Content})
+	openTabs := []TabInfo{}
+	if ctx.GetOpenTabs != nil {
+		openTabs = ctx.GetOpenTabs()
 	}
-	messages = append(messages, anthropicMessage{Role: "user", Content: userMessage})
+	residualProfile, err := BuildAttentionResidualProfile(ctx.ProjectPath, ctx.SessionID, userMessage, openTabs)
+	if err != nil {
+		residualProfile = map[string]float64{}
+	}
+
+	// Use residual-aware selection so older high-value context can survive beyond a flat recent window.
+	windowResult := BuildAttentionConversationWindow(history, userMessage, openTabs, residualProfile)
+	messages := windowResult.Messages
 
 	// Build system prompt
 	branch, _ := gogit.GetCurrentBranch(ctx.ProjectPath)
@@ -653,11 +885,9 @@ func Chat(ctx *ChatContext, userMessage string) {
 		fmt.Sprintf("Project: %s", ctx.ProjectPath),
 		fmt.Sprintf("Branch: %s", branch),
 	}
-	if workspaceGuide := BuildWorkspacePromptContext(ctx.ProjectPath); workspaceGuide != "" {
-		systemLines = append(systemLines, "Workspace direction: "+workspaceGuide)
-	}
-	if session != nil && session.Summary != "" {
-		systemLines = append(systemLines, "Session memory: "+session.Summary)
+	selectiveContext := BuildSelectiveContext(ctx.ProjectPath, session, userMessage, openTabs, residualProfile)
+	if selectiveContext.Prompt != "" {
+		systemLines = append(systemLines, selectiveContext.Prompt)
 	}
 	systemLines = append(systemLines,
 		"",
@@ -666,6 +896,8 @@ func Chat(ctx *ChatContext, userMessage string) {
 		"- Use shell to run tests, builds, and observe real output",
 		"- Use get_system_info to check resource pressure before intensive operations",
 		"- Use list_open_tabs to understand what the user is focused on",
+		"- Prefer residual-weighted context over raw recency when older workspace history is clearly more relevant",
+		"- Use search_history when older workspace decisions, prior debugging, or past validation may matter",
 		"- File operations are confined to the current project root unless the user explicitly elevates them",
 		"- Risky shell commands and git commits require explicit user approval",
 		"- When you open a file, the user sees it in Engine immediately",
@@ -673,99 +905,29 @@ func Chat(ctx *ChatContext, userMessage string) {
 		"- Use github_list_issues, github_get_issue, github_close_issue to interact with GitHub issues",
 	)
 
-	// Inject cross-session learnings relevant to the current conversation
-	if len(messages) > 0 {
-		lastMsg := ""
-		for i := len(messages) - 1; i >= 0; i-- {
-			if messages[i].Role == "user" {
-				if s, ok := messages[i].Content.(string); ok {
-					lastMsg = s
-				}
-				break
-			}
-		}
-		if lastMsg != "" {
-			if learnings := InjectLearnings(lastMsg); learnings != "" {
-				systemLines = append(systemLines, "", learnings)
-			}
-		}
-	}
-
 	systemPrompt := strings.Join(systemLines, "\n")
 
 	var allToolCalls []ToolCall
 	var finalText strings.Builder
 
-	if provider == "openai" {
-		runOpenAILoop(ctx, model, openaiKey, systemPrompt, messages, &allToolCalls, &finalText)
-	} else {
-		// Anthropic agentic loop
-		for {
-			windowed := messages
-			if len(windowed) > 50 {
-				windowed = windowed[len(windowed)-50:]
-			}
-
-			req := anthropicRequest{
-				Model:     model,
-				MaxTokens: 8192,
-				System:    systemPrompt,
-				Messages:  windowed,
-				Tools:     tools,
-				Stream:    true,
-			}
-
-			responseBlocks, stopReason, err := streamRequest(anthropicKey, req, ctx, &finalText)
-			if err != nil {
-				ctx.OnError(err.Error())
-				return
-			}
-
-			messages = append(messages, anthropicMessage{Role: "assistant", Content: responseBlocks})
-
-			if stopReason != "tool_use" {
-				break
-			}
-
-			var toolResults []contentBlock
-			for _, block := range responseBlocks {
-				if block.Type != "tool_use" {
-					continue
-				}
-				inputMap, _ := block.Input.(map[string]interface{})
-				if inputMap == nil {
-					inputMap = map[string]interface{}{}
-				}
-				ctx.OnToolCall(block.Name, inputMap)
-
-				start := time.Now()
-				result, isError := executeTool(block.Name, inputMap, ctx)
-				durationMs := time.Since(start).Milliseconds()
-
-				db.LogToolCall(newID(), ctx.SessionID, block.Name, inputMap, result, isError, durationMs) //nolint:errcheck
-				ctx.OnToolResult(block.Name, result, isError)
-
-				allToolCalls = append(allToolCalls, ToolCall{
-					ID: block.ID, Name: block.Name, Input: inputMap,
-					Result: result, IsError: isError,
-				})
-				toolResults = append(toolResults, contentBlock{
-					Type:      "tool_result",
-					ToolUseID: block.ID,
-					Content:   result,
-				})
-			}
-
-			messages = append(messages, anthropicMessage{Role: "user", Content: toolResults})
-		}
-	}
+	// Dispatch to the correct provider. Adding a new provider = add a case in
+	// newProvider() in provider.go — nothing else changes.
+	newProvider(provider).RunLoop(ctx, model, systemPrompt, messages, &allToolCalls, &finalText)
 
 	// Persist final assistant message
 	var tc interface{}
 	if len(allToolCalls) > 0 {
 		tc = allToolCalls
 	}
-	db.SaveMessage(newID(), ctx.SessionID, "assistant", finalText.String(), tc) //nolint:errcheck
+	assistantMessageID := newID()
+	db.SaveMessage(assistantMessageID, ctx.SessionID, "assistant", finalText.String(), tc) //nolint:errcheck
+	db.SaveAttentionResiduals(BuildAttentionResidualRecords(                               //nolint:errcheck
+		ctx.SessionID,
+		userMsgID,
+		userMessage,
+		windowResult,
+		selectiveContext,
+	))
 	if summary := BuildUpdatedSessionSummary(func() string {
 		if session == nil {
 			return ""
@@ -780,6 +942,76 @@ func Chat(ctx *ChatContext, userMessage string) {
 		}
 	}
 	ctx.OnChunk("", true)
+}
+
+// runAnthropicLoop executes the Anthropic-native streaming agentic loop.
+// It is called by anthropicProvider.RunLoop in provider.go.
+func runAnthropicLoop(
+	ctx *ChatContext,
+	model, apiKey, systemPrompt string,
+	history []anthropicMessage,
+	allToolCalls *[]ToolCall,
+	finalText *strings.Builder,
+) {
+	messages := history
+	for {
+		windowed := messages
+		if len(windowed) > 50 {
+			windowed = windowed[len(windowed)-50:]
+		}
+
+		req := anthropicRequest{
+			Model:     model,
+			MaxTokens: 8192,
+			System:    systemPrompt,
+			Messages:  windowed,
+			Tools:     tools,
+			Stream:    true,
+		}
+
+		responseBlocks, stopReason, err := streamRequest(apiKey, req, ctx, finalText)
+		if err != nil {
+			ctx.OnError(err.Error())
+			return
+		}
+
+		messages = append(messages, anthropicMessage{Role: "assistant", Content: responseBlocks})
+
+		if stopReason != "tool_use" {
+			break
+		}
+
+		var toolResults []contentBlock
+		for _, block := range responseBlocks {
+			if block.Type != "tool_use" {
+				continue
+			}
+			inputMap, _ := block.Input.(map[string]interface{})
+			if inputMap == nil {
+				inputMap = map[string]interface{}{}
+			}
+			ctx.OnToolCall(block.Name, inputMap)
+
+			start := time.Now()
+			result, isError := executeTool(block.Name, inputMap, ctx)
+			durationMs := time.Since(start).Milliseconds()
+
+			db.LogToolCall(newID(), ctx.SessionID, block.Name, inputMap, result, isError, durationMs) //nolint:errcheck
+			ctx.OnToolResult(block.Name, result, isError)
+
+			*allToolCalls = append(*allToolCalls, ToolCall{
+				ID: block.ID, Name: block.Name, Input: inputMap,
+				Result: result, IsError: isError,
+			})
+			toolResults = append(toolResults, contentBlock{
+				Type:      "tool_result",
+				ToolUseID: block.ID,
+				Content:   result,
+			})
+		}
+
+		messages = append(messages, anthropicMessage{Role: "user", Content: toolResults})
+	}
 }
 
 // streamRequest sends one Anthropic streaming request and returns all content blocks.
@@ -819,6 +1051,7 @@ func streamRequest(
 	)
 
 	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -924,10 +1157,11 @@ type openAIMessage struct {
 }
 
 type openAIRequest struct {
-	Model    string          `json:"model"`
-	Messages []openAIMessage `json:"messages"`
-	Tools    []openAITool    `json:"tools,omitempty"`
-	Stream   bool            `json:"stream"`
+	Model     string          `json:"model"`
+	Messages  []openAIMessage `json:"messages"`
+	Tools     []openAITool    `json:"tools,omitempty"`
+	Stream    bool            `json:"stream"`
+	KeepAlive string          `json:"keep_alive,omitempty"` // Ollama only — extends model TTL
 }
 
 // openAIToolsFrom converts the Anthropic tool definitions to OpenAI format.
@@ -946,14 +1180,25 @@ func openAIToolsFrom(src []anthropicTool) []openAITool {
 	return out
 }
 
-// runOpenAILoop runs the full agentic loop against the OpenAI chat completions API.
-func runOpenAILoop(
+// runOpenAICompatibleLoop runs the full agentic loop against an OpenAI-compatible chat completions API.
+func runOpenAICompatibleLoop(
 	ctx *ChatContext,
-	model, apiKey, systemPrompt string,
+	providerName, model, endpointURL, apiKey string,
+	useAuthorization bool,
+	systemPrompt string,
 	history []anthropicMessage,
 	allToolCalls *[]ToolCall,
 	finalText *strings.Builder,
 ) {
+	// keepAlive is Ollama-specific — it resets the model unload timer on every
+	// request so the model stays in VRAM between chat turns. Ignored by OpenAI.
+	keepAlive := ""
+	if providerName == "ollama" {
+		keepAlive = os.Getenv("OLLAMA_KEEP_ALIVE")
+		if keepAlive == "" {
+			keepAlive = "30m"
+		}
+	}
 	// Convert history to OpenAI message format
 	msgs := []openAIMessage{{Role: "system", Content: systemPrompt}}
 	for _, m := range history {
@@ -970,24 +1215,27 @@ func runOpenAILoop(
 		}
 
 		req := openAIRequest{
-			Model:    model,
-			Messages: windowed,
-			Tools:    oaiTools,
-			Stream:   true,
+			Model:     model,
+			Messages:  windowed,
+			Tools:     oaiTools,
+			Stream:    true,
+			KeepAlive: keepAlive,
 		}
 
 		body, _ := json.Marshal(req)
-		httpReq, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewReader(body))
+		httpReq, err := http.NewRequest("POST", endpointURL, bytes.NewReader(body))
 		if err != nil {
-			ctx.OnError("openai request build: " + err.Error())
+			ctx.OnError(providerName + " request build: " + err.Error())
 			return
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+		if useAuthorization {
+			httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+		}
 
 		resp, err := http.DefaultClient.Do(httpReq)
 		if err != nil {
-			ctx.OnError("openai request: " + err.Error())
+			ctx.OnError(providerName + " request: " + err.Error())
 			return
 		}
 		defer resp.Body.Close()
@@ -995,7 +1243,7 @@ func runOpenAILoop(
 		if resp.StatusCode != 200 {
 			var errBody map[string]interface{}
 			json.NewDecoder(resp.Body).Decode(&errBody) //nolint:errcheck
-			ctx.OnError(fmt.Sprintf("openai error %d: %v", resp.StatusCode, errBody))
+			ctx.OnError(fmt.Sprintf("%s error %d: %v", providerName, resp.StatusCode, errBody))
 			return
 		}
 
@@ -1011,6 +1259,7 @@ func runOpenAILoop(
 		finishReason := ""
 
 		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
 			if !strings.HasPrefix(line, "data: ") {
@@ -1065,6 +1314,10 @@ func runOpenAILoop(
 					}
 				}
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			ctx.OnError(providerName + " stream: " + err.Error())
+			return
 		}
 
 		// Build assistant message with tool_calls if any

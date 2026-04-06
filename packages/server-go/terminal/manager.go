@@ -43,7 +43,9 @@ func (m *Manager) Create(id, cwd string, onData func(string), onExit func()) (*T
 		shell = "/bin/bash"
 	}
 
-	cmd := exec.Command(shell)
+	// Pass -l so the shell starts as a login shell, sourcing .zprofile / .bash_profile
+	// and picking up the user's full PATH (Homebrew, nvm, cargo, etc.).
+	cmd := exec.Command(shell, "-l")
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(),
 		"TERM=xterm-256color",

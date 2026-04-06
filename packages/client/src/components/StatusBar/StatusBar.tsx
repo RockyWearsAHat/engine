@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from '../../store/index.js';
 import { GitBranch, Wifi, WifiOff, Github, Circle } from 'lucide-react';
 import { bridge } from '../../bridge.js';
@@ -7,6 +7,13 @@ import {
   EDITOR_STATUS_EVENT,
   type EditorStatusDetail,
 } from '../../editorEvents.js';
+
+const mdModeLabels: { mode: MarkdownViewMode; label: string; description: string }[] = [
+  { mode: 'text', label: 'Text', description: 'Raw markdown source' },
+  { mode: 'preview', label: 'Preview', description: 'Rendered & editable' },
+  { mode: 'split', label: 'Split', description: 'Side-by-side raw + preview' },
+  { mode: 'syntactical', label: 'Syntactical', description: 'Rendered with syntax annotations' },
+];
 
 const isDesktop = typeof window !== 'undefined'
   && ('__TAURI__' in window || !!(window as unknown as Record<string, unknown>).electronAPI);
@@ -26,6 +33,8 @@ export default function StatusBar() {
   const unstaged = gitStatus?.unstaged.length ?? 0;
   const untracked = gitStatus?.untracked.length ?? 0;
   const [editorStatus, setEditorStatus] = useState<EditorStatusDetail | null>(null);
+  const [mdMenuOpen, setMdMenuOpen] = useState(false);
+  const mdMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleEditorStatus = (event: Event) => {
@@ -41,8 +50,21 @@ export default function StatusBar() {
     }
   }, [activeFilePath]);
 
+  // Close md mode popup when clicking outside
+  useEffect(() => {
+    if (!mdMenuOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (mdMenuRef.current && !mdMenuRef.current.contains(e.target as Node)) {
+        setMdMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [mdMenuOpen]);
+
   const updateMarkdownViewMode = useCallback((mode: MarkdownViewMode) => {
     if (editorPreferences.markdownViewMode === mode) {
+      setMdMenuOpen(false);
       return;
     }
     const nextSettings = {
@@ -51,7 +73,10 @@ export default function StatusBar() {
     };
     setEditorPreferences(nextSettings);
     void bridge.setEditorPreferences(nextSettings);
+    setMdMenuOpen(false);
   }, [editorPreferences, setEditorPreferences]);
+
+  const currentMdLabel = mdModeLabels.find(m => m.mode === editorPreferences.markdownViewMode)?.label ?? 'Text';
 
   return (
     <div className={`status-bar ${connected ? '' : 'disconnected'}`}>
@@ -96,17 +121,29 @@ export default function StatusBar() {
               </span>
             )}
             {editorStatus.markdownFileActive && (
-              <span className="status-toggle" aria-label="Markdown view mode">
-                {(['text', 'preview'] as MarkdownViewMode[]).map((mode) => (
-                  <button
-                    key={mode}
-                    className={`status-toggle-btn ${editorStatus.markdownViewMode === mode ? 'active' : ''}`}
-                    onClick={() => updateMarkdownViewMode(mode)}
-                  >
-                    {mode === 'text' ? 'Text' : 'Preview'}
-                  </button>
-                ))}
-              </span>
+              <div className="md-mode-selector" ref={mdMenuRef}>
+                <button
+                  className="status-toggle-btn active"
+                  onClick={() => setMdMenuOpen(!mdMenuOpen)}
+                  title="Markdown view mode"
+                >
+                  {currentMdLabel} ▾
+                </button>
+                {mdMenuOpen && (
+                  <div className="md-mode-popup">
+                    {mdModeLabels.map(({ mode, label, description }) => (
+                      <button
+                        key={mode}
+                        className={`md-mode-option ${editorPreferences.markdownViewMode === mode ? 'selected' : ''}`}
+                        onClick={() => updateMarkdownViewMode(mode)}
+                      >
+                        <span className="md-mode-option-label">{label}</span>
+                        <span className="md-mode-option-desc">{description}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
             {!isDesktop && (
               <button

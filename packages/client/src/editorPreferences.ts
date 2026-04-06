@@ -1,4 +1,4 @@
-export type MarkdownViewMode = 'text' | 'preview';
+export type MarkdownViewMode = 'text' | 'preview' | 'split' | 'syntactical';
 
 export interface EditorPreferences {
   fontFamily: string;
@@ -53,6 +53,8 @@ export function normalizeEditorPreferences(
       ? (requestedTabSize as 2 | 4 | 8)
       : DEFAULT_EDITOR_PREFERENCES.tabSize,
     wordWrap: Boolean(input?.wordWrap),
-    markdownViewMode: input?.markdownViewMode === 'preview' ? 'preview' : 'text',
+    markdownViewMode: (['text', 'preview', 'split', 'syntactical'] as MarkdownViewMode[]).includes(input?.markdownViewMode as MarkdownViewMode)
+      ? (input!.markdownViewMode as MarkdownViewMode)
+      : DEFAULT_EDITOR_PREFERENCES.markdownViewMode,
   };
 }

@@ -5,11 +5,12 @@ import { useStore } from '../../store/index.js';
 import type { OpenFile } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
 import { bridge } from '../../bridge.js';
+import { REQUEST_CLOSE_FILE_EVENT, type CloseFileEventDetail } from '../../editorEvents.js';
 import type { FileNode, GitHubIssue, SearchResult } from '@engine/shared';
 import {
   FolderOpen, Folder, RefreshCw, GitBranch,
-  AlertCircle, FileText, ChevronRight, Circle,
-  Loader2, Search,
+  AlertCircle, FileText, ChevronRight, ChevronDown, Circle,
+  Loader2, Search, X,
 } from 'lucide-react';
 import {
   countFolders,
@@ -91,6 +92,7 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
           setSearchQuery, setSearchLoading, clearSearch, showDotfiles } = useStore();
 
   const [groupFolders, setGroupFolders] = useState(true);
+  const [openEditorsCollapsed, setOpenEditorsCollapsed] = useState(false);
   
   // Initialize expandedFolders from localStorage, or empty set if not found
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => {
@@ -166,9 +168,13 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
 
   // Memoize context menu handler to prevent infinite re-renders
   const onContextMenu = useCallback((x: number, y: number, node: FileNode, type: 'file' | 'folder' | 'empty') => {
+    // For new file/folder, determine target directory
+    const targetDir = type === 'folder' ? node.path
+      : type === 'file' ? node.path.substring(0, node.path.lastIndexOf('/'))
+      : '';
     const items: [string, string][] = [
-      ['New File', 'new-file'],
-      ['New Folder', 'new-folder'],
+      ['New File', targetDir ? `new-file|${targetDir}` : 'new-file'],
+      ['New Folder', targetDir ? `new-folder|${targetDir}` : 'new-folder'],
     ];
 
     if (type === 'folder') {
@@ -223,6 +229,7 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
     }
 
     // Add Group Folders with checkmark if enabled
+    items.push(['---', 'separator']);
     const groupFoldersLabel = groupFolders ? '✓ Group Folders' : 'Group Folders';
     items.push([groupFoldersLabel, 'group-folders']);
 
@@ -269,20 +276,22 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
         case 'new-file': {
           const name = prompt('New file name:');
           if (name && activeSession) {
-            const path = activeSession.projectPath.endsWith('/') 
-              ? activeSession.projectPath + name 
-              : activeSession.projectPath + '/' + name;
+            const base = context || activeSession.projectPath;
+            const path = base.endsWith('/') ? base + name : base + '/' + name;
             wsClient.send({ type: 'file.create', path });
+            // Refresh tree after creation
+            setTimeout(() => wsClient.send({ type: 'file.tree', path: activeSession.projectPath }), 200);
           }
           break;
         }
         case 'new-folder': {
           const name = prompt('New folder name:');
           if (name && activeSession) {
-            const path = activeSession.projectPath.endsWith('/') 
-              ? activeSession.projectPath + name 
-              : activeSession.projectPath + '/' + name;
+            const base = context || activeSession.projectPath;
+            const path = base.endsWith('/') ? base + name : base + '/' + name;
             wsClient.send({ type: 'folder.create', path });
+            // Refresh tree after creation
+            setTimeout(() => wsClient.send({ type: 'file.tree', path: activeSession.projectPath }), 200);
           }
           break;
         }
@@ -368,6 +377,47 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
               <RefreshCw size={12} />
             </button>
           </div>
+
+          {/* Collapsible Open Editors section (VS Code style) */}
+          <div className="explorer-section-header" onClick={() => setOpenEditorsCollapsed(c => !c)}>
+            {openEditorsCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+            <span className="explorer-section-title">OPEN EDITORS</span>
+            {openFiles && openFiles.length > 0 && (
+              <span className="explorer-section-badge">{openFiles.length}</span>
+            )}
+          </div>
+          {!openEditorsCollapsed && (
+            <div className="explorer-section-body">
+              {openFiles && openFiles.length > 0 ? (
+                openFiles.map(file => {
+                  const fileName = file.path.split('/').pop() ?? file.path;
+                  const { color } = getFileStyle(fileName);
+                  return (
+                    <div
+                      key={file.path}
+                      className={`open-editor-item${file.path === activePath ? ' active' : ''}`}
+                      onClick={() => onSetActiveFile?.(file.path)}
+                      title={file.path}
+                    >
+                      <X
+                        size={12}
+                        className="open-editor-close"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          window.dispatchEvent(new CustomEvent<CloseFileEventDetail>(REQUEST_CLOSE_FILE_EVENT, { detail: { path: file.path } }));
+                        }}
+                      />
+                      <FileText size={11} style={{ color, marginRight: '6px', flexShrink: 0 }} />
+                      <span className="open-editor-name">{fileName}</span>
+                      {file.dirty && <Circle size={4} className="open-editor-dirty" />}
+                    </div>
+                  );
+                })
+              ) : (
+                <div style={{ padding: '6px 16px', color: 'var(--tx-3)', fontSize: 11 }}>No open editors</div>
+              )}
+            </div>
+          )}
           
           <div className="sidebar-body" onContextMenu={(e) => {
             e.preventDefault();
@@ -407,7 +457,8 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
                 items.push(['Collapse All', 'collapse-all']);
               }
               
-              items.push(['Group Folders', 'group-folders']);
+              items.push(['---', 'separator']);
+              items.push([groupFolders ? '✓ Group Folders' : 'Group Folders', 'group-folders']);
               
               invoke('show_context_menu', { x: Math.round(e.clientX), y: Math.round(e.clientY), items }).catch(err => console.error('Menu error:', err));
             }
@@ -432,51 +483,6 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
                   <FolderOpen size={13} />
                   Open Folder
                 </button>
-              </div>
-            )}
-          </div>
-        </>
-      )}
-
-      {activityTab === 'open-editors' && (
-        <>
-          <div className="sidebar-header">
-            <span className="sidebar-title">Open Editors</span>
-          </div>
-          <div className="sidebar-body">
-            {openFiles && openFiles.length > 0 ? (
-              <div>
-                {openFiles.map(file => {
-                  const fileName = file.path.split('/').pop() ?? file.path;
-                  const { color } = getFileStyle(fileName);
-                  return (
-                    <div
-                      key={file.path}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        padding: '4px 8px',
-                        margin: '1px 4px',
-                        cursor: 'pointer',
-                        background: file.path === activePath ? 'rgba(255,255,255,0.08)' : 'transparent',
-                        borderRadius: '3px',
-                        transition: 'background 0.15s ease',
-                      }}
-                      onClick={() => onSetActiveFile?.(file.path)}
-                      title={file.path}
-                    >
-                      <FileText size={11} style={{ color, marginRight: '6px', flexShrink: 0 }} />
-                      <span style={{ fontSize: '11px', color: file.path === activePath ? 'var(--accent-2)' : 'var(--tx)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {fileName}
-                      </span>
-                      {file.dirty && <Circle size={4} style={{ color: 'var(--accent-2)', marginLeft: '4px', fill: 'var(--accent-2)', flexShrink: 0 }} />}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div style={{ padding: '20px 12px', textAlign: 'center', color: 'var(--tx-3)', fontSize: 12 }}>
-                No open editors
               </div>
             )}
           </div>

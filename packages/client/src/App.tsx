@@ -164,6 +164,11 @@ export default function App() {
   const editorAreaRef = useRef<HTMLDivElement | null>(null);
   const dirtyOpenFilesRef = useRef(openFiles.filter(file => file.dirty));
   const allowWindowCloseRef = useRef(false);
+  const syncRuntimeConfigRef = useRef<() => Promise<void>>(async () => {});
+  const requestWorkspaceTasksRef = useRef<(path?: string) => void>(() => {});
+  const requestFileCloseRef = useRef<(path: string) => void>(() => {});
+  const ensureStreamingAssistantMessageRef = useRef<(sessionId: string) => string>(() => '');
+  const workspaceRootRef = useRef('');
   const resizeOriginRef = useRef({
     sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
     rightPanelWidth: DEFAULT_RIGHT_PANEL_WIDTH,
@@ -193,9 +198,29 @@ export default function App() {
     }, 4200);
   }, []);
 
+  const ensureStreamingAssistantMessage = useCallback((sessionId: string) => {
+    const nextStreamingMessage = streamingRef.current;
+    if (
+      nextStreamingMessage
+      && nextStreamingMessage.sessionId === sessionId
+      && useStore.getState().chatMessages.some((message) => message.id === nextStreamingMessage.msgId)
+    ) {
+      return nextStreamingMessage.msgId;
+    }
+
+    const msgId = randomUUID();
+    streamingRef.current = { sessionId, msgId };
+    startAssistantMessage(msgId);
+    return msgId;
+  }, [startAssistantMessage]);
+
   useEffect(() => {
     dirtyOpenFilesRef.current = dirtyOpenFiles;
   }, [dirtyOpenFiles]);
+
+  useEffect(() => {
+    workspaceRootRef.current = workspaceRoot;
+  }, [workspaceRoot]);
 
   useEffect(() => () => {
     if (noticeTimerRef.current) {
@@ -308,15 +333,18 @@ export default function App() {
   }, [resizingPanel]);
 
   const syncRuntimeConfig = useCallback(async () => {
-    const [savedGithubToken, githubOwner, githubRepo, anthropicKey, openaiKey, model, editorPreferences] = await Promise.all([
+    const [savedGithubToken, githubOwner, githubRepo, anthropicKey, openaiKey, savedModelProvider, ollamaBaseUrl, model, editorPreferences] = await Promise.all([
       bridge.getGithubToken().catch(() => null),
       bridge.getGithubRepoOwner().catch(() => null),
       bridge.getGithubRepoName().catch(() => null),
       bridge.getAnthropicKey().catch(() => null),
       bridge.getOpenAiKey().catch(() => null),
+      bridge.getModelProvider().catch(() => null),
+      bridge.getOllamaBaseUrl().catch(() => null),
       bridge.getModel().catch(() => null),
       bridge.getEditorPreferences().catch(() => null),
     ]);
+    const modelProvider = savedModelProvider || 'ollama';
 
     setGithubToken(savedGithubToken);
     if (editorPreferences) {
@@ -330,6 +358,8 @@ export default function App() {
         githubRepo,
         anthropicKey,
         openaiKey,
+        modelProvider,
+        ollamaBaseUrl,
         model,
       },
     });
@@ -863,9 +893,54 @@ export default function App() {
 
   const paletteItems = commandPaletteMode === 'commands' ? paletteCommandItems : paletteFileItems;
 
+  useEffect(() => {
+    syncRuntimeConfigRef.current = syncRuntimeConfig;
+  }, [syncRuntimeConfig]);
+
+  useEffect(() => {
+    requestWorkspaceTasksRef.current = requestWorkspaceTasks;
+  }, [requestWorkspaceTasks]);
+
+  useEffect(() => {
+    requestFileCloseRef.current = requestFileClose;
+  }, [requestFileClose]);
+
+  useEffect(() => {
+    ensureStreamingAssistantMessageRef.current = ensureStreamingAssistantMessage;
+  }, [ensureStreamingAssistantMessage]);
+
   // WebSocket handler
   useEffect(() => {
-    wsClient.connect();
+    const initializeConnection = async () => {
+      setConnected(true);
+      await syncRuntimeConfigRef.current();
+
+      const state = useStore.getState();
+      const currentSession = state.activeSession;
+      const tabs = state.openFiles.map((file) => ({
+        path: file.path,
+        isActive: file.path === state.activeFilePath,
+        isDirty: file.dirty,
+      }));
+      if (tabs.length > 0) {
+        wsClient.send({ type: 'editor.tabs.sync', tabs });
+      }
+
+      if (currentSession?.id) {
+        wsClient.send({ type: 'session.load', sessionId: currentSession.id });
+        requestWorkspaceTasksRef.current(currentSession.projectPath);
+        return;
+      }
+
+      const initialPath = normalizeProjectPath(await bridge.getProjectPath().catch(() => ''));
+      if (initialPath && initialPath !== '.') {
+        setProjectName(projectLabel(initialPath));
+        wsClient.send({ type: 'project.open', path: initialPath });
+        requestWorkspaceTasksRef.current(initialPath);
+      } else {
+        wsClient.send({ type: 'session.list' });
+      }
+    };
 
     const off = wsClient.onMessage((msg: ServerMessage) => {
       switch (msg.type) {
@@ -901,43 +976,52 @@ export default function App() {
           setActiveSession(msg.session);
           setMessages(msg.messages);
           pendingToolCallsRef.current[msg.session.id] = [];
+          if (streamingRef.current?.sessionId === msg.session.id) {
+            ensureStreamingAssistantMessageRef.current(msg.session.id);
+            updateAgentSession(msg.session.id, {
+              isStreaming: true,
+              currentActivity: 'Thinking...',
+            });
+          }
+          break;
+
+        case 'chat.started':
+          ensureStreamingAssistantMessageRef.current(msg.sessionId);
+          updateAgentSession(msg.sessionId, {
+            isStreaming: true,
+            currentActivity: 'Thinking...',
+          });
           break;
 
         case 'chat.chunk': {
           const sid = msg.sessionId;
-          if (!streamingRef.current || streamingRef.current.sessionId !== sid) {
-            const msgId = randomUUID();
-            streamingRef.current = { sessionId: sid, msgId };
-            startAssistantMessage(msgId);
+          const msgId = ensureStreamingAssistantMessageRef.current(sid);
+          if (msg.content) {
+            appendChunk(msgId, msg.content);
           }
-          appendChunk(streamingRef.current.msgId, msg.content);
           updateAgentSession(sid, {
             isStreaming: !msg.done,
             currentActivity: msg.done ? '' : 'Responding...',
           });
           if (msg.done) {
-            finalizeMessage(streamingRef.current.msgId);
+            finalizeMessage(msgId);
             streamingRef.current = null;
           }
           break;
         }
 
         case 'chat.tool_call': {
-          if (!streamingRef.current || streamingRef.current.sessionId !== msg.sessionId) {
-            const msgId = randomUUID();
-            streamingRef.current = { sessionId: msg.sessionId, msgId };
-            startAssistantMessage(msgId);
-          }
+          const msgId = ensureStreamingAssistantMessageRef.current(msg.sessionId);
           const toolId = randomUUID();
           const startedAt = Date.now();
-          addToolCall(streamingRef.current.msgId, {
+          addToolCall(msgId, {
             id: toolId,
             name: msg.name,
             input: msg.input,
             pending: true,
           });
           const queue = pendingToolCallsRef.current[msg.sessionId] ?? [];
-          queue.push({ id: toolId, msgId: streamingRef.current.msgId, name: msg.name, startedAt });
+          queue.push({ id: toolId, msgId, name: msg.name, startedAt });
           pendingToolCallsRef.current[msg.sessionId] = queue;
           addLiveToolCall(msg.sessionId, {
             id: toolId,
@@ -971,8 +1055,11 @@ export default function App() {
         }
 
         case 'chat.error':
-          if (streamingRef.current?.sessionId === msg.sessionId) {
-            finalizeMessage(streamingRef.current.msgId);
+          {
+            const msgId = ensureStreamingAssistantMessageRef.current(msg.sessionId);
+            const currentMessage = useStore.getState().chatMessages.find(chatMessage => chatMessage.id === msgId);
+            appendChunk(msgId, `${currentMessage?.content ? '\n\n' : ''}Error: ${msg.error}`);
+            finalizeMessage(msgId);
             streamingRef.current = null;
           }
           pendingToolCallsRef.current[msg.sessionId] = [];
@@ -998,6 +1085,13 @@ export default function App() {
 
         case 'file.tree':
           mergeFileTree(msg.tree);
+          break;
+
+        case 'file.created':
+        case 'folder.created':
+          if (workspaceRootRef.current) {
+            wsClient.send({ type: 'file.tree', path: workspaceRootRef.current });
+          }
           break;
 
         case 'search.results':
@@ -1033,7 +1127,7 @@ export default function App() {
           break;
 
         case 'editor.tab.close':
-          requestFileClose(msg.path);
+          requestFileCloseRef.current(msg.path);
           break;
 
         case 'editor.tab.focus':
@@ -1041,26 +1135,14 @@ export default function App() {
           break;
       }
     });
+    const offOpen = wsClient.onOpen(initializeConnection);
+    const offClose = wsClient.onClose(() => {
+      setConnected(false);
+    });
+    wsClient.connect();
 
-    // Wait for WS then init
-    const interval = setInterval(async () => {
-      if (!wsClient.isConnected) return;
-      clearInterval(interval);
-      setConnected(true);
-      await syncRuntimeConfig();
-
-      const initialPath = normalizeProjectPath(await bridge.getProjectPath().catch(() => ''));
-      if (initialPath && initialPath !== '.') {
-        setProjectName(projectLabel(initialPath));
-        wsClient.send({ type: 'project.open', path: initialPath });
-        requestWorkspaceTasks(initialPath);
-      } else {
-        wsClient.send({ type: 'session.list' });
-      }
-    }, 120);
-
-    return () => { off(); clearInterval(interval); wsClient.disconnect(); };
-  }, [setConnected, syncRuntimeConfig, requestWorkspaceTasks, setGithubIssues, setGithubIssuesError, setGithubIssuesLoading, setGitStatus, setFileTree, mergeFileTree, setSearchResults, setGithubUser, openFile, markFileSaved, setActiveFile, finalizeMessage, appendChunk, startAssistantMessage, updateAgentSession, addToolCall, addLiveToolCall, resolveToolCall, resolveLiveToolCall, setActiveSession, setMessages, setSessions, finishPendingSaveRequest, requestFileClose]); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => { off(); offOpen(); offClose(); wsClient.disconnect(); };
+  }, []); // store actions are stable; refs provide fresh UI state without reconnect churn
 
   useEffect(() => {
     if (!activeSession?.projectPath) {
@@ -1330,7 +1412,6 @@ export default function App() {
           <div className="activity-bar">
             {([
               ['explorer', FolderOpen],
-              ['open-editors', FileStack],
               ['git', GitBranch],
               ['search', Search],
               ['issues', AlertCircle],
@@ -1339,7 +1420,7 @@ export default function App() {
                 key={id}
                 className={`activity-btn ${activityTab === id && showSidebar ? 'active' : ''}`}
                 onClick={() => toggleActivity(id)}
-                title={id === 'open-editors' ? 'Open Editors' : id.charAt(0).toUpperCase() + id.slice(1)}
+                title={id.charAt(0).toUpperCase() + id.slice(1)}
               >
                 <Icon size={17} />
               </button>
