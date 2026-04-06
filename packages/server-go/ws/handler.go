@@ -259,18 +259,36 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		}
 		c.projectPath = msg.Path
 		projectPath = msg.Path
-		id := newID()
-		branch, _ := gogit.GetCurrentBranch(msg.Path)
-		if err := db.CreateSession(id, msg.Path, branch); err != nil {
-			c.sendErr(err.Error(), "DB_ERROR")
-			return
+
+		// Resume the most recent session for this project if one exists with messages.
+		// Only create a new session when none exists yet.
+		var sessionID string
+		var sessionCreated bool
+		if existing, err := db.ListSessions(msg.Path); err == nil && len(existing) > 0 {
+			sessionID = existing[0].ID
+		} else {
+			sessionCreated = true
+			id := newID()
+			branch, _ := gogit.GetCurrentBranch(msg.Path)
+			if err := db.CreateSession(id, msg.Path, branch); err != nil {
+				c.sendErr(err.Error(), "DB_ERROR")
+				return
+			}
+			if summary := ai.BuildInitialSessionSummary(msg.Path); summary != "" {
+				db.UpdateSessionSummary(id, summary) //nolint:errcheck
+			}
+			sessionID = id
 		}
-		if summary := ai.BuildInitialSessionSummary(msg.Path); summary != "" {
-			db.UpdateSessionSummary(id, summary) //nolint:errcheck
+
+		c.sessionID = sessionID
+		session, _ := db.GetSession(sessionID)
+		if sessionCreated {
+			c.send(map[string]interface{}{"type": "session.created", "session": session})
+		} else {
+			messages, _ := db.GetMessages(sessionID)
+			c.send(map[string]interface{}{"type": "session.loaded", "session": session, "messages": messages})
 		}
-		c.sessionID = id
-		session, _ := db.GetSession(id)
-		c.send(map[string]interface{}{"type": "session.created", "session": session})
+
 		tree, err := gofs.GetTree(msg.Path, 1)
 		if err == nil {
 			c.send(map[string]interface{}{"type": "file.tree", "tree": tree})
@@ -278,6 +296,10 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		status, err := gogit.GetStatus(msg.Path)
 		if err == nil {
 			c.send(map[string]interface{}{"type": "git.status", "status": status})
+		}
+		// Push full session list so the sidebar shows prior sessions immediately.
+		if allSessions, err := db.ListSessions(msg.Path); err == nil {
+			c.send(map[string]interface{}{"type": "session.list", "sessions": allSessions})
 		}
 
 	// ── Sessions ──────────────────────────────────────────────────────────────
