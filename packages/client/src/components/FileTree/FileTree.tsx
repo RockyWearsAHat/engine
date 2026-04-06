@@ -93,6 +93,7 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
 
   const [groupFolders, setGroupFolders] = useState(true);
   const [openEditorsCollapsed, setOpenEditorsCollapsed] = useState(false);
+  const [pendingCreate, setPendingCreate] = useState<{ type: 'file' | 'folder'; dir: string } | null>(null);
   
   // Initialize expandedFolders from localStorage, or empty set if not found
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => {
@@ -128,6 +129,17 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
       return next;
     });
   }, []);
+
+  const confirmCreate = useCallback((name: string) => {
+    if (!pendingCreate || !activeSession || !name.trim()) { setPendingCreate(null); return; }
+    const base = pendingCreate.dir;
+    const path = base.endsWith('/') ? base + name.trim() : base + '/' + name.trim();
+    wsClient.send({ type: pendingCreate.type === 'file' ? 'file.create' : 'folder.create', path });
+    setTimeout(() => wsClient.send({ type: 'file.tree', path: activeSession.projectPath }), 200);
+    setPendingCreate(null);
+  }, [pendingCreate, activeSession]);
+
+  const cancelCreate = useCallback(() => setPendingCreate(null), []);
 
   // Sort children: directories first (alphabetical) if grouping, then files (alphabetical)
   const sortNode = (node: FileNode): FileNode => {
@@ -274,25 +286,18 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
       
       switch (action) {
         case 'new-file': {
-          const name = prompt('New file name:');
-          if (name && activeSession) {
-            const base = context || activeSession.projectPath;
-            const path = base.endsWith('/') ? base + name : base + '/' + name;
-            wsClient.send({ type: 'file.create', path });
-            // Refresh tree after creation
-            setTimeout(() => wsClient.send({ type: 'file.tree', path: activeSession.projectPath }), 200);
-          }
+          const dir = context || (activeSession?.projectPath ?? '');
+          if (!dir) break;
+          // Auto-expand the target directory so the inline input is visible.
+          setExpandedFolders(prev => { const next = new Set(prev); next.add(dir); return next; });
+          setPendingCreate({ type: 'file', dir });
           break;
         }
         case 'new-folder': {
-          const name = prompt('New folder name:');
-          if (name && activeSession) {
-            const base = context || activeSession.projectPath;
-            const path = base.endsWith('/') ? base + name : base + '/' + name;
-            wsClient.send({ type: 'folder.create', path });
-            // Refresh tree after creation
-            setTimeout(() => wsClient.send({ type: 'file.tree', path: activeSession.projectPath }), 200);
-          }
+          const dir = context || (activeSession?.projectPath ?? '');
+          if (!dir) break;
+          setExpandedFolders(prev => { const next = new Set(prev); next.add(dir); return next; });
+          setPendingCreate({ type: 'folder', dir });
           break;
         }
         case 'group-folders': {
@@ -475,6 +480,9 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
                 expandedFolders={expandedFolders}
                 onContextMenu={onContextMenu}
                 onToggleFolder={onToggleFolder}
+                pendingCreate={pendingCreate}
+                onConfirmCreate={confirmCreate}
+                onCancelCreate={cancelCreate}
               />
             ) : (
               <div style={{ padding: '20px 12px', textAlign: 'center' }}>
@@ -583,14 +591,59 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
   );
 }
 
+/** Inline input row for creating a new file or folder inside a tree directory. */
+function InlineCreateInput({ type, depth, onConfirm, onCancel }: {
+  type: 'file' | 'folder';
+  depth: number;
+  onConfirm: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const commit = () => { if (name.trim()) onConfirm(name.trim()); else onCancel(); };
+
+  return (
+    <div style={{
+      paddingLeft: 6 + depth * 14,
+      display: 'flex', alignItems: 'center', gap: 6,
+      height: 24, paddingRight: 8,
+    }}>
+      {type === 'folder'
+        ? <Folder size={13} style={{ color: 'var(--accent-2)', flexShrink: 0 }} />
+        : <FileText size={13} style={{ flexShrink: 0, color: 'var(--tx-3)' }} />}
+      <input
+        ref={inputRef}
+        value={name}
+        onChange={e => setName(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(); }
+          if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+        }}
+        onBlur={commit}
+        style={{
+          flex: 1, background: 'var(--surface-2)',
+          border: '1px solid var(--accent)', borderRadius: 2,
+          padding: '1px 5px', fontSize: 12, color: 'var(--tx)',
+          outline: 'none', minWidth: 0,
+        }}
+      />
+    </div>
+  );
+}
+
 // Tree
 
-function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirStatusMap, showDotfiles, expandedFolders, onContextMenu, onToggleFolder }: {
+function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirStatusMap, showDotfiles, expandedFolders, onContextMenu, onToggleFolder, pendingCreate, onConfirmCreate, onCancelCreate }: {
   node: FileNode; depth: number; defaultOpen?: boolean; activePath: string | null;
   statusMap: Map<string, GitFileStatus>; dirStatusMap: Map<string, GitFileStatus>; showDotfiles: boolean;
   expandedFolders: Set<string>;
   onContextMenu?: (x: number, y: number, node: FileNode, type: 'file' | 'folder' | 'empty') => void;
   onToggleFolder?: (path: string, isOpen: boolean) => void;
+  pendingCreate?: { type: 'file' | 'folder'; dir: string } | null;
+  onConfirmCreate?: (name: string) => void;
+  onCancelCreate?: () => void;
 }) {
   const [open, setOpen] = useState(defaultOpen || depth < 1);
   const [loading, setLoading] = useState(false);
@@ -716,8 +769,16 @@ function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirS
                : <Folder size={13} style={{ color: 'var(--accent-2)', flexShrink: 0 }} />}
         <span className="tree-name">{node.name}</span>
       </div>
+      {open && pendingCreate?.dir === node.path && (
+        <InlineCreateInput
+          type={pendingCreate.type}
+          depth={depth + 1}
+          onConfirm={onConfirmCreate ?? (() => {})}
+          onCancel={onCancelCreate ?? (() => {})}
+        />
+      )}
       {open && node.children?.map(child => (
-        <TreeDir key={child.path} node={child} depth={depth + 1} defaultOpen={expandedFolders.has(child.path)} activePath={activePath} statusMap={statusMap} dirStatusMap={dirStatusMap} showDotfiles={showDotfiles} expandedFolders={expandedFolders} onContextMenu={onContextMenu} onToggleFolder={onToggleFolder} />
+        <TreeDir key={child.path} node={child} depth={depth + 1} defaultOpen={expandedFolders.has(child.path)} activePath={activePath} statusMap={statusMap} dirStatusMap={dirStatusMap} showDotfiles={showDotfiles} expandedFolders={expandedFolders} onContextMenu={onContextMenu} onToggleFolder={onToggleFolder} pendingCreate={pendingCreate} onConfirmCreate={onConfirmCreate} onCancelCreate={onCancelCreate} />
       ))}
     </>
   );
