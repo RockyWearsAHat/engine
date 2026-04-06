@@ -22,6 +22,7 @@ export interface ChatMessage {
   content: string;
   toolCalls: ToolCallDisplay[];
   streaming: boolean;
+  failed?: boolean;
 }
 
 export interface OpenFile {
@@ -53,6 +54,7 @@ interface EditorStore {
   finalizeMessage: (id: string) => void;
   addToolCall: (msgId: string, tc: ToolCallDisplay) => void;
   resolveToolCall: (msgId: string, toolId: string, result: unknown, isError: boolean, durationMs?: number) => void;
+  markMessageFailed: (id: string) => void;
   setMessages: (msgs: Message[]) => void;
 
   // File tree
@@ -292,6 +294,11 @@ export const useStore = create<EditorStore>((set, get) => ({
 
   finalizeMessage: (id) => set(s => ({
     chatMessages: s.chatMessages.map(m => m.id === id ? { ...m, streaming: false } : m),
+    streamingMessageId: null,
+  })),
+
+  markMessageFailed: (id) => set(s => ({
+    chatMessages: s.chatMessages.map(m => m.id === id ? { ...m, streaming: false, failed: true } : m),
     streamingMessageId: null,
   })),
 

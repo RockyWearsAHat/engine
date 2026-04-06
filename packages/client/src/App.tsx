@@ -117,7 +117,7 @@ export default function App() {
     sessions, setSessions,
     activeSession, setActiveSession,
     chatMessages, addUserMessage, startAssistantMessage,
-    appendChunk, finalizeMessage, addToolCall, resolveToolCall, setMessages,
+    appendChunk, finalizeMessage, markMessageFailed, addToolCall, resolveToolCall, setMessages,
     fileTree, setFileTree, mergeFileTree,
     openFiles, activeFilePath, openFile, clearOpenFiles, setActiveFile, markFileSaved,
     gitStatus, setGitStatus,
@@ -1058,8 +1058,10 @@ export default function App() {
           {
             const msgId = ensureStreamingAssistantMessageRef.current(msg.sessionId);
             const currentMessage = useStore.getState().chatMessages.find(chatMessage => chatMessage.id === msgId);
-            appendChunk(msgId, `${currentMessage?.content ? '\n\n' : ''}Error: ${msg.error}`);
-            finalizeMessage(msgId);
+            if (currentMessage?.content) {
+              appendChunk(msgId, '\n\n⚠ ' + msg.error);
+            }
+            markMessageFailed(msgId);
             streamingRef.current = null;
           }
           pendingToolCallsRef.current[msg.sessionId] = [];

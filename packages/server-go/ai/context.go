@@ -225,6 +225,9 @@ type ChatContext struct {
 	// Cancel, when closed, signals the agentic loop to stop at the next safe checkpoint.
 	// The loop sends a final chat.chunk with done=true before exiting.
 	Cancel <-chan struct{}
+	// ActiveTools is the live tool set for the current request. Starts as bootstrapTools
+	// and grows each time the model calls search_tools to discover new capabilities.
+	ActiveTools []anthropicTool
 }
 
 // isCancelled returns true if the context's cancel channel has been closed.
@@ -301,20 +304,24 @@ func objSchema(required []string, props map[string]interface{}) interface{} {
 	}
 }
 
-var tools = []anthropicTool{
+// toolRegistry is the complete catalog of every tool Engine can execute.
+// Only a small bootstrap subset is sent to the model at the start of each request.
+// The model discovers additional tools by calling search_tools.
+var toolRegistry = []anthropicTool{
+	// ── Discovery ────────────────────────────────────────────────────────────
+	{
+		Name:        "search_tools",
+		Description: "Search for available tools by describing what you want to do. Returns matching tool names, descriptions, and full schemas — and makes them available for immediate use. Call this during your planning phase before executing, or whenever you need a capability you don't currently have.",
+		InputSchema: objSchema([]string{"query"}, map[string]interface{}{
+			"query": strProp("Natural language description of what you want to do, e.g. 'run shell commands', 'commit to git', 'open GitHub issues'"),
+		}),
+	},
+	// ── Core navigation (always available) ──────────────────────────────────
 	{
 		Name:        "read_file",
 		Description: "Read the contents of a file at the given path.",
 		InputSchema: objSchema([]string{"path"}, map[string]interface{}{
 			"path": strProp("Absolute path to the file"),
-		}),
-	},
-	{
-		Name:        "write_file",
-		Description: "Write content to a file (creates file and parent dirs if needed).",
-		InputSchema: objSchema([]string{"path", "content"}, map[string]interface{}{
-			"path":    strProp("Absolute path to write to"),
-			"content": strProp("Content to write"),
 		}),
 	},
 	{
@@ -324,6 +331,23 @@ var tools = []anthropicTool{
 			"path": strProp("Absolute directory path"),
 		}),
 	},
+	// ── File operations ──────────────────────────────────────────────────────
+	{
+		Name:        "write_file",
+		Description: "Create or overwrite a file with the given content. Parent directories are created automatically. Use this whenever you need to create a new file or save content to disk.",
+		InputSchema: objSchema([]string{"path", "content"}, map[string]interface{}{
+			"path":    strProp("Absolute path to write to"),
+			"content": strProp("Content to write"),
+		}),
+	},
+	{
+		Name:        "open_file",
+		Description: "Open an EXISTING file in the editor so the user can view it. This does NOT create files — use write_file to create new files.",
+		InputSchema: objSchema([]string{"path"}, map[string]interface{}{
+			"path": strProp("Absolute path to the existing file to open"),
+		}),
+	},
+	// ── Shell / execution ────────────────────────────────────────────────────
 	{
 		Name:        "shell",
 		Description: "Execute a shell command and return stdout + stderr. Use for running tests, builds, installs, etc.",
@@ -332,6 +356,16 @@ var tools = []anthropicTool{
 			"cwd":     strProp("Working directory (optional, defaults to project root)"),
 		}),
 	},
+	{
+		Name:        "test.run",
+		Description: "Run a test command in the client terminal and observe output for issue resolution.",
+		InputSchema: objSchema([]string{"command"}, map[string]interface{}{
+			"command":    strProp("Shell command to run"),
+			"terminalId": strProp("Terminal ID to run in (optional)"),
+			"issue":      strProp("Issue description to validate against"),
+		}),
+	},
+	// ── Search ───────────────────────────────────────────────────────────────
 	{
 		Name:        "search_files",
 		Description: "Search for a pattern in files using ripgrep. Returns matching lines with file paths and line numbers.",
@@ -353,6 +387,7 @@ var tools = []anthropicTool{
 			},
 		}),
 	},
+	// ── Git ──────────────────────────────────────────────────────────────────
 	{
 		Name:        "git_status",
 		Description: "Get the current git status: branch, staged/unstaged/untracked files.",
@@ -372,16 +407,10 @@ var tools = []anthropicTool{
 			"message": strProp("Commit message"),
 		}),
 	},
-	{
-		Name:        "open_file",
-		Description: "Open a file in the editor UI so the user can see it.",
-		InputSchema: objSchema([]string{"path"}, map[string]interface{}{
-			"path": strProp("Absolute path to the file to open"),
-		}),
-	},
+	// ── Editor UI ────────────────────────────────────────────────────────────
 	{
 		Name:        "get_system_info",
-		Description: "Get current system resource usage: memory (used/total/%), CPU %, and disk usage for the project path. Use this to check if the system is under memory or CPU pressure before starting intensive operations.",
+		Description: "Get current system resource usage: memory (used/total/%), CPU %, and disk usage for the project path.",
 		InputSchema: objSchema(nil, map[string]interface{}{}),
 	},
 	{
@@ -391,7 +420,7 @@ var tools = []anthropicTool{
 	},
 	{
 		Name:        "close_tab",
-		Description: "Close a specific file tab in the editor. Use to reduce memory usage or clean up irrelevant files. Will not close tabs with unsaved changes unless force is true.",
+		Description: "Close a specific file tab in the editor. Will not close tabs with unsaved changes unless force is true.",
 		InputSchema: objSchema([]string{"path"}, map[string]interface{}{
 			"path":  strProp("Absolute path of the tab to close"),
 			"force": map[string]interface{}{"type": "boolean", "description": "Force close even if there are unsaved changes"},
@@ -404,15 +433,7 @@ var tools = []anthropicTool{
 			"path": strProp("Absolute path of the tab to focus"),
 		}),
 	},
-	{
-		Name:        "test.run",
-		Description: "Run a test command in the client terminal and observe output for issue resolution.",
-		InputSchema: objSchema([]string{"command"}, map[string]interface{}{
-			"command":    strProp("Shell command to run"),
-			"terminalId": strProp("Terminal ID to run in (optional)"),
-			"issue":      strProp("Issue description to validate against"),
-		}),
-	},
+	// ── GitHub ───────────────────────────────────────────────────────────────
 	{
 		Name:        "github_list_issues",
 		Description: "List GitHub issues for a repository.",
@@ -463,6 +484,94 @@ var tools = []anthropicTool{
 	},
 }
 
+// toolRegistryIndex is a flat name→tool map for O(1) lookup.
+var toolRegistryIndex = func() map[string]anthropicTool {
+	m := make(map[string]anthropicTool, len(toolRegistry))
+	for _, t := range toolRegistry {
+		m[t.Name] = t
+	}
+	return m
+}()
+
+// bootstrapTools is the minimal set sent to the model at the start of every request.
+// Only navigation + tool discovery. Everything else must be discovered via search_tools.
+var bootstrapToolNames = []string{"search_tools", "read_file", "list_directory"}
+
+func bootstrapTools() []anthropicTool {
+	out := make([]anthropicTool, 0, len(bootstrapToolNames))
+	for _, name := range bootstrapToolNames {
+		if t, ok := toolRegistryIndex[name]; ok {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// executeSearchTools searches the registry by keyword and injects matched tools into
+// ctx.ActiveTools so they are available on the very next model iteration.
+// Returns a human-readable summary of what was found and added.
+func executeSearchTools(query string, ctx *ChatContext) string {
+	query = strings.ToLower(strings.TrimSpace(query))
+	words := strings.Fields(query)
+
+	type scored struct {
+		tool  anthropicTool
+		score int
+	}
+
+	// Score each tool by how many query words appear in its name+description.
+	var matches []scored
+	for _, t := range toolRegistry {
+		haystack := strings.ToLower(t.Name + " " + t.Description)
+		score := 0
+		for _, w := range words {
+			if strings.Contains(haystack, w) {
+				score++
+			}
+		}
+		if score > 0 {
+			matches = append(matches, scored{t, score})
+		}
+	}
+
+	// Sort by score descending.
+	for i := 1; i < len(matches); i++ {
+		for j := i; j > 0 && matches[j].score > matches[j-1].score; j-- {
+			matches[j], matches[j-1] = matches[j-1], matches[j]
+		}
+	}
+
+	if len(matches) == 0 {
+		return "No tools matched that query. Available categories: file operations, shell/execution, search, git, editor UI, github."
+	}
+
+	// Merge newly found tools into ctx.ActiveTools (dedup by name).
+	activeByName := make(map[string]bool, len(ctx.ActiveTools))
+	for _, t := range ctx.ActiveTools {
+		activeByName[t.Name] = true
+	}
+	var added []string
+	for _, m := range matches {
+		if !activeByName[m.tool.Name] {
+			ctx.ActiveTools = append(ctx.ActiveTools, m.tool)
+			activeByName[m.tool.Name] = true
+			added = append(added, m.tool.Name)
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Tools found and now available:\n")
+	for _, m := range matches {
+		sb.WriteString(fmt.Sprintf("  • %s — %s\n", m.tool.Name, m.tool.Description))
+	}
+	if len(added) > 0 {
+		sb.WriteString(fmt.Sprintf("\nAdded to active tools: %s", strings.Join(added, ", ")))
+	} else {
+		sb.WriteString("\n(All matched tools were already active)")
+	}
+	return sb.String()
+}
+
 // executeTool runs the named tool and returns (result string, isError bool).
 func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (string, bool) {
 	str := func(key string) string {
@@ -479,6 +588,9 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 	}
 
 	switch name {
+	case "search_tools":
+		return executeSearchTools(str("query"), ctx), false
+
 	case "read_file":
 		path, err := resolveWorkspacePath(ctx.ProjectPath, str("path"))
 		if err != nil {
@@ -892,11 +1004,15 @@ func Chat(ctx *ChatContext, userMessage string) {
 	windowResult := BuildAttentionConversationWindow(history, userMessage, openTabs, residualProfile)
 	messages := windowResult.Messages
 
+	// Initialise the active tool set to the bootstrap minimum.
+	// The model discovers additional tools by calling search_tools.
+	ctx.ActiveTools = bootstrapTools()
+
 	// Build system prompt
 	branch, _ := gogit.GetCurrentBranch(ctx.ProjectPath)
 	systemLines := []string{
 		"You are the AI assistant for Engine — an AI-native code editor.",
-		"You ARE the editor. You have full control: read files, write files, run commands, search code, commit changes.",
+		"You ARE the editor. You have full control over the project.",
 		"",
 		fmt.Sprintf("Project: %s", ctx.ProjectPath),
 		fmt.Sprintf("Branch: %s", branch),
@@ -907,18 +1023,24 @@ func Chat(ctx *ChatContext, userMessage string) {
 	}
 	systemLines = append(systemLines,
 		"",
-		"Key principles:",
+		"## Tool discovery",
+		"You start each request with only three tools: search_tools, read_file, list_directory.",
+		"Before executing any task, call search_tools with a description of what you need to do.",
+		"search_tools injects the matching schemas into your active tool set immediately — no extra round-trip needed.",
+		"Examples:",
+		"  search_tools(\"write files to disk\")      → unlocks write_file",
+		"  search_tools(\"run shell commands build\")  → unlocks shell, test.run",
+		"  search_tools(\"git commit push status\")    → unlocks git_status, git_diff, git_commit",
+		"  search_tools(\"github issues\")             → unlocks github_* tools",
+		"Plan first, discover the tools you need, then execute. Do not call tools you haven't discovered.",
+		"",
+		"## Principles",
 		"- Always validate changes by running the code, not just checking syntax",
-		"- Use shell to run tests, builds, and observe real output",
-		"- Use get_system_info to check resource pressure before intensive operations",
-		"- Use list_open_tabs to understand what the user is focused on",
-		"- Prefer residual-weighted context over raw recency when older workspace history is clearly more relevant",
-		"- Use search_history when older workspace decisions, prior debugging, or past validation may matter",
 		"- File operations are confined to the current project root unless the user explicitly elevates them",
 		"- Risky shell commands and git commits require explicit user approval",
 		"- When you open a file, the user sees it in Engine immediately",
 		"- Be decisive: fix problems completely, not just symptoms",
-		"- Use github_list_issues, github_get_issue, github_close_issue to interact with GitHub issues",
+		"- Use search_history when prior workspace decisions or debugging context may matter",
 	)
 
 	systemPrompt := strings.Join(systemLines, "\n")
@@ -985,7 +1107,7 @@ func runAnthropicLoop(
 			MaxTokens: 8192,
 			System:    systemPrompt,
 			Messages:  windowed,
-			Tools:     tools,
+			Tools:     ctx.ActiveTools, // live set — grows as model calls search_tools
 			Stream:    true,
 		}
 
@@ -1230,12 +1352,15 @@ func runOpenAICompatibleLoop(
 		msgs = append(msgs, openAIMessage{Role: m.Role, Content: content})
 	}
 
-	oaiTools := openAIToolsFrom(tools)
+	oaiTools := openAIToolsFrom(ctx.ActiveTools)
 
 	for {
 		if ctx.isCancelled() {
 			return
 		}
+
+		// Rebuild OAI tools each iteration — search_tools may have added new ones.
+		oaiTools = openAIToolsFrom(ctx.ActiveTools)
 
 		windowed := msgs
 		if len(windowed) > 51 { // 1 system + 50 conversation
@@ -1350,26 +1475,34 @@ func runOpenAICompatibleLoop(
 
 		// Build assistant message with tool_calls if any
 		if len(toolCallMap) > 0 {
-			type oaiTC struct {
-				ID       string `json:"id"`
-				Type     string `json:"type"`
-				Function struct {
+		// Assign synthetic IDs to any tool calls that Ollama/Gemma emitted without one.
+		// An empty id in the assistant message causes Ollama to reject the continuation (400).
+		for i, tcd := range toolCallMap {
+			if tcd != nil && tcd.id == "" {
+				toolCallMap[i].id = fmt.Sprintf("call_%s_%d", tcd.name, i)
+			}
+		}
+
+		type oaiTC struct {
+			ID       string `json:"id"`
+			Type     string `json:"type"`
+			Function struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			} `json:"function"`
+		}
+		tcsSlice := make([]oaiTC, len(toolCallMap))
+		for i, tcd := range toolCallMap {
+			tcsSlice[i] = oaiTC{
+				ID:   tcd.id,
+				Type: "function",
+				Function: struct {
 					Name      string `json:"name"`
 					Arguments string `json:"arguments"`
-				} `json:"function"`
+				}{Name: tcd.name, Arguments: tcd.args.String()},
 			}
-			tcsSlice := make([]oaiTC, len(toolCallMap))
-			for i, tcd := range toolCallMap {
-				tcsSlice[i] = oaiTC{
-					ID:   tcd.id,
-					Type: "function",
-					Function: struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					}{Name: tcd.name, Arguments: tcd.args.String()},
-				}
-			}
-			msgs = append(msgs, openAIMessage{Role: "assistant", ToolCalls: tcsSlice})
+		}
+		msgs = append(msgs, openAIMessage{Role: "assistant", ToolCalls: tcsSlice})
 		} else if textBuf.Len() > 0 {
 			msgs = append(msgs, openAIMessage{Role: "assistant", Content: textBuf.String()})
 		}
@@ -1378,19 +1511,30 @@ func runOpenAICompatibleLoop(
 			break
 		}
 
-		// Execute tools and add results
+		// Execute tools and add results.
+		// Tool call error codes (compact, to avoid clogging context):
+		//   E1 = bad JSON arguments   E2 = unknown tool   E3 = execution error
 		for i := 0; i < len(toolCallMap); i++ {
 			tcd := toolCallMap[i]
 			if tcd == nil {
 				continue
 			}
-			var inputMap map[string]interface{}
-			json.Unmarshal([]byte(tcd.args.String()), &inputMap) //nolint:errcheck
-			if inputMap == nil {
-				inputMap = map[string]interface{}{}
-			}
-			ctx.OnToolCall(tcd.name, inputMap)
 
+			var inputMap map[string]interface{}
+			argsStr := tcd.args.String()
+			if argsStr == "" || argsStr == "null" {
+				argsStr = "{}"
+			}
+			if err := json.Unmarshal([]byte(argsStr), &inputMap); err != nil || inputMap == nil {
+				// E1: malformed args — feed compact error back, skip execution
+				errMsg := fmt.Sprintf("E1: invalid JSON arguments for %s. Correct the arguments and retry.", tcd.name)
+				ctx.OnToolCall(tcd.name, map[string]interface{}{"_raw": argsStr})
+				ctx.OnToolResult(tcd.name, errMsg, true)
+				msgs = append(msgs, openAIMessage{Role: "tool", ToolCallID: tcd.id, Content: errMsg})
+				continue
+			}
+
+			ctx.OnToolCall(tcd.name, inputMap)
 			start := time.Now()
 			result, isError := executeTool(tcd.name, inputMap, ctx)
 			durationMs := time.Since(start).Milliseconds()

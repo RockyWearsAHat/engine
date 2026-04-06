@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useStore } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
 import { randomUUID } from '../../utils.js';
-import { ArrowUp, ChevronDown, ChevronRight, Loader2, Check, X, Wrench, Square, ArrowDown } from 'lucide-react';
+import { ArrowUp, ChevronDown, ChevronRight, Loader2, Check, X, Wrench, Square, ArrowDown, RotateCcw } from 'lucide-react';
 
 export default function AIChat() {
   const { activeSession, chatMessages, addUserMessage, streamingMessageId } = useStore();
@@ -60,6 +60,23 @@ export default function AIChat() {
     if (!activeSession || !streamingMessageId) return;
     wsClient.send({ type: 'chat.stop', sessionId: activeSession.id });
   }, [activeSession, streamingMessageId]);
+
+  // Retry: find the last user message before a failed assistant message and resend it.
+  const retry = useCallback((failedMsgId: string) => {
+    if (!activeSession || streamingMessageId) return;
+    const msgs = useStore.getState().chatMessages;
+    const failedIdx = msgs.findIndex(m => m.id === failedMsgId);
+    // Walk backwards to find the preceding user message
+    let userMsg: string | null = null;
+    for (let i = failedIdx - 1; i >= 0; i--) {
+      if (msgs[i].role === 'user') { userMsg = msgs[i].content; break; }
+    }
+    if (!userMsg) return;
+    const msgId = randomUUID();
+    addUserMessage(msgId, userMsg);
+    wsClient.send({ type: 'chat', sessionId: activeSession.id, content: userMsg });
+    forceScrollRef.current = true;
+  }, [activeSession, streamingMessageId, addUserMessage]);
 
   const handleKey = (e: React.KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -185,6 +202,21 @@ export default function AIChat() {
                     <div className="chat-bubble">
                       <MarkdownText text={msg.content} />
                     </div>
+                  )}
+                  {msg.failed && !streamingMessageId && (
+                    <button
+                      onClick={() => retry(msg.id)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 5,
+                        marginTop: 6, padding: '4px 10px',
+                        borderRadius: 6, border: '1px solid var(--border)',
+                        background: 'transparent', color: 'var(--tx-3)',
+                        fontSize: 11, cursor: 'pointer',
+                      }}
+                      title="Retry this request"
+                    >
+                      <RotateCcw size={11} /> Try again
+                    </button>
                   )}
                   {msg.id === streamingMessageId && !msg.content && (
                     <div style={{ padding: '6px 0', display: 'flex', gap: 3 }}>
