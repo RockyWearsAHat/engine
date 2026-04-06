@@ -324,19 +324,64 @@ function ToolBadge({ toolCall, expanded, onToggle }: {
   );
 }
 
+const CODE_STYLE: React.CSSProperties = {
+  fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
+  background: 'var(--surface-3)', padding: '1px 4px',
+  borderRadius: 3, color: 'var(--accent-2)',
+};
+
+/** Tokenise inline markdown: **bold**, *italic*, `code`, ~~strike~~ */
+function inlineFormat(text: string): React.ReactNode {
+  const tokens: React.ReactNode[] = [];
+  // Order matters: ** before * so bold is consumed first
+  const re = /(\*\*[^*\n]+\*\*|~~[^~\n]+~~|\*[^*\n]+\*|`[^`\n]+`)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) tokens.push(text.slice(last, m.index));
+    const raw = m[0];
+    if (raw.startsWith('**'))
+      tokens.push(<strong key={m.index}>{raw.slice(2, -2)}</strong>);
+    else if (raw.startsWith('~~'))
+      tokens.push(<span key={m.index} style={{ textDecoration: 'line-through' }}>{raw.slice(2, -2)}</span>);
+    else if (raw.startsWith('`'))
+      tokens.push(<code key={m.index} style={CODE_STYLE}>{raw.slice(1, -1)}</code>);
+    else if (raw.startsWith('*'))
+      tokens.push(<em key={m.index}>{raw.slice(1, -1)}</em>);
+    last = m.index + raw.length;
+  }
+  if (last < text.length) tokens.push(text.slice(last));
+  return tokens.length === 1 ? tokens[0] : <>{tokens}</>;
+}
+
 function MarkdownText({ text }: { text: string }) {
   const lines = text.split('\n');
   const elements: React.ReactNode[] = [];
   let codeBlock: string[] = [];
   let inCode = false;
+  let listItems: React.ReactNode[] = [];
+  let listType: 'ul' | 'ol' | null = null;
+  let listKey = 0;
+
+  const flushList = () => {
+    if (!listItems.length) return;
+    const tag = listType === 'ol' ? 'ol' : 'ul';
+    elements.push(
+      tag === 'ol'
+        ? <ol key={`list-${listKey++}`} style={{ margin: '4px 0', paddingLeft: 20, lineHeight: 1.7 }}>{listItems}</ol>
+        : <ul key={`list-${listKey++}`} style={{ margin: '4px 0', paddingLeft: 20, lineHeight: 1.7 }}>{listItems}</ul>
+    );
+    listItems = [];
+    listType = null;
+  };
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+
+    // Fenced code block
     if (line.startsWith('```')) {
-      if (!inCode) {
-        inCode = true;
-        codeBlock = [];
-      } else {
+      if (!inCode) { flushList(); inCode = true; codeBlock = []; }
+      else {
         elements.push(
           <pre key={i} style={{
             background: 'var(--surface-2)', border: '1px solid var(--border)',
@@ -347,34 +392,71 @@ function MarkdownText({ text }: { text: string }) {
             <code>{codeBlock.join('\n')}</code>
           </pre>
         );
-        inCode = false;
-        codeBlock = [];
+        inCode = false; codeBlock = [];
       }
-    } else if (inCode) {
-      codeBlock.push(line);
-    } else if (line.trim() === '') {
-      elements.push(<br key={i} />);
-    } else {
-      elements.push(
-        <span key={i} style={{ display: 'block' }}>
-          {inlineFormat(line)}
-        </span>
-      );
+      continue;
     }
+    if (inCode) { codeBlock.push(line); continue; }
+
+    // Blank line
+    if (line.trim() === '') { flushList(); elements.push(<br key={i} />); continue; }
+
+    // Headings
+    const hm = line.match(/^(#{1,3}) (.+)/);
+    if (hm) {
+      flushList();
+      const lvl = hm[1].length;
+      const sz = lvl === 1 ? 16 : lvl === 2 ? 14 : 12.5;
+      const mt = lvl === 1 ? '10px' : '8px';
+      elements.push(
+        <div key={i} style={{ fontWeight: 700, fontSize: sz, margin: `${mt} 0 4px`, color: 'var(--tx)', lineHeight: 1.4 }}>
+          {inlineFormat(hm[2])}
+        </div>
+      );
+      continue;
+    }
+
+    // Horizontal rule
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(line.trim())) {
+      flushList();
+      elements.push(<hr key={i} style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '8px 0' }} />);
+      continue;
+    }
+
+    // Blockquote
+    if (line.startsWith('> ')) {
+      flushList();
+      elements.push(
+        <div key={i} style={{ borderLeft: '2px solid var(--accent-2)', paddingLeft: 10, margin: '3px 0', color: 'var(--tx-2)', fontStyle: 'italic' }}>
+          {inlineFormat(line.slice(2))}
+        </div>
+      );
+      continue;
+    }
+
+    // Unordered list
+    const ulm = line.match(/^[ \t]*[-*+] (.+)/);
+    if (ulm) {
+      if (listType !== 'ul') flushList();
+      listType = 'ul';
+      listItems.push(<li key={i} style={{ marginBottom: 2 }}>{inlineFormat(ulm[1])}</li>);
+      continue;
+    }
+
+    // Ordered list
+    const olm = line.match(/^[ \t]*\d+\. (.+)/);
+    if (olm) {
+      if (listType !== 'ol') flushList();
+      listType = 'ol';
+      listItems.push(<li key={i} style={{ marginBottom: 2 }}>{inlineFormat(olm[1])}</li>);
+      continue;
+    }
+
+    // Plain text
+    flushList();
+    elements.push(<span key={i} style={{ display: 'block' }}>{inlineFormat(line)}</span>);
   }
 
+  flushList();
   return <>{elements}</>;
-}
-
-function inlineFormat(text: string): React.ReactNode {
-  const parts = text.split(/(`[^`]+`)/);
-  return parts.map((part, i) =>
-    part.startsWith('`') && part.endsWith('`')
-      ? <code key={i} style={{
-          fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
-          background: 'var(--surface-3)', padding: '1px 4px',
-          borderRadius: 3, color: 'var(--accent-2)',
-        }}>{part.slice(1, -1)}</code>
-      : part
-  );
 }
