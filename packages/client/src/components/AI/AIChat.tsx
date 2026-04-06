@@ -2,18 +2,46 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useStore } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
 import { randomUUID } from '../../utils.js';
-import { ArrowUp, ChevronDown, ChevronRight, Loader2, Check, X, Wrench } from 'lucide-react';
+import { ArrowUp, ChevronDown, ChevronRight, Loader2, Check, X, Wrench, Square, ArrowDown } from 'lucide-react';
 
 export default function AIChat() {
   const { activeSession, chatMessages, addUserMessage, streamingMessageId } = useStore();
   const [input, setInput] = useState('');
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // True when the user is already scrolled to (or near) the bottom.
+  const isAtBottomRef = useRef(true);
+  // Set to true when the user explicitly sends a message so we force-scroll once.
+  const forceScrollRef = useRef(false);
 
+  // Track scroll position to decide whether to auto-scroll on new content.
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    isAtBottomRef.current = distanceFromBottom < 48;
+    setShowScrollBtn(!isAtBottomRef.current && !!streamingMessageId);
+  }, [streamingMessageId]);
+
+  // Auto-scroll when messages update — only if already at bottom or forced.
   useEffect(() => {
+    if (forceScrollRef.current || isAtBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: forceScrollRef.current ? 'auto' : 'smooth' });
+      forceScrollRef.current = false;
+    } else if (streamingMessageId) {
+      // New content arrived while user is scrolled up — show the FAB.
+      setShowScrollBtn(true);
+    }
+  }, [chatMessages, streamingMessageId]);
+
+  const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages]);
+    isAtBottomRef.current = true;
+    setShowScrollBtn(false);
+  }, []);
 
   const send = useCallback(() => {
     const content = input.trim();
@@ -22,10 +50,16 @@ export default function AIChat() {
     addUserMessage(msgId, content);
     wsClient.send({ type: 'chat', sessionId: activeSession.id, content });
     setInput('');
+    forceScrollRef.current = true;
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
   }, [input, activeSession, addUserMessage]);
+
+  const cancel = useCallback(() => {
+    if (!activeSession || !streamingMessageId) return;
+    wsClient.send({ type: 'chat.stop', sessionId: activeSession.id });
+  }, [activeSession, streamingMessageId]);
 
   const handleKey = (e: React.KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -106,7 +140,12 @@ export default function AIChat() {
         </div>
       )}
 
-      <div className="chat-messages">
+      <div
+        ref={scrollContainerRef}
+        className="chat-messages"
+        onScroll={handleScroll}
+        style={{ position: 'relative' }}
+      >
         {chatMessages.length === 0 && (
           <div className="empty-state" style={{ paddingTop: 32 }}>
             <div style={{
@@ -167,6 +206,36 @@ export default function AIChat() {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Jump-to-bottom FAB — only visible when scrolled up during streaming */}
+      {showScrollBtn && (
+        <button
+          onClick={scrollToBottom}
+          style={{
+            position: 'absolute',
+            bottom: 72,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 10,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+            padding: '5px 12px',
+            borderRadius: 20,
+            border: '1px solid var(--border)',
+            background: 'var(--surface)',
+            color: 'var(--tx-2)',
+            fontSize: 11,
+            fontWeight: 500,
+            cursor: 'pointer',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+          }}
+          title="Jump to latest"
+        >
+          <ArrowDown size={12} />
+          Jump to latest
+        </button>
+      )}
+
       <div className="chat-input-area">
         <div className="chat-input-wrap">
           <textarea
@@ -182,16 +251,25 @@ export default function AIChat() {
             onKeyDown={handleKey}
             rows={1}
           />
-          <button
-            className="chat-send-btn"
-            onClick={send}
-            disabled={!input.trim() || noSession}
-            title="Send"
-          >
-            {streamingMessageId
-              ? <Loader2 size={14} className="animate-spin" />
-              : <ArrowUp size={14} />}
-          </button>
+          {streamingMessageId ? (
+            <button
+              className="chat-send-btn"
+              onClick={cancel}
+              title="Stop generating"
+              style={{ background: 'transparent', border: '1px solid var(--red)', color: 'var(--red)' }}
+            >
+              <Square size={12} style={{ fill: 'currentColor' }} />
+            </button>
+          ) : (
+            <button
+              className="chat-send-btn"
+              onClick={send}
+              disabled={!input.trim() || noSession}
+              title="Send"
+            >
+              <ArrowUp size={14} />
+            </button>
+          )}
         </div>
       </div>
     </div>

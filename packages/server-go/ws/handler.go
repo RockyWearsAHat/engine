@@ -68,6 +68,10 @@ type conn struct {
 	tabsMu   sync.RWMutex
 	openTabs []ai.TabInfo
 
+	// chatCancelMu guards the chatCancelFns map.
+	chatCancelMu  sync.Mutex
+	chatCancelFns map[string]func() // keyed by sessionID
+
 	writeMu sync.Mutex
 }
 
@@ -111,6 +115,7 @@ func newConn(ws *websocket.Conn, projectPath string) *conn {
 		termMgr:         terminal.NewManager(),
 		termIDs:         make(map[string]bool),
 		approvalWaiters: make(map[string]chan bool),
+		chatCancelFns:   make(map[string]func()),
 	}
 }
 
@@ -346,9 +351,28 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		}
 		sessionID := session.ID
 		projectPath = session.ProjectPath
+
+		// Create a cancel channel for this request so the client can stop it.
+		cancelCh := make(chan struct{})
+		c.chatCancelMu.Lock()
+		if old, ok := c.chatCancelFns[sessionID]; ok {
+			old() // cancel any previous in-flight request for this session
+		}
+		c.chatCancelFns[sessionID] = func() { close(cancelCh) }
+		c.chatCancelMu.Unlock()
+
 		c.send(map[string]interface{}{"type": "chat.started", "sessionId": sessionID})
 		go func() {
 			defer func() {
+				// Remove cancel fn when goroutine exits.
+				c.chatCancelMu.Lock()
+				if fn, ok := c.chatCancelFns[sessionID]; ok {
+					// Only delete if it's still the same channel (not replaced by a newer request).
+					_ = fn
+					delete(c.chatCancelFns, sessionID)
+				}
+				c.chatCancelMu.Unlock()
+
 				if r := recover(); r != nil {
 					log.Printf("[engine] ws: panic in AI chat goroutine: %v", r)
 					c.send(map[string]interface{}{
@@ -361,6 +385,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			runAIChat(&ai.ChatContext{
 				ProjectPath: projectPath,
 				SessionID:   sessionID,
+				Cancel:      cancelCh,
 				OnChunk: func(content string, done bool) {
 					c.send(map[string]interface{}{"type": "chat.chunk", "sessionId": sessionID, "content": content, "done": done})
 				},
@@ -395,6 +420,20 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 				},
 			}, msg.Content)
 		}()
+
+	case "chat.stop":
+		var msg struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil || msg.SessionID == "" {
+			return
+		}
+		c.chatCancelMu.Lock()
+		if fn, ok := c.chatCancelFns[msg.SessionID]; ok {
+			fn()
+			delete(c.chatCancelFns, msg.SessionID)
+		}
+		c.chatCancelMu.Unlock()
 
 	case "approval.respond":
 		var msg struct {
