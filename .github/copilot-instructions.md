@@ -21,7 +21,7 @@ Engine is an AI-native code editor. AI is not bolted onto a text editor — it i
 - The editor wraps AI capabilities as first-class primitives, not extensions
 - Session history and project direction are stored persistently, not just in-memory
 - Agent orchestration is a core subsystem, not a plugin
-- Go server now includes a Discord control-plane module for private remote commands (see `.github/DISCORD_CONTROL_PLANE.md`)
+- Go server now includes a Discord control-plane module for private remote commands with project-local config in `.engine/discord.json` (see `.github/DISCORD_CONTROL_PLANE.md`)
 
 ## What AI Should Do
 - Always reference project direction and prior conversation context before acting

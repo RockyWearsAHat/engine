@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "botToken": "paste-discord-bot-token-here",
+  "guildId": "paste-private-server-id-here",
+  "allowedUserIds": [
+    "paste-your-discord-user-id-here"
+  ],
+  "commandPrefix": "!",
+  "controlChannelName": "engine-control"
+}
