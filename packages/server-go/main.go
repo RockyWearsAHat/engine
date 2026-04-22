@@ -48,7 +48,16 @@ func main() {
 		if err := discordService.Start(); err != nil {
 			log.Fatalf("Failed to start Discord service: %v", err)
 		}
+		ws.SetDiscordBridge(discordService)
 		defer discordService.Close() //nolint:errcheck
+	} else {
+		// Even when disabled, allow the UI to save/validate config via WS by
+		// wiring a stub that proxies only the bridge methods relying on the
+		// config + archive. We construct a non-started service so CurrentConfig
+		// and history queries work.
+		if stub, err := discord.NewService(cfg, projectPath); err == nil {
+			ws.SetDiscordBridge(stub)
+		}
 	}
 
 	// VPN tunnel mode: ENGINE_VPN=1 starts Ed25519-authenticated tunnel on top of TLS
