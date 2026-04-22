@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Bot,
   Check,
@@ -107,6 +107,24 @@ export default function PreferencesPanel() {
   const [discordValidation, setDiscordValidation] = useState<DiscordValidationResult | null>(null);
   const [discordValidating, setDiscordValidating] = useState(false);
   const [discordActive, setDiscordActive] = useState(false);
+  const [activeSection, setActiveSection] = useState('desktop-services');
+
+  const sections = [
+    { id: 'desktop-services', label: 'Desktop' },
+    { id: 'machine-connections', label: 'Machines' },
+    { id: 'editor-appearance', label: 'Editor' },
+    { id: 'github-wiring', label: 'GitHub' },
+    { id: 'model-provider', label: 'Model' },
+    { id: 'discord-control', label: 'Discord' },
+  ] as const;
+
+  const jumpToSection = useCallback((id: string) => {
+    setActiveSection(id);
+    const element = document.getElementById(id);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, []);
 
   useEffect(() => {
     const unsub = wsClient.onMessage((msg: unknown) => {
@@ -264,15 +282,16 @@ export default function PreferencesPanel() {
 
   const inputStyle: React.CSSProperties = {
     width: '100%',
-    background: 'rgba(9, 11, 16, 0.82)',
-    border: '1px solid rgba(255,255,255,0.08)',
-    borderRadius: 3,
-    padding: '7px 10px',
+    background: 'rgba(9, 11, 16, 0.6)',
+    border: '1px solid rgba(255, 255, 255, 0.08)',
+    borderRadius: 4,
+    padding: '9px 12px',
     color: 'var(--tx)',
     fontSize: 12,
     fontFamily: 'inherit',
     outline: 'none',
     boxSizing: 'border-box',
+    transition: 'all 120ms ease',
   };
 
   return (
@@ -291,7 +310,22 @@ export default function PreferencesPanel() {
         />
       </div>
 
-      <section className="preferences-card preferences-extensions">
+      <div className="preferences-nav" role="tablist" aria-label="Settings sections">
+        {sections.map((section) => (
+          <button
+            key={section.id}
+            type="button"
+            role="tab"
+            aria-selected={activeSection === section.id}
+            className={`preferences-nav-btn ${activeSection === section.id ? 'active' : ''}`}
+            onClick={() => jumpToSection(section.id)}
+          >
+            {section.label}
+          </button>
+        ))}
+      </div>
+
+      <section id="desktop-services" className="preferences-card preferences-extensions">
         <div className="preferences-card-header">
           <div className="preferences-card-title">
             <ServerCog size={15} />
@@ -339,18 +373,27 @@ export default function PreferencesPanel() {
         </div>
       </section>
 
-      <div className="preferences-connections">
+      <div id="machine-connections" className="preferences-connections">
         <MachineConnectionsPanel compact />
       </div>
 
       <div className="preferences-grid">
-        <section className="preferences-card">
+        <section id="editor-appearance" className="preferences-card">
           <div className="preferences-card-header">
             <div className="preferences-card-title">
               <Type size={15} />
               Editor appearance
             </div>
-            <SaveBadge label="Live preview" active={saved === 'editor'} />
+            <div className="preferences-inline-actions">
+              <SaveBadge label="Live preview" active={saved === 'editor'} />
+              <button
+                className="btn-secondary"
+                style={{ width: 'fit-content' }}
+                onClick={() => void updateEditorPreferences(DEFAULT_EDITOR_PREFERENCES)}
+              >
+                Reset defaults
+              </button>
+            </div>
           </div>
 
           <div className="preferences-row">
@@ -466,7 +509,7 @@ export default function PreferencesPanel() {
           />
         </section>
 
-        <section className="preferences-card">
+        <section id="github-wiring" className="preferences-card">
           <div className="preferences-card-header">
             <div className="preferences-card-title">
               <FolderGit2 size={15} />
@@ -554,7 +597,7 @@ export default function PreferencesPanel() {
           </div>
         </section>
 
-        <section className="preferences-card">
+        <section id="model-provider" className="preferences-card">
           <div className="preferences-card-header">
             <div className="preferences-card-title">
               <Bot size={15} />
@@ -700,7 +743,7 @@ export default function PreferencesPanel() {
           </div>
         </section>
 
-        <section className="preferences-card">
+        <section id="discord-control" className="preferences-card">
           <div className="preferences-card-header">
             <div className="preferences-card-title">
               <MessageSquare size={15} />
