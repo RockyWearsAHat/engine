@@ -124,6 +124,51 @@ func migrate() error {
 			ON attention_residuals(session_id, created_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_attention_residuals_source_key_created
 			ON attention_residuals(source_key, created_at DESC);
+		CREATE TABLE IF NOT EXISTS discord_messages (
+			id            TEXT PRIMARY KEY,
+			project_path  TEXT NOT NULL,
+			channel_id    TEXT NOT NULL DEFAULT '',
+			thread_id     TEXT NOT NULL DEFAULT '',
+			session_id    TEXT NOT NULL DEFAULT '',
+			author_id     TEXT NOT NULL DEFAULT '',
+			author_name   TEXT NOT NULL DEFAULT '',
+			direction     TEXT NOT NULL DEFAULT 'in',
+			kind          TEXT NOT NULL DEFAULT 'message',
+			content       TEXT NOT NULL DEFAULT '',
+			created_at    TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_discord_messages_project_created
+			ON discord_messages(project_path, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_discord_messages_thread_created
+			ON discord_messages(thread_id, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_discord_messages_session_created
+			ON discord_messages(session_id, created_at DESC);
+		CREATE VIRTUAL TABLE IF NOT EXISTS discord_messages_fts USING fts5(
+			content,
+			author_name,
+			content='discord_messages',
+			content_rowid='rowid',
+			tokenize='porter unicode61'
+		);
+		CREATE TRIGGER IF NOT EXISTS discord_messages_ai AFTER INSERT ON discord_messages BEGIN
+			INSERT INTO discord_messages_fts(rowid, content, author_name)
+			VALUES (new.rowid, new.content, new.author_name);
+		END;
+		CREATE TRIGGER IF NOT EXISTS discord_messages_ad AFTER DELETE ON discord_messages BEGIN
+			INSERT INTO discord_messages_fts(discord_messages_fts, rowid, content, author_name)
+			VALUES ('delete', old.rowid, old.content, old.author_name);
+		END;
+		CREATE TABLE IF NOT EXISTS discord_session_threads (
+			session_id   TEXT PRIMARY KEY,
+			project_path TEXT NOT NULL,
+			thread_id    TEXT NOT NULL,
+			channel_id   TEXT NOT NULL DEFAULT '',
+			created_at   TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_discord_session_threads_thread
+			ON discord_session_threads(thread_id);
+		CREATE INDEX IF NOT EXISTS idx_discord_session_threads_project
+			ON discord_session_threads(project_path, created_at DESC);
 	`)
 	return err
 }

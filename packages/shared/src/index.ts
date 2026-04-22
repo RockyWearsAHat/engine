@@ -73,6 +73,49 @@ export interface RuntimeConfig {
   model?: string | null;
 }
 
+// Discord control plane types (kept separate from RuntimeConfig because
+// Discord config is persisted to `.engine/discord.json` rather than
+// mirrored into env vars).
+export interface DiscordConfig {
+  enabled: boolean;
+  /** Outgoing field only — when sending, null/'' means "keep current". */
+  botToken: string;
+  /** Read-only server-side mask for display. */
+  botTokenMasked?: string;
+  guildId: string;
+  allowedUserIds: string[];
+  commandPrefix: string;
+  controlChannelName: string;
+  hasToken?: boolean;
+}
+
+export interface DiscordValidationResult {
+  ok: boolean;
+  enabled: boolean;
+  guildName?: string;
+  botTag?: string;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface DiscordMessageRecord {
+  id: string;
+  projectPath: string;
+  channelId: string;
+  threadId: string;
+  sessionId: string;
+  authorId: string;
+  authorName: string;
+  direction: 'in' | 'out';
+  kind: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface DiscordSearchHit extends DiscordMessageRecord {
+  snippet: string;
+}
+
 // Git types
 export interface GitStatus {
   branch: string;

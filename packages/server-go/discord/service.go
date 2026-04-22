@@ -258,6 +258,11 @@ func (s *Service) onMessage(_ *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
+	// Archive every allowed inbound message, regardless of whether it parses as
+	// a command. This gives agents a comprehensive searchable history of what
+	// has been said in the server — without ever feeding it back wholesale.
+	s.recordInbound(m)
+
 	cmd, args, ok := parseCommand(m.Content, s.cfg.CommandPrefix)
 	if !ok {
 		return
@@ -282,6 +287,10 @@ func (s *Service) onMessage(_ *discordgo.Session, m *discordgo.MessageCreate) {
 		s.handlePauseResume(m, false, args)
 	case "ask":
 		s.handleAskCommand(m, args)
+	case "search":
+		s.handleSearchCommand(m, args)
+	case "history":
+		s.handleHistoryCommand(m, args)
 	default:
 		s.send(m.ChannelID, "Unknown command. Use !help.")
 	}
@@ -527,28 +536,33 @@ func (s *Service) handleAskCommand(m *discordgo.MessageCreate, args []string) {
 		return
 	}
 
-	s.activeMu.Lock()
-	if s.active[binding.ProjectPath] {
-		s.activeMu.Unlock()
-		s.send(m.ChannelID, "A task is already running for this project. Wait for it to finish.")
+	// Thread routing: every !ask spawns (or reuses) a dedicated thread under
+	// the project channel, giving each chat session its own searchable
+	// transcript. If the user is already inside a thread, reuse it so
+	// follow-up messages stay in the same session.
+	threadID, sessionID, err := s.acquireChatThread(m, binding, prompt)
+	if err != nil {
+		s.send(m.ChannelID, "Could not start chat thread: "+err.Error())
 		return
 	}
-	s.active[binding.ProjectPath] = true
+	replyChannelID := threadID
+
+	s.activeMu.Lock()
+	if s.active[sessionID] {
+		s.activeMu.Unlock()
+		s.send(replyChannelID, "A task is already running for this session. Wait for it to finish.")
+		return
+	}
+	s.active[sessionID] = true
 	s.activeMu.Unlock()
 
-	s.send(m.ChannelID, "Running agent request...")
+	s.send(replyChannelID, "Running agent request...")
 	go func() {
 		defer func() {
 			s.activeMu.Lock()
-			delete(s.active, binding.ProjectPath)
+			delete(s.active, sessionID)
 			s.activeMu.Unlock()
 		}()
-
-		sessionID, err := ensureSession(binding.ProjectPath)
-		if err != nil {
-			s.send(m.ChannelID, "Failed to open session: "+err.Error())
-			return
-		}
 
 		var outMu sync.Mutex
 		var output strings.Builder
@@ -569,11 +583,9 @@ func (s *Service) handleAskCommand(m *discordgo.MessageCreate, args []string) {
 				output.WriteString(content)
 				outMu.Unlock()
 			},
-			OnToolCall: func(_ string, _ interface{}) {},
-			OnToolResult: func(_ string, _ interface{}, _ bool) {},
-			OnError: func(err string) {
-				lastErr = strings.TrimSpace(err)
-			},
+			OnToolCall:       func(_ string, _ interface{}) {},
+			OnToolResult:     func(_ string, _ interface{}, _ bool) {},
+			OnError:          func(err string) { lastErr = strings.TrimSpace(err) },
 			OnSessionUpdated: func(_ *db.Session) {},
 			RequestApproval: func(kind, title, message, command string) (bool, error) {
 				_ = kind
@@ -585,7 +597,7 @@ func (s *Service) handleAskCommand(m *discordgo.MessageCreate, args []string) {
 		}, prompt)
 
 		if strings.TrimSpace(lastErr) != "" {
-			s.send(m.ChannelID, "Agent error: "+lastErr)
+			s.send(replyChannelID, "Agent error: "+lastErr)
 			return
 		}
 
@@ -597,9 +609,294 @@ func (s *Service) handleAskCommand(m *discordgo.MessageCreate, args []string) {
 		}
 
 		for _, part := range splitForDiscord(answer, maxDiscordMessageChars) {
-			s.send(m.ChannelID, part)
+			s.sendTagged(replyChannelID, part, "agent", sessionID)
 		}
 	}()
+}
+
+// acquireChatThread returns the thread ID the chat should post to and the
+// session ID tied to it. If the caller is already inside a thread, reuse it;
+// otherwise create a new thread under the project channel and bind it to a
+// fresh session.
+func (s *Service) acquireChatThread(m *discordgo.MessageCreate, binding ProjectBinding, prompt string) (string, string, error) {
+	if s.dg == nil {
+		return "", "", fmt.Errorf("discord session not open")
+	}
+
+	// If the invoking message is already inside a thread, reuse its session.
+	ch, err := s.dg.Channel(m.ChannelID)
+	if err == nil && ch != nil && isThread(ch) {
+		threadID := ch.ID
+		existing, _ := db.DiscordGetSessionByThread(threadID) //nolint:errcheck
+		if existing != nil && strings.TrimSpace(existing.SessionID) != "" {
+			return threadID, existing.SessionID, nil
+		}
+		sessionID, err := s.newSessionForThread(binding.ProjectPath, threadID, binding.ChannelID)
+		if err != nil {
+			return "", "", err
+		}
+		return threadID, sessionID, nil
+	}
+
+	// Otherwise, create a new thread under the project channel.
+	threadName := buildThreadName(prompt)
+	thread, err := s.dg.ThreadStart(binding.ChannelID, threadName, discordgo.ChannelTypeGuildPublicThread, 60*24)
+	if err != nil {
+		return "", "", fmt.Errorf("create thread: %w", err)
+	}
+	sessionID, err := s.newSessionForThread(binding.ProjectPath, thread.ID, binding.ChannelID)
+	if err != nil {
+		return "", "", err
+	}
+	// Echo the invoking prompt into the new thread so the transcript is
+	// self-contained.
+	s.sendTagged(thread.ID, "Chat started by "+m.Author.Username+":\n> "+truncate(prompt, 600), "message", sessionID)
+	return thread.ID, sessionID, nil
+}
+
+func (s *Service) newSessionForThread(projectPath, threadID, channelID string) (string, error) {
+	id := fmt.Sprintf("discord-%d", time.Now().UnixNano())
+	branch, _ := gogit.GetCurrentBranch(projectPath)
+	if err := db.CreateSession(id, projectPath, branch); err != nil {
+		return "", err
+	}
+	if summary := ai.BuildInitialSessionSummary(projectPath); summary != "" {
+		db.UpdateSessionSummary(id, summary) //nolint:errcheck
+	}
+	if err := db.DiscordBindSessionThread(id, projectPath, threadID, channelID); err != nil {
+		return "", fmt.Errorf("bind thread: %w", err)
+	}
+	return id, nil
+}
+
+func (s *Service) handleSearchCommand(m *discordgo.MessageCreate, args []string) {
+	if len(args) == 0 {
+		s.send(m.ChannelID, "Usage: !search <query>")
+		return
+	}
+	binding, ok := s.resolveProjectForMessage(m.ChannelID, nil)
+	projectPath := ""
+	if ok {
+		projectPath = binding.ProjectPath
+	}
+	query := strings.Join(args, " ")
+	hits, err := db.DiscordSearchMessages(projectPath, query, "", 10)
+	if err != nil {
+		s.send(m.ChannelID, "Search error: "+err.Error())
+		return
+	}
+	if len(hits) == 0 {
+		s.send(m.ChannelID, "No matches.")
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Top %d matches for `%s`:\n", len(hits), truncate(query, 60))
+	for _, h := range hits {
+		fmt.Fprintf(&b, "- [%s] %s (%s): %s\n",
+			shortTime(h.CreatedAt),
+			displayName(h.AuthorName, h.Direction),
+			h.Kind,
+			truncate(h.Snippet, 200),
+		)
+	}
+	s.send(m.ChannelID, truncate(b.String(), maxDiscordMessageChars))
+}
+
+func (s *Service) handleHistoryCommand(m *discordgo.MessageCreate, args []string) {
+	hours := 24
+	if len(args) >= 1 {
+		if parsed, err := parsePositiveInt(args[0]); err == nil {
+			hours = parsed
+		}
+	}
+	since := time.Now().Add(-time.Duration(hours) * time.Hour).UTC().Format(time.RFC3339)
+	threadID := ""
+	projectPath := ""
+	if ch, err := s.dg.Channel(m.ChannelID); err == nil && ch != nil && isThread(ch) {
+		threadID = ch.ID
+	}
+	if binding, ok := s.resolveProjectForMessage(m.ChannelID, nil); ok {
+		projectPath = binding.ProjectPath
+	}
+	rows, err := db.DiscordListRecentMessages(projectPath, threadID, since, 20)
+	if err != nil {
+		s.send(m.ChannelID, "History error: "+err.Error())
+		return
+	}
+	if len(rows) == 0 {
+		s.send(m.ChannelID, fmt.Sprintf("No messages in the last %dh.", hours))
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Last %d messages (since %dh ago):\n", len(rows), hours)
+	for i := len(rows) - 1; i >= 0; i-- {
+		r := rows[i]
+		fmt.Fprintf(&b, "- [%s] %s: %s\n",
+			shortTime(r.CreatedAt),
+			displayName(r.AuthorName, r.Direction),
+			truncate(r.Content, 160),
+		)
+	}
+	s.send(m.ChannelID, truncate(b.String(), maxDiscordMessageChars))
+}
+
+// ── Archival helpers ──────────────────────────────────────────────────────
+
+func (s *Service) recordInbound(m *discordgo.MessageCreate) {
+	channelID, threadID := s.splitChannelThread(m.ChannelID)
+	projectPath, sessionID := s.resolveContext(channelID, threadID)
+	authorName := ""
+	authorID := ""
+	if m.Author != nil {
+		authorName = m.Author.Username
+		authorID = m.Author.ID
+	}
+	kind := "message"
+	if strings.HasPrefix(strings.TrimSpace(m.Content), s.cfg.CommandPrefix) {
+		kind = "command"
+	}
+	_ = db.DiscordRecordMessage(db.DiscordMessage{
+		ID:          "dm-in-" + m.ID,
+		ProjectPath: projectPath,
+		ChannelID:   channelID,
+		ThreadID:    threadID,
+		SessionID:   sessionID,
+		AuthorID:    authorID,
+		AuthorName:  authorName,
+		Direction:   "in",
+		Kind:        kind,
+		Content:     m.Content,
+	})
+}
+
+func (s *Service) recordOutbound(channelID, content, kind, sessionIDHint string) {
+	srcChannel, threadID := s.splitChannelThread(channelID)
+	projectPath := ""
+	sessionID := strings.TrimSpace(sessionIDHint)
+	pp, resolvedSession := s.resolveContext(srcChannel, threadID)
+	projectPath = pp
+	if sessionID == "" {
+		sessionID = resolvedSession
+	}
+	_ = db.DiscordRecordMessage(db.DiscordMessage{
+		ProjectPath: projectPath,
+		ChannelID:   srcChannel,
+		ThreadID:    threadID,
+		SessionID:   sessionID,
+		AuthorName:  "engine",
+		Direction:   "out",
+		Kind:        kind,
+		Content:     content,
+	})
+}
+
+// sendTagged is like send but records the outbound with an explicit kind and
+// session hint. Used for agent-authored answers so archive queries can
+// distinguish them.
+func (s *Service) sendTagged(channelID, msg, kind, sessionID string) {
+	if s.dg == nil || strings.TrimSpace(channelID) == "" {
+		return
+	}
+	if strings.TrimSpace(msg) == "" {
+		return
+	}
+	if _, err := s.dg.ChannelMessageSend(channelID, msg); err != nil {
+		log.Printf("[engine-discord] send error: %v", err)
+		return
+	}
+	s.recordOutbound(channelID, msg, kind, sessionID)
+}
+
+// splitChannelThread turns a possibly-thread channel ID into (parent, thread).
+// Returns (channelID, "") if the channel is not a thread.
+func (s *Service) splitChannelThread(channelID string) (string, string) {
+	if s.dg == nil || strings.TrimSpace(channelID) == "" {
+		return channelID, ""
+	}
+	ch, err := s.dg.Channel(channelID)
+	if err != nil || ch == nil {
+		return channelID, ""
+	}
+	if isThread(ch) {
+		return ch.ParentID, ch.ID
+	}
+	return ch.ID, ""
+}
+
+func (s *Service) resolveContext(channelID, threadID string) (projectPath, sessionID string) {
+	if strings.TrimSpace(threadID) != "" {
+		if mapping, _ := db.DiscordGetSessionByThread(threadID); mapping != nil {
+			return mapping.ProjectPath, mapping.SessionID
+		}
+	}
+	// Fall back to channel-based project lookup.
+	if strings.TrimSpace(channelID) != "" {
+		s.stateMu.RLock()
+		defer s.stateMu.RUnlock()
+		for _, p := range s.state.Projects {
+			if p.ChannelID == channelID {
+				return p.ProjectPath, ""
+			}
+		}
+	}
+	return "", ""
+}
+
+func isThread(ch *discordgo.Channel) bool {
+	return ch.Type == discordgo.ChannelTypeGuildPublicThread ||
+		ch.Type == discordgo.ChannelTypeGuildPrivateThread ||
+		ch.Type == discordgo.ChannelTypeGuildNewsThread
+}
+
+func buildThreadName(prompt string) string {
+	cleaned := strings.TrimSpace(prompt)
+	cleaned = strings.ReplaceAll(cleaned, "\n", " ")
+	if len(cleaned) > 60 {
+		cleaned = cleaned[:57] + "..."
+	}
+	if cleaned == "" {
+		cleaned = "chat"
+	}
+	return fmt.Sprintf("chat-%s", cleaned)
+}
+
+func parsePositiveInt(raw string) (int, error) {
+	v := 0
+	for _, r := range strings.TrimSpace(raw) {
+		if r < '0' || r > '9' {
+			return 0, fmt.Errorf("not a positive integer")
+		}
+		v = v*10 + int(r-'0')
+	}
+	if v == 0 {
+		return 0, fmt.Errorf("must be > 0")
+	}
+	return v, nil
+}
+
+func shortTime(ts string) string {
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return ts
+	}
+	return t.Format("01-02 15:04")
+}
+
+func displayName(name, direction string) string {
+	if strings.TrimSpace(name) == "" {
+		if direction == "out" {
+			return "engine"
+		}
+		return "user"
+	}
+	return name
+}
+
+func truncate(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max-1] + "\u2026"
 }
 
 func (s *Service) resolveProjectForMessage(channelID string, args []string) (ProjectBinding, bool) {
@@ -728,7 +1025,9 @@ func (s *Service) send(channelID, msg string) {
 	}
 	if _, err := s.dg.ChannelMessageSend(channelID, msg); err != nil {
 		log.Printf("[engine-discord] send error: %v", err)
+		return
 	}
+	s.recordOutbound(channelID, msg, "message", "")
 }
 
 func (s *Service) sendHelp(channelID string) {
@@ -743,8 +1042,10 @@ func (s *Service) sendHelp(channelID string) {
 		"- !lastcommit [project]",
 		"- !pause [project]",
 		"- !resume [project]",
-		"- !ask <prompt> (inside project channel)",
+		"- !ask <prompt> (opens a new chat thread inside the project channel)",
 		"- !ask <project> <prompt> (from control channel)",
+		"- !search <query> — full-text search across this project's history",
+		"- !history [hours] — recent messages in this thread (default 24h)",
 	}, "\n")
 	s.send(channelID, help)
 }
@@ -924,4 +1225,136 @@ func ternary[T any](condition bool, a T, b T) T {
 		return a
 	}
 	return b
+}
+
+// ── Public API for WS / UI ────────────────────────────────────────────────
+
+// ValidationResult summarizes a Discord configuration preflight check.
+type ValidationResult struct {
+	OK        bool     `json:"ok"`
+	Enabled   bool     `json:"enabled"`
+	GuildName string   `json:"guildName,omitempty"`
+	BotTag    string   `json:"botTag,omitempty"`
+	Errors    []string `json:"errors"`
+	Warnings  []string `json:"warnings"`
+}
+
+// Validate runs a non-destructive preflight against the given configuration.
+// It opens a short-lived session (if needed), verifies the token, guild
+// access, and resolves allowed users. Nothing is persisted.
+func Validate(cfg Config) ValidationResult {
+	result := ValidationResult{
+		Enabled:  cfg.Enabled,
+		Errors:   []string{},
+		Warnings: []string{},
+	}
+	if !cfg.Enabled {
+		result.OK = true
+		result.Warnings = append(result.Warnings, "Discord is disabled in config.")
+		return result
+	}
+	if strings.TrimSpace(cfg.BotToken) == "" {
+		result.Errors = append(result.Errors, "Bot token is empty.")
+	}
+	if strings.TrimSpace(cfg.GuildID) == "" {
+		result.Errors = append(result.Errors, "Guild ID is empty.")
+	}
+	if len(cfg.AllowedUsers) == 0 {
+		result.Errors = append(result.Errors, "At least one allowed user ID is required.")
+	}
+	if len(result.Errors) > 0 {
+		return result
+	}
+
+	dg, err := discordgo.New("Bot " + cfg.BotToken)
+	if err != nil {
+		result.Errors = append(result.Errors, "Invalid token format: "+err.Error())
+		return result
+	}
+	if err := dg.Open(); err != nil {
+		result.Errors = append(result.Errors, "Cannot open gateway: "+err.Error())
+		return result
+	}
+	defer dg.Close() //nolint:errcheck
+
+	if self := dg.State.User; self != nil {
+		result.BotTag = self.Username
+	}
+
+	guild, err := dg.Guild(cfg.GuildID)
+	if err != nil {
+		result.Errors = append(result.Errors, "Cannot access guild "+cfg.GuildID+": "+err.Error())
+		return result
+	}
+	result.GuildName = guild.Name
+
+	// Resolve each allowed user against the guild.
+	for userID := range cfg.AllowedUsers {
+		if _, err := dg.GuildMember(cfg.GuildID, userID); err != nil {
+			result.Warnings = append(result.Warnings, "Allowed user not in guild: "+userID)
+		}
+	}
+
+	result.OK = len(result.Errors) == 0
+	return result
+}
+
+// Reload swaps in a new configuration and reopens the gateway if needed.
+// Callers must hold no references to the prior session.
+func (s *Service) Reload(cfg Config) error {
+	_ = s.Close()
+	s.cfg = cfg
+	if cfg.Enabled {
+		if err := s.loadState(); err != nil {
+			return err
+		}
+		return s.Start()
+	}
+	return nil
+}
+
+// SearchHistory is the public entry for WS/agent callers. It enforces bounded
+// output so the full archive is never dumped into an LLM context.
+func (s *Service) SearchHistory(projectPath, query, since string, limit int) ([]db.DiscordSearchHit, error) {
+	return db.DiscordSearchMessages(projectPath, query, since, limit)
+}
+
+// RecentHistory returns recent archived messages scoped to a project and/or
+// thread. Bounded and paginated by caller.
+func (s *Service) RecentHistory(projectPath, threadID, since string, limit int) ([]db.DiscordMessage, error) {
+	return db.DiscordListRecentMessages(projectPath, threadID, since, limit)
+}
+
+// CurrentConfig returns a copy of the active configuration with secrets masked.
+func (s *Service) CurrentConfig() Config {
+	return s.cfg
+}
+
+// WriteConfig persists a configuration to the project-local config file.
+// This is the single source of truth consumed by LoadConfig on restart.
+func WriteConfig(projectPath string, cfg Config) error {
+	path := configFilePath(projectPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	allowed := make([]string, 0, len(cfg.AllowedUsers))
+	for id := range cfg.AllowedUsers {
+		allowed = append(allowed, id)
+	}
+	sort.Strings(allowed)
+	enabled := cfg.Enabled
+	payload := fileConfig{
+		Enabled:            &enabled,
+		BotToken:           strings.TrimSpace(cfg.BotToken),
+		GuildID:            strings.TrimSpace(cfg.GuildID),
+		AllowedUserIDs:     allowed,
+		CommandPrefix:      strings.TrimSpace(cfg.CommandPrefix),
+		ControlChannelName: strings.TrimSpace(cfg.ControlChannelName),
+		StoragePath:        strings.TrimSpace(cfg.StoragePath),
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return fmt.Errorf("serialize discord config: %w", err)
+	}
+	return os.WriteFile(path, data, 0600)
 }

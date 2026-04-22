@@ -4,6 +4,7 @@ import {
   Check,
   FolderGit2,
   KeyRound,
+  MessageSquare,
   ServerCog,
   Settings2,
   Type,
@@ -12,6 +13,10 @@ import {
 import { bridge, type BackgroundServiceStatus } from '../../bridge.js';
 import { useStore } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
+import type {
+  DiscordConfig,
+  DiscordValidationResult,
+} from '@engine/shared';
 import {
   DEFAULT_EDITOR_PREFERENCES,
   editorFontOptions,
@@ -84,6 +89,53 @@ export default function PreferencesPanel() {
   const [serviceStatus, setServiceStatus] = useState<BackgroundServiceStatus | null>(null);
   const [serviceMsg, setServiceMsg] = useState('');
   const [serviceLoading, setServiceLoading] = useState(false);
+
+  // Discord control plane ────────────────────────────────────────────────
+  const emptyDiscord: DiscordConfig = {
+    enabled: false,
+    botToken: '',
+    botTokenMasked: '',
+    guildId: '',
+    allowedUserIds: [],
+    commandPrefix: '!',
+    controlChannelName: '',
+    hasToken: false,
+  };
+  const [discordForm, setDiscordForm] = useState<DiscordConfig>(emptyDiscord);
+  const [discordAllowedInput, setDiscordAllowedInput] = useState('');
+  const [discordTokenInput, setDiscordTokenInput] = useState('');
+  const [discordValidation, setDiscordValidation] = useState<DiscordValidationResult | null>(null);
+  const [discordValidating, setDiscordValidating] = useState(false);
+  const [discordActive, setDiscordActive] = useState(false);
+
+  useEffect(() => {
+    const unsub = wsClient.onMessage((msg: unknown) => {
+      const m = msg as { type?: string; config?: DiscordConfig; active?: boolean; result?: DiscordValidationResult; warning?: string };
+      if (!m || typeof m.type !== 'string') return;
+      if (m.type === 'discord.config' && m.config) {
+        setDiscordForm(m.config);
+        setDiscordAllowedInput((m.config.allowedUserIds || []).join(', '));
+        setDiscordActive(Boolean(m.active));
+      } else if (m.type === 'discord.config.saved' && m.config) {
+        setDiscordForm(m.config);
+        setDiscordAllowedInput((m.config.allowedUserIds || []).join(', '));
+        setDiscordTokenInput('');
+        markSaved('discord');
+      } else if (m.type === 'discord.validate.result' && m.result) {
+        setDiscordValidation(m.result);
+        setDiscordValidating(false);
+      }
+    });
+    // Ask for current discord config once the WS is usable.
+    const requestConfig = () => wsClient.send({ type: 'discord.config.get' } as never);
+    requestConfig();
+    const unsubOpen = wsClient.onOpen(() => requestConfig());
+    return () => {
+      unsub();
+      unsubOpen();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     bridge.getGithubToken().then(k => {
@@ -181,6 +233,33 @@ export default function PreferencesPanel() {
     setServiceMsg(msg);
     bridge.agentServiceStatus().then(setServiceStatus);
     setServiceLoading(false);
+  };
+
+  // Discord save / validate handlers ────────────────────────────────────
+  const parseDiscordAllowed = (raw: string): string[] =>
+    raw.split(/[\s,]+/).map((s) => s.trim()).filter((s) => s.length > 0);
+
+  const buildDiscordPayload = (): DiscordConfig => {
+    return {
+      enabled: discordForm.enabled,
+      // Only send botToken if the user typed a new value; empty means "keep".
+      botToken: discordTokenInput.trim(),
+      guildId: discordForm.guildId.trim(),
+      allowedUserIds: parseDiscordAllowed(discordAllowedInput),
+      commandPrefix: discordForm.commandPrefix.trim() || '!',
+      controlChannelName: discordForm.controlChannelName.trim(),
+    };
+  };
+
+  const saveDiscordConfig = () => {
+    wsClient.send({ type: 'discord.config.set', config: buildDiscordPayload() } as never);
+  };
+
+  const validateDiscordConfig = () => {
+    setDiscordValidating(true);
+    setDiscordValidation(null);
+    wsClient.send({ type: 'discord.validate', config: buildDiscordPayload() } as never);
+    window.setTimeout(() => setDiscordValidating(false), 6000);
   };
 
   const inputStyle: React.CSSProperties = {
@@ -618,6 +697,124 @@ export default function PreferencesPanel() {
                 {saved === 'ollamaUrl' ? <><Check size={12} /> Ollama URL saved</> : 'Save Ollama URL'}
               </button>
             </div>
+          </div>
+        </section>
+
+        <section className="preferences-card">
+          <div className="preferences-card-header">
+            <div className="preferences-card-title">
+              <MessageSquare size={15} />
+              Discord control plane
+            </div>
+            <SaveBadge label={discordActive ? 'Live' : 'Config only'} active={saved === 'discord'} />
+          </div>
+
+          <div className="preferences-stack">
+            <div className="preferences-muted">
+              Private Discord bot that accepts commands from your own account and
+              archives every interaction to a per-project channel with one thread
+              per chat. Searchable history, never auto-fed to the model.
+            </div>
+
+            <label className="preferences-field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={discordForm.enabled}
+                onChange={(e) => setDiscordForm({ ...discordForm, enabled: e.target.checked })}
+              />
+              <span className="preferences-label" style={{ margin: 0 }}>Enable Discord bot</span>
+            </label>
+
+            <label className="preferences-field">
+              <span className="preferences-label">Bot token</span>
+              <input
+                type="password"
+                style={inputStyle}
+                placeholder={discordForm.hasToken ? (discordForm.botTokenMasked || 'stored — leave blank to keep') : 'Paste bot token'}
+                value={discordTokenInput}
+                onChange={(e) => setDiscordTokenInput(e.target.value)}
+                autoComplete="off"
+              />
+            </label>
+
+            <label className="preferences-field">
+              <span className="preferences-label">Guild (server) ID</span>
+              <input
+                type="text"
+                style={inputStyle}
+                value={discordForm.guildId}
+                onChange={(e) => setDiscordForm({ ...discordForm, guildId: e.target.value })}
+                placeholder="Right-click your server → Copy Server ID"
+              />
+            </label>
+
+            <label className="preferences-field">
+              <span className="preferences-label">Allowed user IDs</span>
+              <textarea
+                style={{ ...inputStyle, minHeight: 56, resize: 'vertical', fontFamily: 'var(--mono)' }}
+                value={discordAllowedInput}
+                onChange={(e) => setDiscordAllowedInput(e.target.value)}
+                placeholder="Comma or newline separated Discord user IDs"
+              />
+            </label>
+
+            <div className="preferences-row">
+              <label className="preferences-field">
+                <span className="preferences-label">Command prefix</span>
+                <input
+                  type="text"
+                  style={inputStyle}
+                  value={discordForm.commandPrefix}
+                  onChange={(e) => setDiscordForm({ ...discordForm, commandPrefix: e.target.value })}
+                  placeholder="!"
+                />
+              </label>
+              <label className="preferences-field">
+                <span className="preferences-label">Control channel name</span>
+                <input
+                  type="text"
+                  style={inputStyle}
+                  value={discordForm.controlChannelName}
+                  onChange={(e) => setDiscordForm({ ...discordForm, controlChannelName: e.target.value })}
+                  placeholder="engine-control"
+                />
+              </label>
+            </div>
+
+            <div className="preferences-inline-actions">
+              <button className="btn-primary" onClick={saveDiscordConfig}>
+                {saved === 'discord' ? <><Check size={12} /> Saved</> : <><MessageSquare size={12} /> Save Discord config</>}
+              </button>
+              <button className="btn-secondary" onClick={validateDiscordConfig} disabled={discordValidating}>
+                {discordValidating ? 'Testing…' : 'Test connection'}
+              </button>
+            </div>
+
+            {discordValidation && (
+              <div className="preferences-message" style={{
+                borderColor: discordValidation.ok ? 'rgba(77, 224, 190, 0.35)' : 'rgba(255, 107, 107, 0.35)',
+              }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                  {discordValidation.ok ? 'Connection OK' : 'Issues detected'}
+                </div>
+                {discordValidation.guildName && (
+                  <div className="preferences-muted">Guild: {discordValidation.guildName}</div>
+                )}
+                {discordValidation.botTag && (
+                  <div className="preferences-muted">Bot: {discordValidation.botTag}</div>
+                )}
+                {discordValidation.errors?.length > 0 && (
+                  <ul style={{ margin: '6px 0 0 18px', padding: 0, color: '#ff9a9a' }}>
+                    {discordValidation.errors.map((err, i) => <li key={i}>{err}</li>)}
+                  </ul>
+                )}
+                {discordValidation.warnings?.length > 0 && (
+                  <ul style={{ margin: '6px 0 0 18px', padding: 0, color: '#e8c46b' }}>
+                    {discordValidation.warnings.map((warn, i) => <li key={i}>{warn}</li>)}
+                  </ul>
+                )}
+              </div>
+            )}
           </div>
         </section>
 

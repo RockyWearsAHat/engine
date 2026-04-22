@@ -13,6 +13,7 @@ import (
 
 	"github.com/engine/server/ai"
 	"github.com/engine/server/db"
+	"github.com/engine/server/discord"
 	gofs "github.com/engine/server/fs"
 	gogit "github.com/engine/server/git"
 	"github.com/engine/server/remote"
@@ -29,15 +30,39 @@ var upgrader = websocket.Upgrader{
 
 var runAIChat = ai.Chat
 
+// DiscordBridge is the subset of the Discord service the WS handler uses.
+// Kept narrow so tests can stub it.
+type DiscordBridge interface {
+	CurrentConfig() discord.Config
+	Reload(cfg discord.Config) error
+	SearchHistory(projectPath, query, since string, limit int) ([]db.DiscordSearchHit, error)
+	RecentHistory(projectPath, threadID, since string, limit int) ([]db.DiscordMessage, error)
+}
+
+// discordBridge is a package-level handle wired by main.go.
+var discordBridge DiscordBridge
+
+// SetDiscordBridge registers the Discord service with the WS layer.
+// Passing nil disables the discord.* endpoints.
+func SetDiscordBridge(d DiscordBridge) {
+	discordBridge = d
+}
+
 // Hub manages the WebSocket server and default project path.
 type Hub struct {
-	projectPath string
+	projectPath    string
 	localAuthToken string
 }
 
 // NewHub creates a new Hub.
 func NewHub(projectPath string) *Hub {
 	return &Hub{projectPath: projectPath, localAuthToken: strings.TrimSpace(os.Getenv("ENGINE_LOCAL_WS_TOKEN"))}
+}
+
+// SetDiscord attaches a Discord bridge so discord.* messages can be handled.
+// Passing nil disables the discord endpoints. Equivalent to SetDiscordBridge.
+func (h *Hub) SetDiscord(d DiscordBridge) {
+	SetDiscordBridge(d)
 }
 
 // ServeWS upgrades an HTTP request to a WebSocket connection and handles it.
@@ -661,6 +686,48 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			return
 		}
 		applyRuntimeConfig(msg.Config)
+
+	// ── Discord control plane ─────────────────────────────────────────────
+
+	case "discord.config.get":
+		c.handleDiscordConfigGet()
+
+	case "discord.config.set":
+		var msg struct {
+			Config discordConfigPayload `json:"config"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.sendErr("Bad payload", "BAD_PAYLOAD")
+			return
+		}
+		c.handleDiscordConfigSet(msg.Config)
+
+	case "discord.validate":
+		var msg struct {
+			Config *discordConfigPayload `json:"config,omitempty"`
+		}
+		_ = json.Unmarshal(raw, &msg)
+		c.handleDiscordValidate(msg.Config)
+
+	case "discord.history.search":
+		var msg struct {
+			ProjectPath string `json:"projectPath"`
+			Query       string `json:"query"`
+			Since       string `json:"since"`
+			Limit       int    `json:"limit"`
+		}
+		_ = json.Unmarshal(raw, &msg)
+		c.handleDiscordHistorySearch(msg.ProjectPath, msg.Query, msg.Since, msg.Limit)
+
+	case "discord.history.recent":
+		var msg struct {
+			ProjectPath string `json:"projectPath"`
+			ThreadID    string `json:"threadId"`
+			Since       string `json:"since"`
+			Limit       int    `json:"limit"`
+		}
+		_ = json.Unmarshal(raw, &msg)
+		c.handleDiscordHistoryRecent(msg.ProjectPath, msg.ThreadID, msg.Since, msg.Limit)
 
 	// ── GitHub Issues ─────────────────────────────────────────────────────────
 
