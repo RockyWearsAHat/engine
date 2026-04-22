@@ -68,9 +68,13 @@ type conn struct {
 	tabsMu   sync.RWMutex
 	openTabs []ai.TabInfo
 
-	// chatCancelMu guards the chatCancelFns map.
-	chatCancelMu  sync.Mutex
-	chatCancelFns map[string]func() // keyed by sessionID
+	// chatCancelMu guards chatCancelFns and chatCancelGens.
+	// chatCancelGens tracks a monotonic generation counter per session so that
+	// when an old goroutine exits it does not accidentally delete the cancel
+	// function that a newer request already installed.
+	chatCancelMu   sync.Mutex
+	chatCancelFns  map[string]func() // keyed by sessionID
+	chatCancelGens map[string]int    // keyed by sessionID
 
 	writeMu sync.Mutex
 }
@@ -116,6 +120,7 @@ func newConn(ws *websocket.Conn, projectPath string) *conn {
 		termIDs:         make(map[string]bool),
 		approvalWaiters: make(map[string]chan bool),
 		chatCancelFns:   make(map[string]func()),
+		chatCancelGens:  make(map[string]int),
 	}
 }
 
@@ -375,23 +380,28 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		projectPath = session.ProjectPath
 
 		// Create a cancel channel for this request so the client can stop it.
+		// Use sync.Once so double-close (e.g. chat.stop racing a new chat) never panics.
 		cancelCh := make(chan struct{})
+		var cancelOnce sync.Once
+		cancelFn := func() { cancelOnce.Do(func() { close(cancelCh) }) }
+
 		c.chatCancelMu.Lock()
 		if old, ok := c.chatCancelFns[sessionID]; ok {
 			old() // cancel any previous in-flight request for this session
 		}
-		c.chatCancelFns[sessionID] = func() { close(cancelCh) }
+		c.chatCancelGens[sessionID]++
+		myGen := c.chatCancelGens[sessionID]
+		c.chatCancelFns[sessionID] = cancelFn
 		c.chatCancelMu.Unlock()
 
 		c.send(map[string]interface{}{"type": "chat.started", "sessionId": sessionID})
 		go func() {
 			defer func() {
-				// Remove cancel fn when goroutine exits.
+				// Only remove our cancel fn if no newer request has replaced it.
 				c.chatCancelMu.Lock()
-				if fn, ok := c.chatCancelFns[sessionID]; ok {
-					// Only delete if it's still the same channel (not replaced by a newer request).
-					_ = fn
+				if c.chatCancelGens[sessionID] == myGen {
 					delete(c.chatCancelFns, sessionID)
+					delete(c.chatCancelGens, sessionID)
 				}
 				c.chatCancelMu.Unlock()
 
@@ -410,6 +420,9 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 				Cancel:      cancelCh,
 				OnChunk: func(content string, done bool) {
 					c.send(map[string]interface{}{"type": "chat.chunk", "sessionId": sessionID, "content": content, "done": done})
+				},
+				OnThinking: func(content string) {
+					c.send(map[string]interface{}{"type": "chat.thinking", "sessionId": sessionID, "content": content})
 				},
 				OnToolCall: func(name string, input interface{}) {
 					c.send(map[string]interface{}{"type": "chat.tool_call", "sessionId": sessionID, "name": name, "input": input})
@@ -452,10 +465,230 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		}
 		c.chatCancelMu.Lock()
 		if fn, ok := c.chatCancelFns[msg.SessionID]; ok {
-			fn()
+			fn() // sync.Once-safe — no panic if already cancelled
 			delete(c.chatCancelFns, msg.SessionID)
+			delete(c.chatCancelGens, msg.SessionID)
 		}
 		c.chatCancelMu.Unlock()
+
+	// chat.edit — user edited a message; checkpoint the old tail and restart
+	// the conversation from the edited point.
+	case "chat.edit":
+		var msg struct {
+			SessionID  string `json:"sessionId"`
+			MessageID  string `json:"messageId"`
+			NewContent string `json:"newContent"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil || msg.SessionID == "" || msg.MessageID == "" {
+			c.sendErr("Bad payload", "BAD_PAYLOAD")
+			return
+		}
+		session, err := c.resolveChatSession(msg.SessionID)
+		if err != nil {
+			c.send(map[string]interface{}{"type": "chat.error", "sessionId": msg.SessionID, "error": err.Error()})
+			return
+		}
+
+		allMsgs, err := db.GetMessages(session.ID)
+		if err != nil {
+			c.send(map[string]interface{}{"type": "chat.error", "sessionId": session.ID, "error": "failed to load messages"})
+			return
+		}
+
+		// Find the index of the message being edited.
+		editIdx := -1
+		for i, m := range allMsgs {
+			if m.ID == msg.MessageID {
+				editIdx = i
+				break
+			}
+		}
+		if editIdx < 0 {
+			c.send(map[string]interface{}{"type": "chat.error", "sessionId": session.ID, "error": "message not found"})
+			return
+		}
+
+		// The slot key is the ID of the message just before the edit point.
+		afterMsgId := ""
+		if editIdx > 0 {
+			afterMsgId = allMsgs[editIdx-1].ID
+		}
+
+		// Look up or create an edit_group_id for this slot.
+		editGroupId, err := db.GetEditGroupID(session.ID, afterMsgId)
+		if err != nil {
+			c.send(map[string]interface{}{"type": "chat.error", "sessionId": session.ID, "error": "branch lookup failed"})
+			return
+		}
+		if editGroupId == "" {
+			editGroupId = newID()
+			// Also snapshot the ORIGINAL tail (branch 0) the first time.
+			if err := db.SaveMessageBranch(newID(), session.ID, afterMsgId, editGroupId, 0, allMsgs[editIdx:]); err != nil {
+				log.Printf("[engine] ws: save original branch: %v", err)
+			}
+		}
+		nextIdx, err := db.NextBranchIndex(editGroupId)
+		if err != nil {
+			c.send(map[string]interface{}{"type": "chat.error", "sessionId": session.ID, "error": "branch index failed"})
+			return
+		}
+
+		// Snapshot the current tail so we can restore it later; then delete it.
+		idsToDelete := make([]string, len(allMsgs)-editIdx)
+		for i, m := range allMsgs[editIdx:] {
+			idsToDelete[i] = m.ID
+		}
+		if err := db.DeleteMessagesFrom(session.ID, idsToDelete); err != nil {
+			log.Printf("[engine] ws: delete messages: %v", err)
+		}
+
+		// Save the new user message and record it as the next branch.
+		newMsgID := newID()
+		if err := db.SaveMessage(newMsgID, session.ID, "user", msg.NewContent, nil); err != nil {
+			log.Printf("[engine] ws: save edited message: %v", err)
+		}
+		newMsg := db.Message{ID: newMsgID, SessionID: session.ID, Role: "user", Content: msg.NewContent}
+		if err := db.SaveMessageBranch(newID(), session.ID, afterMsgId, editGroupId, nextIdx, []db.Message{newMsg}); err != nil {
+			log.Printf("[engine] ws: save new branch: %v", err)
+		}
+
+		// Build updated message list (everything before the edit, plus the new message).
+		updatedMsgs := append(allMsgs[:editIdx:editIdx], newMsg)
+
+		branchInfo, _ := db.GetBranchInfo(session.ID)
+		c.send(map[string]interface{}{
+			"type":       "chat.edited",
+			"sessionId":  session.ID,
+			"messages":   updatedMsgs,
+			"branchInfo": branchInfo,
+		})
+
+		// Fire the AI response from the new edit point.
+		sessionID := session.ID
+		projectPath = session.ProjectPath
+		cancelCh := make(chan struct{})
+		c.chatCancelMu.Lock()
+		if old, ok := c.chatCancelFns[sessionID]; ok {
+			old()
+		}
+		c.chatCancelFns[sessionID] = func() { close(cancelCh) }
+		c.chatCancelMu.Unlock()
+
+		c.send(map[string]interface{}{"type": "chat.started", "sessionId": sessionID})
+		go func() {
+			defer func() {
+				c.chatCancelMu.Lock()
+				delete(c.chatCancelFns, sessionID)
+				c.chatCancelMu.Unlock()
+				if r := recover(); r != nil {
+					log.Printf("[engine] ws: panic in chat.edit goroutine: %v", r)
+					c.send(map[string]interface{}{"type": "chat.error", "sessionId": sessionID, "error": "Internal error"})
+				}
+			}()
+			runAIChat(&ai.ChatContext{
+				ProjectPath: projectPath,
+				SessionID:   sessionID,
+				Cancel:      cancelCh,
+				OnChunk:      func(content string, done bool) { c.send(map[string]interface{}{"type": "chat.chunk", "sessionId": sessionID, "content": content, "done": done}) },
+					OnThinking:   func(content string) { c.send(map[string]interface{}{"type": "chat.thinking", "sessionId": sessionID, "content": content}) },
+				OnToolCall:   func(name string, input interface{}) { c.send(map[string]interface{}{"type": "chat.tool_call", "sessionId": sessionID, "name": name, "input": input}) },
+				OnToolResult: func(name string, result interface{}, isError bool) { c.send(map[string]interface{}{"type": "chat.tool_result", "sessionId": sessionID, "name": name, "result": result, "isError": isError}) },
+				OnError:      func(errMsg string) { c.send(map[string]interface{}{"type": "chat.error", "sessionId": sessionID, "error": errMsg}) },
+				OnSessionUpdated: func(s *db.Session) { c.send(map[string]interface{}{"type": "session.updated", "session": s}) },
+				GetOpenTabs: func() []ai.TabInfo {
+					c.tabsMu.RLock()
+					defer c.tabsMu.RUnlock()
+					return c.openTabs
+				},
+				RequestApproval: func(kind, title, message, command string) (bool, error) {
+					return c.requestApproval(sessionID, kind, title, message, command)
+				},
+				SendToClient: func(msgType string, payload interface{}) {
+					m := map[string]interface{}{"type": msgType}
+					if p, ok := payload.(map[string]interface{}); ok {
+						for k, v := range p {
+							m[k] = v
+						}
+					}
+					c.send(m)
+				},
+			}, msg.NewContent)
+		}()
+
+	// chat.branch.switch — navigate to a previously checkpointed conversation branch.
+	case "chat.branch.switch":
+		var msg struct {
+			SessionID   string `json:"sessionId"`
+			EditGroupID string `json:"editGroupId"`
+			BranchIndex int    `json:"branchIndex"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil || msg.SessionID == "" || msg.EditGroupID == "" {
+			c.sendErr("Bad payload", "BAD_PAYLOAD")
+			return
+		}
+		session, err := c.resolveChatSession(msg.SessionID)
+		if err != nil {
+			c.send(map[string]interface{}{"type": "chat.error", "sessionId": msg.SessionID, "error": err.Error()})
+			return
+		}
+
+		branch, err := db.GetBranch(msg.EditGroupID, msg.BranchIndex)
+		if err != nil {
+			c.send(map[string]interface{}{"type": "chat.error", "sessionId": session.ID, "error": "branch not found"})
+			return
+		}
+
+		// Determine what to keep: find the afterMsgId for this edit group.
+		afterMsgId, err := db.GetAfterMsgIDForGroup(msg.EditGroupID)
+		if err != nil {
+			c.send(map[string]interface{}{"type": "chat.error", "sessionId": session.ID, "error": "branch metadata error"})
+			return
+		}
+
+		allMsgs, _ := db.GetMessages(session.ID)
+
+		// Find the index of afterMsgId in the current conversation.
+		keepUpTo := -1
+		for i, m := range allMsgs {
+			if m.ID == afterMsgId {
+				keepUpTo = i
+				break
+			}
+		}
+		// Delete everything after the keep point.
+		if keepUpTo >= 0 && keepUpTo+1 < len(allMsgs) {
+			idsToDelete := make([]string, len(allMsgs)-keepUpTo-1)
+			for i, m := range allMsgs[keepUpTo+1:] {
+				idsToDelete[i] = m.ID
+			}
+			db.DeleteMessagesFrom(session.ID, idsToDelete) //nolint:errcheck
+		} else if keepUpTo < 0 {
+			// afterMsgId is "" meaning we restore from the very beginning.
+			idsToDelete := make([]string, len(allMsgs))
+			for i, m := range allMsgs {
+				idsToDelete[i] = m.ID
+			}
+			db.DeleteMessagesFrom(session.ID, idsToDelete) //nolint:errcheck
+		}
+
+		// Re-insert the branch messages.
+		for _, m := range branch {
+			tcJSON := interface{}(nil)
+			if m.ToolCalls != nil {
+				tcJSON = m.ToolCalls
+			}
+			db.SaveMessage(m.ID, session.ID, m.Role, m.Content, tcJSON) //nolint:errcheck
+		}
+
+		// Rebuild the full visible conversation and reply.
+		updatedMsgs, _ := db.GetMessages(session.ID)
+		branchInfo, _ := db.GetBranchInfo(session.ID)
+		c.send(map[string]interface{}{
+			"type":       "chat.edited",
+			"sessionId":  session.ID,
+			"messages":   updatedMsgs,
+			"branchInfo": branchInfo,
+		})
 
 	case "approval.respond":
 		var msg struct {

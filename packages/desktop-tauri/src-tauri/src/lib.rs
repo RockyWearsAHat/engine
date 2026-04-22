@@ -263,6 +263,30 @@ fn engine_server_health_ok(port: u16) -> bool {
     response.contains("\"status\":\"ok\"") && response.contains("\"projectPath\"")
 }
 
+/// Attempt a raw WebSocket upgrade handshake to verify the WS endpoint is
+/// actually accepting connections — not just that HTTP is up. Used to emit
+/// `engine:server-ready` only when the frontend's WebSocket will succeed.
+fn engine_ws_ready_ok(port: u16) -> bool {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(500)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+    let request = format!(
+        "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut buf = [0u8; 256];
+    match stream.read(&mut buf) {
+        Ok(n) if n > 0 => String::from_utf8_lossy(&buf[..n]).contains("101 Switching Protocols"),
+        _ => false,
+    }
+}
+
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn listener_pid(port: u16) -> Option<u32> {
     let output = Command::new("lsof")
@@ -1289,6 +1313,10 @@ pub fn run() {
             let open_project_page = MenuItemBuilder::new("Project Home")
                 .id("open-project-page")
                 .build(app)?;
+            let reload_window = MenuItemBuilder::new("Reload Window")
+                .id("reload-window")
+                .accelerator("CmdOrCtrl+R")
+                .build(app)?;
 
             let app_submenu = SubmenuBuilder::new(app, "Engine")
                 .about(Some(AboutMetadata {
@@ -1328,6 +1356,8 @@ pub fn run() {
                 .item(&toggle_sidebar)
                 .item(&toggle_terminal)
                 .item(&focus_chat)
+                .separator()
+                .item(&reload_window)
                 .build()?;
 
             let help_submenu = SubmenuBuilder::new(app, "Help")
@@ -1351,6 +1381,24 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window("main") {
                     window.open_devtools();
                 }
+            }
+
+            // Emit `engine:server-ready` only after the WS endpoint actually
+            // accepts an upgrade — this lets the frontend skip timing guesses
+            // and connect immediately without console errors.
+            {
+                let ready_handle = app.handle().clone();
+                thread::spawn(move || {
+                    for _ in 0..60 {
+                        if engine_ws_ready_ok(DEFAULT_PORT) {
+                            let _ = ready_handle.emit("engine:server-ready", ());
+                            return;
+                        }
+                        thread::sleep(Duration::from_millis(200));
+                    }
+                    // 12 s timeout fallback — emit anyway so the client never hangs
+                    let _ = ready_handle.emit("engine:server-ready", ());
+                });
             }
 
             Ok(())
@@ -1448,6 +1496,11 @@ pub fn run() {
                     }
                     "open-project-page" => {
                         let _ = app.emit(FRONTEND_MENU_EVENT, "open-project-page");
+                    }
+                    "reload-window" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.eval("window.location.reload()");
+                        }
                     }
                     _ => {
                         eprintln!("[MENU EVENT] unhandled id: {}", event_id);

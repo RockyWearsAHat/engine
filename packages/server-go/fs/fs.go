@@ -81,13 +81,20 @@ func ReadFile(path string) (*FileContent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
+	content := string(data)
+	// 12 KB keeps ~400 lines in context without blowing up KV cache.
+	// Larger files: use search_files to find the specific section needed.
+	const maxReadBytes = 12 * 1024
+	if len(content) > maxReadBytes {
+		content = content[:maxReadBytes] + "\n... (file truncated — use search_files to locate specific sections)"
+	}
 	lang := langMap[ext]
 	if lang == "" {
 		lang = "plaintext"
 	}
 	return &FileContent{
 		Path:     path,
-		Content:  string(data),
+		Content:  content,
 		Language: lang,
 		Size:     info.Size(),
 	}, nil
@@ -104,6 +111,27 @@ func WriteFile(path, content string) error {
 // GetTree returns a directory tree up to maxDepth levels deep.
 func GetTree(root string, maxDepth int) (*FileNode, error) {
 	return buildTree(root, 0, maxDepth)
+}
+
+// skipTreeDir lists directory names that are always excluded from GetTree output.
+// These directories are enormous (node_modules) or irrelevant noise (.git) and
+// cause the AI to receive hundreds of KB of useless file listings.
+var skipTreeDir = map[string]bool{
+	"node_modules": true,
+	".git":         true,
+	"dist":         true,
+	"build":        true,
+	".next":        true,
+	".nuxt":        true,
+	"__pycache__":  true,
+	".cache":       true,
+	"coverage":     true,
+	"vendor":       true,
+	".turbo":       true,
+	"target":       true,
+	"out":          true,
+	".idea":        true,
+	".angular":     true,
 }
 
 func buildTree(path string, depth, maxDepth int) (*FileNode, error) {
@@ -129,6 +157,9 @@ func buildTree(path string, depth, maxDepth int) (*FileNode, error) {
 		}
 		node.Loaded = true
 		for _, e := range entries {
+			if e.IsDir() && skipTreeDir[e.Name()] {
+				continue
+			}
 			child, err := buildTree(filepath.Join(path, e.Name()), depth+1, maxDepth)
 			if err == nil {
 				node.Children = append(node.Children, child)
@@ -157,8 +188,8 @@ func SearchFiles(pattern, dir, fileGlob string) (string, error) {
 	}
 
 	formatted := strings.TrimSpace(b.String())
-	if len(formatted) > 4*1024*1024 {
-		formatted = formatted[:4*1024*1024] + "\n... (truncated)"
+	if len(formatted) > 32*1024 {
+		formatted = formatted[:32*1024] + "\n... (search results truncated — refine your pattern or use a narrower glob)"
 	}
 	return formatted, nil
 }

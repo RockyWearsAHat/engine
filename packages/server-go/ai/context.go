@@ -3,12 +3,16 @@ package ai
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -212,6 +216,7 @@ type ChatContext struct {
 	ProjectPath      string
 	SessionID        string
 	OnChunk          func(content string, done bool)
+	OnThinking       func(content string) // thinking-model tokens (Ollama delta.thinking)
 	OnToolCall       func(name string, input interface{})
 	OnToolResult     func(name string, result interface{}, isError bool)
 	OnError          func(err string)
@@ -297,6 +302,11 @@ func strProp(desc string) interface{} {
 }
 
 func objSchema(required []string, props map[string]interface{}) interface{} {
+	// Always use an empty slice, never nil — nil marshals to JSON "null" which
+	// Ollama's schema validator rejects. An empty array is the correct no-required-fields form.
+	if required == nil {
+		required = []string{}
+	}
 	return map[string]interface{}{
 		"type":       "object",
 		"properties": props,
@@ -308,15 +318,18 @@ func objSchema(required []string, props map[string]interface{}) interface{} {
 // Only a small bootstrap subset is sent to the model at the start of each request.
 // The model discovers additional tools by calling search_tools.
 var toolRegistry = []anthropicTool{
-	// ── Discovery ────────────────────────────────────────────────────────────
+	// ── Discovery (deferred loader) ───────────────────────────────────────────
+	// search_tools is the ONLY way new schemas enter the tools[] array.
+	// When the model calls it, matched tools are injected into ctx.ActiveTools
+	// and will be in the API tools[] on the very next iteration — no text faking.
 	{
 		Name:        "search_tools",
-		Description: "Search for available tools by describing what you want to do. Returns matching tool names, descriptions, and full schemas — and makes them available for immediate use. Call this during your planning phase before executing, or whenever you need a capability you don't currently have.",
+		Description: "Inject the schemas for tools you need into your active tool set. Call this before using any tool you don't already have. Returns matched tool names and adds their schemas to tools[] for the next call.",
 		InputSchema: objSchema([]string{"query"}, map[string]interface{}{
 			"query": strProp("Natural language description of what you want to do, e.g. 'run shell commands', 'commit to git', 'open GitHub issues'"),
 		}),
 	},
-	// ── Core navigation (always available) ──────────────────────────────────
+	// ── Core navigation ──────────────────────────────────────────────────────
 	{
 		Name:        "read_file",
 		Description: "Read the contents of a file at the given path.",
@@ -482,6 +495,49 @@ var toolRegistry = []anthropicTool{
 			"body":   strProp("Comment body"),
 		}),
 	},
+	// ── Persistent memory ────────────────────────────────────────────────────
+	// Memory tools are always in bootstrap — model can write/read its own memory
+	// at any time without calling search_tools first.
+	{
+		Name:        "memory_save",
+		Description: "Save a persistent memory for this project. Injected into every future system prompt. Save the ACTUAL STATE and WHY it is that way — not action labels or summaries of what you did.",
+		InputSchema: objSchema([]string{"content", "category"}, map[string]interface{}{
+			"content": strProp("The real constraint, state, or decision AND the reason it exists. " +
+				"BAD: 'context bloat fix applied' or 'fixed slow generation'. " +
+				"GOOD: 'read_file capped at 12KB — Gemma4:31b runs at ~7 tok/s on this M3 Pro; " +
+				"a 50KB file read = ~12k tokens = ~27 min of silence before first output, editor was unusable'. " +
+				"The WHY is what makes a memory useful. Without it the next session has no idea if the constraint still applies."),
+			"category": strProp("One of: fact, decision, preference, constraint, error"),
+		}),
+	},
+	{
+		Name:        "memory_update",
+		Description: "Update the content of an existing memory by ID. Always include a reason — it is stored in the version history so future sessions understand why this belief changed.",
+		InputSchema: objSchema([]string{"id", "content", "reason"}, map[string]interface{}{
+			"id":      strProp("Memory ID from memory_list"),
+			"content": strProp("New content for the memory"),
+			"reason":  strProp("Why this memory changed — stored in version history for future context"),
+		}),
+	},
+	{
+		Name:        "memory_list",
+		Description: "List all persistent memories for this project. Returns id, category, content, importance, and how many times each has been updated.",
+		InputSchema: objSchema([]string{}, map[string]interface{}{}),
+	},
+	{
+		Name:        "memory_history",
+		Description: "Show the full version history of a single memory — every previous value and the reason it was changed. Use when you need to understand how a belief evolved.",
+		InputSchema: objSchema([]string{"id"}, map[string]interface{}{
+			"id": strProp("Memory ID from memory_list"),
+		}),
+	},
+	{
+		Name:        "memory_delete",
+		Description: "Delete a memory that is stale or wrong. Pass the ID from memory_list.",
+		InputSchema: objSchema([]string{"id"}, map[string]interface{}{
+			"id": strProp("Memory ID from memory_list"),
+		}),
+	},
 }
 
 // toolRegistryIndex is a flat name→tool map for O(1) lookup.
@@ -493,18 +549,31 @@ var toolRegistryIndex = func() map[string]anthropicTool {
 	return m
 }()
 
-// bootstrapTools is the minimal set sent to the model at the start of every request.
-// Only navigation + tool discovery. Everything else must be discovered via search_tools.
-var bootstrapToolNames = []string{"search_tools", "read_file", "list_directory"}
-
-func bootstrapTools() []anthropicTool {
-	out := make([]anthropicTool, 0, len(bootstrapToolNames))
-	for _, name := range bootstrapToolNames {
-		if t, ok := toolRegistryIndex[name]; ok {
-			out = append(out, t)
-		}
-	}
+// allTools returns the full tool registry — every tool is available from the first request.
+// All schemas are sent in the tools[] array so the model generates properly-typed args
+// instead of freeform text. search_tools remains available as a filter/info helper but
+// is no longer a required unlock gate.
+func allTools() []anthropicTool {
+	out := make([]anthropicTool, len(toolRegistry))
+	copy(out, toolRegistry)
 	return out
+}
+
+// bootstrapTools returns the minimal tool set sent on the first request.
+// Only search_tools + memory tools. Everything else is deferred: when the model
+// calls search_tools, matched schemas are injected into ctx.ActiveTools and will be
+// present in the tools[] array on the very next API iteration — never as freeform text.
+// read_file and list_directory are intentionally NOT here — they would cause the model
+// to explore the codebase on every message including greetings and simple questions.
+func bootstrapTools() []anthropicTool {
+	return []anthropicTool{
+		toolRegistryIndex["search_tools"],
+		toolRegistryIndex["memory_save"],
+		toolRegistryIndex["memory_update"],
+		toolRegistryIndex["memory_list"],
+		toolRegistryIndex["memory_history"],
+		toolRegistryIndex["memory_delete"],
+	}
 }
 
 // executeSearchTools searches the registry by keyword and injects matched tools into
@@ -658,8 +727,8 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 		if result == "" {
 			result = "(no output)"
 		}
-		if len(result) > 4*1024*1024 {
-			result = result[:4*1024*1024] + "\n...(truncated)"
+		if len(result) > 16*1024 {
+			result = result[:16*1024] + "\n...(output truncated — too large for context)"
 		}
 		return result, err != nil && len(out) == 0
 
@@ -914,6 +983,104 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 		}
 		return fmt.Sprintf("Comment added: %s", comment.HTMLURL), false
 
+	case "memory_save":
+		content := str("content")
+		category := str("category")
+		if content == "" {
+			return "content is required", true
+		}
+		if category == "" {
+			category = "fact"
+		}
+		// Strip line numbers — they drift the moment any edit lands and become
+		// actively harmful when the model treats them as current ground truth.
+		content = stripLineNumbers(content)
+		if content == "" {
+			return "memory content was empty after stripping line numbers — save concepts, not locations", true
+		}
+		importance := 0.7 // user-invoked saves are high-importance by default
+		if category == "progress" {
+			importance = 0.5
+		}
+		err := db.SaveMemory(db.Memory{
+			ProjectPath: ctx.ProjectPath,
+			SessionID:   ctx.SessionID,
+			Category:    category,
+			Content:     content,
+			Importance:  importance,
+		})
+		if err != nil {
+			return "failed to save memory: " + err.Error(), true
+		}
+		return fmt.Sprintf("Memory saved (%s): %s", category, content), false
+
+	case "memory_update":
+		id := str("id")
+		content := str("content")
+		reason := str("reason")
+		if id == "" || content == "" {
+			return "id, content, and reason are required", true
+		}
+		content = stripLineNumbers(content)
+		if content == "" {
+			return "memory content was empty after stripping line numbers", true
+		}
+		if reason == "" {
+			reason = "no reason given"
+		}
+		if err := db.UpdateMemory(id, content, reason); err != nil {
+			return "failed to update memory: " + err.Error(), true
+		}
+		return fmt.Sprintf("Memory updated (reason: %s)", reason), false
+
+	case "memory_delete":
+		id := str("id")
+		if id == "" {
+			return "id is required", true
+		}
+		if err := db.DeleteMemory(id); err != nil {
+			return "failed to delete memory: " + err.Error(), true
+		}
+		return "Memory deleted", false
+
+	case "memory_list":
+		memories, err := db.GetProjectMemories(ctx.ProjectPath, 30)
+		if err != nil {
+			return "failed to list memories: " + err.Error(), true
+		}
+		if len(memories) == 0 {
+			return "No memories saved yet for this project.", false
+		}
+		var b strings.Builder
+		for _, m := range memories {
+			versions := ""
+			if m.VersionCount > 0 {
+				versions = fmt.Sprintf(", updated %dx", m.VersionCount)
+			}
+			fmt.Fprintf(&b, "[%s] (%s%s) %s\n", m.ID[:8], m.Category, versions, m.Content)
+		}
+		return strings.TrimSpace(b.String()), false
+
+	case "memory_history":
+		id := str("id")
+		if id == "" {
+			return "id is required", true
+		}
+		versions, err := db.GetMemoryHistory(id)
+		if err != nil {
+			return "failed to get memory history: " + err.Error(), true
+		}
+		if len(versions) == 0 {
+			return "No version history for this memory — it has never been updated.", false
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "Version history for memory %s (%d changes):\n", id[:8], len(versions))
+		for i, v := range versions {
+			fmt.Fprintf(&b, "\n[v%d — %s]\n  was: %s\n  became: %s\n  reason: %s\n",
+				len(versions)-i, v.ChangedAt[:10], v.OldContent, v.NewContent, v.Reason)
+		}
+		return strings.TrimSpace(b.String()), false
+
 	default:
 		return "Unknown tool: " + name, true
 	}
@@ -942,17 +1109,31 @@ func getSystemInfo(projectPath string) string {
 	return strings.TrimSpace(sb.String())
 }
 
+const maxTreeOutputBytes = 10 * 1024 // 10 KB max — prevents node_modules-style explosions
+
 func formatTree(node *gofs.FileNode, depth int) string {
+	var b strings.Builder
+	writeTreeNode(node, depth, &b)
+	s := b.String()
+	if len(s) >= maxTreeOutputBytes {
+		s = s[:maxTreeOutputBytes] + "\n... (directory listing truncated — use search_files or read specific paths)\n"
+	}
+	return s
+}
+
+func writeTreeNode(node *gofs.FileNode, depth int, b *strings.Builder) {
+	if b.Len() >= maxTreeOutputBytes {
+		return
+	}
 	prefix := strings.Repeat("  ", depth)
 	icon := "📄"
 	if node.Type == "directory" {
 		icon = "📁"
 	}
-	result := fmt.Sprintf("%s%s %s\n", prefix, icon, node.Name)
+	fmt.Fprintf(b, "%s%s %s\n", prefix, icon, node.Name)
 	for _, child := range node.Children {
-		result += formatTree(child, depth+1)
+		writeTreeNode(child, depth+1, b)
 	}
-	return result
 }
 
 // Chat runs the full agentic loop for a user message, streaming results via ctx callbacks.
@@ -1004,9 +1185,22 @@ func Chat(ctx *ChatContext, userMessage string) {
 	windowResult := BuildAttentionConversationWindow(history, userMessage, openTabs, residualProfile)
 	messages := windowResult.Messages
 
-	// Initialise the active tool set to the bootstrap minimum.
-	// The model discovers additional tools by calling search_tools.
+	// Initialise the active tool set. Start with bootstrap, then restore any tools
+	// the model already used in this session — so it doesn't waste a round-trip
+	// re-running search_tools every request.
 	ctx.ActiveTools = bootstrapTools()
+	if recentNames, err := db.GetRecentToolNames(ctx.SessionID, 50); err == nil {
+		activeByName := map[string]bool{}
+		for _, t := range ctx.ActiveTools {
+			activeByName[t.Name] = true
+		}
+		for _, name := range recentNames {
+			if t, ok := toolRegistryIndex[name]; ok && !activeByName[name] {
+				ctx.ActiveTools = append(ctx.ActiveTools, t)
+				activeByName[name] = true
+			}
+		}
+	}
 
 	// Build system prompt
 	branch, _ := gogit.GetCurrentBranch(ctx.ProjectPath)
@@ -1017,24 +1211,70 @@ func Chat(ctx *ChatContext, userMessage string) {
 		fmt.Sprintf("Project: %s", ctx.ProjectPath),
 		fmt.Sprintf("Branch: %s", branch),
 	}
+	// Inject top residuals as always-on baked-in memory (not query-filtered).
+	if memSection := BuildResidualMemorySection(ctx.ProjectPath, ctx.SessionID, 6); memSection != "" {
+		systemLines = append(systemLines, "", memSection)
+	}
+	// Inject project memories as past observations — NOT ground truth.
+	// Code changes. Line numbers drift. Architectural decisions get reversed.
+	// Treat every memory as a hint from the past: useful for orientation,
+	// but always verify against the actual file before acting on it.
+	if memories, err := db.GetProjectMemories(ctx.ProjectPath, 20); err == nil && len(memories) > 0 {
+		var mb strings.Builder
+		mb.WriteString("## Past Observations (hints only — may be stale, verify before acting)\n")
+		mb.WriteString("WARNING: Do NOT use line numbers from memories. Code changes. Always re-read the file.\n")
+		charBudget := 1400
+		now := time.Now().UTC()
+		for _, m := range memories {
+			age := memoryAge(m.UpdatedAt, now)
+			volatility := ""
+			if m.VersionCount >= 3 {
+				volatility = fmt.Sprintf(", changed %dx — VOLATILE", m.VersionCount)
+			} else if m.VersionCount > 0 {
+				volatility = fmt.Sprintf(", changed %dx", m.VersionCount)
+			}
+			line := fmt.Sprintf("- [%s|%s%s] %s\n", m.Category, age, volatility, stripLineNumbers(m.Content))
+			if mb.Len()+len(line) > charBudget {
+				break
+			}
+			mb.WriteString(line)
+			db.TouchMemory(m.ID)
+		}
+		systemLines = append(systemLines, "", strings.TrimSpace(mb.String()))
+	}
 	selectiveContext := BuildSelectiveContext(ctx.ProjectPath, session, userMessage, openTabs, residualProfile)
 	if selectiveContext.Prompt != "" {
 		systemLines = append(systemLines, selectiveContext.Prompt)
 	}
 	systemLines = append(systemLines,
 		"",
-		"## Tool discovery",
-		"You start each request with only three tools: search_tools, read_file, list_directory.",
-		"Before executing any task, call search_tools with a description of what you need to do.",
-		"search_tools injects the matching schemas into your active tool set immediately — no extra round-trip needed.",
-		"Examples:",
-		"  search_tools(\"write files to disk\")      → unlocks write_file",
-		"  search_tools(\"run shell commands build\")  → unlocks shell, test.run",
-		"  search_tools(\"git commit push status\")    → unlocks git_status, git_diff, git_commit",
-		"  search_tools(\"github issues\")             → unlocks github_* tools",
-		"Plan first, discover the tools you need, then execute. Do not call tools you haven't discovered.",
+		"## Tools",
+		"All tools you've used in this session are already active. Call search_tools only if you need a capability you haven't used before.",
+		"IMPORTANT: For greetings, simple questions, or anything not requiring codebase access — respond directly. Do NOT call any tools.",
+		"Examples of what search_tools unlocks when needed:",
+		"  search_tools(\"read files\")        → read_file, list_directory",
+		"  search_tools(\"write files\")       → write_file",
+		"  search_tools(\"run shell\")         → shell, test.run",
+		"  search_tools(\"git\")               → git_status, git_diff, git_commit",
+		"  search_tools(\"github issues\")     → github_* tools",
+		"",
+		"## Memory",
+		"You have memory_save, memory_update, memory_delete, memory_list always available.",
+		"Save the ACTUAL STATE and WHY — not action labels or summaries of what you did.",
+		"",
+		"BAD memory: 'context bloat fix applied' — tells nothing about the real constraint.",
+		"GOOD memory: 'read_file capped at 12KB — Gemma4:31b runs at ~7 tok/s on this M3 Pro; " +
+			"50KB file × 4 reads = ~50k tokens = 26+ min prefill hang, editor was unusable without this limit'.",
+		"",
+		"BAD memory: 'memory versioning added'.",
+		"GOOD memory: 'memory_versions table is append-only; every memory_update stores old+new content and reason " +
+			"so future sessions can see how a belief evolved, not just what it is now'.",
+		"",
+		"Save concepts not locations. Line numbers drift the moment any edit lands.",
+		"Treat your own past memories as hints, not facts. Always re-read the file before editing.",
 		"",
 		"## Principles",
+		"- When the user says to implement or continue, DO IT — don't re-read files already discussed",
 		"- Always validate changes by running the code, not just checking syntax",
 		"- File operations are confined to the current project root unless the user explicitly elevates them",
 		"- Risky shell commands and git commits require explicit user approval",
@@ -1059,6 +1299,8 @@ func Chat(ctx *ChatContext, userMessage string) {
 	}
 	assistantMessageID := newID()
 	db.SaveMessage(assistantMessageID, ctx.SessionID, "assistant", finalText.String(), tc) //nolint:errcheck
+	// Auto-extract memories from this turn — runs async, never blocks response.
+	go autoExtractMemories(ctx.ProjectPath, ctx.SessionID, userMessage, finalText.String(), allToolCalls)
 	db.SaveAttentionResiduals(BuildAttentionResidualRecords(                               //nolint:errcheck
 		ctx.SessionID,
 		userMsgID,
@@ -1284,39 +1526,46 @@ func newID() string {
 
 // ── OpenAI types and agentic loop ─────────────────────────────────────────────
 
-type openAIFunction struct {
+type chatFunction struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
 	Parameters  interface{} `json:"parameters"`
 }
 
-type openAITool struct {
+type chatTool struct {
 	Type     string         `json:"type"`
-	Function openAIFunction `json:"function"`
+	Function chatFunction `json:"function"`
 }
 
-type openAIMessage struct {
+type chatMessage struct {
 	Role       string      `json:"role"`
 	Content    interface{} `json:"content,omitempty"` // string or nil
 	ToolCallID string      `json:"tool_call_id,omitempty"`
 	ToolCalls  interface{} `json:"tool_calls,omitempty"`
 }
 
-type openAIRequest struct {
+type chatRequest struct {
 	Model     string          `json:"model"`
-	Messages  []openAIMessage `json:"messages"`
-	Tools     []openAITool    `json:"tools,omitempty"`
+	Messages  []chatMessage   `json:"messages"`
+	Tools     []chatTool      `json:"tools,omitempty"`
 	Stream    bool            `json:"stream"`
 	KeepAlive string          `json:"keep_alive,omitempty"` // Ollama only — extends model TTL
+	Options   *ollamaOptions  `json:"options,omitempty"`    // Ollama only — context/generation limits
 }
 
-// openAIToolsFrom converts the Anthropic tool definitions to OpenAI format.
-func openAIToolsFrom(src []anthropicTool) []openAITool {
-	out := make([]openAITool, len(src))
+// ollamaOptions contains Ollama-specific generation parameters.
+// Ignored by OpenAI/Anthropic-compatible endpoints.
+type ollamaOptions struct {
+	NumCtx int `json:"num_ctx,omitempty"` // token context window size
+}
+
+// chatToolsFrom converts the Anthropic tool definitions to OpenAI format.
+func chatToolsFrom(src []anthropicTool) []chatTool {
+	out := make([]chatTool, len(src))
 	for i, t := range src {
-		out[i] = openAITool{
+		out[i] = chatTool{
 			Type: "function",
-			Function: openAIFunction{
+			Function: chatFunction{
 				Name:        t.Name,
 				Description: t.Description,
 				Parameters:  t.InputSchema,
@@ -1326,8 +1575,20 @@ func openAIToolsFrom(src []anthropicTool) []openAITool {
 	return out
 }
 
-// runOpenAICompatibleLoop runs the full agentic loop against an OpenAI-compatible chat completions API.
-func runOpenAICompatibleLoop(
+// stripLastToolExchange removes the most recent assistant+tool_calls block and all following
+// tool-result messages from msgs. Used for self-healing when the provider rejects a
+// continuation — the model will get a clean slate to redo its tool calls.
+func stripLastToolExchange(msgs []chatMessage) []chatMessage {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "assistant" && msgs[i].ToolCalls != nil {
+			return msgs[:i]
+		}
+	}
+	return msgs
+}
+
+// runChatCompletionsLoop runs the full agentic loop against any /v1/chat/completions endpoint.
+func runChatCompletionsLoop(
 	ctx *ChatContext,
 	providerName, model, endpointURL, apiKey string,
 	useAuthorization bool,
@@ -1339,45 +1600,79 @@ func runOpenAICompatibleLoop(
 	// keepAlive is Ollama-specific — it resets the model unload timer on every
 	// request so the model stays in VRAM between chat turns. Ignored by OpenAI.
 	keepAlive := ""
+	var ollamaOpts *ollamaOptions
 	if providerName == "ollama" {
 		keepAlive = os.Getenv("OLLAMA_KEEP_ALIVE")
 		if keepAlive == "" {
 			keepAlive = "30m"
 		}
+		// Don't set num_ctx by default — let Ollama use the model's native maximum.
+		// Override with OLLAMA_NUM_CTX if you need to cap it (e.g. low VRAM).
+		if v := os.Getenv("OLLAMA_NUM_CTX"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				ollamaOpts = &ollamaOptions{NumCtx: n}
+			}
+		}
 	}
 	// Convert history to OpenAI message format
-	msgs := []openAIMessage{{Role: "system", Content: systemPrompt}}
+	msgs := []chatMessage{{Role: "system", Content: systemPrompt}}
 	for _, m := range history {
 		content, _ := m.Content.(string)
-		msgs = append(msgs, openAIMessage{Role: m.Role, Content: content})
+		msgs = append(msgs, chatMessage{Role: m.Role, Content: content})
 	}
 
-	oaiTools := openAIToolsFrom(ctx.ActiveTools)
+	// Build a Go context that is cancelled when the user clicks Stop.
+	// Using this on the HTTP request means the TCP connection to Ollama is torn
+	// down immediately — the scanner exits and generation stops at the source.
+	httpCtx, httpCancel := context.WithCancel(context.Background())
+	defer httpCancel()
+	if ctx.Cancel != nil {
+		go func() {
+			select {
+			case <-ctx.Cancel:
+				httpCancel()
+			case <-httpCtx.Done():
+			}
+		}()
+	}
 
+	oaiTools := chatToolsFrom(ctx.ActiveTools)
+
+	healAttempts := 0
+	e1Counts := map[string]int{} // consecutive E1 failures per tool name
 	for {
 		if ctx.isCancelled() {
 			return
 		}
 
 		// Rebuild OAI tools each iteration — search_tools may have added new ones.
-		oaiTools = openAIToolsFrom(ctx.ActiveTools)
+		oaiTools = chatToolsFrom(ctx.ActiveTools)
 
 		windowed := msgs
 		if len(windowed) > 51 { // 1 system + 50 conversation
 			windowed = append(msgs[:1], msgs[len(msgs)-50:]...)
 		}
 
-		req := openAIRequest{
+		req := chatRequest{
 			Model:     model,
 			Messages:  windowed,
 			Tools:     oaiTools,
 			Stream:    true,
 			KeepAlive: keepAlive,
+			Options:   ollamaOpts,
+		}
+
+		// Log estimated prompt size so context bloat is visible in server output.
+		if estimatedTokens := estimateTokens(windowed); estimatedTokens > 0 {
+			log.Printf("[ollama] prompt ~%d tokens (%d msgs)", estimatedTokens, len(windowed))
 		}
 
 		body, _ := json.Marshal(req)
-		httpReq, err := http.NewRequest("POST", endpointURL, bytes.NewReader(body))
+		httpReq, err := http.NewRequestWithContext(httpCtx, "POST", endpointURL, bytes.NewReader(body))
 		if err != nil {
+			if httpCtx.Err() != nil {
+				return // user cancelled
+			}
 			ctx.OnError(providerName + " request build: " + err.Error())
 			return
 		}
@@ -1388,17 +1683,35 @@ func runOpenAICompatibleLoop(
 
 		resp, err := http.DefaultClient.Do(httpReq)
 		if err != nil {
+			if httpCtx.Err() != nil {
+				return // user cancelled — not an error
+			}
+			// Network error — self-heal: strip any pending tool exchange and retry.
+			if healAttempts < 2 {
+				healAttempts++
+				msgs = stripLastToolExchange(msgs)
+				continue
+			}
 			ctx.OnError(providerName + " request: " + err.Error())
 			return
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode != 200 {
 			var errBody map[string]interface{}
 			json.NewDecoder(resp.Body).Decode(&errBody) //nolint:errcheck
+			resp.Body.Close()
+			// Provider rejected the request — self-heal: strip the last tool exchange
+			// so the model retries tool calls fresh without the malformed history.
+			if healAttempts < 2 {
+				healAttempts++
+				msgs = stripLastToolExchange(msgs)
+				continue
+			}
 			ctx.OnError(fmt.Sprintf("%s error %d: %v", providerName, resp.StatusCode, errBody))
 			return
 		}
+		healAttempts = 0 // successful response — reset heal counter
+		defer resp.Body.Close() //nolint:gocritic
 
 		// Parse SSE stream
 		type toolCallDelta struct {
@@ -1443,6 +1756,12 @@ func runOpenAICompatibleLoop(
 				finalText.WriteString(text)
 				ctx.OnChunk(text, false)
 			}
+			// Thinking-model tokens: Ollama puts them in delta.thinking (not delta.content).
+			if thinking, ok := delta["thinking"].(string); ok && thinking != "" {
+				if ctx.OnThinking != nil {
+					ctx.OnThinking(thinking)
+				}
+			}
 			if tcs, ok := delta["tool_calls"].([]interface{}); ok {
 				for _, tcRaw := range tcs {
 					tc, _ := tcRaw.(map[string]interface{})
@@ -1458,8 +1777,21 @@ func runOpenAICompatibleLoop(
 						tcd.id = id
 					}
 					if fn, ok := tc["function"].(map[string]interface{}); ok {
-						if name, ok := fn["name"].(string); ok && name != "" {
-							tcd.name = name
+						newName, hasName := fn["name"].(string)
+						if hasName && newName != "" && tcd.name != "" && tcd.name != newName {
+							// Gemma4/Ollama reuses index 0 for sequential tool calls in the same
+							// stream response. A name change on an existing index means a new tool
+							// call — allocate a new virtual index to avoid smashing the args together.
+							virtualIdx := len(toolCallMap)
+							for toolCallMap[virtualIdx] != nil {
+								virtualIdx++
+							}
+							newTcd := &toolCallDelta{index: virtualIdx}
+							toolCallMap[virtualIdx] = newTcd
+							tcd = newTcd
+						}
+						if hasName && newName != "" {
+							tcd.name = newName
 						}
 						if args, ok := fn["arguments"].(string); ok {
 							tcd.args.WriteString(args)
@@ -1469,6 +1801,9 @@ func runOpenAICompatibleLoop(
 			}
 		}
 		if err := scanner.Err(); err != nil {
+			if httpCtx.Err() != nil {
+				return // user cancelled — connection torn down intentionally
+			}
 			ctx.OnError(providerName + " stream: " + err.Error())
 			return
 		}
@@ -1491,20 +1826,70 @@ func runOpenAICompatibleLoop(
 				Arguments string `json:"arguments"`
 			} `json:"function"`
 		}
-		tcsSlice := make([]oaiTC, len(toolCallMap))
+
+		// DEFERRED LOADING BARRIER: if search_tools is in this batch alongside other
+		// tools, the other tools were called before their schemas were in tools[].
+		// Drop everything except search_tools so the next API iteration has proper
+		// schemas loaded before the model generates args for those tools.
+		hasSearchTools := false
+		for _, tcd := range toolCallMap {
+			if tcd != nil && tcd.name == "search_tools" {
+				hasSearchTools = true
+				break
+			}
+		}
+		if hasSearchTools && len(toolCallMap) > 1 {
+			for i, tcd := range toolCallMap {
+				if tcd != nil && tcd.name != "search_tools" {
+					toolCallMap[i] = nil
+				}
+			}
+		}
+
+		tcsSlice := make([]oaiTC, 0, len(toolCallMap))
 		for i, tcd := range toolCallMap {
-			tcsSlice[i] = oaiTC{
-				ID:   tcd.id,
+			if tcd == nil {
+				continue
+			}
+			// Normalize empty/null args to "{}".
+			argsStr := tcd.args.String()
+			if argsStr == "" || argsStr == "null" {
+				argsStr = "{}"
+			}
+			// Normalize concatenated JSON objects (Gemma emits {"path":"a"}{"path":"b"})
+			// to just the first valid object, both here (so Ollama accepts the continuation)
+			// and later at execution time. Without this, Ollama rejects the continuation
+			// request with 400 because Arguments must be valid JSON.
+			if json.Unmarshal([]byte(argsStr), &(map[string]interface{}{})) != nil {
+				var first map[string]interface{}
+				dec := json.NewDecoder(strings.NewReader(argsStr))
+				if dec.Decode(&first) == nil {
+					if nb, err := json.Marshal(first); err == nil {
+						argsStr = string(nb)
+						tcd.args.Reset()
+						tcd.args.WriteString(argsStr)
+					}
+				}
+			}
+			tcsSlice = append(tcsSlice, oaiTC{
+				ID:   toolCallMap[i].id,
 				Type: "function",
 				Function: struct {
 					Name      string `json:"name"`
 					Arguments string `json:"arguments"`
-				}{Name: tcd.name, Arguments: tcd.args.String()},
-			}
+				}{Name: tcd.name, Arguments: argsStr},
+			})
 		}
-		msgs = append(msgs, openAIMessage{Role: "assistant", ToolCalls: tcsSlice})
+		// Preserve any text the model emitted alongside tool calls (e.g. a plan).
+		// OpenAI wire format allows content + tool_calls in the same assistant message.
+		assistantMsg := chatMessage{Role: "assistant", ToolCalls: tcsSlice}
+		if textBuf.Len() > 0 {
+			assistantMsg.Content = textBuf.String()
+			finalText.WriteString(textBuf.String())
+		}
+		msgs = append(msgs, assistantMsg)
 		} else if textBuf.Len() > 0 {
-			msgs = append(msgs, openAIMessage{Role: "assistant", Content: textBuf.String()})
+			msgs = append(msgs, chatMessage{Role: "assistant", Content: textBuf.String()})
 		}
 
 		if finishReason != "tool_calls" || len(toolCallMap) == 0 {
@@ -1526,13 +1911,23 @@ func runOpenAICompatibleLoop(
 				argsStr = "{}"
 			}
 			if err := json.Unmarshal([]byte(argsStr), &inputMap); err != nil || inputMap == nil {
-				// E1: malformed args — feed compact error back, skip execution
-				errMsg := fmt.Sprintf("E1: invalid JSON arguments for %s. Correct the arguments and retry.", tcd.name)
-				ctx.OnToolCall(tcd.name, map[string]interface{}{"_raw": argsStr})
-				ctx.OnToolResult(tcd.name, errMsg, true)
-				msgs = append(msgs, openAIMessage{Role: "tool", ToolCallID: tcd.id, Content: errMsg})
-				continue
+				// Gemma sometimes concatenates two JSON objects — extract the first valid one.
+				dec := json.NewDecoder(strings.NewReader(argsStr))
+				if decErr := dec.Decode(&inputMap); decErr != nil || inputMap == nil {
+					e1Counts[tcd.name]++
+					var errMsg string
+					if e1Counts[tcd.name] >= 3 {
+						errMsg = fmt.Sprintf("E1: %s arguments are still malformed after multiple attempts. Skip this tool and use a different approach.", tcd.name)
+					} else {
+						errMsg = fmt.Sprintf("E1: invalid JSON arguments for %s. Each tool call must have a single valid JSON object. Correct and retry.", tcd.name)
+					}
+					ctx.OnToolCall(tcd.name, map[string]interface{}{"_raw": argsStr})
+					ctx.OnToolResult(tcd.name, errMsg, true)
+					msgs = append(msgs, chatMessage{Role: "tool", ToolCallID: tcd.id, Content: errMsg})
+					continue
+				}
 			}
+			e1Counts[tcd.name] = 0 // successful parse resets the counter
 
 			ctx.OnToolCall(tcd.name, inputMap)
 			start := time.Now()
@@ -1546,7 +1941,7 @@ func runOpenAICompatibleLoop(
 				ID: tcd.id, Name: tcd.name, Input: inputMap,
 				Result: result, IsError: isError,
 			})
-			msgs = append(msgs, openAIMessage{
+			msgs = append(msgs, chatMessage{
 				Role:       "tool",
 				ToolCallID: tcd.id,
 				Content:    result,
@@ -1557,4 +1952,147 @@ func runOpenAICompatibleLoop(
 			return
 		}
 	}
+}
+
+// autoExtractMemories scans a completed conversation turn and saves atomic memories for
+// any signals found. Runs asynchronously after each assistant response — never blocks.
+// This is lightweight pattern-matching, not an LLM call, so it's always fast.
+func autoExtractMemories(projectPath, sessionID, userMsg, assistantMsg string, toolCalls []ToolCall) {
+lower := strings.ToLower(assistantMsg)
+user := strings.ToLower(userMsg)
+
+type candidate struct {
+content    string
+category   string
+importance float64
+}
+var found []candidate
+
+// Detect explicit decisions in assistant text.
+decisionMarkers := []string{
+"decided to ", "we'll use ", "using ", "going with ",
+"architecture:", "approach:", "design decision:",
+}
+for _, line := range strings.Split(assistantMsg, "\n") {
+ll := strings.ToLower(strings.TrimSpace(line))
+for _, marker := range decisionMarkers {
+if strings.Contains(ll, marker) && len(line) > 20 && len(line) < 200 {
+found = append(found, candidate{strings.TrimSpace(line), "decision", 0.75})
+break
+}
+}
+}
+
+// Detect fixed bugs / resolved errors — only save if the line explains WHY it broke,
+// not just that it was fixed. "Fixed X" is an action label. "Fixed X because Y" is state.
+if strings.Contains(lower, "fixed") || strings.Contains(lower, "resolved") {
+	for _, line := range strings.Split(assistantMsg, "\n") {
+		ll := strings.ToLower(strings.TrimSpace(line))
+		hasResolution := strings.Contains(ll, "fixed") || strings.Contains(ll, "resolved")
+		hasReason := strings.Contains(ll, "because") || strings.Contains(ll, "due to") ||
+			strings.Contains(ll, "caused by") || strings.Contains(ll, "was ") || strings.Contains(ll, "—")
+		if hasResolution && hasReason && len(line) > 20 && len(line) < 220 {
+			found = append(found, candidate{strings.TrimSpace(line), "error", 0.6})
+			break
+		}
+	}
+}
+
+// Detect user preferences from user message.
+prefMarkers := []string{"prefer ", "always ", "never ", "don't ", "please use ", "i want "}
+for _, marker := range prefMarkers {
+if strings.Contains(user, marker) && len(userMsg) < 200 {
+found = append(found, candidate{strings.TrimSpace(userMsg), "preference", 0.8})
+break
+}
+}
+
+// Detect tool-call progress — only git_commit is meaningful; write_file is noise.
+for _, tc := range toolCalls {
+	switch tc.Name {
+	case "git_commit":
+		inputMap, _ := tc.Input.(map[string]interface{})
+		msg, _ := inputMap["message"].(string)
+		if msg != "" && len(msg) < 200 {
+			found = append(found, candidate{
+				fmt.Sprintf("Last commit: %s", msg),
+				"progress", 0.4,
+			})
+		}
+	// write_file deliberately excluded — "Wrote file: X" is action noise, not state
+	}
+}
+
+// Dedup against existing memories to avoid spamming duplicates.
+existing, err := db.GetProjectMemories(projectPath, 50)
+if err != nil {
+existing = nil
+}
+existingSet := make(map[string]bool, len(existing))
+for _, m := range existing {
+existingSet[strings.ToLower(strings.TrimSpace(m.Content))] = true
+}
+
+	for _, c := range found {
+		// Strip line numbers before saving — they drift the moment any edit lands.
+		clean := stripLineNumbers(c.content)
+		if clean == "" {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(clean))
+		if existingSet[key] {
+			continue
+		}
+		db.SaveMemory(db.Memory{ //nolint:errcheck
+			ProjectPath: projectPath,
+			SessionID:   sessionID,
+			Category:    c.category,
+			Content:     clean,
+			Importance:  c.importance,
+		})
+		existingSet[key] = true // prevent dupes within the same batch
+	}
+}
+
+// estimateTokens approximates token count for a slice of chat messages.
+// Uses the chars/4 heuristic — accurate enough for logging and budget checks.
+func estimateTokens(msgs []chatMessage) int {
+total := 0
+for _, m := range msgs {
+if str, ok := m.Content.(string); ok {
+total += len(str) / 4
+}
+total += 4 // role overhead per message
+}
+return total
+}
+
+// lineNumberPattern matches things like "line 42", "at ~1153", ":42:", "line ~90".
+var lineNumberPattern = regexp.MustCompile(`(?i)(line\s*~?\d+|at\s*~?\d+|:\d{2,}[:\s]|\bat\s+line\s+\d+)`)
+
+// stripLineNumbers removes line number references from memory content.
+// Line numbers drift the moment any edit lands — storing them as memories
+// causes the model to navigate to wrong locations and make incorrect edits.
+func stripLineNumbers(s string) string {
+return strings.TrimSpace(lineNumberPattern.ReplaceAllString(s, ""))
+}
+
+// memoryAge returns a human-readable age string for a memory given its updatedAt timestamp.
+// Shown alongside every memory so the model can judge how stale it might be.
+func memoryAge(updatedAt string, now time.Time) string {
+t, err := time.Parse(time.RFC3339, updatedAt)
+if err != nil {
+return "?"
+}
+d := now.Sub(t)
+switch {
+case d < 10*time.Minute:
+return "just now"
+case d < time.Hour:
+return fmt.Sprintf("%dm ago", int(d.Minutes()))
+case d < 24*time.Hour:
+return fmt.Sprintf("%dh ago", int(d.Hours()))
+default:
+return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+}
 }

@@ -1322,8 +1322,33 @@ html, body, #root {
   color: var(--tx);
   font-size: 13px;
   line-height: 1.55;
-  display: inline-block;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
   max-width: 100%;
+}
+
+/* Pencil icon inside bubble — hidden until hover */
+.bubble-edit-icon {
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s;
+  color: var(--tx-3);
+  position: relative;
+  top: 1px;
+}
+
+/* Clickable state: pointer cursor + reveal icon on hover */
+.chat-bubble-can-edit {
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.chat-bubble-can-edit:hover {
+  border-color: rgba(99,102,241,0.5);
+  background: var(--accent-dim2, rgba(99,102,241,0.12));
+}
+.chat-bubble-can-edit:hover .bubble-edit-icon {
+  opacity: 0.6;
 }
 
 .chat-msg-assistant .chat-bubble {

@@ -39,7 +39,7 @@ func newProvider(name string) Provider {
 }
 
 // ── Ollama ───────────────────────────────────────────────────────────────────
-// Uses the OpenAI-compatible /v1/chat/completions endpoint that Ollama exposes.
+// Uses Ollama's /v1/chat/completions endpoint (chat completions protocol).
 // No API key required.
 
 type ollamaProvider struct{}
@@ -52,7 +52,7 @@ func (p *ollamaProvider) RunLoop(
 	finalText *strings.Builder,
 ) {
 	baseURL := os.Getenv("OLLAMA_BASE_URL")
-	runOpenAICompatibleLoop(
+	runChatCompletionsLoop(
 		ctx, "ollama", model,
 		ollamaChatCompletionsURL(baseURL),
 		"", false,
@@ -73,7 +73,7 @@ func (p *openAIProvider) RunLoop(
 	finalText *strings.Builder,
 ) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
-	runOpenAICompatibleLoop(
+	runChatCompletionsLoop(
 		ctx, "openai", model,
 		"https://api.openai.com/v1/chat/completions",
 		apiKey, true,

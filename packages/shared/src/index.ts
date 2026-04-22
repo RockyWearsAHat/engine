@@ -111,6 +111,8 @@ export type ClientMessage =
   | { type: 'project.open'; path: string }
   | { type: 'chat'; sessionId: string; content: string }
   | { type: 'chat.stop'; sessionId: string }
+  | { type: 'chat.edit'; sessionId: string; messageId: string; newContent: string }
+  | { type: 'chat.branch.switch'; sessionId: string; editGroupId: string; branchIndex: number }
   | { type: 'session.create'; projectPath: string }
   | { type: 'session.load'; sessionId: string }
   | { type: 'session.list' }
@@ -138,6 +140,7 @@ export type ClientMessage =
 // WebSocket protocol — Server → Client
 export type ServerMessage =
   | { type: 'chat.started'; sessionId: string }
+  | { type: 'chat.thinking'; sessionId: string; content: string }
   | { type: 'chat.chunk'; sessionId: string; content: string; done: boolean }
   | { type: 'chat.tool_call'; sessionId: string; name: string; input: unknown }
   | { type: 'chat.tool_result'; sessionId: string; name: string; result: unknown; isError: boolean }
@@ -166,6 +169,7 @@ export type ServerMessage =
   | { type: 'editor.tab.focus'; path: string }
   | { type: 'file.created'; path: string }
   | { type: 'folder.created'; path: string }
+  | { type: 'chat.edited'; sessionId: string; messages: Message[]; branchInfo: Record<string, { editGroupId: string; current: number; total: number }> }
   | { type: 'error'; message: string; code?: string };
 
 // Tab and system info types

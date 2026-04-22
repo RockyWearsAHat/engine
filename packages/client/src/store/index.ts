@@ -20,9 +20,19 @@ export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  thinking: string; // thinking-model tokens streamed before the response
   toolCalls: ToolCallDisplay[];
   streaming: boolean;
   failed?: boolean;
+  // afterMsgId is set on user messages that are an edit slot anchor.
+  // It identifies which edit slot (the message just before this one) this belongs to.
+  afterMsgId?: string;
+}
+
+export interface BranchInfo {
+  editGroupId: string;
+  current: number;
+  total: number;
 }
 
 export interface OpenFile {
@@ -48,14 +58,23 @@ interface EditorStore {
   // Chat
   chatMessages: ChatMessage[];
   streamingMessageId: string | null;
+  // branchInfo maps afterMsgId → BranchInfo for slots that have been edited.
+  branchInfo: Record<string, BranchInfo>;
+  // editingMessageId is the ID of the user message currently being inline-edited.
+  editingMessageId: string | null;
   addUserMessage: (id: string, content: string) => void;
   startAssistantMessage: (id: string) => void;
   appendChunk: (id: string, text: string) => void;
+  appendThinking: (id: string, text: string) => void;
   finalizeMessage: (id: string) => void;
   addToolCall: (msgId: string, tc: ToolCallDisplay) => void;
   resolveToolCall: (msgId: string, toolId: string, result: unknown, isError: boolean, durationMs?: number) => void;
   markMessageFailed: (id: string) => void;
   setMessages: (msgs: Message[]) => void;
+  setEditingMessage: (id: string | null) => void;
+  // applyEditedMessages replaces the conversation with the server-confirmed state
+  // after a chat.edit or chat.branch.switch response.
+  applyEditedMessages: (msgs: Message[], branchInfo: Record<string, BranchInfo>) => void;
 
   // File tree
   fileTree: FileNode | null;
@@ -276,19 +295,27 @@ export const useStore = create<EditorStore>((set, get) => ({
 
   chatMessages: [],
   streamingMessageId: null,
+  branchInfo: {},
+  editingMessageId: null,
 
   addUserMessage: (id, content) => set(s => ({
-    chatMessages: [...s.chatMessages, { id, role: 'user', content, toolCalls: [], streaming: false }],
+    chatMessages: [...s.chatMessages, { id, role: 'user', content, thinking: '', toolCalls: [], streaming: false }],
   })),
 
   startAssistantMessage: (id) => set(s => ({
-    chatMessages: [...s.chatMessages, { id, role: 'assistant', content: '', toolCalls: [], streaming: true }],
+    chatMessages: [...s.chatMessages, { id, role: 'assistant', content: '', thinking: '', toolCalls: [], streaming: true }],
     streamingMessageId: id,
   })),
 
   appendChunk: (id, text) => set(s => ({
     chatMessages: s.chatMessages.map(m =>
       m.id === id ? { ...m, content: m.content + text } : m
+    ),
+  })),
+
+  appendThinking: (id, text) => set(s => ({
+    chatMessages: s.chatMessages.map(m =>
+      m.id === id ? { ...m, thinking: m.thinking + text } : m
     ),
   })),
 
@@ -326,6 +353,7 @@ export const useStore = create<EditorStore>((set, get) => ({
       id: m.id,
       role: m.role,
       content: m.content,
+      thinking: '',
       toolCalls: (m.toolCalls ?? []).map(tc => ({
         id: tc.id,
         name: tc.name,
@@ -337,6 +365,27 @@ export const useStore = create<EditorStore>((set, get) => ({
       streaming: false,
     }));
     set({ chatMessages, streamingMessageId: null });
+  },
+
+  setEditingMessage: (id) => set({ editingMessageId: id }),
+
+  applyEditedMessages: (msgs, branchInfo) => {
+    const chatMessages: ChatMessage[] = msgs.map(m => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      thinking: '',
+      toolCalls: (m.toolCalls ?? []).map(tc => ({
+        id: tc.id,
+        name: tc.name,
+        input: tc.input,
+        result: tc.result,
+        isError: tc.isError,
+        pending: false,
+      })),
+      streaming: false,
+    }));
+    set({ chatMessages, streamingMessageId: null, branchInfo, editingMessageId: null });
   },
 
   fileTree: null,

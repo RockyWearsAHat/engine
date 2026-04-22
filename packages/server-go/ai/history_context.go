@@ -176,9 +176,17 @@ func BuildAttentionConversationWindow(
 	for index, selection := range selected {
 		selection.Weight = weights[index]
 		selected[index] = selection
+		// Cap large history messages (e.g. file read results) so stale content
+		// doesn't re-inflate the KV cache on every subsequent turn.
+		// The model already acted on the full content when it ran; history is
+		// a reminder. If it needs the file again it will re-read it.
+		content := selection.Content
+		if len(content) > 3000 {
+			content = content[:3000] + "\n...[history truncated — model saw full content when this ran; re-read if needed]"
+		}
 		messages = append(messages, anthropicMessage{
 			Role:    selection.Role,
-			Content: selection.Content,
+			Content: content,
 		})
 	}
 	messages = append(messages, anthropicMessage{Role: "user", Content: userMessage})
@@ -509,6 +517,61 @@ func BuildAttentionResidualProfile(
 		return nil, err
 	}
 	return buildAttentionResidualProfile(residuals, currentSessionID, query, openTabs), nil
+}
+
+// BuildResidualMemorySection returns the top residuals as an explicit "## Active Memory" block
+// for injection into the system prompt. Unlike the scored profile (which only boosts selection),
+// these are always-on facts the model should carry across every turn regardless of query relevance.
+func BuildResidualMemorySection(projectPath, sessionID string, limit int) string {
+	residuals, err := db.GetProjectAttentionResiduals(projectPath, projectAttentionResidualLimit)
+	if err != nil || len(residuals) == 0 {
+		return ""
+	}
+
+	type scoredResidual struct {
+		r     db.AttentionResidual
+		score float64
+	}
+
+	// Score purely on weight + absolute recency — not query-specific.
+	// We want the residuals that have been most consistently attended to.
+	best := map[string]scoredResidual{}
+	for _, r := range residuals {
+		if strings.TrimSpace(r.Context) == "" {
+			continue
+		}
+		s := r.Weight + math.Min(r.Score/6.0, 1.2) + recencyScore(r.CreatedAt)
+		if r.SessionID == sessionID {
+			s += 0.45
+		}
+		if existing, ok := best[r.SourceKey]; !ok || s > existing.score {
+			best[r.SourceKey] = scoredResidual{r: r, score: s}
+		}
+	}
+
+	ranked := make([]scoredResidual, 0, len(best))
+	for _, v := range best {
+		ranked = append(ranked, v)
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		return ranked[i].score > ranked[j].score
+	})
+
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	if len(ranked) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("## Active Memory (always carry these across turns)\n")
+	for _, sr := range ranked {
+		b.WriteString("- ")
+		b.WriteString(strings.TrimSpace(sr.r.Context))
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 func BuildAttentionResidualRecords(

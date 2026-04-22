@@ -2,46 +2,51 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useStore } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
 import { randomUUID } from '../../utils.js';
-import { ArrowUp, ChevronDown, ChevronRight, Loader2, Check, X, Wrench, Square, ArrowDown, RotateCcw } from 'lucide-react';
+import { ArrowUp, ChevronDown, ChevronRight, Loader2, Check, X, Wrench, Square, ArrowDown, Pencil, ChevronLeft } from 'lucide-react';
 
 export default function AIChat() {
-  const { activeSession, chatMessages, addUserMessage, streamingMessageId } = useStore();
+  const { activeSession, chatMessages, addUserMessage, streamingMessageId, branchInfo, editingMessageId, setEditingMessage } = useStore();
   const [input, setInput] = useState('');
+  const [editDraft, setEditDraft] = useState('');
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  // True when the user is already scrolled to (or near) the bottom.
-  const isAtBottomRef = useRef(true);
-  // Set to true when the user explicitly sends a message so we force-scroll once.
-  const forceScrollRef = useRef(false);
+  const editTextareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Track scroll position to decide whether to auto-scroll on new content.
-  const handleScroll = useCallback(() => {
-    const el = scrollContainerRef.current;
-    if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    isAtBottomRef.current = distanceFromBottom < 48;
-    setShowScrollBtn(!isAtBottomRef.current && !!streamingMessageId);
-  }, [streamingMessageId]);
+
+  // AUTOSCROLL NOT WORKING
+  // // True when the user is already scrolled to (or near) the bottom.
+  // const isAtBottomRef = useRef(true);
+  // // Set to true when the user explicitly sends a message so we force-scroll once.
+  // const forceScrollRef = useRef(false);
+
+  // // Track scroll position to decide whether to auto-scroll on new content.
+  // const handleScroll = useCallback(() => {
+  //   const el = scrollContainerRef.current;
+  //   if (!el) return;
+  //   const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+  //   isAtBottomRef.current = distanceFromBottom < 48;
+  //   setShowScrollBtn(!isAtBottomRef.current && !!streamingMessageId);
+  // }, [streamingMessageId]);
 
   // Auto-scroll when messages update — only if already at bottom or forced.
-  useEffect(() => {
-    if (forceScrollRef.current || isAtBottomRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: forceScrollRef.current ? 'auto' : 'smooth' });
-      forceScrollRef.current = false;
-    } else if (streamingMessageId) {
-      // New content arrived while user is scrolled up — show the FAB.
-      setShowScrollBtn(true);
-    }
-  }, [chatMessages, streamingMessageId]);
+  // useEffect(() => {
+  //   if (forceScrollRef.current || isAtBottomRef.current) {
+  //     messagesEndRef.current?.scrollIntoView({ behavior: forceScrollRef.current ? 'auto' : 'smooth' });
+  //     forceScrollRef.current = false;
+  //   } else if (streamingMessageId) {
+  //     // New content arrived while user is scrolled up — show the FAB.
+  //     setShowScrollBtn(true);
+  //   }
+  // }, [chatMessages, streamingMessageId]);
 
-  const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    isAtBottomRef.current = true;
-    setShowScrollBtn(false);
-  }, []);
+  // const scrollToBottom = useCallback(() => {
+  //   messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  //   isAtBottomRef.current = true;
+  //   setShowScrollBtn(false);
+  // }, []);
 
   const send = useCallback(() => {
     const content = input.trim();
@@ -50,10 +55,10 @@ export default function AIChat() {
     addUserMessage(msgId, content);
     wsClient.send({ type: 'chat', sessionId: activeSession.id, content });
     setInput('');
-    forceScrollRef.current = true;
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-    }
+    // forceScrollRef.current = true;
+    // if (textareaRef.current) {
+    //   textareaRef.current.style.height = 'auto';
+    // }
   }, [input, activeSession, addUserMessage]);
 
   const cancel = useCallback(() => {
@@ -61,22 +66,42 @@ export default function AIChat() {
     wsClient.send({ type: 'chat.stop', sessionId: activeSession.id });
   }, [activeSession, streamingMessageId]);
 
-  // Retry: find the last user message before a failed assistant message and resend it.
-  const retry = useCallback((failedMsgId: string) => {
+  // Begin inline editing a user message.
+  const startEdit = useCallback((msgId: string, currentContent: string) => {
+    if (streamingMessageId) return; // don't edit while streaming
+    setEditDraft(currentContent);
+    setEditingMessage(msgId);
+    setTimeout(() => {
+      editTextareaRef.current?.focus();
+      editTextareaRef.current?.select();
+    }, 0);
+  }, [streamingMessageId, setEditingMessage]);
+
+  // Cancel an in-progress edit without sending.
+  const cancelEdit = useCallback(() => {
+    setEditingMessage(null);
+    setEditDraft('');
+  }, [setEditingMessage]);
+
+  // Confirm an edit — send to server, which checkpoints the old tail and resends.
+  const confirmEdit = useCallback((msgId: string) => {
+    const content = editDraft.trim();
+    if (!content || !activeSession) return;
+
+    //IDK why this is different?? Look into it
+    // wsClient.send({ type: 'chat', sessionId: activeSession.id, content });
+    wsClient.send({ type: 'chat.edit', sessionId: activeSession.id, messageId: msgId, newContent: content });
+    setEditingMessage(null);
+    setEditDraft('');
+    // forceScrollRef.current = true;
+  }, [editDraft, activeSession, setEditingMessage]);
+
+  // Navigate to a different branch at an edit slot.
+  const switchBranch = useCallback((editGroupId: string, targetIndex: number) => {
     if (!activeSession || streamingMessageId) return;
-    const msgs = useStore.getState().chatMessages;
-    const failedIdx = msgs.findIndex(m => m.id === failedMsgId);
-    // Walk backwards to find the preceding user message
-    let userMsg: string | null = null;
-    for (let i = failedIdx - 1; i >= 0; i--) {
-      if (msgs[i].role === 'user') { userMsg = msgs[i].content; break; }
-    }
-    if (!userMsg) return;
-    const msgId = randomUUID();
-    addUserMessage(msgId, userMsg);
-    wsClient.send({ type: 'chat', sessionId: activeSession.id, content: userMsg });
-    forceScrollRef.current = true;
-  }, [activeSession, streamingMessageId, addUserMessage]);
+    wsClient.send({ type: 'chat.branch.switch', sessionId: activeSession.id, editGroupId, branchIndex: targetIndex });
+    // forceScrollRef.current = true;
+  }, [activeSession, streamingMessageId]);
 
   const handleKey = (e: React.KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -160,7 +185,7 @@ export default function AIChat() {
       <div
         ref={scrollContainerRef}
         className="chat-messages"
-        onScroll={handleScroll}
+        // onScroll={handleScroll}
         style={{ position: 'relative' }}
       >
         {chatMessages.length === 0 && (
@@ -180,11 +205,86 @@ export default function AIChat() {
           </div>
         )}
 
-        {chatMessages.map(msg => (
+        {chatMessages.map((msg, idx) => {
+          // The "slot key" for branch info is the ID of the message BEFORE this one.
+          const prevMsgId = idx > 0 ? chatMessages[idx - 1].id : '';
+          const branch = msg.role === 'user' ? branchInfo[prevMsgId] : undefined;
+          const isEditing = editingMessageId === msg.id;
+
+          return (
           <div key={msg.id} className={'chat-msg chat-msg-' + msg.role}>
             {msg.role === 'user' ? (
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <div className="chat-bubble">{msg.content}</div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, maxWidth: '85%' }}>
+                  {/* Branch navigator — shown when this slot has multiple versions */}
+                  {branch && branch.total > 1 && !isEditing && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--tx-3)' }}>
+                      <button
+                        onClick={() => switchBranch(branch.editGroupId, branch.current - 1)}
+                        disabled={branch.current <= 0 || !!streamingMessageId}
+                        style={navBtnStyle(branch.current <= 0)}
+                        title="Previous version"
+                      >
+                        <ChevronLeft size={10} />
+                      </button>
+                      <span>{branch.current + 1} / {branch.total}</span>
+                      <button
+                        onClick={() => switchBranch(branch.editGroupId, branch.current + 1)}
+                        disabled={branch.current >= branch.total - 1 || !!streamingMessageId}
+                        style={navBtnStyle(branch.current >= branch.total - 1)}
+                        title="Next version"
+                      >
+                        <ChevronRight size={10} />
+                      </button>
+                    </div>
+                  )}
+
+                  {isEditing ? (
+                    /* Inline edit textarea */
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', minWidth: 200 }}>
+                      <textarea
+                        ref={editTextareaRef}
+                        value={editDraft}
+                        onChange={e => setEditDraft(e.target.value)}
+                        onKeyDown={e => {
+                          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); confirmEdit(msg.id); }
+                          if (e.key === 'Escape') cancelEdit();
+                        }}
+                        style={{
+                          background: 'var(--surface-2)',
+                          border: '1px solid var(--accent)',
+                          borderRadius: 'var(--radius)',
+                          color: 'var(--tx)',
+                          padding: '8px 10px',
+                          fontSize: 13,
+                          lineHeight: 1.5,
+                          resize: 'vertical',
+                          minHeight: 60,
+                          outline: 'none',
+                          fontFamily: 'inherit',
+                          width: '100%',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                        <button onClick={cancelEdit} style={editActionBtn(false)}>Cancel</button>
+                        <button onClick={() => confirmEdit(msg.id)} disabled={!editDraft.trim()} style={editActionBtn(true)}>
+                          Send ⌘↵
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Bubble is directly clickable to enter edit mode */
+                    <div
+                      className={'chat-bubble chat-bubble-editable' + (streamingMessageId ? '' : ' chat-bubble-can-edit')}
+                      onClick={!streamingMessageId ? () => startEdit(msg.id, msg.content) : undefined}
+                      title={!streamingMessageId ? 'Click to edit' : undefined}
+                    >
+                      {msg.content}
+                      {!streamingMessageId && <Pencil size={10} className="bubble-edit-icon" />}
+                    </div>
+                  )}
+                </div>
               </div>
             ) : (
               <div className="chat-msg-assistant-row">
@@ -198,27 +298,15 @@ export default function AIChat() {
                       onToggle={() => toggleTool(tc.id)}
                     />
                   ))}
+                  {msg.thinking && (
+                    <ThinkingBlock thinking={msg.thinking} streaming={msg.streaming && !msg.content} />
+                  )}
                   {msg.content && (
                     <div className="chat-bubble">
                       <MarkdownText text={msg.content} />
                     </div>
                   )}
-                  {msg.failed && !streamingMessageId && (
-                    <button
-                      onClick={() => retry(msg.id)}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 5,
-                        marginTop: 6, padding: '4px 10px',
-                        borderRadius: 6, border: '1px solid var(--border)',
-                        background: 'transparent', color: 'var(--tx-3)',
-                        fontSize: 11, cursor: 'pointer',
-                      }}
-                      title="Retry this request"
-                    >
-                      <RotateCcw size={11} /> Try again
-                    </button>
-                  )}
-                  {msg.id === streamingMessageId && !msg.content && (
+                  {msg.id === streamingMessageId && !msg.content && !msg.thinking && (
                     <div style={{ padding: '6px 0', display: 'flex', gap: 3 }}>
                       {[0, 1, 2].map(i => (
                         <span key={i} style={{
@@ -234,14 +322,15 @@ export default function AIChat() {
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
         <div ref={messagesEndRef} />
       </div>
 
       {/* Jump-to-bottom FAB — only visible when scrolled up during streaming */}
       {showScrollBtn && (
         <button
-          onClick={scrollToBottom}
+          // onClick={scrollToBottom}
           style={{
             position: 'absolute',
             bottom: 72,
@@ -306,6 +395,33 @@ export default function AIChat() {
       </div>
     </div>
   );
+}
+
+function navBtnStyle(disabled: boolean): React.CSSProperties {
+  return {
+    background: 'transparent',
+    border: 'none',
+    color: disabled ? 'var(--tx-3)' : 'var(--tx-2)',
+    cursor: disabled ? 'default' : 'pointer',
+    opacity: disabled ? 0.35 : 1,
+    padding: '1px 3px',
+    borderRadius: 3,
+    display: 'flex',
+    alignItems: 'center',
+  };
+}
+
+function editActionBtn(primary: boolean): React.CSSProperties {
+  return {
+    padding: '4px 12px',
+    borderRadius: 'var(--radius)',
+    border: primary ? 'none' : '1px solid var(--border)',
+    background: primary ? 'var(--accent)' : 'transparent',
+    color: primary ? 'white' : 'var(--tx-3)',
+    fontSize: 11,
+    fontWeight: primary ? 600 : 400,
+    cursor: 'pointer',
+  };
 }
 
 function ToolBadge({ toolCall, expanded, onToggle }: {
@@ -384,6 +500,40 @@ function inlineFormat(text: string): React.ReactNode {
   }
   if (last < text.length) tokens.push(text.slice(last));
   return tokens.length === 1 ? tokens[0] : <>{tokens}</>;
+}
+
+function ThinkingBlock({ thinking, streaming }: { thinking: string; streaming: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const wordCount = thinking.trim().split(/\s+/).length;
+  return (
+    <div style={{ marginBottom: 4 }}>
+      <button
+        onClick={() => setExpanded(e => !e)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 4,
+          background: 'none', border: 'none', cursor: 'pointer',
+          color: 'var(--tx-3)', fontSize: 11, padding: '2px 0',
+        }}
+      >
+        {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+        {streaming ? (
+          <span style={{ color: 'var(--accent-2)' }}>Thinking…</span>
+        ) : (
+          <span>Thought for {wordCount} words</span>
+        )}
+      </button>
+      {expanded && (
+        <div style={{
+          marginTop: 4, padding: '6px 10px',
+          background: 'var(--surface-2)', borderLeft: '2px solid var(--border)',
+          borderRadius: 'var(--radius)', fontSize: 11, color: 'var(--tx-3)',
+          whiteSpace: 'pre-wrap', lineHeight: 1.6, maxHeight: 300, overflowY: 'auto',
+        }}>
+          {thinking}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function MarkdownText({ text }: { text: string }) {

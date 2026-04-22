@@ -78,6 +78,7 @@ func main() {
 
 	http.HandleFunc("/ws", hub.ServeWS)
 	http.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"status":"ok","projectPath":%q}`, projectPath)
 	})

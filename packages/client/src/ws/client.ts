@@ -41,6 +41,11 @@ export class WSClient {
   private remoteConfig: RemoteConfig | null = null;
   private connectAttempt = 0;
   private queuedMessages: ClientMessage[] = [];
+  // Track whether we have ever had a successful connection. On first-boot the
+  // health probe can pass slightly before the OS TCP stack is ready for a WS
+  // upgrade — if the initial WS attempt fails we retry immediately (0 ms) once
+  // rather than waiting the full 1 s reconnect back-off.
+  private hasConnectedOnce = false;
 
   connect(remote?: RemoteConfig): void {
     if (this.disconnectTimer) {
@@ -79,22 +84,56 @@ export class WSClient {
   }
 
   private async waitForLocalDesktopServer(attempt: number): Promise<boolean> {
-    for (let i = 0; i < 40; i++) {
-      if (!this.shouldConnect || attempt !== this.connectAttempt) {
-        return false;
-      }
-      if (await this.probeLocalDesktopServer()) {
-        return true;
-      }
-      await sleep(100);
+    if (!this.shouldConnect || attempt !== this.connectAttempt) return false;
+
+    let resolved = false;
+    let resolveFn!: () => void;
+    const gate = new Promise<void>((r) => { resolveFn = r; });
+    const finish = () => { if (!resolved) { resolved = true; resolveFn(); } };
+
+    // Primary: Tauri emits `engine:server-ready` only after the Go server's
+    // WebSocket endpoint has accepted a real upgrade handshake from Rust.
+    // This means when we receive the event, `new WebSocket(url)` is guaranteed
+    // to succeed — no timing guesses or settle delays needed.
+    try {
+      const { once } = await import('@tauri-apps/api/event');
+      once('engine:server-ready', finish).catch(() => { /* ignore */ });
+    } catch {
+      // Tauri event API unavailable — HTTP poll fallback will drive resolution
     }
-    if (!this.shouldConnect || attempt !== this.connectAttempt) {
-      return false;
-    }
-    const delay = this.reconnectDelay;
-    this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxDelay);
-    this.scheduleConnect(delay);
-    return false;
+
+    // Fallback: HTTP health poll handles the edge case where the server was
+    // already running when the app launched and the event fired before our
+    // listener was registered. We add a settle after HTTP success because
+    // unlike the event path, HTTP-ready ≠ WS-ready on WKWebView.
+    void (async () => {
+      for (let i = 0; i < 80; i++) {
+        if (resolved || !this.shouldConnect || attempt !== this.connectAttempt) return;
+        if (await this.probeLocalDesktopServer()) {
+          // WKWebView can accept HTTP before its WS stack is ready; give it
+          // enough time. Only needed when we didn't get the Rust WS-confirmed
+          // event (which means we fell through to this HTTP path).
+          if (!this.hasConnectedOnce) await sleep(800);
+          finish();
+          return;
+        }
+        await sleep(100);
+      }
+      // Polling exhausted — schedule a backoff reconnect
+      if (!resolved) {
+        const delay = this.reconnectDelay;
+        this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxDelay);
+        this.scheduleConnect(delay);
+        finish();
+      }
+    })();
+
+    // Safety timeout so we never hang the UI
+    const timeoutId = setTimeout(finish, 15_000);
+    await gate;
+    clearTimeout(timeoutId);
+
+    return this.shouldConnect && attempt === this.connectAttempt;
   }
 
   private async probeLocalDesktopServer(): Promise<boolean> {
@@ -104,13 +143,14 @@ export class WSClient {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 300);
     try {
-      await fetch(localDesktopHealthURL(), {
+      // Use cors mode so we can read the response status — no-cors returns an
+      // opaque response that looks like success even when the server is not up.
+      const res = await fetch(localDesktopHealthURL(), {
         method: 'GET',
-        mode: 'no-cors',
         cache: 'no-store',
         signal: controller.signal,
       });
-      return true;
+      return res.ok;
     } catch {
       return false;
     } finally {
@@ -162,7 +202,10 @@ export class WSClient {
         handler();
       }
       if (!this.shouldConnect) return;
-      const delay = this.reconnectDelay;
+      // On first-boot the initial WS attempt can fail before we have ever
+      // connected (race between health probe and WS readiness). Retry
+      // immediately so the user sees no disconnected gap at startup.
+      const delay = this.hasConnectedOnce ? this.reconnectDelay : 0;
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxDelay);
       this.scheduleConnect(delay);
     };
@@ -172,6 +215,7 @@ export class WSClient {
 
   private async handleOpen(ws: WebSocket): Promise<void> {
     this.reconnectDelay = 1000;
+    this.hasConnectedOnce = true;
     for (const handler of this.openHandlers) {
       await handler();
       if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) {

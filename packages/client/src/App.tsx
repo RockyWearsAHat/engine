@@ -117,7 +117,8 @@ export default function App() {
     sessions, setSessions,
     activeSession, setActiveSession,
     chatMessages, addUserMessage, startAssistantMessage,
-    appendChunk, finalizeMessage, markMessageFailed, addToolCall, resolveToolCall, setMessages,
+    appendChunk, appendThinking, finalizeMessage, markMessageFailed, addToolCall, resolveToolCall, setMessages,
+    applyEditedMessages,
     fileTree, setFileTree, mergeFileTree,
     openFiles, activeFilePath, openFile, clearOpenFiles, setActiveFile, markFileSaved,
     gitStatus, setGitStatus,
@@ -993,6 +994,16 @@ export default function App() {
           });
           break;
 
+        case 'chat.thinking': {
+          const sid = msg.sessionId;
+          const msgId = ensureStreamingAssistantMessageRef.current(sid);
+          if (msg.content) {
+            appendThinking(msgId, msg.content);
+          }
+          updateAgentSession(sid, { isStreaming: true, currentActivity: 'Thinking...' });
+          break;
+        }
+
         case 'chat.chunk': {
           const sid = msg.sessionId;
           const msgId = ensureStreamingAssistantMessageRef.current(sid);
@@ -1064,6 +1075,17 @@ export default function App() {
             markMessageFailed(msgId);
             streamingRef.current = null;
           }
+          pendingToolCallsRef.current[msg.sessionId] = [];
+          updateAgentSession(msg.sessionId, {
+            isStreaming: false,
+            currentActivity: '',
+          });
+          break;
+
+        case 'chat.edited':
+          // Server confirmed an edit or branch switch — replace the conversation
+          // and carry the branchInfo so the UI can show navigation arrows.
+          applyEditedMessages(msg.messages, msg.branchInfo ?? {});
           pendingToolCallsRef.current[msg.sessionId] = [];
           updateAgentSession(msg.sessionId, {
             isStreaming: false,
