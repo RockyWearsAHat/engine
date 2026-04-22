@@ -55,6 +55,12 @@ func migrate() error {
 			created_at   TEXT NOT NULL,
 			updated_at   TEXT NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS project_directions (
+			project_path TEXT PRIMARY KEY,
+			summary      TEXT NOT NULL DEFAULT '',
+			created_at   TEXT NOT NULL,
+			updated_at   TEXT NOT NULL
+		);
 		CREATE TABLE IF NOT EXISTS messages (
 			id         TEXT PRIMARY KEY,
 			session_id TEXT NOT NULL,
@@ -127,6 +133,7 @@ type Session struct {
 	ID           string `json:"id"`
 	ProjectPath  string `json:"projectPath"`
 	BranchName   string `json:"branchName"`
+	ProjectDirection string `json:"projectDirection,omitempty"`
 	Summary      string `json:"summary"`
 	CreatedAt    string `json:"createdAt"`
 	UpdatedAt    string `json:"updatedAt"`
@@ -202,6 +209,9 @@ func scanSession(s scanner) (*Session, error) {
 		&sess.CreatedAt, &sess.UpdatedAt, &sess.MessageCount)
 	if err != nil {
 		return nil, err
+	}
+	if direction, directionErr := GetProjectDirection(sess.ProjectPath); directionErr == nil {
+		sess.ProjectDirection = direction
 	}
 	return &sess, nil
 }

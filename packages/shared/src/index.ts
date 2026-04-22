@@ -5,6 +5,7 @@ export interface Session {
   branchName: string;
   createdAt: string;
   updatedAt: string;
+  projectDirection?: string;
   summary: string;
   messageCount: number;
 }

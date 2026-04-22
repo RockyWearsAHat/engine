@@ -60,6 +60,9 @@ func seedHistoryFixtures(t *testing.T, projectDir string) {
 	if err := db.UpdateSessionSummary("session-old", "Past fix: retrieved validation evidence and session memory to unblock long-running debugging."); err != nil {
 		t.Fatalf("update old summary: %v", err)
 	}
+	if err := db.UpsertProjectDirection(projectDir, "Project goal: Engine should preserve project direction across sessions.\nArchitecture direction: Persistent context is first-class."); err != nil {
+		t.Fatalf("upsert project direction: %v", err)
+	}
 
 	messages := []struct {
 		id        string

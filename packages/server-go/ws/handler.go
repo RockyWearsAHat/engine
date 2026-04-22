@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"github.com/engine/server/db"
 	gofs "github.com/engine/server/fs"
 	gogit "github.com/engine/server/git"
+	"github.com/engine/server/remote"
 	"github.com/engine/server/terminal"
 	"github.com/engine/server/workspace"
 	"github.com/gorilla/websocket"
@@ -30,15 +32,23 @@ var runAIChat = ai.Chat
 // Hub manages the WebSocket server and default project path.
 type Hub struct {
 	projectPath string
+	localAuthToken string
 }
 
 // NewHub creates a new Hub.
 func NewHub(projectPath string) *Hub {
-	return &Hub{projectPath: projectPath}
+	return &Hub{projectPath: projectPath, localAuthToken: strings.TrimSpace(os.Getenv("ENGINE_LOCAL_WS_TOKEN"))}
 }
 
 // ServeWS upgrades an HTTP request to a WebSocket connection and handles it.
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
+	if h.localAuthToken != "" {
+		token := remote.ExtractToken(r)
+		if subtle.ConstantTimeCompare([]byte(token), []byte(h.localAuthToken)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("ws upgrade error: %v", err)
@@ -264,6 +274,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		// Only create a new session when none exists yet.
 		var sessionID string
 		var sessionCreated bool
+		ai.EnsureProjectDirection(msg.Path)
 		if existing, err := db.ListSessions(msg.Path); err == nil && len(existing) > 0 {
 			sessionID = existing[0].ID
 		} else {
@@ -330,6 +341,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr(err.Error(), "DB_ERROR")
 			return
 		}
+		ai.EnsureProjectDirection(projectPath)
 		if summary := ai.BuildInitialSessionSummary(projectPath); summary != "" {
 			db.UpdateSessionSummary(id, summary) //nolint:errcheck
 		}
@@ -433,7 +445,12 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 				},
 				SendToClient: func(msgType string, payload interface{}) {
 					m := map[string]interface{}{"type": msgType}
-					if p, ok := payload.(map[string]interface{}); ok {
+					switch p := payload.(type) {
+					case map[string]interface{}:
+						for k, v := range p {
+							m[k] = v
+						}
+					case map[string]string:
 						for k, v := range p {
 							m[k] = v
 						}
