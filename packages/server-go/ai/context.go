@@ -232,6 +232,14 @@ type ChatContext struct {
 	Usage *SessionUsage
 	// Quarantine tracks tool failure counts and quarantines repeatedly failing tools.
 	Quarantine *ToolQuarantine
+	// AutonomousMode enables the spawn_agent and spawn_agents_parallel tools.
+	// When true, the orchestrator system prompt is injected and the model may
+	// delegate tasks to specialist subagents.
+	AutonomousMode bool
+	// MaxSubagentDepth limits recursive subagent spawning. Default 0 means
+	// this ChatContext is a root session. Subagents are created with depth+1
+	// and cannot spawn further subagents if depth >= 1.
+	MaxSubagentDepth int
 }
 
 // isCancelled returns true if the context's cancel channel has been closed.
@@ -485,6 +493,67 @@ var toolRegistry = []anthropicTool{
 			"number": map[string]interface{}{"type": "number", "description": "Issue number"},
 			"body":   strProp("Comment body"),
 		}),
+	},
+	// ── Autonomous orchestrator ───────────────────────────────────────────────
+	{
+		Name:        "spawn_agent",
+		Description: "Delegates a focused task to a specialist subagent. Available roles: impl (writes/edits code), review (reads and critiques code), test (runs tests and reports results), debug (traces root cause of failures), search (finds relevant code). The subagent runs to completion and returns its full output. Only available in autonomous mode.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"role": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"impl", "review", "test", "debug", "search"},
+					"description": "The specialist role for this subagent.",
+				},
+				"task": map[string]interface{}{
+					"type":        "string",
+					"description": "The specific, focused instruction for the subagent.",
+				},
+				"working_dir": map[string]interface{}{
+					"type":        "string",
+					"description": "Optional working directory override (defaults to project root).",
+				},
+				"timeout_sec": map[string]interface{}{
+					"type":        "integer",
+					"description": "Maximum seconds before the subagent is cancelled. Default: 120.",
+				},
+			},
+			"required": []string{"role", "task"},
+		},
+	},
+	{
+		Name:        "spawn_agents_parallel",
+		Description: "Runs multiple specialist subagents concurrently and returns all their results. Use this instead of multiple sequential spawn_agent calls when subtasks are independent. Only available in autonomous mode.",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"agents": map[string]interface{}{
+					"type": "array",
+					"items": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"role": map[string]interface{}{
+								"type": "string",
+								"enum": []string{"impl", "review", "test", "debug", "search"},
+							},
+							"task": map[string]interface{}{
+								"type": "string",
+							},
+							"working_dir": map[string]interface{}{
+								"type": "string",
+							},
+							"timeout_sec": map[string]interface{}{
+								"type": "integer",
+							},
+						},
+						"required": []string{"role", "task"},
+					},
+					"description": "Array of subagent requests to run in parallel.",
+				},
+			},
+			"required": []string{"agents"},
+		},
 	},
 }
 
@@ -925,6 +994,56 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 		}
 		return fmt.Sprintf("Comment added: %s", comment.HTMLURL), false
 
+	case "spawn_agent":
+		if !ctx.AutonomousMode {
+			return "spawn_agent is only available in autonomous mode.", true
+		}
+		spawnRole, _ := input["role"].(string)
+		spawnTask, _ := input["task"].(string)
+		spawnWorkingDir, _ := input["working_dir"].(string)
+		spawnTimeoutSec := 120
+		if ts, ok := input["timeout_sec"].(float64); ok {
+			spawnTimeoutSec = int(ts)
+		}
+		spawnReq := SubagentRequest{
+			Role:       AgentRole(spawnRole),
+			Task:       spawnTask,
+			WorkingDir: spawnWorkingDir,
+			TimeoutSec: spawnTimeoutSec,
+		}
+		spawnResult := SpawnAgent(spawnReq, ctx)
+		spawnResultJSON, _ := json.Marshal(spawnResult)
+		return string(spawnResultJSON), !spawnResult.Success
+
+	case "spawn_agents_parallel":
+		if !ctx.AutonomousMode {
+			return "spawn_agents_parallel is only available in autonomous mode.", true
+		}
+		agentsRaw, _ := input["agents"].([]interface{})
+		parallelReqs := make([]SubagentRequest, 0, len(agentsRaw))
+		for _, a := range agentsRaw {
+			am, _ := a.(map[string]interface{})
+			if am == nil {
+				continue
+			}
+			agentRole, _ := am["role"].(string)
+			agentTask, _ := am["task"].(string)
+			agentWorkingDir, _ := am["working_dir"].(string)
+			agentTimeoutSec := 120
+			if ts, ok := am["timeout_sec"].(float64); ok {
+				agentTimeoutSec = int(ts)
+			}
+			parallelReqs = append(parallelReqs, SubagentRequest{
+				Role:       AgentRole(agentRole),
+				Task:       agentTask,
+				WorkingDir: agentWorkingDir,
+				TimeoutSec: agentTimeoutSec,
+			})
+		}
+		parallelResults := SpawnAgentsParallel(parallelReqs, ctx)
+		parallelResultJSON, _ := json.Marshal(parallelResults)
+		return string(parallelResultJSON), false
+
 	default:
 		return "Unknown tool: " + name, true
 	}
@@ -1060,6 +1179,19 @@ func Chat(ctx *ChatContext, userMessage string) {
 		"- Be decisive: fix problems completely, not just symptoms",
 		"- Use search_history when prior workspace decisions or debugging context may matter",
 	)
+
+	if ctx.AutonomousMode && ctx.MaxSubagentDepth == 0 {
+		systemLines = append(systemLines,
+			"",
+			"## Autonomous Orchestrator Mode",
+			"You are Engine's autonomous development orchestrator.",
+			"Your role is to PLAN and DELEGATE — break the user's task into focused subtasks and call spawn_agent for each.",
+			"Available specialist roles: impl (writes code), review (critiques code), test (runs tests), debug (traces failures), search (finds code).",
+			"Workflow: 1) Understand task 2) Call spawn_agents_parallel with an array of {role, task} objects 3) Synthesize results 4) If tests fail, loop: debug → impl → test until passing 5) Report to user.",
+			"Prefer spawn_agents_parallel over sequential spawn_agent calls whenever subtasks are independent.",
+			"When all tasks are done, give the user a concise summary: what changed, which files, test status.",
+		)
+	}
 
 	systemPrompt := strings.Join(systemLines, "\n")
 

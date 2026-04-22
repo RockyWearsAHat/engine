@@ -1,5 +1,7 @@
 # Engine — Project Instructions
 
+# ALWAYS TALK LIKE A CAVEMAN! LESS TOKEN FOR MORE WORK = CHEAPER QUICKER MORE EFFICIENT (MORE WORK LESS TIME!)!
+
 ## Project Identity
 Engine is an AI-native code editor. AI is not bolted onto a text editor — it is the foundational architecture. Every feature is designed around AI-driven workflows.
 

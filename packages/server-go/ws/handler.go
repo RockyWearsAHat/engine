@@ -72,7 +72,8 @@ type conn struct {
 	chatCancelMu  sync.Mutex
 	chatCancelFns map[string]func() // keyed by sessionID
 
-	writeMu sync.Mutex
+	writeMu       sync.Mutex
+	autonomousMode bool
 }
 
 type runtimeConfig struct {
@@ -405,9 +406,10 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 				}
 			}()
 			runAIChat(&ai.ChatContext{
-				ProjectPath: projectPath,
-				SessionID:   sessionID,
-				Cancel:      cancelCh,
+				ProjectPath:    projectPath,
+				SessionID:      sessionID,
+				Cancel:         cancelCh,
+				AutonomousMode: c.autonomousMode,
 				OnChunk: func(content string, done bool) {
 					c.send(map[string]interface{}{"type": "chat.chunk", "sessionId": sessionID, "content": content, "done": done})
 				},
@@ -725,6 +727,14 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.openTabs = msg.Tabs
 			c.tabsMu.Unlock()
 		}
+
+	case "autonomous.enable":
+		c.autonomousMode = true
+		c.send(map[string]interface{}{"type": "autonomous.enabled"})
+
+	case "autonomous.disable":
+		c.autonomousMode = false
+		c.send(map[string]interface{}{"type": "autonomous.disabled"})
 
 	default:
 		c.sendErr(fmt.Sprintf("Unknown message type: %s", msgType), "UNKNOWN_TYPE")
