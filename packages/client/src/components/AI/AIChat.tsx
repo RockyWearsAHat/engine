@@ -122,38 +122,6 @@ export default function AIChat() {
               </>
             )}
           </div>
-          {activeSession.summary && (
-            <div style={{
-              margin: '0 12px 10px',
-              padding: '10px 12px',
-              borderRadius: 3,
-              border: '1px solid rgba(125, 211, 252, 0.14)',
-              background: 'rgba(125,211,252,0.06)',
-            }}>
-              <div style={{
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: '0.12em',
-                textTransform: 'uppercase',
-                color: '#7dd3fc',
-                marginBottom: 6,
-              }}>
-                Project memory
-              </div>
-              <div style={{
-                fontSize: 11,
-                color: 'var(--tx-2)',
-                lineHeight: 1.6,
-                whiteSpace: 'pre-line',
-                display: '-webkit-box',
-                WebkitBoxOrient: 'vertical',
-                WebkitLineClamp: 4,
-                overflow: 'hidden',
-              }}>
-                {activeSession.summary}
-              </div>
-            </div>
-          )}
         </div>
       )}
 
