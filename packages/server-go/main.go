@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/engine/server/db"
+	"github.com/engine/server/discord"
 	"github.com/engine/server/remote"
 	"github.com/engine/server/vpn"
 	"github.com/engine/server/ws"
@@ -33,6 +34,19 @@ func main() {
 	}
 
 	hub := ws.NewHub(projectPath)
+
+	// Optional Discord control plane: private server for remote status/control.
+	if cfg, err := discord.LoadConfig(projectPath); err != nil {
+		log.Fatalf("Invalid Discord config: %v", err)
+	} else if cfg.Enabled {
+		discordService, err := discord.NewService(cfg, projectPath)
+		if err != nil {
+			log.Fatalf("Failed to initialize Discord service: %v", err)
+		}
+		if err := discordService.Start(); err != nil {
+			log.Fatalf("Failed to start Discord service: %v", err)
+		}
+	}
 
 	// VPN tunnel mode: ENGINE_VPN=1 starts Ed25519-authenticated tunnel on top of TLS
 	if os.Getenv("ENGINE_VPN") == "1" {
