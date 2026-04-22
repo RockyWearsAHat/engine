@@ -57,8 +57,14 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Lint
+        run: pnpm lint
+
       - name: Build web client
         run: pnpm build
+
+      - name: Test client with coverage thresholds
+        run: pnpm --filter @engine/client exec vitest run --coverage --coverage.thresholds.statements=80 --coverage.thresholds.branches=70
 
       - name: Test Go sidecar
         working-directory: packages/server-go
