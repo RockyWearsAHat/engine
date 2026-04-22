@@ -234,3 +234,96 @@ func ResolveGitHubRepo(cwd string) (string, string, error) {
 
 	return "", "", fmt.Errorf("not a GitHub repo")
 }
+
+// WorktreeInfo describes a single git worktree.
+type WorktreeInfo struct {
+	Path   string `json:"path"`
+	Branch string `json:"branch"`
+	Head   string `json:"head"`
+}
+
+// CreateWorktree creates a new git worktree at worktreePath on a new branch named branchName.
+// The branch is created from HEAD if it does not already exist.
+// Returns an error if the worktree already exists at that path.
+func CreateWorktree(repoPath, worktreePath, branchName string) error {
+	// Try to create worktree with new branch.
+	_, err := run(repoPath, "worktree", "add", "-b", branchName, worktreePath)
+	if err != nil {
+		// Branch may already exist — try without -b.
+		_, err2 := run(repoPath, "worktree", "add", worktreePath, branchName)
+		if err2 != nil {
+			return fmt.Errorf("git worktree add: %w (branch create: %v)", err2, err)
+		}
+	}
+	return nil
+}
+
+// RemoveWorktree removes a worktree and its reference from the repo.
+// Equivalent to `git worktree remove --force <path>`.
+func RemoveWorktree(repoPath, worktreePath string) error {
+	_, err := run(repoPath, "worktree", "remove", "--force", worktreePath)
+	return err
+}
+
+// PruneWorktrees removes stale worktree references (worktrees whose directories no longer exist).
+func PruneWorktrees(repoPath string) error {
+	_, err := run(repoPath, "worktree", "prune")
+	return err
+}
+
+// ListWorktrees returns information about all worktrees for the repo at repoPath.
+func ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
+	out, err := run(repoPath, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	var result []WorktreeInfo
+	var current WorktreeInfo
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			if current.Path != "" {
+				result = append(result, current)
+			}
+			current = WorktreeInfo{Path: strings.TrimPrefix(line, "worktree ")}
+		case strings.HasPrefix(line, "HEAD "):
+			current.Head = strings.TrimPrefix(line, "HEAD ")
+		case strings.HasPrefix(line, "branch "):
+			current.Branch = strings.TrimPrefix(strings.TrimPrefix(line, "branch "), "refs/heads/")
+		case line == "":
+			if current.Path != "" {
+				result = append(result, current)
+				current = WorktreeInfo{}
+			}
+		}
+	}
+	if current.Path != "" {
+		result = append(result, current)
+	}
+	return result, nil
+}
+
+// GetBaseBranch returns the name of the main baseline branch (main, master, or dev).
+// Returns "main" as default if none of these are found.
+func GetBaseBranch(repoPath string) string {
+	for _, candidate := range []string{"main", "master", "dev"} {
+		out, err := run(repoPath, "rev-parse", "--verify", candidate)
+		if err == nil && strings.TrimSpace(out) != "" {
+			return candidate
+		}
+	}
+	return "main"
+}
+
+// CheckoutBranch switches the worktree at worktreePath (or repoPath for the main worktree) to branchName.
+func CheckoutBranch(repoPath, branchName string) error {
+	_, err := run(repoPath, "checkout", branchName)
+	return err
+}
+
+// RunGit executes a git command in the given directory and returns stdout+stderr.
+// This is a public wrapper for use by other packages that need raw git access.
+func RunGit(cwd string, args ...string) (string, error) {
+	return run(cwd, args...)
+}
