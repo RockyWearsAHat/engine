@@ -20,6 +20,8 @@ import (
 const (
 	defaultCommandPrefix   = "!"
 	defaultControlChanName = "engine-control"
+	defaultConfigFileName  = "discord.json"
+	defaultStateFileName   = "discord-state.json"
 	maxDiscordMessageChars = 1800
 )
 
@@ -32,6 +34,17 @@ type Config struct {
 	CommandPrefix      string
 	ControlChannelName string
 	StoragePath        string
+	ConfigFilePath     string
+}
+
+type fileConfig struct {
+	Enabled            *bool    `json:"enabled"`
+	BotToken           string   `json:"botToken"`
+	GuildID            string   `json:"guildId"`
+	AllowedUserIDs     []string `json:"allowedUserIds"`
+	CommandPrefix      string   `json:"commandPrefix"`
+	ControlChannelName string   `json:"controlChannelName"`
+	StoragePath        string   `json:"storagePath"`
 }
 
 // ProjectBinding keeps channel/project mapping and runtime controls.
@@ -58,40 +71,125 @@ type Service struct {
 	active   map[string]bool
 }
 
-// LoadConfig reads Discord configuration from env vars.
+// LoadConfig reads Discord configuration from a project file first, then env overrides.
 func LoadConfig(projectPath string) (Config, error) {
 	cfg := Config{
-		Enabled:            strings.TrimSpace(os.Getenv("ENGINE_DISCORD")) == "1",
-		BotToken:           strings.TrimSpace(os.Getenv("ENGINE_DISCORD_BOT_TOKEN")),
-		GuildID:            strings.TrimSpace(os.Getenv("ENGINE_DISCORD_GUILD_ID")),
-		AllowedUsers:       parseCSVSet(os.Getenv("ENGINE_DISCORD_ALLOWED_USER_IDS")),
-		CommandPrefix:      strings.TrimSpace(os.Getenv("ENGINE_DISCORD_PREFIX")),
-		ControlChannelName: strings.TrimSpace(os.Getenv("ENGINE_DISCORD_CONTROL_CHANNEL")),
-		StoragePath:        filepath.Join(stateDir(projectPath), "discord"),
+		AllowedUsers:       map[string]bool{},
+		CommandPrefix:      defaultCommandPrefix,
+		ControlChannelName: defaultControlChanName,
+		StoragePath:        stateDir(projectPath),
+		ConfigFilePath:     configFilePath(projectPath),
 	}
 
-	if cfg.CommandPrefix == "" {
-		cfg.CommandPrefix = defaultCommandPrefix
+	projectCfg, exists, err := loadProjectConfig(projectPath)
+	if err != nil {
+		return cfg, err
 	}
-	if cfg.ControlChannelName == "" {
-		cfg.ControlChannelName = defaultControlChanName
+	if exists {
+		applyFileConfig(&cfg, projectCfg)
 	}
+	applyEnvOverrides(&cfg)
+
 	if !cfg.Enabled {
 		return cfg, nil
 	}
 	if cfg.BotToken == "" {
-		return cfg, fmt.Errorf("ENGINE_DISCORD_BOT_TOKEN is required when ENGINE_DISCORD=1")
+		return cfg, fmt.Errorf("discord bot token is required in %s or ENGINE_DISCORD_BOT_TOKEN", cfg.ConfigFilePath)
 	}
 	if cfg.GuildID == "" {
-		return cfg, fmt.Errorf("ENGINE_DISCORD_GUILD_ID is required for private-server mode")
+		return cfg, fmt.Errorf("discord guild id is required in %s or ENGINE_DISCORD_GUILD_ID", cfg.ConfigFilePath)
 	}
 	if len(cfg.AllowedUsers) == 0 {
-		return cfg, fmt.Errorf("ENGINE_DISCORD_ALLOWED_USER_IDS must include at least one Discord user id")
+		return cfg, fmt.Errorf("at least one allowed Discord user id is required in %s or ENGINE_DISCORD_ALLOWED_USER_IDS", cfg.ConfigFilePath)
 	}
 	if err := os.MkdirAll(cfg.StoragePath, 0700); err != nil {
 		return cfg, fmt.Errorf("create discord storage: %w", err)
 	}
 	return cfg, nil
+}
+
+func loadProjectConfig(projectPath string) (fileConfig, bool, error) {
+	path := configFilePath(projectPath)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fileConfig{}, false, nil
+		}
+		return fileConfig{}, false, fmt.Errorf("read discord config: %w", err)
+	}
+
+	var cfg fileConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return fileConfig{}, false, fmt.Errorf("parse discord config %s: %w", path, err)
+	}
+	return cfg, true, nil
+}
+
+func applyFileConfig(cfg *Config, input fileConfig) {
+	if input.Enabled != nil {
+		cfg.Enabled = *input.Enabled
+	}
+	if value := strings.TrimSpace(input.BotToken); value != "" {
+		cfg.BotToken = value
+	}
+	if value := strings.TrimSpace(input.GuildID); value != "" {
+		cfg.GuildID = value
+	}
+	if len(input.AllowedUserIDs) > 0 {
+		cfg.AllowedUsers = parseSliceSet(input.AllowedUserIDs)
+	}
+	if value := strings.TrimSpace(input.CommandPrefix); value != "" {
+		cfg.CommandPrefix = value
+	}
+	if value := strings.TrimSpace(input.ControlChannelName); value != "" {
+		cfg.ControlChannelName = value
+	}
+	if value := strings.TrimSpace(input.StoragePath); value != "" {
+		cfg.StoragePath = value
+	}
+}
+
+func applyEnvOverrides(cfg *Config) {
+	if value, ok := parseOptionalBool(os.Getenv("ENGINE_DISCORD")); ok {
+		cfg.Enabled = value
+	}
+	if value := strings.TrimSpace(os.Getenv("ENGINE_DISCORD_BOT_TOKEN")); value != "" {
+		cfg.BotToken = value
+	}
+	if value := strings.TrimSpace(os.Getenv("ENGINE_DISCORD_GUILD_ID")); value != "" {
+		cfg.GuildID = value
+	}
+	if value := strings.TrimSpace(os.Getenv("ENGINE_DISCORD_ALLOWED_USER_IDS")); value != "" {
+		cfg.AllowedUsers = parseCSVSet(value)
+	}
+	if value := strings.TrimSpace(os.Getenv("ENGINE_DISCORD_PREFIX")); value != "" {
+		cfg.CommandPrefix = value
+	}
+	if value := strings.TrimSpace(os.Getenv("ENGINE_DISCORD_CONTROL_CHANNEL")); value != "" {
+		cfg.ControlChannelName = value
+	}
+	if value := strings.TrimSpace(os.Getenv("ENGINE_STATE_DIR")); value != "" {
+		cfg.StoragePath = value
+	}
+}
+
+func parseOptionalBool(raw string) (bool, bool) {
+	value := strings.TrimSpace(strings.ToLower(raw))
+	if value == "" {
+		return false, false
+	}
+	switch value {
+	case "1", "true", "yes", "on":
+		return true, true
+	case "0", "false", "no", "off":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func configFilePath(projectPath string) string {
+	return filepath.Join(stateDir(projectPath), defaultConfigFileName)
 }
 
 // NewService creates a Discord service.
@@ -652,7 +750,7 @@ func (s *Service) sendHelp(channelID string) {
 }
 
 func (s *Service) stateFile() string {
-	return filepath.Join(s.cfg.StoragePath, "control-plane.json")
+	return filepath.Join(s.cfg.StoragePath, defaultStateFileName)
 }
 
 func (s *Service) loadState() error {
@@ -783,8 +881,12 @@ func splitForDiscord(text string, max int) []string {
 }
 
 func parseCSVSet(raw string) map[string]bool {
+	return parseSliceSet(strings.Split(raw, ","))
+}
+
+func parseSliceSet(values []string) map[string]bool {
 	result := make(map[string]bool)
-	for _, part := range strings.Split(raw, ",") {
+	for _, part := range values {
 		v := strings.TrimSpace(part)
 		if v != "" {
 			result[v] = true
@@ -797,14 +899,14 @@ func stateDir(projectPath string) string {
 	if override := strings.TrimSpace(os.Getenv("ENGINE_STATE_DIR")); override != "" {
 		return override
 	}
+	if strings.TrimSpace(projectPath) != "" {
+		return filepath.Join(projectPath, ".engine")
+	}
 	if configDir, err := os.UserConfigDir(); err == nil && configDir != "" {
 		return filepath.Join(configDir, "Engine")
 	}
 	if homeDir, err := os.UserHomeDir(); err == nil && homeDir != "" {
 		return filepath.Join(homeDir, ".engine")
-	}
-	if strings.TrimSpace(projectPath) != "" {
-		return filepath.Join(projectPath, ".engine")
 	}
 	return filepath.Join(".", ".engine")
 }

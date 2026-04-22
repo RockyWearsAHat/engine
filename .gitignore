@@ -50,6 +50,8 @@ coverage/
 .eslintcache
 .stylelintcache
 .github/session-memory/
+.engine/discord.json
+.engine/discord-state.json
 
 # Package manager locks (keep one, ignore others)
 # Uncomment the one you DON'T use:
