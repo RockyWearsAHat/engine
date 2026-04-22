@@ -228,6 +228,10 @@ type ChatContext struct {
 	// ActiveTools is the live tool set for the current request. Starts as bootstrapTools
 	// and grows each time the model calls search_tools to discover new capabilities.
 	ActiveTools []anthropicTool
+	// Usage accumulates token counts and cost estimates for this chat session.
+	Usage *SessionUsage
+	// Quarantine tracks tool failure counts and quarantines repeatedly failing tools.
+	Quarantine *ToolQuarantine
 }
 
 // isCancelled returns true if the context's cancel channel has been closed.
@@ -699,6 +703,13 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 		return diff, false
 
 	case "git_commit":
+		// Secret scan: block commits that contain secrets.
+		if diff, diffErr := gogit.GetDiff(ctx.ProjectPath, ""); diffErr == nil && diff != "" {
+			if findings := ScanDiff(diff); len(findings) > 0 {
+				report := FormatScanReport(findings)
+				return report, true
+			}
+		}
 		if ctx.RequestApproval == nil {
 			return "Git commits require explicit approval, but no approval handler is available.", true
 		}
@@ -1008,6 +1019,13 @@ func Chat(ctx *ChatContext, userMessage string) {
 	// The model discovers additional tools by calling search_tools.
 	ctx.ActiveTools = bootstrapTools()
 
+	if ctx.Usage == nil {
+		ctx.Usage = &SessionUsage{}
+	}
+	if ctx.Quarantine == nil {
+		ctx.Quarantine = NewToolQuarantine()
+	}
+
 	// Build system prompt
 	branch, _ := gogit.GetCurrentBranch(ctx.ProjectPath)
 	systemLines := []string{
@@ -1047,6 +1065,13 @@ func Chat(ctx *ChatContext, userMessage string) {
 
 	var allToolCalls []ToolCall
 	var finalText strings.Builder
+
+	// Enforce token budget: trim oldest messages if over budget.
+	trimmedMessages, tokensUsed := TrimToTokenBudgetAnthropicFormat(messages, DefaultTokenBudget)
+	if tokensUsed > DefaultTokenBudget {
+		ctx.OnError(fmt.Sprintf("⚠️ Conversation history exceeds token budget (%d > %d). Oldest messages were trimmed to fit.", tokensUsed, DefaultTokenBudget))
+	}
+	messages = trimmedMessages
 
 	// Dispatch to the correct provider. Adding a new provider = add a case in
 	// newProvider() in provider.go — nothing else changes.
@@ -1111,9 +1136,32 @@ func runAnthropicLoop(
 			Stream:    true,
 		}
 
-		responseBlocks, stopReason, err := streamRequest(apiKey, req, ctx, finalText)
-		if err != nil {
-			ctx.OnError(err.Error())
+		var responseBlocks []contentBlock
+		var stopReason string
+		var lastErr error
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			if attempt > 0 {
+				wait := retryBackoff(attempt - 1)
+				select {
+				case <-ctx.Cancel:
+					return
+				case <-time.After(wait):
+				}
+			}
+			responseBlocks, stopReason, lastErr = streamRequest(apiKey, req, ctx, finalText)
+			if lastErr == nil {
+				break
+			}
+			// Only retry transient errors - check if error message contains status code
+			errStr := lastErr.Error()
+			isTransient := strings.Contains(errStr, "429") || strings.Contains(errStr, "500") ||
+				strings.Contains(errStr, "502") || strings.Contains(errStr, "503") || strings.Contains(errStr, "504")
+			if !isTransient {
+				break
+			}
+		}
+		if lastErr != nil {
+			ctx.OnError(lastErr.Error())
 			return
 		}
 
@@ -1132,11 +1180,35 @@ func runAnthropicLoop(
 			if inputMap == nil {
 				inputMap = map[string]interface{}{}
 			}
+
+			if ctx.Quarantine != nil {
+				if allowed, reason := ctx.Quarantine.Check(block.Name); !allowed {
+					result := reason
+					isError := true
+					ctx.OnToolCall(block.Name, inputMap)
+					ctx.OnToolResult(block.Name, result, isError)
+					*allToolCalls = append(*allToolCalls, ToolCall{
+						ID: block.ID, Name: block.Name, Input: inputMap,
+						Result: result, IsError: isError,
+					})
+					toolResults = append(toolResults, contentBlock{
+						Type:      "tool_result",
+						ToolUseID: block.ID,
+						Content:   result,
+					})
+					continue
+				}
+			}
+
 			ctx.OnToolCall(block.Name, inputMap)
 
 			start := time.Now()
 			result, isError := executeTool(block.Name, inputMap, ctx)
 			durationMs := time.Since(start).Milliseconds()
+
+			if ctx.Quarantine != nil {
+				ctx.Quarantine.RecordOutcome(block.Name, isError, ctx.OnError)
+			}
 
 			db.LogToolCall(newID(), ctx.SessionID, block.Name, inputMap, result, isError, durationMs) //nolint:errcheck
 			ctx.OnToolResult(block.Name, result, isError)
@@ -1262,6 +1334,17 @@ func streamRequest(
 			} else if curText.Len() > 0 {
 				blocks = append(blocks, contentBlock{Type: "text", Text: curText.String()})
 				curText.Reset()
+			}
+
+		case "message_start":
+			msg, _ := event["message"].(map[string]interface{})
+			if msg != nil {
+				usage, _ := msg["usage"].(map[string]interface{})
+				if usage != nil && ctx.Usage != nil {
+					in := int(func() float64 { v, _ := usage["input_tokens"].(float64); return v }())
+					out := int(func() float64 { v, _ := usage["output_tokens"].(float64); return v }())
+					ctx.Usage.Add(req.Model, in, out)
+				}
 			}
 
 		case "message_delta":
