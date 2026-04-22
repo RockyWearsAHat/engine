@@ -24,6 +24,7 @@ declare global {
     };
     electronAPI?: {
       getProjectPath(): Promise<string>;
+      getLocalServerToken?(): Promise<string | null>;
       getGithubToken(): Promise<string | null>;
       setGithubToken(token: string): Promise<boolean>;
       openExternal(url: string): Promise<void>;
@@ -149,6 +150,16 @@ export const bridge = {
     }
     // Plain web / dev server — fall back to env var injected by Vite or '.'
     return (import.meta as { env?: Record<string, string> }).env?.VITE_PROJECT_PATH ?? '.';
+  },
+
+  async getLocalServerToken(): Promise<string | null> {
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<string | null>('get_local_server_token');
+    }
+    if (isElectron()) {
+      return window.electronAPI!.getLocalServerToken?.() ?? null;
+    }
+    return null;
   },
 
   async getGithubToken(): Promise<string | null> {

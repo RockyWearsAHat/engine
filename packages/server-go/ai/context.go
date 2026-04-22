@@ -578,6 +578,14 @@ func executeSearchTools(query string, ctx *ChatContext) string {
 
 // executeTool runs the named tool and returns (result string, isError bool).
 func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (string, bool) {
+	return aiExecuteTool(name, input, ctx)
+}
+
+func ExecuteToolForTest(name string, input map[string]interface{}, ctx *ChatContext) (string, bool) {
+	return aiExecuteTool(name, input, ctx)
+}
+
+func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) (string, bool) {
 	str := func(key string) string {
 		v, _ := input[key].(string)
 		return v
@@ -613,6 +621,9 @@ func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (s
 		}
 		if err := gofs.WriteFile(path, str("content")); err != nil {
 			return err.Error(), true
+		}
+		if ctx.SendToClient != nil {
+			ctx.SendToClient("file.saved", map[string]interface{}{"path": path})
 		}
 		return "File written: " + path, false
 

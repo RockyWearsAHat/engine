@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
@@ -32,6 +33,10 @@ const FRONTEND_MENU_EVENT: &str = "engine-shell-menu";
 struct ServerProcess {
     child: Mutex<Option<Child>>,
     managed: bool,
+}
+
+struct LocalServerAuth {
+    token: String,
 }
 
 struct ServerLaunch {
@@ -426,9 +431,15 @@ fn server_binary_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("resources").join(server_binary_names()[0]))
 }
 
-fn configure_server_command(cmd: &mut Command, project_path: &str, cfg: &AppConfig) {
+fn configure_server_command(
+    cmd: &mut Command,
+    project_path: &str,
+    cfg: &AppConfig,
+    local_server_token: &str,
+) {
     cmd.env("PROJECT_PATH", project_path)
-        .env("PORT", DEFAULT_PORT.to_string());
+        .env("PORT", DEFAULT_PORT.to_string())
+        .env("ENGINE_LOCAL_WS_TOKEN", local_server_token);
 
     if let Some(token) = &cfg.github_token {
         cmd.env("GITHUB_TOKEN", token);
@@ -456,7 +467,7 @@ fn configure_server_command(cmd: &mut Command, project_path: &str, cfg: &AppConf
     }
 }
 
-fn start_go_server(project_path: &str, cfg: &AppConfig) -> ServerLaunch {
+fn start_go_server(project_path: &str, cfg: &AppConfig, local_server_token: &str) -> ServerLaunch {
     if cfg!(debug_assertions) && server_running(DEFAULT_PORT) {
         let _ = stop_stale_debug_server(DEFAULT_PORT);
     }
@@ -478,7 +489,7 @@ fn start_go_server(project_path: &str, cfg: &AppConfig) -> ServerLaunch {
     }
 
     let mut cmd = Command::new(&server_bin);
-    configure_server_command(&mut cmd, project_path, cfg);
+    configure_server_command(&mut cmd, project_path, cfg, local_server_token);
 
     match cmd.spawn() {
         Ok(child) => ServerLaunch {
@@ -498,8 +509,9 @@ fn start_go_server(project_path: &str, cfg: &AppConfig) -> ServerLaunch {
 fn run_background_service() {
     let cfg = read_config();
     let project_path = project_path_for_server(&cfg);
+    let local_server_token = generate_local_server_token();
     loop {
-        let ServerLaunch { child, .. } = start_go_server(&project_path, &cfg);
+        let ServerLaunch { child, .. } = start_go_server(&project_path, &cfg, &local_server_token);
         if let Some(mut managed_child) = child {
             let _ = managed_child.wait();
         }
@@ -522,6 +534,12 @@ fn cli_action() -> Option<CliAction> {
         "--service-status" => Some(CliAction::ServiceStatus),
         _ => None,
     })
+}
+
+fn generate_local_server_token() -> String {
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(target_os = "macos")]
@@ -842,6 +860,11 @@ fn get_project_path() -> String {
         .ok()
         .filter(|path| !path.trim().is_empty())
         .unwrap_or_else(|| read_config().last_project_path.unwrap_or_default())
+}
+
+#[tauri::command]
+fn get_local_server_token(state: tauri::State<'_, LocalServerAuth>) -> String {
+    state.token.clone()
 }
 
 #[tauri::command]
@@ -1222,20 +1245,22 @@ pub fn run() {
 
     let cfg = read_config();
     let project_path = project_path_for_server(&cfg);
-    let server = start_go_server(&project_path, &cfg);
+    let local_server_token = generate_local_server_token();
+    let server = start_go_server(&project_path, &cfg, &local_server_token);
 
     // Watchdog: if the Go server exits unexpectedly, restart it. Runs in a
     // background thread so the Tauri UI is never blocked. Waits up to 2 s
     // between restart attempts so we don't spin-loop if the binary is broken.
     {
         let project_path_wd = project_path.clone();
+        let local_server_token_wd = local_server_token.clone();
         thread::spawn(move || {
             loop {
                 thread::sleep(Duration::from_secs(2));
                 if !server_running(DEFAULT_PORT) {
                     eprintln!("[engine] server watchdog: Go server is down — restarting");
                     let cfg_wd = read_config();
-                    start_go_server(&project_path_wd, &cfg_wd);
+                    start_go_server(&project_path_wd, &cfg_wd, &local_server_token_wd);
                 }
             }
         });
@@ -1359,8 +1384,12 @@ pub fn run() {
             child: Mutex::new(server.child),
             managed: server.managed,
         })
+        .manage(LocalServerAuth {
+            token: local_server_token,
+        })
         .invoke_handler(tauri::generate_handler![
             get_project_path,
+            get_local_server_token,
             get_github_token,
             set_github_token,
             get_github_owner,
