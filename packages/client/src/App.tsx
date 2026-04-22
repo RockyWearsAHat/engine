@@ -186,6 +186,7 @@ export default function App() {
     ?? buildTask
     ?? null;
   const workspaceRoot = normalizeProjectPath(activeSession?.projectPath ?? '');
+  const missionProjectName = projectName || projectLabel(workspaceRoot);
 
   const showNotice = useCallback((message: string, tone: NoticeTone = 'info') => {
     if (noticeTimerRef.current) {
@@ -1460,7 +1461,16 @@ export default function App() {
           <div className="main-column">
             <div className="editor-area" ref={editorAreaRef}>
               {hasProject ? (
-                <Editor />
+                <>
+                  <MissionControlStrip
+                    projectName={missionProjectName}
+                    branchName={activeSession?.branchName ?? ''}
+                    summary={activeSession?.summary ?? ''}
+                    onFocusAssistant={() => setRightTab('chat')}
+                    onFocusAgent={() => setRightTab('agent')}
+                  />
+                  <Editor />
+                </>
               ) : (
                 <WelcomeScreen
                   sessions={sessions}
@@ -1670,6 +1680,81 @@ function ApprovalModal({
       </div>
     </div>
   );
+}
+
+function MissionControlStrip({
+  projectName,
+  branchName,
+  summary,
+  onFocusAssistant,
+  onFocusAgent,
+}: {
+  projectName: string;
+  branchName: string;
+  summary: string;
+  onFocusAssistant: () => void;
+  onFocusAgent: () => void;
+}) {
+  const items = parseMissionSummary(summary);
+  if (!projectName && items.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="mission-strip" aria-label="Mission control">
+      <div className="mission-strip-header">
+        <div className="mission-strip-copy">
+          <div className="mission-strip-kicker">Mission control</div>
+          <div className="mission-strip-title-row">
+            <div className="mission-strip-title">{projectName || 'Active workspace'}</div>
+            {branchName && <span className="editor-meta-chip">{branchName}</span>}
+          </div>
+          <div className="mission-strip-subtitle">
+            AI context stays visible in the editor instead of hiding in the side panel.
+          </div>
+        </div>
+        <div className="mission-strip-actions">
+          <button className="mission-strip-action" onClick={onFocusAssistant} type="button">
+            Assistant
+          </button>
+          <button className="mission-strip-action" onClick={onFocusAgent} type="button">
+            Agent activity
+          </button>
+        </div>
+      </div>
+
+      {items.length > 0 && (
+        <div className="mission-strip-grid">
+          {items.map((item) => (
+            <article key={item.label} className="mission-strip-card">
+              <div className="mission-strip-card-label">{item.label}</div>
+              <div className="mission-strip-card-value">{item.value}</div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function parseMissionSummary(summary: string): Array<{ label: string; value: string }> {
+  return summary
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const separatorIndex = line.indexOf(':');
+      if (separatorIndex === -1) {
+        return { label: 'Context', value: line };
+      }
+      const rawLabel = line.slice(0, separatorIndex).trim();
+      const rawValue = line.slice(separatorIndex + 1).trim();
+      return {
+        label: rawLabel || 'Context',
+        value: rawValue || line,
+      };
+    })
+    .slice(0, 4);
 }
 
 function WindowControls({

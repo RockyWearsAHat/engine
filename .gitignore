@@ -49,6 +49,7 @@ coverage/
 .parcel-cache/
 .eslintcache
 .stylelintcache
+.github/session-memory/
 
 # Package manager locks (keep one, ignore others)
 # Uncomment the one you DON'T use:
