@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,11 +59,19 @@ func setupWSProject(t *testing.T) string {
 
 func openWSTestConnection(t *testing.T, projectDir string) (*websocket.Conn, func()) {
 	t.Helper()
+	return openWSTestConnectionWithToken(t, projectDir, "")
+}
+
+func openWSTestConnectionWithToken(t *testing.T, projectDir, token string) (*websocket.Conn, func()) {
+	t.Helper()
 
 	hub := NewHub(projectDir)
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	if token != "" {
+		wsURL += "?token=" + url.QueryEscape(token)
+	}
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		server.Close()
@@ -74,6 +83,39 @@ func openWSTestConnection(t *testing.T, projectDir string) (*websocket.Conn, fun
 		server.Close()
 	}
 	return conn, cleanup
+}
+
+func TestServeWS_RejectsMissingTokenWhenLocalAuthEnabled(t *testing.T) {
+	projectDir := setupWSProject(t)
+	t.Setenv("ENGINE_LOCAL_WS_TOKEN", "desktop-secret")
+	hub := NewHub(projectDir)
+	server := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	_, response, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err == nil {
+		t.Fatal("expected websocket dial to fail without auth token")
+	}
+	if response == nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 unauthorized response, got %#v", response)
+	}
+}
+
+func TestServeWS_AllowsTokenWhenLocalAuthEnabled(t *testing.T) {
+	projectDir := setupWSProject(t)
+	t.Setenv("ENGINE_LOCAL_WS_TOKEN", "desktop-secret")
+	conn, cleanup := openWSTestConnectionWithToken(t, projectDir, "desktop-secret")
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "project.open",
+		"path": projectDir,
+	})
+	message := readWSMessageOfType(t, conn, "session.created")
+	if message["type"] != "session.created" {
+		t.Fatalf("expected authenticated websocket to load session, got %+v", message)
+	}
 }
 
 func writeWSMessage(t *testing.T, conn *websocket.Conn, payload map[string]interface{}) {
@@ -264,5 +306,73 @@ func TestHandler_ChatMessage_UsesPayloadSessionWhenConnectionStateWasLost(t *tes
 	started := readWSMessageOfType(t, conn, "chat.started")
 	if started["sessionId"] != sessionID {
 		t.Fatalf("expected chat.started for recovered session, got %+v", started)
+	}
+}
+
+func TestHandler_ChatMessage_CanWriteAndOpenFileThroughAITools(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	originalRunAIChat := runAIChat
+	defer func() { runAIChat = originalRunAIChat }()
+
+	targetPath := filepath.Join(projectDir, "generated", "engine-note.ts")
+	runAIChat = func(ctx *ai.ChatContext, userMessage string) {
+		ctx.OnToolCall("write_file", map[string]interface{}{"path": targetPath})
+		if result, isError := ai.ExecuteToolForTest("write_file", map[string]interface{}{
+			"path":    targetPath,
+			"content": "export const engineNote = 'cave';\n",
+		}, ctx); isError {
+			ctx.OnToolResult("write_file", result, true)
+			ctx.OnError(result)
+			return
+		} else {
+			ctx.OnToolResult("write_file", result, false)
+		}
+
+		ctx.OnToolCall("open_file", map[string]interface{}{"path": targetPath})
+		if result, isError := ai.ExecuteToolForTest("open_file", map[string]interface{}{"path": targetPath}, ctx); isError {
+			ctx.OnToolResult("open_file", result, true)
+			ctx.OnError(result)
+			return
+		} else {
+			ctx.OnToolResult("open_file", result, false)
+		}
+
+		ctx.OnChunk("done", false)
+		ctx.OnChunk("", true)
+	}
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "project.open",
+		"path": projectDir,
+	})
+	sessionCreated := readWSMessageOfType(t, conn, "session.created")
+	session, _ := sessionCreated["session"].(map[string]interface{})
+	sessionID, _ := session["id"].(string)
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type":      "chat",
+		"sessionId": sessionID,
+		"content":   "create and open a note",
+	})
+
+	readWSMessageOfType(t, conn, "chat.started")
+	readWSMessageOfType(t, conn, "chat.tool_call")
+	readWSMessageOfType(t, conn, "chat.tool_result")
+	readWSMessageOfType(t, conn, "chat.tool_call")
+	opened := readWSMessageOfType(t, conn, "editor.open")
+	if opened["path"] != targetPath {
+		t.Fatalf("expected editor.open for %q, got %+v", targetPath, opened)
+	}
+	readWSMessageOfType(t, conn, "chat.tool_result")
+
+	content, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("expected AI tool path to write file: %v", err)
+	}
+	if string(content) != "export const engineNote = 'cave';\n" {
+		t.Fatalf("unexpected file content: %q", string(content))
 	}
 }
