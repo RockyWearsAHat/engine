@@ -26,7 +26,7 @@ import {
 import {
   FolderOpen, GitBranch, AlertCircle, Settings2, Activity,
   Search, ServerCog,
-  Minus, Square, X, FileText, Hammer, Play, Terminal as TerminalIcon, Menu, FileStack,
+  Minus, Square, X, FileText, Hammer, Play, Terminal as TerminalIcon, Menu, FileStack, RotateCcw,
 } from 'lucide-react';
 
 type ActivityTab = 'explorer' | 'open-editors' | 'git' | 'search' | 'issues';
@@ -807,6 +807,18 @@ export default function App() {
         },
       },
       {
+        id: 'palette:show-open-editors',
+        kind: 'command',
+        title: 'Show Open Editors',
+        subtitle: 'Focus the currently open editor list',
+        keywords: 'open editors tabs sidebar',
+        badge: 'Sidebar',
+        action: () => {
+          setActivityTab('open-editors');
+          setShowSidebar(true);
+        },
+      },
+      {
         id: 'palette:show-search',
         kind: 'command',
         title: 'Show Search',
@@ -1307,6 +1319,38 @@ export default function App() {
           case 'toggle-terminal':
             setShowTerminal((current) => !current);
             break;
+          case 'focus-agent':
+            setRightTab('agent');
+            break;
+          case 'show-explorer':
+            setActivityTab('explorer');
+            setShowSidebar(true);
+            break;
+          case 'show-open-editors':
+            setActivityTab('open-editors');
+            setShowSidebar(true);
+            break;
+          case 'show-search':
+            setActivityTab('search');
+            setShowSidebar(true);
+            break;
+          case 'show-git':
+            setActivityTab('git');
+            setShowSidebar(true);
+            break;
+          case 'show-issues':
+            setActivityTab('issues');
+            setShowSidebar(true);
+            break;
+          case 'open-command-palette':
+            openCommandPalette('commands');
+            break;
+          case 'open-file-palette':
+            openCommandPalette('files');
+            break;
+          case 'reload-ui':
+            window.location.reload();
+            break;
           case 'focus-chat':
             setRightTab('chat');
             break;
@@ -1380,13 +1424,45 @@ export default function App() {
               desktopShell={desktopShell}
               buildTaskAvailable={!!buildTask}
               runTaskAvailable={!!runTask}
+              showSidebar={showSidebar}
+              showTerminal={showTerminal}
+              activityTab={activityTab}
+              rightTab={rightTab}
               onOpenFolder={openFolder}
               onOpenFile={openFileFromPath}
               onOpenPreferences={() => setShowPreferences(true)}
               onOpenCommands={() => openCommandPalette('commands')}
+              onOpenFilesPalette={() => openCommandPalette('files')}
               onToggleTerminal={() => setShowTerminal(v => !v)}
+              onToggleSidebar={() => setShowSidebar(v => !v)}
+              onShowExplorer={() => {
+                setActivityTab('explorer');
+                setShowSidebar(true);
+              }}
+              onShowOpenEditors={() => {
+                setActivityTab('open-editors');
+                setShowSidebar(true);
+              }}
+              onShowSearch={() => {
+                setActivityTab('search');
+                setShowSidebar(true);
+              }}
+              onShowGit={() => {
+                setActivityTab('git');
+                setShowSidebar(true);
+              }}
+              onShowIssues={() => {
+                setActivityTab('issues');
+                setShowSidebar(true);
+              }}
+              onFocusChat={() => setRightTab('chat')}
+              onFocusAgent={() => setRightTab('agent')}
               onBuildWorkspace={() => launchWorkspaceTask(buildTask)}
               onRunWorkspace={() => launchWorkspaceTask(runTask)}
+              onOpenProjectPage={() => {
+                void bridge.openExternal('https://github.com/RockyWearsAHat/engine');
+              }}
+              onReloadUi={() => window.location.reload()}
             />
             {desktopShell && !macPlatform && (
               <WindowControls onAction={handleWindowAction} />
@@ -1415,6 +1491,7 @@ export default function App() {
           <div className="activity-bar">
             {([
               ['explorer', FolderOpen],
+              ['open-editors', FileStack],
               ['git', GitBranch],
               ['search', Search],
               ['issues', AlertCircle],
@@ -1805,27 +1882,70 @@ function FileMenu({
   desktopShell,
   buildTaskAvailable,
   runTaskAvailable,
+  showSidebar,
+  showTerminal,
+  activityTab,
+  rightTab,
   onOpenFolder,
   onOpenFile,
   onOpenPreferences,
   onOpenCommands,
+  onOpenFilesPalette,
   onToggleTerminal,
+  onToggleSidebar,
+  onShowExplorer,
+  onShowOpenEditors,
+  onShowSearch,
+  onShowGit,
+  onShowIssues,
+  onFocusChat,
+  onFocusAgent,
   onBuildWorkspace,
   onRunWorkspace,
+  onOpenProjectPage,
+  onReloadUi,
 }: {
   desktopShell: boolean;
   buildTaskAvailable: boolean;
   runTaskAvailable: boolean;
+  showSidebar: boolean;
+  showTerminal: boolean;
+  activityTab: ActivityTab;
+  rightTab: RightTab;
   onOpenFolder: () => void;
   onOpenFile: () => void;
   onOpenPreferences: () => void;
   onOpenCommands: () => void;
+  onOpenFilesPalette: () => void;
   onToggleTerminal: () => void;
+  onToggleSidebar: () => void;
+  onShowExplorer: () => void;
+  onShowOpenEditors: () => void;
+  onShowSearch: () => void;
+  onShowGit: () => void;
+  onShowIssues: () => void;
+  onFocusChat: () => void;
+  onFocusAgent: () => void;
   onBuildWorkspace: () => void;
   onRunWorkspace: () => void;
+  onOpenProjectPage: () => void;
+  onReloadUi: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [serviceMsg, setServiceMsg] = useState('');
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open]);
 
   const handleInstall = async () => {
     setOpen(false);
@@ -1858,16 +1978,43 @@ function FileMenu({
             onClick={() => setOpen(false)}
           />
           <div className="shell-menu">
-            <MenuItem icon={<Search size={13} />} label="Command palette…" onClick={() => { setOpen(false); onOpenCommands(); }} />
-            {desktopShell && <MenuItem icon={<FolderOpen size={13} />} label="Open Folder…" onClick={() => { setOpen(false); onOpenFolder(); }} />}
-            {desktopShell && <MenuItem icon={<FileText size={13} />} label="Open File…" onClick={() => { setOpen(false); onOpenFile(); }} />}
-            <MenuItem icon={<FileText size={13} />} label="Save Active File" onClick={() => { setOpen(false); window.dispatchEvent(new Event('engine:save-active-file')); }} />
-            <MenuItem icon={<FileText size={13} />} label="Save All Open Files" onClick={() => { setOpen(false); window.dispatchEvent(new Event('engine:save-all-open-files')); }} />
-            <MenuItem icon={<TerminalIcon size={13} />} label="Toggle Terminal" onClick={() => { setOpen(false); onToggleTerminal(); }} />
-            <MenuItem icon={<Settings2 size={13} />} label="Settings…" onClick={() => { setOpen(false); onOpenPreferences(); }} />
-            {desktopShell && (buildTaskAvailable || runTaskAvailable) && <div className="shell-menu-divider" />}
-            {desktopShell && buildTaskAvailable && <MenuItem icon={<Hammer size={13} />} label="Build workspace" onClick={() => { setOpen(false); onBuildWorkspace(); }} />}
-            {desktopShell && runTaskAvailable && <MenuItem icon={<Play size={13} />} label="Run workspace" onClick={() => { setOpen(false); onRunWorkspace(); }} />}
+            <div className="shell-menu-group-label">Workspace</div>
+            <MenuItem icon={<Search size={13} />} label="Command Palette…" shortcut="Cmd/Ctrl+Shift+P" onClick={() => { setOpen(false); onOpenCommands(); }} />
+            <MenuItem icon={<FileText size={13} />} label="Quick Open File…" shortcut="Cmd/Ctrl+P" onClick={() => { setOpen(false); onOpenFilesPalette(); }} />
+            {desktopShell && <MenuItem icon={<FolderOpen size={13} />} label="Open Folder…" shortcut="Cmd/Ctrl+O" onClick={() => { setOpen(false); onOpenFolder(); }} />}
+            {desktopShell && <MenuItem icon={<FileText size={13} />} label="Open File…" shortcut="Cmd/Ctrl+Shift+O" onClick={() => { setOpen(false); onOpenFile(); }} />}
+            <MenuItem icon={<FileText size={13} />} label="Save Active File" shortcut="Cmd/Ctrl+S" onClick={() => { setOpen(false); window.dispatchEvent(new Event('engine:save-active-file')); }} />
+            <MenuItem icon={<FileText size={13} />} label="Save All Open Files" shortcut="Cmd/Ctrl+Shift+S" onClick={() => { setOpen(false); window.dispatchEvent(new Event('engine:save-all-open-files')); }} />
+            <MenuItem icon={<Settings2 size={13} />} label="Settings…" shortcut="Cmd/Ctrl+," onClick={() => { setOpen(false); onOpenPreferences(); }} />
+
+            <div className="shell-menu-divider" />
+            <div className="shell-menu-group-label">View</div>
+            <MenuItem icon={<Menu size={13} />} label={showSidebar ? 'Hide Sidebar' : 'Show Sidebar'} onClick={() => { setOpen(false); onToggleSidebar(); }} />
+            <MenuItem icon={<TerminalIcon size={13} />} label={showTerminal ? 'Hide Terminal' : 'Show Terminal'} onClick={() => { setOpen(false); onToggleTerminal(); }} />
+            <MenuItem icon={<FolderOpen size={13} />} label={`${activityTab === 'explorer' ? '✓ ' : ''}Explorer`} onClick={() => { setOpen(false); onShowExplorer(); }} />
+            <MenuItem icon={<FileStack size={13} />} label={`${activityTab === 'open-editors' ? '✓ ' : ''}Open Editors`} onClick={() => { setOpen(false); onShowOpenEditors(); }} />
+            <MenuItem icon={<Search size={13} />} label={`${activityTab === 'search' ? '✓ ' : ''}Search`} onClick={() => { setOpen(false); onShowSearch(); }} />
+            <MenuItem icon={<GitBranch size={13} />} label={`${activityTab === 'git' ? '✓ ' : ''}Source Control`} onClick={() => { setOpen(false); onShowGit(); }} />
+            <MenuItem icon={<AlertCircle size={13} />} label={`${activityTab === 'issues' ? '✓ ' : ''}Issues`} onClick={() => { setOpen(false); onShowIssues(); }} />
+
+            <div className="shell-menu-divider" />
+            <div className="shell-menu-group-label">Panels</div>
+            <MenuItem icon={<Settings2 size={13} />} label={`${rightTab === 'chat' ? '✓ ' : ''}Focus Chat`} onClick={() => { setOpen(false); onFocusChat(); }} />
+            <MenuItem icon={<Activity size={13} />} label={`${rightTab === 'agent' ? '✓ ' : ''}Focus Agent Monitor`} onClick={() => { setOpen(false); onFocusAgent(); }} />
+
+            {(buildTaskAvailable || runTaskAvailable) && (
+              <>
+                <div className="shell-menu-divider" />
+                <div className="shell-menu-group-label">Tasks</div>
+              </>
+            )}
+            {buildTaskAvailable && <MenuItem icon={<Hammer size={13} />} label="Build Workspace" shortcut="Cmd/Ctrl+Shift+B" onClick={() => { setOpen(false); onBuildWorkspace(); }} />}
+            {runTaskAvailable && <MenuItem icon={<Play size={13} />} label="Run Workspace" onClick={() => { setOpen(false); onRunWorkspace(); }} />}
+
+            <div className="shell-menu-divider" />
+            <div className="shell-menu-group-label">App</div>
+            <MenuItem icon={<FolderOpen size={13} />} label="Project Home" onClick={() => { setOpen(false); onOpenProjectPage(); }} />
+            <MenuItem icon={<RotateCcw size={13} />} label="Reload UI" onClick={() => { setOpen(false); onReloadUi(); }} />
             {desktopShell && <MenuItem icon={<ServerCog size={13} />} label="Install Agent Service" onClick={handleInstall} />}
             {desktopShell && <MenuItem icon={<ServerCog size={13} />} label="Remove Agent Service" onClick={handleUninstall} />}
           </div>
@@ -2000,15 +2147,30 @@ function UnsavedChangesModal({
   );
 }
 
-function MenuItem({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
+function MenuItem({
+  icon,
+  label,
+  shortcut,
+  disabled = false,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  shortcut?: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
   return (
-    <div
+    <button
+      type="button"
       onClick={onClick}
       className="shell-menu-item"
+      disabled={disabled}
     >
       <span className="shell-menu-item-icon">{icon}</span>
-      {label}
-    </div>
+      <span>{label}</span>
+      {shortcut && <span className="shell-menu-item-shortcut">{shortcut}</span>}
+    </button>
   );
 }
 
