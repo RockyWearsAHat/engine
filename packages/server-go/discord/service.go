@@ -530,10 +530,28 @@ func (s *Service) resolveAskTarget(channelID string, args []string) (ProjectBind
 }
 
 func (s *Service) resolveProjectByChannel(channelID string) (ProjectBinding, bool) {
+	if strings.TrimSpace(channelID) == "" {
+		return ProjectBinding{}, false
+	}
+
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
 	for _, p := range s.state.Projects {
 		if p.ChannelID == channelID {
+			return p, true
+		}
+	}
+
+	if s.dg == nil {
+		return ProjectBinding{}, false
+	}
+
+	ch, err := s.dg.Channel(channelID)
+	if err != nil || ch == nil || strings.TrimSpace(ch.ParentID) == "" {
+		return ProjectBinding{}, false
+	}
+	for _, p := range s.state.Projects {
+		if p.ChannelID == ch.ParentID {
 			return p, true
 		}
 	}
