@@ -1,0 +1,345 @@
+# Engine Project Configuration
+# Copy this to .engine/config.yaml and customize for your project
+# All settings have sensible defaults—only override what you need
+
+# Project metadata
+project:
+  name: "MyEditor"
+  description: "AI-native code editor"
+
+# ============================================================================
+# AGENT TEAMS — Hand-picked groups of agents working together
+# ============================================================================
+# Users can define multiple teams for different workflows
+# Each team specifies which model handles which role
+
+teams:
+  # Default team: runs by default if user doesn't specify
+  # Optimized for speed + cost in dev loop
+  default:
+    description: "Fast dev loop—local models + cloud for heavy thinking"
+    orchestrator:
+      model: "ollama:gemma4:31b"
+      model_display: "Gemma 4:31B (Local)"
+      timeout_seconds: 180
+    architect:
+      model: "anthropic:claude-sonnet-4.6"
+      model_display: "Claude Sonnet 4.6"
+      timeout_seconds: 120
+    implementer:
+      model: "ollama:gemma4:31b"
+      model_display: "Gemma 4:31B (Local)"
+      timeout_seconds: 120
+    tester:
+      model: "anthropic:claude-haiku-4.5"
+      model_display: "Claude Haiku 4.5"
+      timeout_seconds: 600  # Testing takes longer
+    documenter:
+      model: "ollama:gemma4:31b"
+      model_display: "Gemma 4:31B (Local)"
+      timeout_seconds: 90
+
+  # Premium team: best quality, higher cost
+  # For critical fixes, main branch work, important refactors
+  premium:
+    description: "Maximum quality—Claude models throughout"
+    orchestrator:
+      model: "anthropic:claude-opus-4.6"
+      model_display: "Claude Opus 4.6"
+      timeout_seconds: 180
+    architect:
+      model: "anthropic:claude-opus-4.6"
+      model_display: "Claude Opus 4.6"
+      timeout_seconds: 120
+    implementer:
+      model: "anthropic:claude-sonnet-4.6"
+      model_display: "Claude Sonnet 4.6"
+      timeout_seconds: 120
+    tester:
+      model: "anthropic:claude-haiku-4.5"
+      model_display: "Claude Haiku 4.5"
+      timeout_seconds: 600
+    documenter:
+      model: "anthropic:claude-haiku-4.5"
+      model_display: "Claude Haiku 4.5"
+      timeout_seconds: 90
+
+  # Fast team: rapid iteration, local only
+  # For experimental branches, WIP code, quick fixes
+  fast:
+    description: "Lightning fast—all local models"
+    orchestrator:
+      model: "ollama:gemma4:31b"
+      model_display: "Gemma 4:31B (Local)"
+      timeout_seconds: 120
+    architect:
+      model: "ollama:gemma4:31b"
+      model_display: "Gemma 4:31B (Local)"
+      timeout_seconds: 90
+    implementer:
+      model: "ollama:gemma4:31b"
+      model_display: "Gemma 4:31B (Local)"
+      timeout_seconds: 90
+    tester:
+      model: "ollama:gemma4:31b"
+      model_display: "Gemma 4:31B (Local)"
+      timeout_seconds: 300
+    documenter:
+      model: "ollama:gemma4:31b"
+      model_display: "Gemma 4:31B (Local)"
+      timeout_seconds: 60
+
+  # OpenAI team: alternative to Claude
+  openai:
+    description: "OpenAI models throughout"
+    orchestrator:
+      model: "openai:gpt-5.4"
+      model_display: "GPT-5.4"
+      timeout_seconds: 180
+    architect:
+      model: "openai:gpt-5.4"
+      model_display: "GPT-5.4"
+      timeout_seconds: 120
+    implementer:
+      model: "openai:gpt-4o"
+      model_display: "GPT-4o"
+      timeout_seconds: 120
+    tester:
+      model: "openai:gpt-4o-mini"
+      model_display: "GPT-4o Mini"
+      timeout_seconds: 600
+    documenter:
+      model: "openai:gpt-4o-mini"
+      model_display: "GPT-4o Mini"
+      timeout_seconds: 90
+
+# ============================================================================
+# API CONFIGURATION — Per-provider credentials and permissions
+# ============================================================================
+# Keep these safe! Never commit actual keys to version control
+# Use environment variables: ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.
+
+apis:
+  anthropic:
+    enabled: true
+    # API key from environment: $ANTHROPIC_API_KEY
+    # Models available: claude-opus-4.6, claude-sonnet-4.6, claude-haiku-4.5
+    rate_limit: 10_000_tokens_per_minute
+    max_cost_per_execution: 5.00  # Dollar limit per task
+    timeout_seconds: 300
+
+  openai:
+    enabled: true
+    # API key from environment: $OPENAI_API_KEY
+    # Models available: gpt-5.4, gpt-4o, gpt-4o-mini
+    rate_limit: 10_000_tokens_per_minute
+    max_cost_per_execution: 5.00
+    timeout_seconds: 300
+
+  ollama:
+    enabled: true
+    # No API key needed—runs locally
+    base_url: "http://127.0.0.1:11434"
+    # Models: gemma4:31b, llama2:13b, qwen:32b, etc.
+    timeout_seconds: 300
+    # Cost is zero (local compute), but include for consistency
+    max_cost_per_execution: 0.00
+
+  custom:
+    # Support for other model providers or self-hosted
+    enabled: false
+    base_url: "https://api.example.com"
+    api_key_env: "CUSTOM_API_KEY"
+    timeout_seconds: 300
+    max_cost_per_execution: 5.00
+
+# ============================================================================
+# AUTONOMY — How much decision-making power each agent has
+# ============================================================================
+
+autonomy:
+  # Default autonomy for all task types
+  # User can override per request: "fix this bug with full_approve autonomy"
+  default: "observe_after"  # Most tasks: agent acts, reports, waits for OK
+
+  # Task-type specific overrides
+  bug_fixes:
+    level: "observe_after"  # Run fix, report results, wait for confirmation
+    team: "default"         # Use the default team for bug fixes
+    approval_required: true
+
+  tests:
+    level: "auto"           # Run tests without asking, report results
+    team: "default"
+    approval_required: false
+
+  documentation:
+    level: "auto"           # Update docs automatically
+    team: "fast"            # Fast team for docs
+    approval_required: false
+
+  refactors:
+    level: "architect_approve"  # Architect must sign off on design first
+    team: "premium"             # Use premium team for refactors
+    approval_required: true
+
+  new_features:
+    level: "full_approve"   # All gates require human approval
+    team: "premium"
+    approval_required: true
+
+  experimental:
+    level: "auto"           # Full autonomy on experimental branches
+    team: "fast"            # Fast team for experiments
+    approval_required: false
+
+# ============================================================================
+# REQUEST-LEVEL OVERRIDES — What users can change at runtime
+# ============================================================================
+# Users can say: "fix this with premium team" or "use opus for orchestrator"
+# These settings define what's allowed
+
+request_overrides:
+  allowed_team_switches: true
+  allowed_model_selection: true  # "use gpt-5.4 for this task"
+  allowed_autonomy_changes: true # "do this with full_approve"
+  allowed_branch_restrictions: true # "only work on feature/* branches"
+
+# ============================================================================
+# DEVELOPMENT LOOP DEFAULTS — Optimize for speed
+# ============================================================================
+
+dev_loop:
+  # Default behavior: maximize speed, minimize cost
+  # Best for local development, rapid iteration
+
+  # Which team to use by default
+  default_team: "default"
+
+  # Auto-execute these phases without asking
+  auto_execute:
+    - test           # Always run tests automatically
+    - documentation  # Always update docs
+
+  # Require approval for these
+  require_approval:
+    - main_branch_merge  # Always approve before merging to main
+
+  # Default branch scope (where agents can work)
+  branch_scope: "feature/*,fix/*"  # Only these branches, not main
+  exclude_branches: "main,develop"
+
+  # Cost targets for dev loop
+  max_cost_per_issue: 1.00  # Stop if cost exceeds $1 per issue
+  prefer_local_models: true # Use local models when possible
+
+# ============================================================================
+# MONITORING & LOGGING — Transparency and observability
+# ============================================================================
+
+logging:
+  # Store execution logs locally
+  local_storage: ".engine/logs/"
+  
+  # Log to cloud (optional)
+  cloud_storage_enabled: false
+  cloud_storage_bucket: "gs://my-bucket/engine-logs"
+
+  # What to log
+  log_level: "info"  # debug, info, warn, error
+  log_decisions: true
+  log_token_usage: true
+  log_costs: true
+  log_human_approvals: true
+
+# ============================================================================
+# ADVANCED — Fine-tuning agent behavior
+# ============================================================================
+
+advanced:
+  # Retry failed tasks how many times?
+  max_retries: 3
+  
+  # If an agent takes too long, escalate to a faster/better model?
+  auto_escalate_on_timeout: true
+  escalation_model_map:
+    "ollama:*": "anthropic:claude-sonnet-4.6"
+    "openai:gpt-4o-mini": "openai:gpt-5.4"
+
+  # Context window management
+  compress_context_over_tokens: 20000
+  preserve_project_direction: true
+  preserve_git_history: true
+
+  # Temperature and parameters per agent type
+  orchestrator_temperature: 0.7
+  architect_temperature: 0.5      # Lower = more consistent
+  implementer_temperature: 0.3    # Lower = more reliable code
+  tester_temperature: 0.5
+  documenter_temperature: 0.3
+
+# ============================================================================
+# INTEGRATIONS — Connect to external systems
+# ============================================================================
+
+integrations:
+  github:
+    enabled: true
+    # Auto-respond to issues with ai:auto label
+    auto_respond_labels:
+      - "ai:auto"
+      - "ai:urgent"
+    
+    # Post results as PR comments
+    post_results_as_comments: true
+
+  slack:
+    enabled: false
+    # Notify about orchestration results
+    webhook_env: "SLACK_WEBHOOK_URL"
+    notify_on:
+      - task_complete
+      - task_failed
+      - approval_needed
+
+  discord:
+    enabled: false
+    # Control agents from Discord
+    webhook_env: "DISCORD_WEBHOOK_URL"
+    channel_env: "DISCORD_CHANNEL_ID"
+
+# ============================================================================
+# DEFAULTS & RATIONALE
+# ============================================================================
+#
+# These defaults are optimized for a developer's workflow:
+#
+# 1. DEFAULT TEAM uses local Gemma + cloud Sonnet/Haiku
+#    - Orchestrator: local Gemma (fast, no cost)
+#    - Architect: cloud Sonnet (deep design thinking)
+#    - Implementer: local Gemma (code writing)
+#    - Tester: cloud Haiku (efficient observation)
+#    - Documenter: local Gemma (text summarization)
+#
+# 2. AUTONOMY: "observe_after" by default
+#    - Agent acts, reports results, waits for human OK
+#    - Gives 80% automation benefit with 100% control
+#    - Can override per task type
+#
+# 3. COST TARGET: $1 per issue max
+#    - Simple bug fix: ~$0.30
+#    - Complex refactor: ~$0.80
+#    - Stays under budget
+#
+# 4. SPEED: All operations complete in <20 minutes
+#    - Orchestrator: 3 min
+#    - Architect: 2 min
+#    - Implementer: 5 min
+#    - Tester: 5 min
+#    - Documenter: 2 min
+#
+# Users can override any of this by:
+# - Switching teams: "use premium team"
+# - Picking models: "use opus for orchestrator"
+# - Changing autonomy: "do this with full_approve"
+# - Adjusting scope: "only work on main branch"
