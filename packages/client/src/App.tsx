@@ -1465,6 +1465,7 @@ export default function App() {
                   <MissionControlStrip
                     projectName={missionProjectName}
                     branchName={activeSession?.branchName ?? ''}
+                    projectDirection={activeSession?.projectDirection ?? ''}
                     summary={activeSession?.summary ?? ''}
                     onFocusAssistant={() => setRightTab('chat')}
                     onFocusAgent={() => setRightTab('agent')}
@@ -1685,17 +1686,19 @@ function ApprovalModal({
 function MissionControlStrip({
   projectName,
   branchName,
+  projectDirection,
   summary,
   onFocusAssistant,
   onFocusAgent,
 }: {
   projectName: string;
   branchName: string;
+  projectDirection: string;
   summary: string;
   onFocusAssistant: () => void;
   onFocusAgent: () => void;
 }) {
-  const items = parseMissionSummary(summary);
+  const items = [...parseMissionSummary(projectDirection), ...parseMissionSummary(summary)].slice(0, 4);
   if (!projectName && items.length === 0) {
     return null;
   }

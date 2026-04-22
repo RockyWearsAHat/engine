@@ -35,6 +35,7 @@ vi.mock('../bridge.js', () => ({
     getModel: vi.fn().mockResolvedValue('gemma4:31b'),
     getEditorPreferences: vi.fn().mockResolvedValue(null),
     getProjectPath: vi.fn().mockResolvedValue(''),
+    getLocalServerToken: vi.fn().mockResolvedValue('desktop-token'),
     setLastProjectPath: vi.fn().mockResolvedValue(undefined),
     startWindowDrag: vi.fn().mockResolvedValue(undefined),
     closeWindow: vi.fn().mockResolvedValue(undefined),

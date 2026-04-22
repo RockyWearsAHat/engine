@@ -1,5 +1,6 @@
 import type { ClientMessage, ServerMessage } from '@engine/shared';
 import { loadActiveConnectionProfile } from '../connectionProfiles.js';
+import { bridge } from '../bridge.js';
 
 type MessageHandler = (msg: ServerMessage) => void;
 type OpenHandler = () => void | Promise<void>;
@@ -15,8 +16,11 @@ function isDesktopShell(): boolean {
   return typeof window !== 'undefined' && ('__TAURI__' in window || !!window.electronAPI?.isElectron);
 }
 
-function localDesktopSocketURL(): string {
-  return 'ws://127.0.0.1:3000/ws';
+function localDesktopSocketURL(token: string | null): string {
+  if (!token) {
+    return 'ws://127.0.0.1:3000/ws';
+  }
+  return `ws://127.0.0.1:3000/ws?token=${encodeURIComponent(token)}`;
 }
 
 function localDesktopHealthURL(): string {
@@ -128,7 +132,7 @@ export class WSClient {
       if (!(await this.waitForLocalDesktopServer(attempt))) {
         return;
       }
-      url = localDesktopSocketURL();
+      url = localDesktopSocketURL(await bridge.getLocalServerToken());
     } else {
       url = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
     }

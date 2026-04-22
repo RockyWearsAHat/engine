@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/engine/server/db"
 )
 
 const (
@@ -67,25 +69,7 @@ func uniqToolNames(toolCalls []ToolCall) []string {
 	return names
 }
 
-func carryForwardProjectMemory(previousSummary string) string {
-	lines := strings.Split(strings.ReplaceAll(previousSummary, "\r\n", "\n"), "\n")
-	kept := make([]string, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(line, "Project goal:"),
-			strings.HasPrefix(line, "Architecture direction:"),
-			strings.HasPrefix(line, "Project memory:"):
-			kept = append(kept, strings.TrimPrefix(line, "Project memory: "))
-		}
-	}
-	if len(kept) == 0 {
-		return truncateSummary(normalizeSummaryText(previousSummary), 620)
-	}
-	return truncateSummary(normalizeSummaryText(strings.Join(kept, " ")), 620)
-}
-
-func BuildInitialSessionSummary(projectPath string) string {
+func BuildInitialProjectDirection(projectPath string) string {
 	projectGoal := truncateSummary(readWorkspaceDocSnippet(projectPath, "PROJECT_GOAL.md"), projectGuideMaxChars)
 	architecture := truncateSummary(readWorkspaceDocSnippet(projectPath, ".github", "references", "architecture.md"), architectureMaxChars)
 
@@ -99,17 +83,35 @@ func BuildInitialSessionSummary(projectPath string) string {
 	return strings.Join(sections, "\n")
 }
 
+func EnsureProjectDirection(projectPath string) string {
+	if projectPath == "" {
+		return ""
+	}
+	if existing, err := db.GetProjectDirection(projectPath); err == nil && strings.TrimSpace(existing) != "" {
+		return existing
+	}
+	direction := BuildInitialProjectDirection(projectPath)
+	if strings.TrimSpace(direction) != "" {
+		db.UpsertProjectDirection(projectPath, direction) //nolint:errcheck
+	}
+	return direction
+}
+
+func BuildInitialSessionSummary(projectPath string) string {
+	_ = projectPath
+	return ""
+}
+
 func BuildWorkspacePromptContext(projectPath string) string {
-	return BuildInitialSessionSummary(projectPath)
+	return EnsureProjectDirection(projectPath)
 }
 
 func BuildUpdatedSessionSummary(previousSummary, userMessage, assistantText string, toolCalls []ToolCall) string {
 	sections := make([]string, 0, 4)
-	if previous := carryForwardProjectMemory(previousSummary); previous != "" {
-		sections = append(sections, "Project memory: "+previous)
-	}
 	if focus := truncateSummary(normalizeSummaryText(userMessage), 280); focus != "" {
 		sections = append(sections, "Current focus: "+focus)
+	} else if carry := truncateSummary(normalizeSummaryText(previousSummary), 280); carry != "" {
+		sections = append(sections, "Current focus: "+carry)
 	}
 	if outcome := truncateSummary(normalizeSummaryText(assistantText), 420); outcome != "" {
 		sections = append(sections, "Latest outcome: "+outcome)
