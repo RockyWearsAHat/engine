@@ -177,7 +177,9 @@ export type ClientMessage =
   | { type: 'terminal.input'; terminalId: string; data: string }
   | { type: 'terminal.resize'; terminalId: string; cols: number; rows: number }
   | { type: 'terminal.close'; terminalId: string }
-  | { type: 'editor.tabs.sync'; tabs: TabInfo[] };
+  | { type: 'editor.tabs.sync'; tabs: TabInfo[] }
+  | { type: 'engine.config.get' }
+  | { type: 'engine.team.set'; team: string; provider: string; model: string };
 
 // WebSocket protocol — Server → Client
 export type ServerMessage =
@@ -210,7 +212,9 @@ export type ServerMessage =
   | { type: 'editor.tab.focus'; path: string }
   | { type: 'file.created'; path: string }
   | { type: 'folder.created'; path: string }
-  | { type: 'error'; message: string; code?: string };
+  | { type: 'error'; message: string; code?: string }
+  | { type: 'engine.config'; yaml: string; error?: string }
+  | { type: 'engine.team.updated'; team: string };
 
 // Tab and system info types
 export interface TabInfo {
@@ -263,6 +267,27 @@ export interface LiveToolCall {
   pending: boolean;
   startedAt: number;
   durationMs?: number;
+}
+
+// Engine orchestration — team config types
+export interface EngineAgentModel {
+  model: string;
+  modelDisplay: string;
+}
+
+export interface EngineTeamConfig {
+  name: string;
+  description: string;
+  orchestrator: EngineAgentModel;
+  architect: EngineAgentModel;
+  implementer: EngineAgentModel;
+  tester: EngineAgentModel;
+  documenter: EngineAgentModel;
+}
+
+export interface EngineConfig {
+  teams: Record<string, EngineTeamConfig>;
+  activeTeam?: string;
 }
 
 // Remote connection types

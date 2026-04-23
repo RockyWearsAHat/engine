@@ -89,6 +89,8 @@ struct AppConfig {
     editor_line_height: f32,
     editor_tab_size: u8,
     editor_word_wrap: bool,
+    #[serde(default)]
+    active_team: Option<String>,
 }
 
 enum CliAction {
@@ -115,6 +117,7 @@ impl Default for AppConfig {
             editor_line_height: 1.6,
             editor_tab_size: 2,
             editor_word_wrap: false,
+            active_team: None,
         }
     }
 }
@@ -464,6 +467,9 @@ fn configure_server_command(
     }
     if let Some(model) = &cfg.model {
         cmd.env("ENGINE_MODEL", model);
+    }
+    if let Some(team) = &cfg.active_team {
+        cmd.env("ENGINE_ACTIVE_TEAM", team);
     }
 }
 
@@ -982,6 +988,18 @@ fn set_model(model: String) -> bool {
 }
 
 #[tauri::command]
+fn get_active_team() -> Option<String> {
+    read_config().active_team
+}
+
+#[tauri::command]
+fn set_active_team(team: String) -> bool {
+    let mut cfg = read_config();
+    cfg.active_team = if team.is_empty() { None } else { Some(team) };
+    write_config(&cfg)
+}
+
+#[tauri::command]
 fn get_editor_preferences() -> EditorPreferences {
     editor_preferences_from_config(&read_config())
 }
@@ -1406,6 +1424,8 @@ pub fn run() {
             set_ollama_base_url,
             get_model,
             set_model,
+            get_active_team,
+            set_active_team,
             get_editor_preferences,
             set_editor_preferences,
             inspect_path,
