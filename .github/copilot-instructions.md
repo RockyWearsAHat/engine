@@ -2,6 +2,12 @@
 
 # TALK LIKE A CAVEMAN, ALWAYS, THIS HELPS SAVE CONTEXT, LESS CONTEXT = MORE WORK FOR LESS MONEY!!!
 
+# Anything out of date, old, unnecessary, or causing bloat in the code should immediately be removed as per CS 3500 principles. Consider asking me (the user) about questionable things that you are unsure if they should be removed, but for the most part, if you stumble across something like an old markdown document that claims something don't take that as proof our code might have changed, and the markdown documents are not generated from code.
+
+# ALL CODE YOU WRITE SHOULD CONSIDER THE UTMOST EFFICIENT WAY TO DO SOMETHING, DO NOT TRY TO NEEDLESSLY OPTIMIZE, BUT O(1) IS SIGNIFICANTLY BETTER THAN SOMETHING THAT IS O(n*n) WHEN RAN ACROSS A DATASET OF MILLIONS. CONSIDER TIME COMPLEXITY AND IF IT CAN BE DROPPED **WITHOUT** FUNCTIONAL DEGREDATION. IF SOMETHING IS PHYSICALLY SLOW (real world seconds) THAT IS BAD AND WE SHOULD CONSIDER REAPPROACHING THE CODE TO MAKE IT LESS SLOW.
+
+THE HALLMARK OF BAD SOFTWARE IS SOFTWARE WRITTEN TO HAVE EDGE CASES THAT **MAY** BUT ARE NOT NECESSARILY ALWAYS HIT THAT CAUSE INCREDIBLY OBTUSE AND INCORRECT BEHAVIOR, OR CODE THAT SHOULD RUN INCREDIBLY QUICKLY AND INSTEAD IT TAKES AGES. BOTH OF THESE SIGNIFY BAD CODE, IF YOU EVER NOTICE THEM ANYWHERE, PAUSE, ANALYZE THAT AREA, CONSIDER WHAT MIGHT BE GOING WRONG, IF IT'S A SIMPLE FIX TO NOT TOUCH LOGIC BUT TOUCH TIME, DO IT AND CONTINUE, OTHERWISE REPORT YOUR FINDINGS TO THE USER FOR THE NEXT REQUEST ALONG WITH WHATEVER YOU WERE GOING TO SAY ANYWAYS IN YOUR FOLLOWUP.
+
 ## Project Identity
 Engine is an AI-native code editor. AI is not bolted onto a text editor — it is the foundational architecture. Every feature is designed around AI-driven workflows.
 
@@ -50,3 +56,16 @@ Engine is an AI-native code editor. AI is not bolted onto a text editor — it i
 - Integration tests for AI-editor interaction
 - Behavioral tests: AI runs the app, observes, validates
 - (Detailed strategy TBD once codebase exists)
+
+## Mandatory Completion Gate (Hard Stop)
+- Agent must not finish a request until completion gate passes.
+- Completion gate requirements:
+	- 100% client coverage (statements, branches, functions, lines)
+	- 100% Go coverage total
+	- lint clean
+	- typecheck clean
+	- explicit CS 3500 verification attestation
+	- explicit request and chat-history completion attestation
+- Enforced by Stop hook: `.github/hooks/mandatory-completion-gate.json`
+- Gate implementation: `scripts/agent-completion-gate.mjs`
+	- Internal-only completion report artifact: `.github/session-memory/agent-completion-report.json` (agent/hook telemetry, not user-facing output)

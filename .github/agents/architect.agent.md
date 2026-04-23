@@ -20,3 +20,23 @@ Review architectural decisions and code changes to ensure they align with MyEdit
 - Tool implementations that can silently fail or produce ambiguous output
 - Session state that doesn't survive process restart
 - Architecture that assumes AI is optional or supplementary
+
+## Creating Render Tests
+To add a new component to render testing, open component-renders.test.tsx and add one object to the COMPONENTS array:
+```tsx
+{
+  name: 'MyNewComponent',
+  element: <MyNewComponent someProp="value" />,
+  rootClass: 'my-root-class',  // or null if no class to enforce yet
+},
+```
+
+Then add its lazy import at the top with the rest:
+```tsx
+const { default: MyNewComponent } = await import('../components/MyFolder/MyNewComponent.js');
+```
+
+That's it. The test loop picks it up automatically — no new describe, no new it.
+
+rootClass is the design system anchor. Set it to the CSS class your root element must always have. If the class ever gets renamed or dropped, the test fails immediately and tells you exactly which component broke.
+
