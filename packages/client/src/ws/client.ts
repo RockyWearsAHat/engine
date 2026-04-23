@@ -24,7 +24,13 @@ function localDesktopSocketURL(token: string | null): string {
 }
 
 function localDesktopHealthURL(): string {
-  return 'http://127.0.0.1:3000/health';
+  // In Tauri/Electron the webview talks directly to the local server (no proxy,
+  // no CORS restriction). In the Vite dev server the request goes through the
+  // /health proxy entry so we use a same-origin relative path to avoid CORS.
+  if (isDesktopShell()) {
+    return 'http://127.0.0.1:3000/health';
+  }
+  return '/health';
 }
 
 interface LocalDesktopHealth {
