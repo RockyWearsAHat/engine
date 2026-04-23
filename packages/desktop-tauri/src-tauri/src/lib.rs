@@ -925,6 +925,31 @@ fn get_local_server_token(state: tauri::State<'_, LocalServerAuth>) -> String {
 }
 
 #[tauri::command]
+fn restart_local_server(
+    server_state: tauri::State<'_, ServerProcess>,
+    auth_state: tauri::State<'_, LocalServerAuth>,
+) -> bool {
+    if let Ok(mut guard) = server_state.child.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    let _ = stop_stale_debug_server(DEFAULT_PORT);
+
+    let cfg = read_config();
+    let project_path = project_path_for_server(&cfg);
+    let launch = start_go_server(&project_path, &cfg, &auth_state.token);
+
+    if let Ok(mut guard) = server_state.child.lock() {
+        *guard = launch.child;
+    }
+
+    launch.managed || server_running(DEFAULT_PORT)
+}
+
+#[tauri::command]
 fn get_github_token() -> Option<String> {
     read_config().github_token
 }
@@ -1459,6 +1484,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_project_path,
             get_local_server_token,
+            restart_local_server,
             get_github_token,
             set_github_token,
             get_github_owner,

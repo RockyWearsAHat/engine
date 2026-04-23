@@ -45,6 +45,8 @@ export class WSClient {
   private remoteConfig: RemoteConfig | null = null;
   private connectAttempt = 0;
   private queuedMessages: ClientMessage[] = [];
+  private localRecoveryInFlight = false;
+  private lastLocalRecoveryAt = 0;
 
   connect(remote?: RemoteConfig): void {
     if (this.disconnectTimer) {
@@ -143,11 +145,13 @@ export class WSClient {
 
     const ws = new WebSocket(url);
     this.ws = ws;
+    let opened = false;
 
     ws.onopen = () => {
       if (this.ws !== ws) {
         return;
       }
+      opened = true;
       void this.handleOpen(ws);
     };
 
@@ -159,6 +163,7 @@ export class WSClient {
     };
 
     ws.onclose = () => {
+      const closedBeforeOpen = !opened;
       if (this.ws === ws) {
         this.ws = null;
       }
@@ -166,12 +171,37 @@ export class WSClient {
         handler();
       }
       if (!this.shouldConnect) return;
-      const delay = this.reconnectDelay;
-      this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxDelay);
-      this.scheduleConnect(delay);
+
+      void (async () => {
+        let delay = this.reconnectDelay;
+        const shouldRecoverLocal = closedBeforeOpen && isDesktopShell() && !this.remoteConfig;
+        if (shouldRecoverLocal && (await this.restartLocalDesktopServer())) {
+          this.reconnectDelay = 1000;
+          delay = 150;
+        } else {
+          this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxDelay);
+        }
+        this.scheduleConnect(delay);
+      })();
     };
 
     ws.onerror = () => {};
+  }
+
+  private async restartLocalDesktopServer(): Promise<boolean> {
+    const now = Date.now();
+    if (this.localRecoveryInFlight || now - this.lastLocalRecoveryAt < 3000) {
+      return false;
+    }
+    this.localRecoveryInFlight = true;
+    this.lastLocalRecoveryAt = now;
+    try {
+      return await bridge.restartLocalServer();
+    } catch {
+      return false;
+    } finally {
+      this.localRecoveryInFlight = false;
+    }
   }
 
   private async handleOpen(ws: WebSocket): Promise<void> {
