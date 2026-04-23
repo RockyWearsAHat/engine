@@ -19,6 +19,7 @@
     "tauri:build": "node ./scripts/run-cargo.mjs tauri build",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm --filter @engine/client exec eslint src --ext ts,tsx --max-warnings 0",
+    "verify:agent-completion": "node ./scripts/agent-completion-gate.mjs",
     "install:all": "pnpm install"
   },
   "devDependencies": {

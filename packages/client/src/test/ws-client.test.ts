@@ -1,4 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const bridgeMocks = vi.hoisted(() => ({
+  getLocalServerToken: vi.fn().mockResolvedValue('desktop-token'),
+  restartLocalServer: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock('../bridge.js', () => ({
+  bridge: {
+    getLocalServerToken: bridgeMocks.getLocalServerToken,
+    restartLocalServer: bridgeMocks.restartLocalServer,
+  },
+}));
+
+vi.mock('../connectionProfiles.js', () => ({
+  loadActiveConnectionProfile: vi.fn().mockReturnValue(null),
+}));
+
 import { WSClient } from '../ws/client.js';
 
 class MockWebSocket {
@@ -31,6 +48,10 @@ describe('WSClient desktop startup behavior', () => {
     vi.useFakeTimers();
     MockWebSocket.instances = [];
     globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+    bridgeMocks.getLocalServerToken.mockReset();
+    bridgeMocks.restartLocalServer.mockReset();
+    bridgeMocks.getLocalServerToken.mockResolvedValue('desktop-token');
+    bridgeMocks.restartLocalServer.mockResolvedValue(true);
     Object.defineProperty(window, '__TAURI__', {
       configurable: true,
       value: {},
@@ -45,34 +66,41 @@ describe('WSClient desktop startup behavior', () => {
   });
 
   it('waits for the local desktop server health check before opening a websocket', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ status: 'ok' }),
+    });
     globalThis.fetch = fetchMock as typeof fetch;
 
     const client = new WSClient();
     client.connect();
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(500);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:3000/health',
+      '/health',
       expect.objectContaining({
         method: 'GET',
-        mode: 'no-cors',
         cache: 'no-store',
       }),
     );
+    expect(bridgeMocks.restartLocalServer).toHaveBeenCalledTimes(1);
+    expect(bridgeMocks.getLocalServerToken).toHaveBeenCalledTimes(1);
     expect(MockWebSocket.instances).toHaveLength(1);
-    expect(MockWebSocket.instances[0]?.url).toBe('ws://127.0.0.1:3000/ws');
+    expect(MockWebSocket.instances[0]?.url).toBe('ws://localhost:3000/ws?token=desktop-token');
   });
 
   it('queues outbound messages until the websocket opens', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ status: 'ok' }),
+    });
     globalThis.fetch = fetchMock as typeof fetch;
 
     const client = new WSClient();
     client.connect();
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(500);
 
     const socket = MockWebSocket.instances[0];
     expect(socket).toBeDefined();
@@ -88,13 +116,16 @@ describe('WSClient desktop startup behavior', () => {
   });
 
   it('cancels a pending disconnect when the app reconnects immediately', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ status: 'ok' }),
+    });
     globalThis.fetch = fetchMock as typeof fetch;
 
     const client = new WSClient();
     client.connect();
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(500);
 
     const socket = MockWebSocket.instances[0];
     expect(socket).toBeDefined();
@@ -105,5 +136,37 @@ describe('WSClient desktop startup behavior', () => {
 
     expect(socket?.close).not.toHaveBeenCalled();
     expect(MockWebSocket.instances).toHaveLength(1);
+  });
+
+  it('uses remote configuration when provided', async () => {
+    const client = new WSClient();
+    client.connect({ host: 'engine.example.dev', port: '7443', token: 'abc xyz' });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(MockWebSocket.instances[0]?.url).toBe('wss://engine.example.dev:7443/ws?token=abc%20xyz');
+    expect(client.isRemote).toBe(true);
+  });
+
+  it('keeps only the most recent 100 queued messages while disconnected', async () => {
+    const client = new WSClient();
+    client.connect({ host: 'engine.example.dev', port: '7443', token: 'abc' });
+    await vi.advanceTimersByTimeAsync(1);
+
+    const socket = MockWebSocket.instances[0];
+    expect(socket).toBeDefined();
+    socket!.readyState = MockWebSocket.CONNECTING;
+
+    for (let i = 0; i < 120; i += 1) {
+      client.send({ type: 'session.read', id: String(i) });
+    }
+
+    socket!.readyState = MockWebSocket.OPEN;
+    socket!.onopen?.();
+
+    expect(socket?.send).toHaveBeenCalledTimes(100);
+    expect(socket?.send).toHaveBeenNthCalledWith(1, JSON.stringify({ type: 'session.read', id: '20' }));
+    expect(socket?.send).toHaveBeenNthCalledWith(100, JSON.stringify({ type: 'session.read', id: '119' }));
   });
 });
