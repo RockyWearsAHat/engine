@@ -1156,7 +1156,15 @@ export default function App() {
     });
     wsClient.connect();
 
-    return () => { off(); offOpen(); offClose(); wsClient.disconnect(); };
+    return () => {
+      off();
+      offOpen();
+      offClose();
+      const runningViaDevServer = typeof window !== 'undefined' && window.location.host.includes(':5173');
+      if (!runningViaDevServer) {
+        wsClient.disconnect();
+      }
+    };
   }, []); // store actions are stable; refs provide fresh UI state without reconnect churn
 
   useEffect(() => {
