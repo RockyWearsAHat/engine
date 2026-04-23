@@ -101,11 +101,12 @@ func main() {
 	if port == "" {
 		port = "3000"
 	}
+	bootID := os.Getenv("ENGINE_LOCAL_BOOT_ID")
 
 	http.HandleFunc("/ws", hub.ServeWS)
 	http.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"status":"ok","projectPath":%q}`, projectPath)
+		fmt.Fprintf(w, `{"status":"ok","projectPath":%q,"bootId":%q}`, projectPath, bootID)
 	})
 
 	// GitHub webhook receiver for repo monitoring.

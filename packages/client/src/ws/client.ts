@@ -27,6 +27,12 @@ function localDesktopHealthURL(): string {
   return 'http://127.0.0.1:3000/health';
 }
 
+interface LocalDesktopHealth {
+  status?: string;
+  projectPath?: string;
+  bootId?: string;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -85,11 +91,13 @@ export class WSClient {
   }
 
   private async waitForLocalDesktopServer(attempt: number): Promise<boolean> {
+    const expectedProjectPath = (await bridge.getProjectPath()).trim();
+    const expectedBootId = (await bridge.getLocalServerBootId())?.trim() ?? '';
     for (let i = 0; i < 40; i++) {
       if (!this.shouldConnect || attempt !== this.connectAttempt) {
         return false;
       }
-      if (await this.probeLocalDesktopServer()) {
+      if (await this.probeLocalDesktopServer(expectedProjectPath, expectedBootId)) {
         return true;
       }
       await sleep(100);
@@ -103,19 +111,36 @@ export class WSClient {
     return false;
   }
 
-  private async probeLocalDesktopServer(): Promise<boolean> {
+  private async probeLocalDesktopServer(expectedProjectPath: string, expectedBootId: string): Promise<boolean> {
     if (typeof fetch !== 'function') {
       return false;
     }
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 300);
     try {
-      await fetch(localDesktopHealthURL(), {
+      const response = await fetch(localDesktopHealthURL(), {
         method: 'GET',
-        mode: 'no-cors',
         cache: 'no-store',
         signal: controller.signal,
       });
+
+      if (!response.ok) {
+        return false;
+      }
+
+      const payload = (await response.json()) as LocalDesktopHealth;
+      if (payload.status !== 'ok') {
+        return false;
+      }
+
+      if (expectedProjectPath && payload.projectPath !== expectedProjectPath) {
+        return false;
+      }
+
+      if (expectedBootId && payload.bootId !== expectedBootId) {
+        return false;
+      }
+
       return true;
     } catch {
       return false;
