@@ -23,7 +23,26 @@ function isHttpDevOrigin(): boolean {
   return window.location.protocol === 'http:' || window.location.protocol === 'https:';
 }
 
+function desktopDevProxyHost(): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const host = window.location.host;
+  if (!host) {
+    return null;
+  }
+  if (host.includes(':5173')) {
+    return host;
+  }
+  return null;
+}
+
 function localDesktopSocketURL(token: string | null): string {
+  const proxyHost = desktopDevProxyHost();
+  if (proxyHost) {
+    const base = `ws://${proxyHost}/ws`;
+    return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+  }
   if (isHttpDevOrigin()) {
     const base = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
     return token ? `${base}?token=${encodeURIComponent(token)}` : base;
@@ -35,6 +54,9 @@ function localDesktopSocketURL(token: string | null): string {
 }
 
 function localDesktopHealthURL(): string {
+  if (desktopDevProxyHost()) {
+    return '/health';
+  }
   if (isHttpDevOrigin()) {
     return '/health';
   }
