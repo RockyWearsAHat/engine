@@ -84,6 +84,7 @@ struct AppConfig {
     ollama_base_url: Option<String>,
     model: Option<String>,
     last_project_path: Option<String>,
+    local_server_token: Option<String>,
     editor_font_family: String,
     editor_font_size: u16,
     editor_line_height: f32,
@@ -112,6 +113,7 @@ impl Default for AppConfig {
             ollama_base_url: None,
             model: None,
             last_project_path: None,
+            local_server_token: None,
             editor_font_family: default_editor_font_family(),
             editor_font_size: 13,
             editor_line_height: 1.6,
@@ -546,9 +548,9 @@ fn start_go_server(project_path: &str, cfg: &AppConfig, local_server_token: &str
 }
 
 fn run_background_service() {
-    let cfg = read_config();
+    let mut cfg = read_config();
+    let local_server_token = ensure_local_server_token(&mut cfg);
     let project_path = project_path_for_server(&cfg);
-    let local_server_token = generate_local_server_token();
     loop {
         let ServerLaunch { child, .. } = start_go_server(&project_path, &cfg, &local_server_token);
         if let Some(mut managed_child) = child {
@@ -579,6 +581,22 @@ fn generate_local_server_token() -> String {
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn ensure_local_server_token(cfg: &mut AppConfig) -> String {
+    if let Some(existing) = cfg
+        .local_server_token
+        .as_ref()
+        .map(|token| token.trim())
+        .filter(|token| !token.is_empty())
+    {
+        return existing.to_string();
+    }
+
+    let token = generate_local_server_token();
+    cfg.local_server_token = Some(token.clone());
+    let _ = write_config(cfg);
+    token
 }
 
 #[cfg(target_os = "macos")]
@@ -1294,9 +1312,9 @@ pub fn run() {
         None => {}
     }
 
-    let cfg = read_config();
+    let mut cfg = read_config();
     let project_path = project_path_for_server(&cfg);
-    let local_server_token = generate_local_server_token();
+    let local_server_token = ensure_local_server_token(&mut cfg);
     let server = start_go_server(&project_path, &cfg, &local_server_token);
 
     // Watchdog: if the Go server exits unexpectedly, restart it. Runs in a
