@@ -85,10 +85,11 @@ func (c *conn) handleDiscordConfigGet() {
 		})
 		return
 	}
+	active := discordBridge.CurrentConfig().Enabled
 	c.send(map[string]interface{}{
 		"type":   "discord.config",
 		"config": toPayload(discordBridge.CurrentConfig()),
-		"active": true,
+		"active": active,
 	})
 }
 
@@ -106,19 +107,45 @@ func (c *conn) handleDiscordConfigSet(payload discordConfigPayload) {
 		return
 	}
 
+	active := false
 	if discordBridge != nil {
 		if err := discordBridge.Reload(cfg); err != nil {
 			c.send(map[string]interface{}{
 				"type":    "discord.config.saved",
 				"config":  toPayload(cfg),
+				"active":  false,
 				"warning": "Saved, but reload failed: " + err.Error(),
 			})
 			return
 		}
+		active = discordBridge.CurrentConfig().Enabled
+	} else if cfg.Enabled {
+		service, err := discord.NewService(cfg, c.projectPath)
+		if err != nil {
+			c.send(map[string]interface{}{
+				"type":    "discord.config.saved",
+				"config":  toPayload(cfg),
+				"active":  false,
+				"warning": "Saved, but service init failed: " + err.Error(),
+			})
+			return
+		}
+		if err := service.Start(); err != nil {
+			c.send(map[string]interface{}{
+				"type":    "discord.config.saved",
+				"config":  toPayload(cfg),
+				"active":  false,
+				"warning": "Saved, but service start failed: " + err.Error(),
+			})
+			return
+		}
+		SetDiscordBridge(service)
+		active = true
 	}
 	c.send(map[string]interface{}{
 		"type":   "discord.config.saved",
 		"config": toPayload(cfg),
+		"active": active,
 	})
 }
 

@@ -108,6 +108,7 @@ export default function PreferencesPanel() {
   const [discordValidation, setDiscordValidation] = useState<DiscordValidationResult | null>(null);
   const [discordValidating, setDiscordValidating] = useState(false);
   const [discordActive, setDiscordActive] = useState(false);
+  const [discordSaveWarning, setDiscordSaveWarning] = useState('');
   const [activeSection, setActiveSection] = useState('desktop-services');
 
   const sections = [
@@ -136,10 +137,13 @@ export default function PreferencesPanel() {
         setDiscordForm(m.config);
         setDiscordAllowedInput((m.config.allowedUserIds || []).join(', '));
         setDiscordActive(Boolean(m.active));
+        setDiscordSaveWarning('');
       } else if (m.type === 'discord.config.saved' && m.config) {
         setDiscordForm(m.config);
         setDiscordAllowedInput((m.config.allowedUserIds || []).join(', '));
         setDiscordTokenInput('');
+        setDiscordActive(Boolean(m.active));
+        setDiscordSaveWarning(typeof m.warning === 'string' ? m.warning : '');
         markSaved('discord');
       } else if (m.type === 'discord.validate.result' && m.result) {
         setDiscordValidation(m.result);
@@ -909,6 +913,12 @@ export default function PreferencesPanel() {
                     {discordValidation.warnings.map((warn, i) => <li key={i}>{warn}</li>)}
                   </ul>
                 )}
+              </div>
+            )}
+
+            {discordSaveWarning && (
+              <div className="preferences-message" style={{ borderColor: 'rgba(255, 167, 38, 0.35)' }}>
+                {discordSaveWarning}
               </div>
             )}
           </div>
