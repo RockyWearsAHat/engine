@@ -101,8 +101,6 @@ func main() {
 	if port == "" {
 		port = "3000"
 	}
-	bootID := os.Getenv("ENGINE_LOCAL_BOOT_ID")
-
 	http.HandleFunc("/ws", hub.ServeWS)
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -112,7 +110,7 @@ func main() {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"status":"ok","projectPath":%q,"bootId":%q}`, projectPath, bootID)
+		fmt.Fprintf(w, `{"status":"ok","projectPath":%q}`, projectPath)
 	})
 
 	// GitHub webhook receiver for repo monitoring.
