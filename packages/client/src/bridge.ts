@@ -25,6 +25,7 @@ declare global {
     electronAPI?: {
       getProjectPath(): Promise<string>;
       getLocalServerToken?(): Promise<string | null>;
+      restartLocalServer?(): Promise<boolean>;
       getGithubToken(): Promise<string | null>;
       setGithubToken(token: string): Promise<boolean>;
       openExternal(url: string): Promise<void>;
@@ -160,6 +161,16 @@ export const bridge = {
       return window.electronAPI!.getLocalServerToken?.() ?? null;
     }
     return null;
+  },
+
+  async restartLocalServer(): Promise<boolean> {
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<boolean>('restart_local_server');
+    }
+    if (isElectron()) {
+      return window.electronAPI!.restartLocalServer?.() ?? false;
+    }
+    return false;
   },
 
   async getGithubToken(): Promise<string | null> {
