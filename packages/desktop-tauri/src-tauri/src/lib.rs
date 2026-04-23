@@ -37,7 +37,6 @@ struct ServerProcess {
 
 struct LocalServerAuth {
     token: String,
-    boot_id: String,
 }
 
 struct ServerLaunch {
@@ -446,12 +445,10 @@ fn configure_server_command(
     project_path: &str,
     cfg: &AppConfig,
     local_server_token: &str,
-    local_boot_id: &str,
 ) {
     cmd.env("PROJECT_PATH", project_path)
         .env("PORT", DEFAULT_PORT.to_string())
-        .env("ENGINE_LOCAL_WS_TOKEN", local_server_token)
-        .env("ENGINE_LOCAL_BOOT_ID", local_boot_id);
+        .env("ENGINE_LOCAL_WS_TOKEN", local_server_token);
 
     if let Some(token) = &cfg.github_token {
         cmd.env("GITHUB_TOKEN", token);
@@ -486,7 +483,6 @@ fn start_go_server(
     project_path: &str,
     cfg: &AppConfig,
     local_server_token: &str,
-    local_boot_id: &str,
 ) -> ServerLaunch {
     // In dev mode, always attempt to evict whatever is on the port — even if
     // the health check is ambiguous — so the new token matches the new server.
@@ -538,7 +534,7 @@ fn start_go_server(
     }
 
     let mut cmd = Command::new(&server_bin);
-    configure_server_command(&mut cmd, project_path, cfg, local_server_token, local_boot_id);
+    configure_server_command(&mut cmd, project_path, cfg, local_server_token);
 
     match cmd.spawn() {
         Ok(child) => ServerLaunch {
@@ -558,11 +554,10 @@ fn start_go_server(
 fn run_background_service() {
     let mut cfg = read_config();
     let local_server_token = ensure_local_server_token(&mut cfg);
-    let local_boot_id = generate_local_server_token();
     let project_path = project_path_for_server(&cfg);
     loop {
         let ServerLaunch { child, .. } =
-            start_go_server(&project_path, &cfg, &local_server_token, &local_boot_id);
+            start_go_server(&project_path, &cfg, &local_server_token);
         if let Some(mut managed_child) = child {
             let _ = managed_child.wait();
         }
@@ -935,11 +930,6 @@ fn get_local_server_token(state: tauri::State<'_, LocalServerAuth>) -> String {
 }
 
 #[tauri::command]
-fn get_local_server_boot_id(state: tauri::State<'_, LocalServerAuth>) -> String {
-    state.boot_id.clone()
-}
-
-#[tauri::command]
 fn restart_local_server(
     server_state: tauri::State<'_, ServerProcess>,
     auth_state: tauri::State<'_, LocalServerAuth>,
@@ -955,7 +945,7 @@ fn restart_local_server(
 
     let cfg = read_config();
     let project_path = project_path_for_server(&cfg);
-    let launch = start_go_server(&project_path, &cfg, &auth_state.token, &auth_state.boot_id);
+    let launch = start_go_server(&project_path, &cfg, &auth_state.token);
 
     if let Ok(mut guard) = server_state.child.lock() {
         *guard = launch.child;
@@ -1355,8 +1345,7 @@ pub fn run() {
     let mut cfg = read_config();
     let project_path = project_path_for_server(&cfg);
     let local_server_token = ensure_local_server_token(&mut cfg);
-    let local_boot_id = generate_local_server_token();
-    let server = start_go_server(&project_path, &cfg, &local_server_token, &local_boot_id);
+    let server = start_go_server(&project_path, &cfg, &local_server_token);
 
     // Watchdog: if the Go server exits unexpectedly, restart it. Runs in a
     // background thread so the Tauri UI is never blocked. Waits up to 2 s
@@ -1364,7 +1353,6 @@ pub fn run() {
     {
         let project_path_wd = project_path.clone();
         let local_server_token_wd = local_server_token.clone();
-        let local_boot_id_wd = local_boot_id.clone();
         thread::spawn(move || {
             loop {
                 thread::sleep(Duration::from_secs(2));
@@ -1375,7 +1363,6 @@ pub fn run() {
                         &project_path_wd,
                         &cfg_wd,
                         &local_server_token_wd,
-                        &local_boot_id_wd,
                     );
                 }
             }
@@ -1502,12 +1489,10 @@ pub fn run() {
         })
         .manage(LocalServerAuth {
             token: local_server_token,
-            boot_id: local_boot_id,
         })
         .invoke_handler(tauri::generate_handler![
             get_project_path,
             get_local_server_token,
-            get_local_server_boot_id,
             restart_local_server,
             get_github_token,
             set_github_token,
