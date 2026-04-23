@@ -328,7 +328,7 @@ fn terminate_pid(pid: u32, _signal: &str) -> bool {
 }
 
 fn stop_stale_debug_server(port: u16) -> bool {
-    if !cfg!(debug_assertions) || !engine_server_health_ok(port) {
+    if !engine_server_health_ok(port) {
         return false;
     }
 
@@ -474,7 +474,9 @@ fn configure_server_command(
 }
 
 fn start_go_server(project_path: &str, cfg: &AppConfig, local_server_token: &str) -> ServerLaunch {
-    if cfg!(debug_assertions) && server_running(DEFAULT_PORT) {
+    if server_running(DEFAULT_PORT) {
+        // If an Engine server is already on this port, stop it so this app
+        // instance can launch a fresh server with a matching local WS token.
         let _ = stop_stale_debug_server(DEFAULT_PORT);
     }
 
