@@ -380,9 +380,9 @@ func (to *TestOrchestrator) GetValidationResult() BehavioralResult {
 // FormatValidationReport creates a human-readable validation report.
 func FormatValidationReport(result BehavioralResult, issue string) string {
 	report := strings.Builder{}
-	report.WriteString(fmt.Sprintf("═══ BEHAVIORAL VALIDATION REPORT ═══\n"))
-	report.WriteString(fmt.Sprintf("Issue: %s\n", issue))
-	report.WriteString(fmt.Sprintf("Status: "))
+	report.WriteString("═══ BEHAVIORAL VALIDATION REPORT ═══\n")
+	fmt.Fprintf(&report, "Issue: %s\n", issue)
+	report.WriteString("Status: ")
 	
 	if result.IssueResolved {
 		report.WriteString("✓ RESOLVED\n")
@@ -390,10 +390,10 @@ func FormatValidationReport(result BehavioralResult, issue string) string {
 		report.WriteString("✗ NOT RESOLVED\n")
 	}
 	
-	report.WriteString(fmt.Sprintf("Test Passed: %v\n", result.TestPassed))
-	report.WriteString(fmt.Sprintf("Errors: %d | Warnings: %d\n", result.ErrorCount, result.WarningCount))
-	report.WriteString(fmt.Sprintf("Duration: %dms\n", result.DurationMs))
-	report.WriteString(fmt.Sprintf("\nEvidence:\n%s\n", result.Evidence))
+	fmt.Fprintf(&report, "Test Passed: %v\n", result.TestPassed)
+	fmt.Fprintf(&report, "Errors: %d | Warnings: %d\n", result.ErrorCount, result.WarningCount)
+	fmt.Fprintf(&report, "Duration: %dms\n", result.DurationMs)
+	fmt.Fprintf(&report, "\nEvidence:\n%s\n", result.Evidence)
 	
 	return report.String()
 }

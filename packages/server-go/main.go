@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/engine/server/db"
+	"github.com/engine/server/discord"
 	"github.com/engine/server/github"
 	"github.com/engine/server/remote"
 	"github.com/engine/server/vpn"
@@ -36,6 +37,28 @@ func main() {
 	}
 
 	hub := ws.NewHub(projectPath)
+
+	if cfg, err := discord.LoadConfig(projectPath); err != nil {
+		log.Fatalf("Invalid Discord config: %v", err)
+	} else if cfg.Enabled {
+		discordService, err := discord.NewService(cfg, projectPath)
+		if err != nil {
+			log.Fatalf("Failed to initialize Discord service: %v", err)
+		}
+		if err := discordService.Start(); err != nil {
+			log.Fatalf("Failed to start Discord service: %v", err)
+		}
+		ws.SetDiscordBridge(discordService)
+		defer discordService.Close() //nolint:errcheck
+	} else {
+		// Even when disabled, allow the UI to save/validate config via WS by
+		// wiring a stub that proxies only the bridge methods relying on the
+		// config + archive. We construct a non-started service so CurrentConfig
+		// and history queries work.
+		if stub, err := discord.NewService(cfg, projectPath); err == nil {
+			ws.SetDiscordBridge(stub)
+		}
+	}
 
 	// VPN tunnel mode: ENGINE_VPN=1 starts Ed25519-authenticated tunnel on top of TLS
 	if os.Getenv("ENGINE_VPN") == "1" {
@@ -78,9 +101,14 @@ func main() {
 	if port == "" {
 		port = "3000"
 	}
-
 	http.HandleFunc("/ws", hub.ServeWS)
-	http.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"status":"ok","projectPath":%q}`, projectPath)
 	})

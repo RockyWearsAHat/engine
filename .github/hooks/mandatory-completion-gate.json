@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node ./scripts/agent-completion-gate.mjs",
+        "timeout": 3600
+      }
+    ]
+  }
+}
