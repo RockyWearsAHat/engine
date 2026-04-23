@@ -1154,13 +1154,17 @@ export default function App() {
     const offClose = wsClient.onClose(() => {
       setConnected(false);
     });
-    wsClient.connect();
+    const runningViaDevServer = typeof window !== 'undefined' && window.location.host.includes(':5173');
+    const connectTimer = window.setTimeout(
+      () => wsClient.connect(),
+      runningViaDevServer ? 900 : 0,
+    );
 
     return () => {
+      window.clearTimeout(connectTimer);
       off();
       offOpen();
       offClose();
-      const runningViaDevServer = typeof window !== 'undefined' && window.location.host.includes(':5173');
       if (!runningViaDevServer) {
         wsClient.disconnect();
       }
