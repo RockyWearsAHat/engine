@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -809,6 +810,48 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.openTabs = msg.Tabs
 			c.tabsMu.Unlock()
 		}
+
+	// ── Engine Team Orchestration ────────────────────────────────────────────
+
+	case "engine.config.get":
+		configPath := filepath.Join(projectPath, ".engine", "config.yaml")
+		content, err := os.ReadFile(configPath)
+		if err != nil {
+			c.send(map[string]interface{}{
+				"type":  "engine.config",
+				"yaml":  "",
+				"error": "No .engine/config.yaml found",
+			})
+			return
+		}
+		c.send(map[string]interface{}{
+			"type": "engine.config",
+			"yaml": string(content),
+		})
+
+	case "engine.team.set":
+		var msg struct {
+			Team     string `json:"team"`
+			Provider string `json:"provider"`
+			Model    string `json:"model"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.sendErr("Bad payload", "BAD_PAYLOAD")
+			return
+		}
+		if strings.TrimSpace(msg.Provider) != "" {
+			os.Setenv("ENGINE_MODEL_PROVIDER", strings.TrimSpace(msg.Provider)) //nolint:errcheck
+		}
+		if strings.TrimSpace(msg.Model) != "" {
+			os.Setenv("ENGINE_MODEL", strings.TrimSpace(msg.Model)) //nolint:errcheck
+		}
+		if strings.TrimSpace(msg.Team) != "" {
+			os.Setenv("ENGINE_ACTIVE_TEAM", strings.TrimSpace(msg.Team)) //nolint:errcheck
+		}
+		c.send(map[string]interface{}{
+			"type": "engine.team.updated",
+			"team": msg.Team,
+		})
 
 	default:
 		c.sendErr(fmt.Sprintf("Unknown message type: %s", msgType), "UNKNOWN_TYPE")

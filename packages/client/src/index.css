@@ -2765,35 +2765,75 @@ html, body, #root {
   padding: 0 20px 24px;
 }
 
+.preferences-body {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 24px;
+}
+
+.preferences-content {
+  min-width: 0;
+}
+
+.preferences-nav-rail {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  padding-top: 18px;
+}
+
+.preferences-nav-kicker {
+  margin-bottom: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tx-3);
+}
+
 .preferences-nav {
   display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  margin: 20px 0 24px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-  padding-bottom: 0;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .preferences-nav-btn {
-  border: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  border: 1px solid transparent;
   background: transparent;
-  color: var(--tx-3);
+  color: var(--tx-2);
   font-size: 12px;
   font-weight: 600;
-  padding: 0 0 12px;
+  padding: 10px 12px;
   border-radius: 0;
-  border-bottom: 2px solid transparent;
   cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.preferences-nav-btn small {
+  color: var(--tx-3);
+  font-size: 10px;
+  line-height: 1.4;
+  font-weight: 500;
 }
 
 .preferences-nav-btn:hover {
-  color: var(--tx-2);
+  color: var(--tx);
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .preferences-nav-btn.active {
   color: var(--tx);
-  border-bottom-color: var(--accent);
+  border-color: rgba(124, 140, 255, 0.45);
+  background: rgba(124, 140, 255, 0.08);
 }
 
 .preferences-hero {
@@ -2813,13 +2853,22 @@ html, body, #root {
 }
 
 .preferences-card {
-  padding: 28px 0;
+  padding: 24px 20px;
   border-radius: 0;
-  border: none;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-left: 2px solid rgba(124, 140, 255, 0.35);
+  margin-bottom: 14px;
+  background: rgba(13, 16, 24, 0.72);
   box-shadow: none;
   scroll-margin-top: 20px;
+}
+
+.preferences-section-copy {
+  margin-top: 10px;
+  color: var(--tx-3);
+  font-size: 11px;
+  line-height: 1.7;
+  max-width: 62ch;
 }
 
 .preferences-card-header,
@@ -2873,7 +2922,7 @@ html, body, #root {
 .preferences-stack {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
   margin-top: 18px;
 }
 
@@ -3005,6 +3054,11 @@ html, body, #root {
   flex-wrap: wrap;
 }
 
+.preferences-action-group {
+  padding-top: 4px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.09);
+}
+
 .preferences-status-dot {
   width: 8px;
   height: 8px;
@@ -3040,6 +3094,31 @@ html, body, #root {
 @media (max-width: 1120px) {
   .welcome-grid {
     grid-template-columns: 1fr;
+  }
+
+  .preferences-body {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .preferences-nav-rail {
+    position: static;
+    padding-top: 0;
+  }
+
+  .preferences-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 0;
+    border: none;
+    background: transparent;
+  }
+
+  .preferences-nav-btn {
+    min-width: 144px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 8px 10px;
   }
 
   .preferences-grid {

@@ -410,4 +410,18 @@ export const bridge = {
       await window.__TAURI__!.core.invoke('window_start_drag');
     }
   },
+
+  async getActiveTeam(): Promise<string | null> {
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<string | null>('get_active_team');
+    }
+    return getBrowserSetting('engine.activeTeam');
+  },
+
+  async setActiveTeam(team: string): Promise<boolean> {
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<boolean>('set_active_team', { team });
+    }
+    return setBrowserSetting('engine.activeTeam', team);
+  },
 };

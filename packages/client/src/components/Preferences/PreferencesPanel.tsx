@@ -27,6 +27,7 @@ import {
 } from '../../editorPreferences.js';
 import { highlightCode } from '../Editor/editorSyntax.js';
 import MachineConnectionsPanel from '../Connections/MachineConnectionsPanel.js';
+import TeamSelector from './TeamSelector.js';
 
 const previewSnippet = `export async function openWorkspace(path: string) {
   const response = await bridge.setLastProjectPath(path);
@@ -110,12 +111,13 @@ export default function PreferencesPanel() {
   const [activeSection, setActiveSection] = useState('desktop-services');
 
   const sections = [
-    { id: 'desktop-services', label: 'Desktop' },
-    { id: 'machine-connections', label: 'Machines' },
-    { id: 'editor-appearance', label: 'Editor' },
-    { id: 'github-wiring', label: 'GitHub' },
-    { id: 'model-provider', label: 'Model' },
-    { id: 'discord-control', label: 'Discord' },
+    { id: 'desktop-services', label: 'Desktop', detail: 'Agent service runtime and install state' },
+    { id: 'machine-connections', label: 'Machines', detail: 'Remote machine links and pairing' },
+    { id: 'editor-appearance', label: 'Editor', detail: 'Fonts, spacing, wrapping, and preview' },
+    { id: 'github-wiring', label: 'GitHub', detail: 'Token and repository wiring' },
+    { id: 'model-provider', label: 'Model', detail: 'Provider, model, and API credentials' },
+    { id: 'agent-teams', label: 'Teams', detail: 'Role routing profile for orchestrators' },
+    { id: 'discord-control', label: 'Discord', detail: 'Control plane bot and access policy' },
   ] as const;
 
   const jumpToSection = useCallback((id: string) => {
@@ -310,21 +312,27 @@ export default function PreferencesPanel() {
         />
       </div>
 
-      <div className="preferences-nav" role="tablist" aria-label="Settings sections">
-        {sections.map((section) => (
-          <button
-            key={section.id}
-            type="button"
-            role="tab"
-            aria-selected={activeSection === section.id}
-            className={`preferences-nav-btn ${activeSection === section.id ? 'active' : ''}`}
-            onClick={() => jumpToSection(section.id)}
-          >
-            {section.label}
-          </button>
-        ))}
-      </div>
+      <div className="preferences-body">
+        <aside className="preferences-nav-rail">
+          <div className="preferences-nav-kicker">Section map</div>
+          <div className="preferences-nav" role="tablist" aria-label="Settings sections">
+            {sections.map((section) => (
+              <button
+                key={section.id}
+                type="button"
+                role="tab"
+                aria-selected={activeSection === section.id}
+                className={`preferences-nav-btn ${activeSection === section.id ? 'active' : ''}`}
+                onClick={() => jumpToSection(section.id)}
+              >
+                <span>{section.label}</span>
+                <small>{section.detail}</small>
+              </button>
+            ))}
+          </div>
+        </aside>
 
+        <div className="preferences-content">
       <section id="desktop-services" className="preferences-card preferences-extensions">
         <div className="preferences-card-header">
           <div className="preferences-card-title">
@@ -332,6 +340,9 @@ export default function PreferencesPanel() {
             Desktop services
           </div>
           <SaveBadge label="Agent service" active={serviceStatus?.installed ?? false} />
+        </div>
+        <div className="preferences-section-copy">
+          Local Engine companion service status and install controls for this machine.
         </div>
 
         <div className="preferences-stack">
@@ -394,6 +405,9 @@ export default function PreferencesPanel() {
                 Reset defaults
               </button>
             </div>
+          </div>
+          <div className="preferences-section-copy">
+            Tune readability defaults and preview exactly how code rendering will look.
           </div>
 
           <div className="preferences-row">
@@ -516,6 +530,9 @@ export default function PreferencesPanel() {
               GitHub and project wiring
             </div>
           </div>
+          <div className="preferences-section-copy">
+            Keep repository identity and token wiring explicit for issue and PR flows.
+          </div>
 
           <div className="preferences-stack">
             <label className="preferences-field">
@@ -566,7 +583,7 @@ export default function PreferencesPanel() {
               </label>
             </div>
 
-            <div className="preferences-inline-actions">
+            <div className="preferences-inline-actions preferences-action-group">
               <button
                 className="btn-secondary"
                 onClick={() => void saveField('gh-owner', async () => {
@@ -604,6 +621,9 @@ export default function PreferencesPanel() {
               Model and provider keys
             </div>
           </div>
+          <div className="preferences-section-copy">
+            Set provider routing, preferred model, and key material in one place.
+          </div>
 
           <div className="preferences-stack">
             <div className="preferences-row two-up">
@@ -634,7 +654,7 @@ export default function PreferencesPanel() {
               </label>
             </div>
 
-            <div className="preferences-inline-actions">
+            <div className="preferences-inline-actions preferences-action-group">
               <button
                 className="btn-secondary"
                 onClick={() => void saveField('provider', async () => {
@@ -699,7 +719,7 @@ export default function PreferencesPanel() {
               <span className="preferences-muted">Engine uses Ollama&apos;s OpenAI-compatible `/v1/chat/completions` endpoint. Leave blank for the local default.</span>
             </label>
 
-            <div className="preferences-inline-actions">
+            <div className="preferences-inline-actions preferences-action-group">
               <button
                 className="btn-secondary"
                 onClick={() => void saveField('anthropic', async () => {
@@ -743,6 +763,36 @@ export default function PreferencesPanel() {
           </div>
         </section>
 
+        <section id="agent-teams" className="preferences-card">
+          <div className="preferences-card-header">
+            <div className="preferences-card-title">
+              <Bot size={15} />
+              Agent teams
+            </div>
+          </div>
+          <div className="preferences-section-copy">
+            Choose the model team profile that maps each orchestrator role.
+          </div>
+          <div className="preferences-stack">
+            <div className="preferences-muted">
+              Select the team configuration that determines which models each
+              orchestrator role uses. Requires a{' '}
+              <code
+                style={{
+                  fontFamily: 'monospace',
+                  background: 'var(--surface-3)',
+                  padding: '1px 4px',
+                  borderRadius: 3,
+                }}
+              >
+                .engine/config.yaml
+              </code>{' '}
+              file at the project root.
+            </div>
+            <TeamSelector />
+          </div>
+        </section>
+
         <section id="discord-control" className="preferences-card">
           <div className="preferences-card-header">
             <div className="preferences-card-title">
@@ -750,6 +800,9 @@ export default function PreferencesPanel() {
               Discord control plane
             </div>
             <SaveBadge label={discordActive ? 'Live' : 'Config only'} active={saved === 'discord'} />
+          </div>
+          <div className="preferences-section-copy">
+            Configure bot access and channel routing for private remote control.
           </div>
 
           <div className="preferences-stack">
@@ -824,7 +877,7 @@ export default function PreferencesPanel() {
               </label>
             </div>
 
-            <div className="preferences-inline-actions">
+            <div className="preferences-inline-actions preferences-action-group">
               <button className="btn-primary" onClick={saveDiscordConfig}>
                 {saved === 'discord' ? <><Check size={12} /> Saved</> : <><MessageSquare size={12} /> Save Discord config</>}
               </button>
@@ -860,7 +913,8 @@ export default function PreferencesPanel() {
             )}
           </div>
         </section>
-
+      </div>
+        </div>
       </div>
     </div>
   );
