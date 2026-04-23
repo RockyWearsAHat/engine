@@ -93,6 +93,7 @@ export class WSClient {
   private queuedMessages: ClientMessage[] = [];
   private localRecoveryInFlight = false;
   private lastLocalRecoveryAt = 0;
+  private localStartupPrimed = false;
 
   connect(remote?: RemoteConfig): void {
     if (this.disconnectTimer) {
@@ -189,6 +190,10 @@ export class WSClient {
       const { host, port, token } = this.remoteConfig;
       url = `wss://${host}:${port}/ws?token=${encodeURIComponent(token)}`;
     } else if (isDesktopShell()) {
+      if (!this.localStartupPrimed) {
+        this.localStartupPrimed = true;
+        await this.restartLocalDesktopServer().catch(() => false);
+      }
       if (!(await this.waitForLocalDesktopServer(attempt))) {
         return;
       }
