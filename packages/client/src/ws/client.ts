@@ -16,15 +16,61 @@ function isDesktopShell(): boolean {
   return typeof window !== 'undefined' && ('__TAURI__' in window || !!window.electronAPI?.isElectron);
 }
 
-function localDesktopSocketURL(token: string | null): string {
-  if (!token) {
-    return 'ws://127.0.0.1:3000/ws';
+function isHttpDevOrigin(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
   }
-  return `ws://127.0.0.1:3000/ws?token=${encodeURIComponent(token)}`;
+  return window.location.protocol === 'http:' || window.location.protocol === 'https:';
+}
+
+function desktopDevProxyHost(): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const host = window.location.host;
+  if (!host) {
+    return null;
+  }
+  if (host.includes(':5173')) {
+    return host;
+  }
+  return null;
+}
+
+function localDesktopSocketURL(token: string | null): string {
+  const proxyHost = desktopDevProxyHost();
+  if (proxyHost) {
+    const base = `ws://${proxyHost}/ws`;
+    return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+  }
+  if (isHttpDevOrigin()) {
+    const base = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
+    return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+  }
+  if (!token) {
+    return 'ws://localhost:3000/ws';
+  }
+  return `ws://localhost:3000/ws?token=${encodeURIComponent(token)}`;
 }
 
 function localDesktopHealthURL(): string {
-  return 'http://127.0.0.1:3000/health';
+  if (desktopDevProxyHost()) {
+    return '/health';
+  }
+  if (isHttpDevOrigin()) {
+    return '/health';
+  }
+  // In Tauri/Electron the webview talks directly to the local server (no proxy,
+  // no CORS restriction). In the Vite dev server the request goes through the
+  // /health proxy entry so we use a same-origin relative path to avoid CORS.
+  if (isDesktopShell()) {
+    return 'http://localhost:3000/health';
+  }
+  return '/health';
+}
+
+interface LocalDesktopHealth {
+  status?: string;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -45,6 +91,9 @@ export class WSClient {
   private remoteConfig: RemoteConfig | null = null;
   private connectAttempt = 0;
   private queuedMessages: ClientMessage[] = [];
+  private localRecoveryInFlight = false;
+  private lastLocalRecoveryAt = 0;
+  private localStartupPrimed = false;
 
   connect(remote?: RemoteConfig): void {
     if (this.disconnectTimer) {
@@ -83,12 +132,21 @@ export class WSClient {
   }
 
   private async waitForLocalDesktopServer(attempt: number): Promise<boolean> {
+    let healthyStreak = 0;
     for (let i = 0; i < 40; i++) {
       if (!this.shouldConnect || attempt !== this.connectAttempt) {
         return false;
       }
       if (await this.probeLocalDesktopServer()) {
-        return true;
+        healthyStreak += 1;
+        // Require two consecutive healthy probes so we don't race a server
+        // restart boundary and immediately attempt a socket to a process
+        // that is about to die.
+        if (healthyStreak >= 2) {
+          return true;
+        }
+      } else {
+        healthyStreak = 0;
       }
       await sleep(100);
     }
@@ -108,13 +166,16 @@ export class WSClient {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 300);
     try {
-      await fetch(localDesktopHealthURL(), {
+      const response = await fetch(localDesktopHealthURL(), {
         method: 'GET',
-        mode: 'no-cors',
         cache: 'no-store',
         signal: controller.signal,
       });
-      return true;
+      if (!response.ok) {
+        return false;
+      }
+      const payload = (await response.json()) as LocalDesktopHealth;
+      return payload.status === 'ok';
     } catch {
       return false;
     } finally {
@@ -129,6 +190,10 @@ export class WSClient {
       const { host, port, token } = this.remoteConfig;
       url = `wss://${host}:${port}/ws?token=${encodeURIComponent(token)}`;
     } else if (isDesktopShell()) {
+      if (!this.localStartupPrimed) {
+        this.localStartupPrimed = true;
+        await this.restartLocalDesktopServer().catch(() => false);
+      }
       if (!(await this.waitForLocalDesktopServer(attempt))) {
         return;
       }
@@ -143,11 +208,13 @@ export class WSClient {
 
     const ws = new WebSocket(url);
     this.ws = ws;
+    let opened = false;
 
     ws.onopen = () => {
       if (this.ws !== ws) {
         return;
       }
+      opened = true;
       void this.handleOpen(ws);
     };
 
@@ -159,6 +226,7 @@ export class WSClient {
     };
 
     ws.onclose = () => {
+      const closedBeforeOpen = !opened;
       if (this.ws === ws) {
         this.ws = null;
       }
@@ -166,12 +234,37 @@ export class WSClient {
         handler();
       }
       if (!this.shouldConnect) return;
-      const delay = this.reconnectDelay;
-      this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxDelay);
-      this.scheduleConnect(delay);
+
+      void (async () => {
+        let delay = this.reconnectDelay;
+        const shouldRecoverLocal = closedBeforeOpen && isDesktopShell() && !this.remoteConfig;
+        if (shouldRecoverLocal && (await this.restartLocalDesktopServer())) {
+          this.reconnectDelay = 1000;
+          delay = 150;
+        } else {
+          this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxDelay);
+        }
+        this.scheduleConnect(delay);
+      })();
     };
 
     ws.onerror = () => {};
+  }
+
+  private async restartLocalDesktopServer(): Promise<boolean> {
+    const now = Date.now();
+    if (this.localRecoveryInFlight || now - this.lastLocalRecoveryAt < 3000) {
+      return false;
+    }
+    this.localRecoveryInFlight = true;
+    this.lastLocalRecoveryAt = now;
+    try {
+      return await bridge.restartLocalServer();
+    } catch {
+      return false;
+    } finally {
+      this.localRecoveryInFlight = false;
+    }
   }
 
   private async handleOpen(ws: WebSocket): Promise<void> {

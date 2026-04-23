@@ -84,11 +84,14 @@ struct AppConfig {
     ollama_base_url: Option<String>,
     model: Option<String>,
     last_project_path: Option<String>,
+    local_server_token: Option<String>,
     editor_font_family: String,
     editor_font_size: u16,
     editor_line_height: f32,
     editor_tab_size: u8,
     editor_word_wrap: bool,
+    #[serde(default)]
+    active_team: Option<String>,
 }
 
 enum CliAction {
@@ -110,11 +113,13 @@ impl Default for AppConfig {
             ollama_base_url: None,
             model: None,
             last_project_path: None,
+            local_server_token: None,
             editor_font_family: default_editor_font_family(),
             editor_font_size: 13,
             editor_line_height: 1.6,
             editor_tab_size: 2,
             editor_word_wrap: false,
+            active_team: None,
         }
     }
 }
@@ -325,7 +330,11 @@ fn terminate_pid(pid: u32, _signal: &str) -> bool {
 }
 
 fn stop_stale_debug_server(port: u16) -> bool {
-    if !cfg!(debug_assertions) || !engine_server_health_ok(port) {
+    // In dev mode skip the health-gate: kill whatever is listening on this
+    // port regardless of whether it responds to our health endpoint.  This
+    // handles the hot-reload race where the old token-bearing server is still
+    // alive but the health check loses the timing window.
+    if !cfg!(debug_assertions) && !engine_server_health_ok(port) {
         return false;
     }
 
@@ -465,10 +474,46 @@ fn configure_server_command(
     if let Some(model) = &cfg.model {
         cmd.env("ENGINE_MODEL", model);
     }
+    if let Some(team) = &cfg.active_team {
+        cmd.env("ENGINE_ACTIVE_TEAM", team);
+    }
 }
 
-fn start_go_server(project_path: &str, cfg: &AppConfig, local_server_token: &str) -> ServerLaunch {
-    if cfg!(debug_assertions) && server_running(DEFAULT_PORT) {
+fn start_go_server(
+    project_path: &str,
+    cfg: &AppConfig,
+    local_server_token: &str,
+) -> ServerLaunch {
+    // In dev mode, always attempt to evict whatever is on the port — even if
+    // the health check is ambiguous — so the new token matches the new server.
+    if cfg!(debug_assertions) {
+        if let Some(pid) = listener_pid(DEFAULT_PORT) {
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            let _ = terminate_pid(pid, "-TERM");
+            #[cfg(target_os = "windows")]
+            let _ = terminate_pid(pid, "");
+            // Wait for port to clear (up to 1 s)
+            for _ in 0..10 {
+                if !server_running(DEFAULT_PORT) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            // Force-kill if still alive
+            if server_running(DEFAULT_PORT) {
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                let _ = terminate_pid(pid, "-KILL");
+                for _ in 0..10 {
+                    if !server_running(DEFAULT_PORT) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+    } else if server_running(DEFAULT_PORT) {
+        // If an Engine server is already on this port, stop it so this app
+        // instance can launch a fresh server with a matching local WS token.
         let _ = stop_stale_debug_server(DEFAULT_PORT);
     }
 
@@ -507,11 +552,12 @@ fn start_go_server(project_path: &str, cfg: &AppConfig, local_server_token: &str
 }
 
 fn run_background_service() {
-    let cfg = read_config();
+    let mut cfg = read_config();
+    let local_server_token = ensure_local_server_token(&mut cfg);
     let project_path = project_path_for_server(&cfg);
-    let local_server_token = generate_local_server_token();
     loop {
-        let ServerLaunch { child, .. } = start_go_server(&project_path, &cfg, &local_server_token);
+        let ServerLaunch { child, .. } =
+            start_go_server(&project_path, &cfg, &local_server_token);
         if let Some(mut managed_child) = child {
             let _ = managed_child.wait();
         }
@@ -540,6 +586,22 @@ fn generate_local_server_token() -> String {
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn ensure_local_server_token(cfg: &mut AppConfig) -> String {
+    if let Some(existing) = cfg
+        .local_server_token
+        .as_ref()
+        .map(|token| token.trim())
+        .filter(|token| !token.is_empty())
+    {
+        return existing.to_string();
+    }
+
+    let token = generate_local_server_token();
+    cfg.local_server_token = Some(token.clone());
+    let _ = write_config(cfg);
+    token
 }
 
 #[cfg(target_os = "macos")]
@@ -868,6 +930,31 @@ fn get_local_server_token(state: tauri::State<'_, LocalServerAuth>) -> String {
 }
 
 #[tauri::command]
+fn restart_local_server(
+    server_state: tauri::State<'_, ServerProcess>,
+    auth_state: tauri::State<'_, LocalServerAuth>,
+) -> bool {
+    if let Ok(mut guard) = server_state.child.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    let _ = stop_stale_debug_server(DEFAULT_PORT);
+
+    let cfg = read_config();
+    let project_path = project_path_for_server(&cfg);
+    let launch = start_go_server(&project_path, &cfg, &auth_state.token);
+
+    if let Ok(mut guard) = server_state.child.lock() {
+        *guard = launch.child;
+    }
+
+    launch.managed || server_running(DEFAULT_PORT)
+}
+
+#[tauri::command]
 fn get_github_token() -> Option<String> {
     read_config().github_token
 }
@@ -978,6 +1065,18 @@ fn get_model() -> Option<String> {
 fn set_model(model: String) -> bool {
     let mut cfg = read_config();
     cfg.model = if model.is_empty() { None } else { Some(model) };
+    write_config(&cfg)
+}
+
+#[tauri::command]
+fn get_active_team() -> Option<String> {
+    read_config().active_team
+}
+
+#[tauri::command]
+fn set_active_team(team: String) -> bool {
+    let mut cfg = read_config();
+    cfg.active_team = if team.is_empty() { None } else { Some(team) };
     write_config(&cfg)
 }
 
@@ -1243,9 +1342,9 @@ pub fn run() {
         None => {}
     }
 
-    let cfg = read_config();
+    let mut cfg = read_config();
     let project_path = project_path_for_server(&cfg);
-    let local_server_token = generate_local_server_token();
+    let local_server_token = ensure_local_server_token(&mut cfg);
     let server = start_go_server(&project_path, &cfg, &local_server_token);
 
     // Watchdog: if the Go server exits unexpectedly, restart it. Runs in a
@@ -1260,7 +1359,11 @@ pub fn run() {
                 if !server_running(DEFAULT_PORT) {
                     eprintln!("[engine] server watchdog: Go server is down — restarting");
                     let cfg_wd = read_config();
-                    start_go_server(&project_path_wd, &cfg_wd, &local_server_token_wd);
+                    start_go_server(
+                        &project_path_wd,
+                        &cfg_wd,
+                        &local_server_token_wd,
+                    );
                 }
             }
         });
@@ -1390,6 +1493,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_project_path,
             get_local_server_token,
+            restart_local_server,
             get_github_token,
             set_github_token,
             get_github_owner,
@@ -1406,6 +1510,8 @@ pub fn run() {
             set_ollama_base_url,
             get_model,
             set_model,
+            get_active_team,
+            set_active_team,
             get_editor_preferences,
             set_editor_preferences,
             inspect_path,

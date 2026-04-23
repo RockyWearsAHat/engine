@@ -25,6 +25,7 @@ declare global {
     electronAPI?: {
       getProjectPath(): Promise<string>;
       getLocalServerToken?(): Promise<string | null>;
+      restartLocalServer?(): Promise<boolean>;
       getGithubToken(): Promise<string | null>;
       setGithubToken(token: string): Promise<boolean>;
       openExternal(url: string): Promise<void>;
@@ -160,6 +161,16 @@ export const bridge = {
       return window.electronAPI!.getLocalServerToken?.() ?? null;
     }
     return null;
+  },
+
+  async restartLocalServer(): Promise<boolean> {
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<boolean>('restart_local_server');
+    }
+    if (isElectron()) {
+      return window.electronAPI!.restartLocalServer?.() ?? false;
+    }
+    return false;
   },
 
   async getGithubToken(): Promise<string | null> {
@@ -409,5 +420,19 @@ export const bridge = {
       }
       await window.__TAURI__!.core.invoke('window_start_drag');
     }
+  },
+
+  async getActiveTeam(): Promise<string | null> {
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<string | null>('get_active_team');
+    }
+    return getBrowserSetting('engine.activeTeam');
+  },
+
+  async setActiveTeam(team: string): Promise<boolean> {
+    if (isTauri()) {
+      return window.__TAURI__!.core.invoke<boolean>('set_active_team', { team });
+    }
+    return setBrowserSetting('engine.activeTeam', team);
   },
 };

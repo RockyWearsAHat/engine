@@ -1,5 +1,5 @@
-import { act, render, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, render } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../App.js';
 import { useStore } from '../store/index.js';
 
@@ -89,6 +89,7 @@ vi.mock('../components/CommandPalette/CommandPalette.js', () => ({
 
 describe('App websocket lifecycle', () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     wsMocks.connect.mockClear();
     wsMocks.disconnect.mockClear();
     wsMocks.send.mockClear();
@@ -118,8 +119,13 @@ describe('App websocket lifecycle', () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('keeps the websocket connected when open-file UI state changes', async () => {
     render(<App />);
+    await vi.advanceTimersByTimeAsync(1100);
 
     expect(wsMocks.connect).toHaveBeenCalledTimes(1);
 
@@ -137,9 +143,7 @@ describe('App websocket lifecycle', () => {
       });
     });
 
-    await waitFor(() => {
-      expect(wsMocks.connect).toHaveBeenCalledTimes(1);
-    });
+    expect(wsMocks.connect).toHaveBeenCalledTimes(1);
     expect(wsMocks.disconnect).not.toHaveBeenCalled();
   });
 });

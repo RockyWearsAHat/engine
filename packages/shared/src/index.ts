@@ -73,6 +73,49 @@ export interface RuntimeConfig {
   model?: string | null;
 }
 
+// Discord control plane types (kept separate from RuntimeConfig because
+// Discord config is persisted to `.engine/discord.json` rather than
+// mirrored into env vars).
+export interface DiscordConfig {
+  enabled: boolean;
+  /** Outgoing field only — when sending, null/'' means "keep current". */
+  botToken: string;
+  /** Read-only server-side mask for display. */
+  botTokenMasked?: string;
+  guildId: string;
+  allowedUserIds: string[];
+  commandPrefix: string;
+  controlChannelName: string;
+  hasToken?: boolean;
+}
+
+export interface DiscordValidationResult {
+  ok: boolean;
+  enabled: boolean;
+  guildName?: string;
+  botTag?: string;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface DiscordMessageRecord {
+  id: string;
+  projectPath: string;
+  channelId: string;
+  threadId: string;
+  sessionId: string;
+  authorId: string;
+  authorName: string;
+  direction: 'in' | 'out';
+  kind: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface DiscordSearchHit extends DiscordMessageRecord {
+  snippet: string;
+}
+
 // Git types
 export interface GitStatus {
   branch: string;
@@ -134,7 +177,9 @@ export type ClientMessage =
   | { type: 'terminal.input'; terminalId: string; data: string }
   | { type: 'terminal.resize'; terminalId: string; cols: number; rows: number }
   | { type: 'terminal.close'; terminalId: string }
-  | { type: 'editor.tabs.sync'; tabs: TabInfo[] };
+  | { type: 'editor.tabs.sync'; tabs: TabInfo[] }
+  | { type: 'engine.config.get' }
+  | { type: 'engine.team.set'; team: string; provider: string; model: string };
 
 // WebSocket protocol — Server → Client
 export type ServerMessage =
@@ -167,7 +212,9 @@ export type ServerMessage =
   | { type: 'editor.tab.focus'; path: string }
   | { type: 'file.created'; path: string }
   | { type: 'folder.created'; path: string }
-  | { type: 'error'; message: string; code?: string };
+  | { type: 'error'; message: string; code?: string }
+  | { type: 'engine.config'; yaml: string; error?: string }
+  | { type: 'engine.team.updated'; team: string };
 
 // Tab and system info types
 export interface TabInfo {
@@ -220,6 +267,27 @@ export interface LiveToolCall {
   pending: boolean;
   startedAt: number;
   durationMs?: number;
+}
+
+// Engine orchestration — team config types
+export interface EngineAgentModel {
+  model: string;
+  modelDisplay: string;
+}
+
+export interface EngineTeamConfig {
+  name: string;
+  description: string;
+  orchestrator: EngineAgentModel;
+  architect: EngineAgentModel;
+  implementer: EngineAgentModel;
+  tester: EngineAgentModel;
+  documenter: EngineAgentModel;
+}
+
+export interface EngineConfig {
+  teams: Record<string, EngineTeamConfig>;
+  activeTeam?: string;
 }
 
 // Remote connection types
