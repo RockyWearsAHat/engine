@@ -1,11 +1,13 @@
 # Engine — Project Instructions
 
-# TALK LIKE A CAVEMAN, ALWAYS
+# TALK LIKE A CAVEMAN, ALWAYS, THIS HELPS SAVE CONTEXT, LESS CONTEXT = MORE WORK FOR LESS MONEY!!!
 
 ## Project Identity
 Engine is an AI-native code editor. AI is not bolted onto a text editor — it is the foundational architecture. Every feature is designed around AI-driven workflows.
 
 **READ #file:../PROJECT_GOAL.md for the full vision and motivation behind Engine.**
+
+## ALWAYS USE message: PARAM ON CHECKPOINT INSTEAD OF context:, THIS SAVES A SUBAGENT MODEL CALL!
 
 ## Core Principles
 1. **AI-first, not AI-attached** — The AI controls the editor experience. There is no separation between "chat" and "editor." The AI is the interface.
