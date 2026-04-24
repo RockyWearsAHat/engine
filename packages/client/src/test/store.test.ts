@@ -531,3 +531,106 @@ describe('toggleDotfiles', () => {
     expect(useStore.getState().showDotfiles).toBe(false);
   });
 });
+
+// ─── store branch coverage ────────────────────────────────────────────────────
+
+describe('markMessageFailed — non-matching message untouched', () => {
+    it('NonMatchingId_OtherMessagesUnchanged', () => {
+      useStore.getState().startAssistantMessage('msg-a');
+      useStore.getState().startAssistantMessage('msg-b');
+      const before = useStore.getState().chatMessages.find(m => m.id === 'msg-a');
+      useStore.getState().markMessageFailed('msg-b');
+      const after = useStore.getState().chatMessages.find(m => m.id === 'msg-a');
+      // msg-a should be unchanged (the non-matching map branch)
+      expect(after?.failed).toBeFalsy();
+      expect(after?.content).toBe(before?.content);
+    });
+  });
+
+  describe('openFile — non-matching files unchanged in map', () => {
+    it('ReopenOneOfMultiple_OtherFileUnchanged', () => {
+      useStore.getState().openFile('/a.ts', 'original-a', 'typescript', 10);
+      useStore.getState().openFile('/b.ts', 'original-b', 'typescript', 10);
+      useStore.getState().openFile('/a.ts', 'updated-a', 'typescript', 20);
+      // /b.ts goes through the `f.path === path ? ... : f` FALSE branch
+      expect(useStore.getState().openFiles.find(f => f.path === '/b.ts')?.content).toBe('original-b');
+    });
+  });
+
+  describe('closeFile — non-active file leaves active path unchanged', () => {
+    it('CloseNonActiveFile_ActivePathUnchanged', () => {
+      vi.useFakeTimers();
+      useStore.getState().openFile('/a.ts', '', 'typescript', 10);
+      useStore.getState().openFile('/b.ts', '', 'typescript', 10);
+      // /b.ts is active now; close /a.ts (non-active)
+      useStore.getState().closeFile('/a.ts');
+      expect(useStore.getState().activeFilePath).toBe('/b.ts');
+      vi.useRealTimers();
+    });
+  });
+
+  describe('parentPathForTreeNode — no separator returns empty string', () => {
+    it('NoSlash_ReturnsEmpty', () => {
+      // Exercise parentPathForTreeNode indirectly via mergeFileTree
+      // A node whose path has no separator: parentPathForTreeNode returns ''
+      // Use attachFileTreeNode path: set up a tree where a shallow node is attached
+      useStore.getState().setFileTree({
+        path: '',
+        name: '',
+        type: 'directory',
+        loaded: true,
+        children: [],
+      });
+      useStore.getState().mergeFileTree({
+        path: 'child',
+        name: 'child',
+        type: 'file',
+        loaded: true,
+      });
+      // Should not throw — the empty-string separator path is exercised
+      expect(useStore.getState().fileTree).toBeTruthy();
+    });
+  });
+
+  describe('compareTreeNodes — file sorted after directory', () => {
+    it('FileAndDirectory_DirectoryFirst', () => {
+      const dir = { path: '/root/src', name: 'src', type: 'directory' as const, loaded: true, children: [] };
+      const fileNode = { path: '/root/file.ts', name: 'file.ts', type: 'file' as const, loaded: true };
+      useStore.getState().setFileTree({
+        path: '/root',
+        name: 'root',
+        type: 'directory',
+        loaded: true,
+        children: [fileNode, dir],
+      });
+      // attachFileTreeNode will call compareTreeNodes when sorting children
+      useStore.getState().mergeFileTree({
+        path: '/root/new.ts',
+        name: 'new.ts',
+        type: 'file',
+        loaded: true,
+      });
+      const children = useStore.getState().fileTree?.children ?? [];
+      // Directories should come before files
+      expect(children[0]?.type).toBe('directory');
+    });
+  });
+
+  describe('attachFileTreeNode — parent with undefined children', () => {
+    it('UndefinedChildren_NodeAttachedViaEmptyFallback', () => {
+      useStore.getState().setFileTree({
+        path: '/root',
+        name: 'root',
+        type: 'directory',
+        loaded: true,
+        // children intentionally omitted (undefined)
+      });
+      useStore.getState().mergeFileTree({
+        path: '/root/a.ts',
+        name: 'a.ts',
+        type: 'file',
+        loaded: true,
+      });
+      expect(useStore.getState().fileTree?.children?.some(c => c.name === 'a.ts')).toBe(true);
+    });
+  });

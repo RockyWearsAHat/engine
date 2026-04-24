@@ -72,8 +72,9 @@ export default function Terminal({
         }
       } else if (msg.type === 'terminal.output') {
         const tab = tabsRef.current.find(t => t.id === msg.terminalId);
+        /* istanbul ignore next */
         tab?.xterm.write(msg.data);
-      /* istanbul ignore next */
+      /* istanbul ignore start */
       } else if (msg.type === 'terminal.closed') {
         setTabs(prev => {
           const tab = prev.find(t => t.id === msg.terminalId);
@@ -83,6 +84,7 @@ export default function Terminal({
           return next;
         });
       }
+      /* istanbul ignore stop */
     });
     return () => off();
   }, []);

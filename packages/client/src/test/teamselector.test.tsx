@@ -533,6 +533,28 @@ teams:
     expect(screen.getByText('quoted-team')).toBeTruthy();
   });
 
+  it('TeamSelector_parseEngineConfigYaml_singleQuotedValuesAreUnquoted', () => {
+    // Single-quoted description covers the `startsWith("'") && endsWith("'")` branch in extractYamlValue
+    const YAML_SINGLE_QUOTED = `
+teams:
+  single-quoted-team:
+    description: 'A single-quoted description'
+    orchestrator:
+      model: gpt-4o
+    architect:
+      model: gpt-4o
+    implementer:
+      model: gpt-4o
+    tester:
+      model: gpt-4o
+    documenter:
+      model: gpt-4o
+`;
+    render(<TeamSelector />);
+    sendWsMessage({ type: 'engine.config', yaml: YAML_SINGLE_QUOTED });
+    expect(screen.getByText('single-quoted-team')).toBeTruthy();
+  });
+
   it('TeamSelector_parseEngineConfigYaml_emptyYamlReturnsEmptyConfig', () => {
     render(<TeamSelector />);
     sendWsMessage({ type: 'engine.config', yaml: '   ' });

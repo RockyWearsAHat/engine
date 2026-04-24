@@ -234,4 +234,84 @@ describe('CommandPalette interactions', () => {
 
     expect(screen.getByPlaceholderText(/search commands/i)).toBeTruthy();
   });
+
+  it('ItemWithNoKeywords_FilterStillMatchesByTitle', () => {
+    // Covers the `?? ''` FALSE branch in `${item.keywords ?? ''}`
+    const noKeywordsItem = { id: 'nk', kind: 'command' as const, title: 'Alpha Command', subtitle: 'alpha sub', action: vi.fn() };
+    render(
+      <CommandPalette
+        open
+        mode="commands"
+        workspaceName="demo"
+        items={[noKeywordsItem]}
+        onClose={onClose}
+        onModeChange={onModeChange}
+      />,
+    );
+    const input = screen.getByPlaceholderText(/search commands/i);
+    fireEvent.change(input, { target: { value: 'alpha' } });
+    expect(screen.getByText('Alpha Command')).toBeTruthy();
+  });
+
+  it('ArrowUp_WhenCurrentIsPositive_DecrementsIndex', () => {
+    // Covers `current <= 0 ? ... : current - 1` FALSE branch (current > 0)
+    const first = makeItem('one', 'First Cmd');
+    const second = makeItem('two', 'Second Cmd');
+    const third = makeItem('thr', 'Third Cmd');
+    render(
+      <CommandPalette
+        open
+        mode="commands"
+        workspaceName="demo"
+        items={[first, second, third]}
+        onClose={onClose}
+        onModeChange={onModeChange}
+      />,
+    );
+    const input = screen.getByPlaceholderText(/search commands/i);
+    // Move to index 2 (two ArrowDowns from 0)
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    // ArrowUp from index 2 → index 1, covers the `current - 1` branch
+    fireEvent.keyDown(input, { key: 'ArrowUp' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(second.action).toHaveBeenCalled();
+  });
+
+  it('Tab_WhenModeIsFiles_SwitchesToCommands', () => {
+    // Covers `mode === 'commands' ? 'files' : 'commands'` FALSE branch (mode === 'files')
+    render(
+      <CommandPalette
+        open
+        mode="files"
+        workspaceName="demo"
+        items={[makeItem('one', 'Alpha File', 'file')]}
+        onClose={onClose}
+        onModeChange={onModeChange}
+      />,
+    );
+    const input = screen.getByPlaceholderText(/search files by name or path/i);
+    fireEvent.keyDown(input, { key: 'Tab' });
+    expect(onModeChange).toHaveBeenCalledWith('commands');
+  });
+
+  it('NonEnterKey_InKeyDownHandler_NoAction', () => {
+    // Covers `if (key === 'Enter')` else branch — any non-handled key falls through
+    const cmd = makeItem('one', 'Some Command');
+    render(
+      <CommandPalette
+        open
+        mode="commands"
+        workspaceName="demo"
+        items={[cmd]}
+        onClose={onClose}
+        onModeChange={onModeChange}
+      />,
+    );
+    const input = screen.getByPlaceholderText(/search commands/i);
+    // Press a key that is not Arrow/Tab/Enter/Escape — no action
+    fireEvent.keyDown(input, { key: 'Home' });
+    expect(cmd.action).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });
