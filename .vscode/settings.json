@@ -20,11 +20,6 @@
     "go.terminal.activateEnvironment": true,
 
     // ── Rust ─────────────────────────────────────────────────────────────
-    // linkedProjects: workspace-relative paths so rust-analyzer discovers
-    // the crate immediately on reload without a full background scan.
-    "rust-analyzer.linkedProjects": [
-        "Cargo.toml"
-    ],
     "rust-analyzer.cargo.targetDir": true,
     "rust-analyzer.testExplorer": true,
     "rust-analyzer.files.excludeDirs": [
