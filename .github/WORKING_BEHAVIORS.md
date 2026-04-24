@@ -204,6 +204,15 @@ If code and this file fight, we fix code or fix file in same work session.
   - Added root `/target/` ignore to prevent large generated Rust artifacts from polluting git status.
   - Added `coverage-summary.json` and `packages/server-go/coverage.out` ignores to keep generated coverage outputs out of normal commits.
 
+### 2026-04-24 (Session 11)
+
+- **Removed all machine-specific absolute paths** from [.vscode/settings.json](.vscode/settings.json):
+  - Deleted `go.toolsEnvVars` (hardcoded PATH + GOWORK), `go.alternateTools` (hardcoded go/gopls paths), `rust-analyzer.server.path`, `rust-analyzer.runnables.command`, `rust-analyzer.cargo.extraEnv`, and `rust-analyzer.runnables.extraEnv`.
+  - These paths were `/Users/alexwaldmann/...` machine-specific values that break on any other dev environment.
+  - Extensions auto-resolve their tools from PATH when no override is set — this is the correct portable behavior.
+  - `rust-analyzer.linkedProjects` kept with single workspace-relative `Cargo.toml` entry for immediate crate discovery on reload.
+  - All other discovery/coverage settings retained (portable).
+
 ### 2026-04-24 (Session 8)
 
 - **Client coverage contract restored to 100% targets** in [packages/client/vitest.config.ts](packages/client/vitest.config.ts):

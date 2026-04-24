@@ -1,6 +1,8 @@
 {
     "editor.formatOnSave": false,
     "editor.codeActionsOnSave": {},
+
+    // ── Go ──────────────────────────────────────────────────────────────
     "go.testFlags": [
         "-count=1",
         "-coverprofile=coverage.out",
@@ -16,31 +18,22 @@
     "go.testExplorer.packageDisplayMode": "flat",
     "go.testExplorer.showOutput": true,
     "go.terminal.activateEnvironment": true,
-    "go.toolsEnvVars": {
-        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/Users/alexwaldmann/go/bin"
-    },
-    "go.alternateTools": {
-        "gopls": "/Users/alexwaldmann/go/bin/gopls",
-        "go": "/opt/homebrew/bin/go"
-    },
-    "rust-analyzer.cargo.extraEnv": {
-        "PATH": "/Users/alexwaldmann/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-    },
-    "rust-analyzer.runnables.command": "/Users/alexwaldmann/.cargo/bin/cargo",
-    "rust-analyzer.runnables.extraEnv": {
-        "PATH": "/Users/alexwaldmann/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-    },
+
+    // ── Rust ─────────────────────────────────────────────────────────────
+    // linkedProjects: workspace-relative paths so rust-analyzer discovers
+    // the crate immediately on reload without a full background scan.
+    "rust-analyzer.linkedProjects": [
+        "Cargo.toml"
+    ],
     "rust-analyzer.cargo.targetDir": true,
     "rust-analyzer.testExplorer": true,
-    "rust-analyzer.server.path": "/Users/alexwaldmann/.cargo/bin/rust-analyzer",
     "rust-analyzer.files.excludeDirs": [
         "target",
         "node_modules",
         ".git"
     ],
-    "rust-analyzer.linkedProjects": [
-        "/Users/alexwaldmann/Desktop/MyEditor/Cargo.toml"
-    ],
+
+    // ── gopls ────────────────────────────────────────────────────────────
     "gopls": {
         "build.workspaceFiles": [
             "go.work",
@@ -53,11 +46,15 @@
             "-**/.git"
         ]
     },
+
+    // ── Watcher ──────────────────────────────────────────────────────────
     "files.watcherExclude": {
         "**/target/**": true,
         "**/node_modules/**": true,
         "**/.git/**": true
     },
+
+    // ── Coverage Gutters ─────────────────────────────────────────────────
     "coverage-gutters.coverageFileNames": [
         "coverage.out",
         "cover.out",
