@@ -103,7 +103,11 @@ function buildDirStatusMap(
   return dirMap;
 }
 
-export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFiles = /* istanbul ignore next */ [], activeFilePath: activePath, onSetActiveFile }: Props) {
+/* istanbul ignore start */
+const defaultOpenFiles: OpenFile[] = [];
+/* istanbul ignore stop */
+
+export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFiles = defaultOpenFiles, activeFilePath: activePath, onSetActiveFile }: Props) {
   const { fileTree, activeSession, gitStatus, githubIssues, githubIssuesLoading,
           githubIssuesError, activeFilePath, setGithubIssuesLoading, setGithubIssuesError,
           searchQuery, searchResults, searchLoading, searchError,
