@@ -37,6 +37,9 @@ Thumbs.db
 
 # Testing
 coverage/
+lcov.info
+*.profraw
+coverage.out
 .nyc_output/
 
 # Electron
@@ -60,5 +63,8 @@ coverage/
 # pnpm-lock.yaml
 
 # Rust build artifacts
+/target/
 packages/desktop-tauri/src-tauri/target/
+coverage-summary.json
+packages/server-go/coverage.out
 engine-45mb-test.ts

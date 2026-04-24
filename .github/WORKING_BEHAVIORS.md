@@ -30,8 +30,18 @@ If code and this file fight, we fix code or fix file in same work session.
   - Global functions: **100%** ✓
   - Global lines: **100%** ✓
   - FileTree component: statements/functions/lines are now covered to **100%** under current instrumentation.
+  - Vitest emits `lcov.info` (in addition to json/html) for coverage-gutters display.
 - **Go server tests**: pass with coverage profile generation (`-coverprofile=coverage.out -covermode=atomic`) ✓
+  - VS Code Go Testing panel discovery requires `gopls` installed and resolvable. Workspace pins `go.alternateTools.gopls` to `/Users/alexwaldmann/go/bin/gopls` and `go.alternateTools.go` to `/opt/homebrew/bin/go` in `.vscode/settings.json` for stable discovery across restarts.
+  - VS Code Go Testing panel runs now emit `coverage.out` consistently via `go.testFlags` (`-coverprofile=coverage.out -covermode=atomic`).
 - **Rust desktop tests**: **17 unit tests passing** in [packages/desktop-tauri/src-tauri/src/lib.rs](packages/desktop-tauri/src-tauri/src/lib.rs) ✓
+- **Unified coverage report**: run `pnpm coverage:all` (or VS Code task `Coverage All Languages (Unified Report)`) to run client + go + rust in one pass and write [coverage-summary.json](coverage-summary.json).
+  - Rust coverage uses `cargo llvm-cov` via [scripts/run-cargo.mjs](scripts/run-cargo.mjs), which auto-injects `LLVM_COV`/`LLVM_PROFDATA` env vars from the active stable rustup toolchain. No manual env setup needed.
+  - Rust lcov output written to `packages/desktop-tauri/src-tauri/lcov.info` for coverage-gutters.
+- **Coverage gutters (VS Code)**: `ryanluker.vscode-coverage-gutters` is configured in `.vscode/settings.json` to watch `lcov.info` and Go coverage profile names (`coverage.out`, `cover.out`). After running tests or `pnpm coverage:all`, click "Watch" in the status bar to see per-line coverage for client, Rust, and Go files.
+- **Rust in VS Code Testing pane**: uses native `rust-lang.rust-analyzer` test controller only. Do not install `swellaby.vscode-rust-test-adapter` (legacy adapter conflicts with native Go/Rust discovery).
+  - Rust test run reliability is pinned with absolute cargo in `rust-analyzer.runnables.command` (`/Users/alexwaldmann/.cargo/bin/cargo`) plus `rust-analyzer.runnables.extraEnv.PATH`.
+ - **Rust startup discovery**: workspace must expose a Cargo workspace manifest at root ([Cargo.toml](Cargo.toml)) that includes `packages/desktop-tauri/src-tauri` so rust-analyzer activates on window reload. The `rust-analyzer` rustup component must be installed (`~/.cargo/bin/rustup component add rust-analyzer`) and `rust-analyzer.server.path` must use an absolute path (`/Users/alexwaldmann/.cargo/bin/rust-analyzer`) in `.vscode/settings.json` to avoid non-expanded `~` paths. `rust-analyzer.linkedProjects` is pinned to both workspace Cargo manifests for immediate test discovery without waiting for background workspace scan. Disk must have sufficient free space — the workspace target dirs can grow to 12GB+; run `cargo clean` from the workspace root periodically. The orphaned `packages/desktop-tauri/src-tauri/target/` (created when running cargo directly inside that dir) must be deleted manually, as `cargo clean` from the workspace root does not remove it.
 
 ## Behavior Contract By Surface
 
@@ -161,6 +171,38 @@ If code and this file fight, we fix code or fix file in same work session.
 
 
 ## Delta Log
+
+### 2026-04-24 (Session 9)
+
+- VS Code Testing panel stability patch in [.vscode/settings.json](.vscode/settings.json):
+  - Added Go test flags for deterministic coverage-file output on run (`-coverprofile=coverage.out -covermode=atomic`).
+  - Added rust-analyzer runnable command/env pinning so Rust test run button uses absolute cargo and consistent PATH.
+  - Added Go coverage filenames (`coverage.out`, `cover.out`) to coverage-gutters watched files.
+  - Added Go test-controller compatibility keys (`go.useLanguageServer`, `go.experiments.testExplorer`, `go.testExplorer.showOutput`, `go.terminal.activateEnvironment`) to improve first-load controller registration.
+  - Added `gopls.build.workspaceFiles` and `gopls.build.directoryFilters` so nested `go.mod` in `packages/server-go` is indexed deterministically from workspace root.
+  - Added `rust-analyzer.files.excludeDirs` and `files.watcherExclude` to reduce heavy indexing pressure (`target`, `node_modules`, `.git`) that delayed Rust test-controller appearance.
+
+- Added unified cross-language coverage script [scripts/coverage-all.mjs](scripts/coverage-all.mjs).
+  - Runs Vitest coverage, Go tests with coverprofile, Rust tests.
+  - If `cargo llvm-cov` is installed, also captures Rust coverage percentage.
+  - Writes machine-readable summary to [coverage-summary.json](coverage-summary.json).
+- Added package script `coverage:all` in [package.json](package.json).
+- Added VS Code task `Coverage All Languages (Unified Report)` in [.vscode/tasks.json](.vscode/tasks.json).
+- Added workspace extension recommendations in [.vscode/extensions.json](.vscode/extensions.json) for:
+  - Go test controller
+  - Vitest test controller
+  - Rust test adapter for Test Explorer
+  - Coverage gutters visualization
+- Aligned Vitest package versions by pinning `@vitest/coverage-istanbul` to `^4.1.2` in [packages/client/package.json](packages/client/package.json) to remove mixed-version warning.
+
+### 2026-04-24 (Session 10)
+
+- Rust test runtime stall mitigation in [.vscode/settings.json](.vscode/settings.json):
+  - Enabled `rust-analyzer.cargo.targetDir = true` so rust-analyzer uses a dedicated cargo target dir and avoids lock contention with normal cargo/test runs.
+  - Simplified `rust-analyzer.linkedProjects` to workspace [Cargo.toml](Cargo.toml) only, avoiding duplicate project graph loading for the same crate.
+- Commit hygiene updates in [.gitignore](.gitignore):
+  - Added root `/target/` ignore to prevent large generated Rust artifacts from polluting git status.
+  - Added `coverage-summary.json` and `packages/server-go/coverage.out` ignores to keep generated coverage outputs out of normal commits.
 
 ### 2026-04-24 (Session 8)
 
