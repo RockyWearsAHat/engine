@@ -204,4 +204,32 @@ describe('Terminal interactions', () => {
     if (firstTabDiv) fireEvent.click(firstTabDiv);
     expect(screen.getAllByText('shell').length).toBeGreaterThanOrEqual(1);
   });
+
+  it('NewTerminal_NullActiveSession_CwdDefaultsToDot', () => {
+    // Override active session to null so the `?? '.'` branch fires
+    useStore.setState({ activeSession: null });
+    render(<Terminal />);
+    // Click the new terminal button (no title attr — use role)
+    const newTermBtn = screen.getAllByRole('button')[0];
+    if (!newTermBtn) throw new Error('no button found');
+    fireEvent.click(newTermBtn);
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'terminal.create', cwd: '.' }),
+    );
+    vi.useRealTimers();
+  });
+
+  it('TerminalOutput_UnknownTerminalId_WriteSkipped', () => {
+    render(<Terminal />);
+    act(() => {
+      capturedWsHandler?.({ type: 'terminal.created', terminalId: 't-known', cwd: '/project/root' });
+    });
+    // Send output for a different (unknown) terminal ID — covers the `tab?.` FALSE branch
+    act(() => {
+      capturedWsHandler?.({ type: 'terminal.output', terminalId: 'unknown-id', data: 'hello' });
+    });
+    // writeMock should NOT have been called (tab was undefined)
+    expect(writeMock).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
 });

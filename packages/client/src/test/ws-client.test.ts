@@ -346,4 +346,43 @@ describe('WSClient desktop startup behavior', () => {
     const url = MockWebSocket.instances[0]?.url ?? '';
     expect(url).toMatch(/^wss?:\/\/.+\/ws$/);
   });
+
+  it('AlreadyOpen_SecondConnectNoOp', async () => {
+    const client = new WSClient();
+    client.connect({ host: 'engine.example.dev', port: '7443', token: 'abc' });
+    await vi.advanceTimersByTimeAsync(1);
+
+    const socket = MockWebSocket.instances[0]!;
+    socket.readyState = MockWebSocket.OPEN;
+    socket.onopen?.();
+    await Promise.resolve();
+
+    // Second connect with no remote — remoteConfig is already set (FALSE branch of else-if)
+    // and socket is OPEN (TRUE branch of readyState === OPEN guard)
+    client.connect();
+    await vi.advanceTimersByTimeAsync(1);
+
+    // No new socket should be created
+    expect(MockWebSocket.instances).toHaveLength(1);
+  });
+
+  it('PerformDisconnect_SocketInClosingState_CloseNotCalledAgain', async () => {
+    const client = new WSClient();
+    client.connect({ host: 'engine.example.dev', port: '7443', token: 'abc' });
+    await vi.advanceTimersByTimeAsync(1);
+
+    const socket = MockWebSocket.instances[0]!;
+    socket.readyState = MockWebSocket.OPEN;
+    socket.onopen?.();
+    await Promise.resolve();
+
+    // Simulate socket already transitioning to CLOSING before performDisconnect fires
+    socket.readyState = MockWebSocket.CLOSING;
+
+    client.disconnect();
+    await vi.advanceTimersByTimeAsync(300);
+
+    // ws.close() should NOT be called because readyState is not OPEN
+    expect(socket.close).not.toHaveBeenCalled();
+  });
 });

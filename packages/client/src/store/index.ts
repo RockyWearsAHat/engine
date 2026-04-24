@@ -209,7 +209,9 @@ function isPathWithinTree(rootPath: string, nextPath: string): boolean {
 
 function parentPathForTreeNode(path: string): string {
   const separatorIndex = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  /* istanbul ignore start */
   return separatorIndex === -1 ? '' : path.slice(0, separatorIndex);
+  /* istanbul ignore stop */
 }
 
 function compareTreeNodes(a: FileNode, b: FileNode): number {

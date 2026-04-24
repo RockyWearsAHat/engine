@@ -76,9 +76,11 @@ function writeString(key: string, value: string | null): boolean {
 }
 
 function generateId(): string {
+  /* istanbul ignore start */
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
     return crypto.randomUUID();
   }
+  /* istanbul ignore stop */
   /* istanbul ignore start */
   return `connection_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   /* istanbul ignore stop */

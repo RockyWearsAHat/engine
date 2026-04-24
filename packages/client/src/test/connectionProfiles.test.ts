@@ -137,6 +137,16 @@ describe('connectionProfiles', () => {
       expect(list).toHaveLength(1);
     });
 
+    it('ExistingId_UpdatedInPlace_OtherProfilesUnchanged', () => {
+      // Two profiles — update one → the OTHER profile goes through the FALSE branch in map()
+      const a = makeProfile({ name: 'Alpha' });
+      const b = makeProfile({ name: 'Beta' });
+      saveConnectionProfile({ ...a, name: 'Alpha Updated' });
+      const list = loadConnectionProfiles();
+      expect(list.find(p => p.id === a.id)?.name).toBe('Alpha Updated');
+      expect(list.find(p => p.id === b.id)?.name).toBe('Beta');
+    });
+
     it('ProfileSaved_SetAsActive', () => {
       const profile = makeProfile();
       expect(loadActiveConnectionProfileId()).toBe(profile.id);
@@ -262,6 +272,18 @@ describe('connectionProfiles', () => {
       const result = await pairConnectionCode('engine.dev', '3443', 'BAD');
       expect(result.ok).toBe(false);
       expect(typeof result.error).toBe('string');
+    });
+
+    it('OkResponseButNullBody_FallbackErrorReturned', async () => {
+      // response.ok=true but json() returns null → covers `payload ?? { ok: false, error: '...' }`
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        json: async () => null,
+      } as Response);
+
+      const result = await pairConnectionCode('engine.dev', '3443', 'CODE');
+      expect(result.ok).toBe(false);
+      expect(result.error).toBe('pairing failed');
     });
   });
 

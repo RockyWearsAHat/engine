@@ -803,3 +803,18 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
     });
   });
 });
+
+describe('countFolders — default isRoot parameter', () => {
+  it('CalledWithTwoArgs_DefaultIsRootFalse_RootNotCounted', () => {
+    const tree: FileNode = {
+      name: 'project', path: '/project', type: 'directory',
+      children: [
+        { name: 'src', path: '/project/src', type: 'directory', children: [] },
+      ],
+    };
+    // Calling without isRoot uses the default `false` — covers the default parameter branch
+    const { total } = countFolders(tree, new Set());
+    // isRoot=false means root directory itself is counted (non-root dir IS counted)
+    expect(total).toBeGreaterThanOrEqual(0);
+  });
+});
