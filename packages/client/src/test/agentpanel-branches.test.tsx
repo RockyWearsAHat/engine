@@ -43,12 +43,12 @@ describe('AgentPanel — branch coverage', () => {
       activeSession: makeSession('s1', '/workspace/p', 'main'),
       activeAgentSessionId: 's1',
       agentSessions: [{
-        id: 's1', projectPath: '/workspace/p', branch: 'main',
+        id: 's1', projectPath: '/workspace/p', branchName: 'main',
         createdAt: '', updatedAt: '', summary: '', messageCount: 1,
         isActive: true, isStreaming: false, currentActivity: '',
         recentToolCalls: [
           // Non-object input (string) — covers the `: ''` else branch in ToolRow
-          { id: 'tc-str', name: 'echo', input: 'hello' as unknown as Record<string, unknown>, pending: false, durationMs: 5 },
+          { id: 'tc-str', name: 'echo', input: 'hello' as unknown as Record<string, unknown>, pending: false, startedAt: Date.now(), durationMs: 5 },
         ],
       }],
     });
@@ -62,12 +62,12 @@ describe('AgentPanel — branch coverage', () => {
       activeSession: makeSession('s1', '/workspace/p', 'main'),
       activeAgentSessionId: 's1',
       agentSessions: [{
-        id: 's1', projectPath: '/workspace/p', branch: 'main',
+        id: 's1', projectPath: '/workspace/p', branchName: 'main',
         createdAt: '', updatedAt: '', summary: '', messageCount: 1,
         isActive: true, isStreaming: false, currentActivity: '',
         recentToolCalls: [
           // isError=true — covers the XCircle branch
-          { id: 'tc-err', name: 'read_file', input: { path: '/a.ts' }, pending: false, isError: true, durationMs: 3 },
+          { id: 'tc-err', name: 'read_file', input: { path: '/a.ts' }, pending: false, isError: true, startedAt: Date.now(), durationMs: 3 },
         ],
       }],
     });
@@ -99,12 +99,12 @@ describe('AgentPanel — branch coverage', () => {
       activeSession: makeSession('s1', '/workspace/p', 'main'),
       activeAgentSessionId: 's1',
       agentSessions: [{
-        id: 's1', projectPath: '/workspace/p', branch: 'main',
+        id: 's1', projectPath: '/workspace/p', branchName: 'main',
         createdAt: '', updatedAt: '', summary: '', messageCount: 1,
         isActive: true, isStreaming: false, currentActivity: '',
         recentToolCalls: [
           // Object input with no enumerable values — covers the `?? ''` fallback
-          { id: 'tc-empty', name: 'noop', input: {} as Record<string, unknown>, pending: false, durationMs: 1 },
+          { id: 'tc-empty', name: 'noop', input: {} as Record<string, unknown>, pending: false, startedAt: Date.now(), durationMs: 1 },
         ],
       }],
     });

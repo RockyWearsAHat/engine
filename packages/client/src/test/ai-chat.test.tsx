@@ -78,7 +78,7 @@ describe('AIChat interactions', () => {
   it('StreamingActive_ChatStopSent', () => {
     useStore.setState({
       streamingMessageId: 'assistant-1',
-      chatMessages: [{ id: 'assistant-1', role: 'assistant', content: 'working...', failed: false }],
+      chatMessages: [{ id: 'assistant-1', role: 'assistant', content: 'working...', toolCalls: [], streaming: false, failed: false }],
     });
     render(<AIChat />);
 
@@ -90,8 +90,8 @@ describe('AIChat interactions', () => {
   it('FailedAssistantMessage_RetriesFromLastUserMessage', () => {
     useStore.setState({
       chatMessages: [
-        { id: 'user-1', role: 'user', content: 'first request', failed: false },
-        { id: 'assistant-1', role: 'assistant', content: 'failed reply', failed: true },
+        { id: 'user-1', role: 'user', content: 'first request', toolCalls: [], streaming: false, failed: false },
+        { id: 'assistant-1', role: 'assistant', content: 'failed reply', toolCalls: [], streaming: false, failed: true },
       ],
     });
     render(<AIChat />);
@@ -116,6 +116,7 @@ describe('AIChat interactions', () => {
           role: 'assistant',
           content: 'done',
           failed: false,
+          streaming: false,
           toolCalls: [
             {
               id: 'tool-1',
@@ -145,8 +146,8 @@ describe('AIChat interactions', () => {
         {
           id: 'assistant-1',
           role: 'assistant',
-          content: '# Heading\n- item one\n1. item two\nUse **bold**, *italic*, `code`, and ~~gone~~.\n```ts\nconst x = 1;\n```',
-          failed: false,
+          content: '# Heading\n- item one\n1. item two\nUse **bold**, *italic*, `code`, and ~~gone~~.\n```ts\nconst x = 1;\n```',            toolCalls: [],
+            streaming: false,          failed: false,
         },
       ],
     });
@@ -173,7 +174,7 @@ describe('AIChat interactions', () => {
   it('UserScrolledUpWhileStreaming_JumpToLatestShown', async () => {
     useStore.setState({
       streamingMessageId: 'assistant-1',
-      chatMessages: [{ id: 'assistant-1', role: 'assistant', content: 'streaming update', failed: false }],
+      chatMessages: [{ id: 'assistant-1', role: 'assistant', content: 'streaming update', toolCalls: [], streaming: false, failed: false }],
     });
     const { container } = render(<AIChat />);
     const messages = container.querySelector('.chat-messages') as HTMLDivElement;
@@ -196,6 +197,8 @@ describe('AIChat interactions', () => {
           id: 'md-hr-bq',
           role: 'assistant',
           content: 'Before\n---\nAfter\n> A quoted line',
+          toolCalls: [],
+          streaming: false,
           failed: false,
         },
       ],
@@ -212,6 +215,8 @@ describe('AIChat interactions', () => {
           id: 'md-headings',
           role: 'assistant',
           content: '## Sub Heading\n### Sub Sub Heading',
+          toolCalls: [],
+          streaming: false,
           failed: false,
         },
       ],
@@ -225,7 +230,7 @@ describe('AIChat interactions', () => {
     useStore.setState({
       streamingMessageId: 'streaming-empty',
       chatMessages: [
-        { id: 'streaming-empty', role: 'assistant', content: '', failed: false },
+          { id: 'streaming-empty', role: 'assistant', content: '', toolCalls: [], streaming: false, failed: false },
       ],
     });
     const { container } = render(<AIChat />);
@@ -235,7 +240,7 @@ describe('AIChat interactions', () => {
   it('NewContentWhileScrolledUp_ScrollFabShown', async () => {
     useStore.setState({
       streamingMessageId: 'stream-1',
-      chatMessages: [{ id: 'stream-1', role: 'assistant', content: 'hello', failed: false }],
+      chatMessages: [{ id: 'stream-1', role: 'assistant', content: 'hello', toolCalls: [], streaming: false, failed: false }],
     });
     const { container } = render(<AIChat />);
 
@@ -251,7 +256,7 @@ describe('AIChat interactions', () => {
     await act(async () => {
       useStore.setState({
         chatMessages: [
-          { id: 'stream-1', role: 'assistant', content: 'hello world', failed: false },
+            { id: 'stream-1', role: 'assistant', content: 'hello world', toolCalls: [], streaming: false, failed: false },
         ],
       });
     });
@@ -272,7 +277,7 @@ describe('AIChat — markdown rendering', () => {
 
   it('AIChat_inlineFormat_strikethroughRendersLineThroughStyle', () => {
     useStore.setState({
-      chatMessages: [{ id: 'm1', role: 'assistant', content: '~~deleted text~~', failed: false }],
+        chatMessages: [{ id: 'm1', role: 'assistant', content: '~~deleted text~~', toolCalls: [], streaming: false, failed: false }],
     });
     const { container } = render(<AIChat />);
     const el = container.querySelector('span[style*="line-through"]');
@@ -282,7 +287,7 @@ describe('AIChat — markdown rendering', () => {
 
   it('AIChat_MarkdownText_h3HeadingUsesTwelvePointFivePxFontSize', () => {
     useStore.setState({
-      chatMessages: [{ id: 'm2', role: 'assistant', content: '### Small Heading', failed: false }],
+        chatMessages: [{ id: 'm2', role: 'assistant', content: '### Small Heading', toolCalls: [], streaming: false, failed: false }],
     });
     const { container } = render(<AIChat />);
     const div = container.querySelector('.chat-bubble div[style]');
@@ -292,7 +297,7 @@ describe('AIChat — markdown rendering', () => {
 
   it('AIChat_MarkdownText_ulToOlSwitchRendersBothListTypes', () => {
     useStore.setState({
-      chatMessages: [{ id: 'm3', role: 'assistant', content: '- alpha\n- beta\n1. first\n2. second', failed: false }],
+        chatMessages: [{ id: 'm3', role: 'assistant', content: '- alpha\n- beta\n1. first\n2. second', toolCalls: [], streaming: false, failed: false }],
     });
     const { container } = render(<AIChat />);
     expect(container.querySelector('ul')).toBeTruthy();
@@ -301,7 +306,7 @@ describe('AIChat — markdown rendering', () => {
 
   it('AIChat_MarkdownText_olToUlSwitchRendersBothListTypes', () => {
     useStore.setState({
-      chatMessages: [{ id: 'm4', role: 'assistant', content: '1. one\n2. two\n- alpha\n- beta', failed: false }],
+        chatMessages: [{ id: 'm4', role: 'assistant', content: '1. one\n2. two\n- alpha\n- beta', toolCalls: [], streaming: false, failed: false }],
     });
     const { container } = render(<AIChat />);
     expect(container.querySelector('ol')).toBeTruthy();
@@ -310,7 +315,7 @@ describe('AIChat — markdown rendering', () => {
 
   it('AIChat_inlineFormat_trailingTextAfterMarkupRendered', () => {
     useStore.setState({
-      chatMessages: [{ id: 'm5', role: 'assistant', content: '**bold** trailing.', failed: false }],
+        chatMessages: [{ id: 'm5', role: 'assistant', content: '**bold** trailing.', toolCalls: [], streaming: false, failed: false }],
     });
     const { container } = render(<AIChat />);
     expect(container.textContent).toContain('trailing.');
@@ -318,7 +323,7 @@ describe('AIChat — markdown rendering', () => {
 
   it('AIChat_inlineFormat_backtickCodeRendersCodeElement', () => {
     useStore.setState({
-      chatMessages: [{ id: 'm6', role: 'assistant', content: 'Use `myFunc()` here.', failed: false }],
+        chatMessages: [{ id: 'm6', role: 'assistant', content: 'Use `myFunc()` here.', toolCalls: [], streaming: false, failed: false }],
     });
     const { container } = render(<AIChat />);
     expect(container.querySelector('code')).toBeTruthy();
@@ -327,7 +332,7 @@ describe('AIChat — markdown rendering', () => {
 
   it('AIChat_MarkdownText_blankLineInsertsBreakElement', () => {
     useStore.setState({
-      chatMessages: [{ id: 'm7', role: 'assistant', content: 'line one\n\nline two', failed: false }],
+        chatMessages: [{ id: 'm7', role: 'assistant', content: 'line one\n\nline two', toolCalls: [], streaming: false, failed: false }],
     });
     const { container } = render(<AIChat />);
     expect(container.querySelector('br')).toBeTruthy();
@@ -352,6 +357,7 @@ describe('AIChat — ToolBadge result rendering', () => {
           role: 'assistant',
           content: 'done',
           failed: false,
+          streaming: false,
           toolCalls: [
             {
               id: 'tool-err',
@@ -381,6 +387,7 @@ describe('AIChat — ToolBadge result rendering', () => {
           role: 'assistant',
           content: 'done',
           failed: false,
+          streaming: false,
           toolCalls: [
             {
               id: 'tool-str',
@@ -408,6 +415,7 @@ describe('AIChat — ToolBadge result rendering', () => {
           role: 'assistant',
           content: 'thinking...',
           failed: false,
+          streaming: false,
           toolCalls: [
             {
               id: 'tool-pending',
@@ -434,6 +442,7 @@ describe('AIChat — ToolBadge result rendering', () => {
           role: 'assistant',
           content: 'done',
           failed: false,
+          streaming: false,
           toolCalls: [
             {
               id: 'tool-toggle',
@@ -478,7 +487,7 @@ describe('AIChat — guard branches', () => {
     useStore.setState({
       activeSession: null,
       streamingMessageId: 'x',
-      chatMessages: [{ id: 'x', role: 'assistant', content: '...', failed: false, toolCalls: [] }],
+      chatMessages: [{ id: 'x', role: 'assistant', content: '...', failed: false, toolCalls: [], streaming: false }],
     });
     render(<AIChat />);
     // No stop button rendered when session is null, but we can test via keyboard
@@ -489,7 +498,7 @@ describe('AIChat — guard branches', () => {
   it('AIChat_retry_noUserMessageBeforeFailedReturnsEarly', () => {
     useStore.setState({
       chatMessages: [
-        { id: 'assistant-only', role: 'assistant', content: 'failed', failed: true, toolCalls: [] },
+        { id: 'assistant-only', role: 'assistant', content: 'failed', failed: true, toolCalls: [], streaming: false },
       ],
     });
     render(<AIChat />);
