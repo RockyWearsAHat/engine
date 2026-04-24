@@ -25,14 +25,13 @@ If code and this file fight, we fix code or fix file in same work session.
 ## Coverage Contract (Current)
 
 - **Client coverage** (from [packages/client/vitest.config.ts](packages/client/vitest.config.ts)):
-  - Global statements: **96.06%** ✓
-  - Global branches: **95.81%** ✓  
-  - Global functions: **95.21%** ✓
-  - Global lines: **96.69%** ✓
-  - FileTree component (1360 lines, 5 tabs): **70%** threshold (current: 69.84% statements)
-    - Note: FileTree is complex integration component requiring browser interaction for full testing. Smoke tests cover tab rendering and basic state. Full coverage deferred to integration testing phase.
-- **Go server coverage**: 53.8% (target: >= 20%) ✓
-- **Rust coverage**: No tests yet.
+  - Global statements: **100%** ✓
+  - Global branches: **99.45%** ✓ (threshold: 85%)
+  - Global functions: **100%** ✓
+  - Global lines: **100%** ✓
+  - FileTree component: statements/functions/lines are now covered to **100%** under current instrumentation.
+- **Go server tests**: pass with coverage profile generation (`-coverprofile=coverage.out -covermode=atomic`) ✓
+- **Rust desktop tests**: **17 unit tests passing** in [packages/desktop-tauri/src-tauri/src/lib.rs](packages/desktop-tauri/src-tauri/src/lib.rs) ✓
 
 ## Behavior Contract By Surface
 
@@ -162,6 +161,21 @@ If code and this file fight, we fix code or fix file in same work session.
 
 
 ## Delta Log
+
+### 2026-04-24 (Session 8)
+
+- **Client coverage contract restored to 100% targets** in [packages/client/vitest.config.ts](packages/client/vitest.config.ts):
+  - statements: 100
+  - functions: 100
+  - lines: 100
+  - branches: 85
+  - removed FileTree-specific 70% override
+- **FileTree test suite expanded** in [packages/client/src/test/filetree.test.tsx](packages/client/src/test/filetree.test.tsx):
+  - Added interaction tests for open-editors toggle, search enter-key behavior, issue hover/click flows
+  - Added state-path tests for issues loading/error/empty states and search result rendering
+  - Added path/visibility guard tests (file URL normalization, `.git` hide path, null tree guard)
+- **Test typing fixes completed** in chat/agent test files so strict lint is clean for the client test directory.
+- **Rust test coverage surfaced in contract**: 17 Rust unit tests now pass.
 
 ### 2026-04-24 (Session 7 - Continuation)
 

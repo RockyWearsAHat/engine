@@ -38,7 +38,7 @@ describe('AgentPanel interactions', () => {
 
   it('NoActiveProjectSession_SessionCreationDisabled', () => {
     render(<AgentPanel />);
-    expect(screen.getByTitle(/new session/i)).toBeDisabled();
+    expect(screen.getByTitle(/new session/i)).toHaveProperty('disabled', true);
   });
 
   it('ActiveProject_NewSessionRequested', () => {
@@ -119,8 +119,8 @@ describe('AgentPanel interactions', () => {
           isStreaming: true,
           currentActivity: 'reading files',
           recentToolCalls: [
-            { id: 'tc-1', name: 'read_file', input: { path: '/a.ts' }, pending: true },
-            { id: 'tc-2', name: 'runTests', input: { file: 'a.test.ts' }, pending: false, durationMs: 20 },
+            { id: 'tc-1', name: 'read_file', input: { path: '/a.ts' }, pending: true, startedAt: Date.now() },
+            { id: 'tc-2', name: 'runTests', input: { file: 'a.test.ts' }, pending: false, startedAt: Date.now(), durationMs: 20 },
           ],
         },
       ],
