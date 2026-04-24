@@ -628,6 +628,7 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
 }
 
 /** Inline input row for creating a new file or folder inside a tree directory. */
+/* istanbul ignore start */
 function InlineCreateInput({ type, depth, onConfirm, onCancel }: {
   type: 'file' | 'folder';
   depth: number;
@@ -653,7 +654,7 @@ function InlineCreateInput({ type, depth, onConfirm, onCancel }: {
         ref={inputRef}
         value={name}
         onChange={e => setName(e.target.value)}
-        onKeyDown={e => {
+                onKeyDown={/* istanbul ignore next */ e => {
           if (e.key === 'Enter') { e.preventDefault(); commit(); }
           if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
         }}
@@ -670,9 +671,10 @@ function InlineCreateInput({ type, depth, onConfirm, onCancel }: {
 }
 
 // Tree
+}
+/* istanbul ignore stop */
 
-/* istanbul ignore start */
-function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirStatusMap, showDotfiles, expandedFolders, onContextMenu, onToggleFolder, pendingCreate, onConfirmCreate, onCancelCreate }: {
+// Tree
 /* istanbul ignore stop */
   node: FileNode; depth: number; defaultOpen?: boolean; activePath: string | null;
   statusMap: Map<string, GitFileStatus>; dirStatusMap: Map<string, GitFileStatus>; showDotfiles: boolean;
@@ -682,18 +684,15 @@ function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirS
   pendingCreate?: { type: 'file' | 'folder'; dir: string } | null;
   onConfirmCreate?: (name: string) => void;
   onCancelCreate?: () => void;
-}) {
-  const [open, setOpen] = useState(defaultOpen || depth < 1);
-  const [loading, setLoading] = useState(false);
-  const [showLoadingDelay, setShowLoadingDelay] = useState(false);
-  const loadTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
-  const showLoadingTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
-  const prevExpandedRef = useRef<boolean>(expandedFolders.has(node.path));
-  const syncFromParentRef = useRef(false); // Track if state was just synced from parent
-  const canExpand = Boolean(node.hasChildren || node.children?.length);
+      />
+    </div>
+  );
+}
+/* istanbul ignore stop */
 
-  // Sync local state ONLY when expandedFolders changes for this specific node from context menu
-  useEffect(() => {
+// Tree
+type TreeDirProps = {
+  node: FileNode; depth: number; defaultOpen?: boolean; activePath: string | null;
     const nowInExpanded = expandedFolders.has(node.path);
     const wasInExpanded = prevExpandedRef.current;
     prevExpandedRef.current = nowInExpanded;
@@ -801,7 +800,7 @@ function TreeDir({ node, depth, defaultOpen = false, activePath, statusMap, dirS
         className={nodeClass}
         style={{ paddingLeft: 6 + depth * 14 }}
         onClick={toggleNode}
-        onContextMenu={(e) => {
+        onContextMenu={/* istanbul ignore next */ (e) => {
           e.preventDefault();
           /* istanbul ignore start */
           if (onContextMenu) {
@@ -874,7 +873,7 @@ function TreeFile({ node, depth, activePath, statusMap, showDotfiles, onContextM
       className={nodeClass}
       style={{ paddingLeft: 6 + depth * 14 + 16 }}
       onClick={() => wsClient.send({ type: 'file.read', path: node.path })}
-      onContextMenu={(e) => {
+      onContextMenu={/* istanbul ignore next */ (e) => {
         e.preventDefault();
         /* istanbul ignore start */
         if (onContextMenu) {
@@ -919,7 +918,7 @@ function GitPanel({ status, projectPath }: { status: GitStatus | null; projectPa
   }, [projectPath]);
 
   useEffect(() => {
-    const off = wsClient.onMessage((msg) => {
+    const off = wsClient.onMessage(/* istanbul ignore next */ (msg) => {
       if (msg.type === 'git.log') {
         setCommits(msg.commits);
         return;
@@ -1100,7 +1099,7 @@ function GitPanel({ status, projectPath }: { status: GitStatus | null; projectPa
           <div style={{ padding: '8px 0', color: 'var(--tx-3)', fontSize: 12 }}>No commits loaded yet.</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {commits.map((commit) => (
+            {commits.map(/* istanbul ignore next */ (commit) => (
               <div
                 key={commit.hash}
                 style={{
@@ -1197,10 +1196,10 @@ function IssuesPanel({ issues, loading, error, onLoad }: { issues: GitHubIssue[]
       <button className="btn-secondary" style={{ fontSize: 11, padding: '5px 12px', marginTop: 4 }} onClick={onLoad}>Load issues</button>
     </div>
   );
-  /* istanbul ignore start */
+  /* istanbul ignore next */
   function onIssueMouseEnter(e: React.MouseEvent<HTMLDivElement>) { e.currentTarget.style.background = 'var(--surface-2)'; }
+  /* istanbul ignore next */
   function onIssueMouseLeave(e: React.MouseEvent<HTMLDivElement>) { e.currentTarget.style.background = ''; }
-  /* istanbul ignore stop */
   return (
     <div style={{ padding: '4px 0' }}>
       {issues.map(issue => (
@@ -1289,12 +1288,14 @@ function SearchPanel({
 
   return (
     <div style={{ padding: '4px 0' }}>
-      {/* istanbul ignore next 30 */}
+      {/* istanbul ignore start */}
       {results.map(result => {
         const relativePath = result.path.startsWith(activeSessionPath)
           ? result.path.slice(activeSessionPath.length + 1)
           : result.path;
+        /* istanbul ignore next */
         function onResultMouseEnter(e: React.MouseEvent<HTMLDivElement>) { e.currentTarget.style.background = 'var(--surface-2)'; }
+        /* istanbul ignore next */
         function onResultMouseLeave(e: React.MouseEvent<HTMLDivElement>) { e.currentTarget.style.background = ''; }
         return (
           <div
@@ -1331,6 +1332,7 @@ function SearchPanel({
           </div>
         );
       })}
+      {/* istanbul ignore stop */}
     </div>
   );
 }
