@@ -83,6 +83,84 @@
         "clear": true
       },
       "problemMatcher": []
+    },
+    {
+      "label": "Test Client (Vitest)",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["--filter", "@engine/client", "test:run"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Test Client Coverage (Vitest)",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["--filter", "@engine/client", "test:coverage"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Test Go Server",
+      "type": "shell",
+      "command": "go",
+      "args": ["test", "./...", "-v", "-coverprofile=coverage.out", "-covermode=atomic"],
+      "options": {
+        "cwd": "${workspaceFolder}/packages/server-go"
+      },
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Test Rust (Cargo)",
+      "type": "shell",
+      "command": "node",
+      "args": ["${workspaceFolder}/scripts/run-cargo.mjs", "test"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Test All Languages",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Test Client Coverage (Vitest)",
+        "Test Go Server",
+        "Test Rust (Cargo)"
+      ],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": []
     }
   ]
 }

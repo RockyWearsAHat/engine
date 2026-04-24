@@ -322,6 +322,66 @@ func CheckoutBranch(repoPath, branchName string) error {
 	return err
 }
 
+// Push pushes the current branch to the named remote (defaults to "origin").
+func Push(cwd, remote string) (string, error) {
+	if remote == "" {
+		remote = "origin"
+	}
+	branch, _ := GetCurrentBranch(cwd)
+	out, err := run(cwd, "push", remote, branch)
+	if err != nil {
+		return out, fmt.Errorf("git push: %w", err)
+	}
+	return out, nil
+}
+
+// Pull pulls from the named remote for the current branch (defaults to "origin").
+func Pull(cwd, remote string) (string, error) {
+	if remote == "" {
+		remote = "origin"
+	}
+	out, err := run(cwd, "pull", remote)
+	if err != nil {
+		return out, fmt.Errorf("git pull: %w", err)
+	}
+	return out, nil
+}
+
+// CreateBranch creates and checks out a new branch, or switches to an existing one.
+func CreateBranch(cwd, name string, create bool) (string, error) {
+	if create {
+		out, err := run(cwd, "checkout", "-b", name)
+		if err != nil {
+			return out, fmt.Errorf("git checkout -b: %w", err)
+		}
+		return out, nil
+	}
+	out, err := run(cwd, "checkout", name)
+	if err != nil {
+		return out, fmt.Errorf("git checkout: %w", err)
+	}
+	return out, nil
+}
+
+// ListBranches returns the list of local branches.
+func ListBranches(cwd string) ([]string, error) {
+	out, err := run(cwd, "branch", "--list")
+	if err != nil {
+		return nil, err
+	}
+	var branches []string
+	for _, line := range strings.Split(out, "\n") {
+		b := strings.TrimSpace(strings.TrimPrefix(line, "* "))
+		if b != "" {
+			branches = append(branches, b)
+		}
+	}
+	if branches == nil {
+		branches = []string{}
+	}
+	return branches, nil
+}
+
 // RunGit executes a git command in the given directory and returns stdout+stderr.
 // This is a public wrapper for use by other packages that need raw git access.
 func RunGit(cwd string, args ...string) (string, error) {

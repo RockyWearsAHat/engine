@@ -31,6 +31,13 @@ func stateDir(projectPath string) string {
 
 // Init opens (or creates) the SQLite database at the Engine app state path.
 func Init(projectPath string) error {
+	if globalDB != nil {
+		if err := globalDB.Close(); err != nil {
+			return fmt.Errorf("close previous db handle: %w", err)
+		}
+		globalDB = nil
+	}
+
 	dir := stateDir(projectPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create engine state dir: %w", err)
@@ -41,6 +48,8 @@ func Init(projectPath string) error {
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	globalDB = db
 	return migrate()
 }
@@ -214,7 +223,14 @@ func GetSession(id string) (*Session, error) {
 		LEFT JOIN messages m ON m.session_id = s.id
 		WHERE s.id = ?
 		GROUP BY s.id`, id)
-	return scanSession(row)
+	sess, err := scanSession(row)
+	if err != nil {
+		return nil, err
+	}
+	if direction, directionErr := GetProjectDirection(sess.ProjectPath); directionErr == nil {
+		sess.ProjectDirection = direction
+	}
+	return sess, nil
 }
 
 func ListSessions(projectPath string) ([]Session, error) {
@@ -238,6 +254,11 @@ func ListSessions(projectPath string) ([]Session, error) {
 		}
 		sessions = append(sessions, *s)
 	}
+	if direction, directionErr := GetProjectDirection(projectPath); directionErr == nil {
+		for i := range sessions {
+			sessions[i].ProjectDirection = direction
+		}
+	}
 	if sessions == nil {
 		sessions = []Session{}
 	}
@@ -254,9 +275,6 @@ func scanSession(s scanner) (*Session, error) {
 		&sess.CreatedAt, &sess.UpdatedAt, &sess.MessageCount)
 	if err != nil {
 		return nil, err
-	}
-	if direction, directionErr := GetProjectDirection(sess.ProjectPath); directionErr == nil {
-		sess.ProjectDirection = direction
 	}
 	return &sess, nil
 }

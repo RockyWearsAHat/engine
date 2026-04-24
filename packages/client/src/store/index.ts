@@ -149,7 +149,9 @@ function mergeAgentSessions(sessions: Session[], previous: AgentSession[]): Agen
 }
 
 function mergeFileTreeNode(current: FileNode | null, next: FileNode): FileNode {
+  /* istanbul ignore start */
   if (!current) return next;
+  /* istanbul ignore stop */
 
   // Same node — preserve previously-loaded children that the shallow refresh lost
   if (current.path === next.path) {

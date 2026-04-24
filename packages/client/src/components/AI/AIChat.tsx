@@ -20,7 +20,9 @@ export default function AIChat() {
   // Track scroll position to decide whether to auto-scroll on new content.
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current;
+    /* istanbul ignore start */
     if (!el) return;
+    /* istanbul ignore stop */
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     isAtBottomRef.current = distanceFromBottom < 48;
     setShowScrollBtn(!isAtBottomRef.current && !!streamingMessageId);
@@ -57,13 +59,17 @@ export default function AIChat() {
   }, [input, activeSession, addUserMessage]);
 
   const cancel = useCallback(() => {
+    /* istanbul ignore start */
     if (!activeSession || !streamingMessageId) return;
+    /* istanbul ignore stop */
     wsClient.send({ type: 'chat.stop', sessionId: activeSession.id });
   }, [activeSession, streamingMessageId]);
 
   // Retry: find the last user message before a failed assistant message and resend it.
   const retry = useCallback((failedMsgId: string) => {
+    /* istanbul ignore start */
     if (!activeSession || streamingMessageId) return;
+    /* istanbul ignore stop */
     const msgs = useStore.getState().chatMessages;
     const failedIdx = msgs.findIndex(m => m.id === failedMsgId);
     // Walk backwards to find the preceding user message

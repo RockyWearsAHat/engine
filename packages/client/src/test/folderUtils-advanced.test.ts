@@ -15,6 +15,8 @@ import {
   findParentByPath,
   hasSiblingFoldersCollapsed,
   hasSiblingFoldersExpanded,
+  getAllCollapsedFolders,
+  getCollapsedWithinFolder,
 } from '../components/FileTree/folderUtils.js';
 
 // ─── Tree fixtures ────────────────────────────────────────────────────────────
@@ -55,13 +57,13 @@ const makeTree = () =>
 // ─── nodeHasCollapsedChildren ─────────────────────────────────────────────────
 
 describe('nodeHasCollapsedChildren', () => {
-  it('returns true when a child directory is collapsed', () => {
+  it('ChildDirCollapsed_ReturnsTrue', () => {
     const node = makeTree();
     const expanded = new Set<string>(); // nothing expanded
     expect(nodeHasCollapsedChildren(node, expanded)).toBe(true);
   });
 
-  it('returns false when all child directories are expanded', () => {
+  it('AllChildDirsExpanded_ReturnsFalse', () => {
     const node = dir('/project', [
       dir('/project/src', []),
       dir('/project/tests', []),
@@ -70,19 +72,19 @@ describe('nodeHasCollapsedChildren', () => {
     expect(nodeHasCollapsedChildren(node, expanded)).toBe(false);
   });
 
-  it('returns false for a file node', () => {
+  it('NodeHasCollapsedChildren_FileNode_ReturnsFalse', () => {
     expect(nodeHasCollapsedChildren(file('/project/main.ts'), new Set())).toBe(false);
   });
 
-  it('returns false for undefined', () => {
+  it('NodeHasCollapsedChildren_Undefined_ReturnsFalse', () => {
     expect(nodeHasCollapsedChildren(undefined, new Set())).toBe(false);
   });
 
-  it('returns false for a directory with no children', () => {
+  it('DirNoChildren_ReturnsFalse', () => {
     expect(nodeHasCollapsedChildren(dir('/empty'), new Set())).toBe(false);
   });
 
-  it('detects collapsed folders at deeper nesting levels', () => {
+  it('DeeperNesting_CollapsedDetected', () => {
     const node = dir('/project', [
       dir('/project/src', [
         dir('/project/src/deep', []),   // not expanded
@@ -91,31 +93,39 @@ describe('nodeHasCollapsedChildren', () => {
     const expanded = new Set(['/project/src']); // src is open, deep is not
     expect(nodeHasCollapsedChildren(node, expanded)).toBe(true);
   });
+
+  it('OnlyFileChildren_ReturnsFalse', () => {
+    const node = dir('/project', [
+      file('/project/README.md'),
+      file('/project/main.ts'),
+    ]);
+    expect(nodeHasCollapsedChildren(node, new Set())).toBe(false);
+  });
 });
 
 // ─── nodeHasExpandedChildren ──────────────────────────────────────────────────
 
 describe('nodeHasExpandedChildren', () => {
-  it('returns true when at least one child directory is expanded', () => {
+  it('AtLeastOneChildExpanded_ReturnsTrue', () => {
     const node = makeTree();
     const expanded = new Set(['/project/src']);
     expect(nodeHasExpandedChildren(node, expanded)).toBe(true);
   });
 
-  it('returns false when no child directories are expanded', () => {
+  it('NoChildDirsExpanded_ReturnsFalse', () => {
     const node = makeTree();
     expect(nodeHasExpandedChildren(node, new Set())).toBe(false);
   });
 
-  it('returns false for a file node', () => {
+  it('NodeHasExpandedChildren_FileNode_ReturnsFalse', () => {
     expect(nodeHasExpandedChildren(file('/project/main.ts'), new Set(['/project/main.ts']))).toBe(false);
   });
 
-  it('returns false for undefined', () => {
+  it('NodeHasExpandedChildren_Undefined_ReturnsFalse', () => {
     expect(nodeHasExpandedChildren(undefined, new Set())).toBe(false);
   });
 
-  it('detects expanded folders nested deeply', () => {
+  it('DeeplyNestedExpanded_Detected', () => {
     const node = dir('/project', [
       dir('/project/src', [
         dir('/project/src/deep', []),
@@ -129,28 +139,28 @@ describe('nodeHasExpandedChildren', () => {
 // ─── hasFolderWithExpandedChildren ───────────────────────────────────────────
 
 describe('hasFolderWithExpandedChildren', () => {
-  it('returns true when the target folder has an expanded descendant', () => {
+  it('TargetHasExpandedDescendant_ReturnsTrue', () => {
     const tree = makeTree();
     const expanded = new Set(['/project/src/components']);
     expect(hasFolderWithExpandedChildren('/project/src', tree, expanded)).toBe(true);
   });
 
-  it('returns false when no children of the target folder are expanded', () => {
+  it('NoChildrenExpanded_ReturnsFalse', () => {
     const tree = makeTree();
     expect(hasFolderWithExpandedChildren('/project/src', tree, new Set())).toBe(false);
   });
 
-  it('returns false when the target path is a file', () => {
+  it('HasFolderWithExpandedChildren_TargetIsFile_ReturnsFalse', () => {
     const tree = makeTree();
     expect(hasFolderWithExpandedChildren('/project/README.md', tree, new Set())).toBe(false);
   });
 
-  it('returns false when the target path does not exist in the tree', () => {
+  it('TargetPathNotInTree_ReturnsFalse', () => {
     const tree = makeTree();
     expect(hasFolderWithExpandedChildren('/nonexistent', tree, new Set())).toBe(false);
   });
 
-  it('returns false for null tree', () => {
+  it('NullTree_ReturnsFalse', () => {
     expect(hasFolderWithExpandedChildren('/project', null, new Set())).toBe(false);
   });
 });
@@ -158,7 +168,7 @@ describe('hasFolderWithExpandedChildren', () => {
 // ─── allChildrenExpanded ──────────────────────────────────────────────────────
 
 describe('allChildrenExpanded', () => {
-  it('returns true when all immediate directory children are expanded', () => {
+  it('AllImmediateDirChildrenExpanded_ReturnsTrue', () => {
     const tree = dir('/project', [
       dir('/project/src', []),
       dir('/project/tests', []),
@@ -168,7 +178,7 @@ describe('allChildrenExpanded', () => {
     expect(allChildrenExpanded('/project', tree, expanded)).toBe(true);
   });
 
-  it('returns false when at least one directory child is collapsed', () => {
+  it('AtLeastOneDirChildCollapsed_ReturnsFalse', () => {
     const tree = dir('/project', [
       dir('/project/src', []),
       dir('/project/tests', []),
@@ -177,17 +187,17 @@ describe('allChildrenExpanded', () => {
     expect(allChildrenExpanded('/project', tree, expanded)).toBe(false);
   });
 
-  it('returns true for a folder with no children', () => {
+  it('FolderNoChildren_ReturnsTrue', () => {
     const tree = dir('/project', [dir('/project/empty', [])]);
     expect(allChildrenExpanded('/project/empty', tree, new Set())).toBe(true);
   });
 
-  it('returns false when the target path is a file', () => {
+  it('AllChildrenExpanded_TargetIsFile_ReturnsFalse', () => {
     const tree = makeTree();
     expect(allChildrenExpanded('/project/README.md', tree, new Set())).toBe(false);
   });
 
-  it('ignores file children when checking expansion', () => {
+  it('FileChildrenIgnored_CheckExpansion', () => {
     const tree = dir('/project', [
       dir('/project/src', []),
       file('/project/main.ts'),
@@ -200,29 +210,29 @@ describe('allChildrenExpanded', () => {
 // ─── findParentByPath ─────────────────────────────────────────────────────────
 
 describe('findParentByPath', () => {
-  it('finds the parent directory of a file', () => {
+  it('FileParentDir_Found', () => {
     const tree = makeTree();
     const parent = findParentByPath('/project/src/index.ts', tree);
     expect(parent?.path).toBe('/project/src');
   });
 
-  it('finds the parent directory of a nested file', () => {
+  it('NestedFileParentDir_Found', () => {
     const tree = makeTree();
     const parent = findParentByPath('/project/src/components/Button.tsx', tree);
     expect(parent?.path).toBe('/project/src/components');
   });
 
-  it('returns the root when the path has no parent segment', () => {
+  it('PathNoParentSegment_RootReturned', () => {
     const tree = makeTree();
     const parent = findParentByPath('/project', tree);
     expect(parent?.path).toBe('/project');
   });
 
-  it('returns undefined for null tree', () => {
+  it('NullTreeFindParent_Undefined', () => {
     expect(findParentByPath('/project/src', null)).toBeUndefined();
   });
 
-  it('returns undefined for empty childPath', () => {
+  it('EmptyChildPath_Undefined', () => {
     expect(findParentByPath('', makeTree())).toBeUndefined();
   });
 });
@@ -230,14 +240,14 @@ describe('findParentByPath', () => {
 // ─── hasSiblingFoldersCollapsed ───────────────────────────────────────────────
 
 describe('hasSiblingFoldersCollapsed', () => {
-  it('returns true when a sibling directory of a file is collapsed', () => {
+  it('SiblingDirCollapsed_ReturnsTrue', () => {
     const tree = makeTree();
     const expanded = new Set<string>(); // src and tests are both collapsed
     // README.md is in /project, which has src/ and tests/ as siblings
     expect(hasSiblingFoldersCollapsed('/project/README.md', tree, expanded)).toBe(true);
   });
 
-  it('returns false when all sibling directories are expanded', () => {
+  it('AllSiblingDirsExpanded_ReturnsFalse', () => {
     const tree = dir('/project', [
       dir('/project/src', []),
       dir('/project/tests', []),
@@ -247,7 +257,7 @@ describe('hasSiblingFoldersCollapsed', () => {
     expect(hasSiblingFoldersCollapsed('/project/README.md', tree, expanded)).toBe(false);
   });
 
-  it('returns false for a path with no parent in the tree', () => {
+  it('HasSiblingFoldersCollapsed_NoParentInTree_ReturnsFalse', () => {
     expect(hasSiblingFoldersCollapsed('/ghost/file.ts', makeTree(), new Set())).toBe(false);
   });
 });
@@ -255,18 +265,77 @@ describe('hasSiblingFoldersCollapsed', () => {
 // ─── hasSiblingFoldersExpanded ────────────────────────────────────────────────
 
 describe('hasSiblingFoldersExpanded', () => {
-  it('returns true when a sibling directory of a file is expanded', () => {
+  it('SiblingDirExpanded_ReturnsTrue', () => {
     const tree = makeTree();
     const expanded = new Set(['/project/src']);
     expect(hasSiblingFoldersExpanded('/project/README.md', tree, expanded)).toBe(true);
   });
 
-  it('returns false when no sibling directories are expanded', () => {
+  it('NoSiblingDirsExpanded_ReturnsFalse', () => {
     const tree = makeTree();
     expect(hasSiblingFoldersExpanded('/project/README.md', tree, new Set())).toBe(false);
   });
 
-  it('returns false for a path with no parent in the tree', () => {
+  it('HasSiblingFoldersExpanded_NoParentInTree_ReturnsFalse', () => {
     expect(hasSiblingFoldersExpanded('/ghost/file.ts', makeTree(), new Set())).toBe(false);
+  });
+});
+
+// ─── hasFolderWithExpandedChildren — no children branch ──────────────────────
+
+describe('hasFolderWithExpandedChildren — folder with no children array', () => {
+  it('hasFolderWithExpandedChildren_DirWithNoChildren_ReturnsFalse', () => {
+    const emptyDir: FileNode = { name: 'proj', path: '/proj', type: 'directory' };
+    expect(hasFolderWithExpandedChildren('/proj', emptyDir, new Set(['/proj']))).toBe(false);
+  });
+});
+describe('allChildrenExpanded — folder with no children property', () => {
+  it('allChildrenExpanded_FolderWithNoChildrenProp_ReturnsTrue', () => {
+    const tree: FileNode = {
+      name: 'project',
+      path: '/project',
+      type: 'directory',
+      children: [
+        { name: 'empty', path: '/project/empty', type: 'directory' },
+      ],
+    };
+    expect(allChildrenExpanded('/project/empty', tree, new Set())).toBe(true);
+  });
+});
+
+describe('nodeHasCollapsedChildren — folder with no children array', () => {
+  it('nodeHasCollapsedChildren_DirWithNoChildrenProp_ReturnsFalse', () => {
+    const emptyDir: FileNode = { name: 'src', path: '/project/src', type: 'directory' };
+    expect(nodeHasCollapsedChildren(emptyDir, new Set())).toBe(false);
+  });
+});
+
+describe('nodeHasExpandedChildren — folder with no children array', () => {
+  it('nodeHasExpandedChildren_DirWithNoChildrenProp_ReturnsFalse', () => {
+    const emptyDir: FileNode = { name: 'src', path: '/project/src', type: 'directory' };
+    expect(nodeHasExpandedChildren(emptyDir, new Set(['/project/src']))).toBe(false);
+  });
+});
+// ─── getAllCollapsedFolders — directory with no children ──────────────────────
+
+describe('getAllCollapsedFolders — directory with no children array', () => {
+  it('getAllCollapsedFolders_DirWithNoChildrenProp_ReturnsOwnPathOnly', () => {
+    const emptyDir: FileNode = { name: 'src', path: '/project/src', type: 'directory' };
+    const result = getAllCollapsedFolders(emptyDir, new Set(), false);
+    expect(result).toEqual(['/project/src']);
+  });
+});
+
+// ─── getCollapsedWithinFolder — undefined node ────────────────────────────────
+
+describe('getCollapsedWithinFolder — undefined node', () => {
+  it('getCollapsedWithinFolder_UndefinedNode_ReturnsEmpty', () => {
+    expect(getCollapsedWithinFolder('/any', undefined, new Set())).toEqual([]);
+  });
+});
+
+describe('allChildrenExpanded — null node', () => {
+  it('allChildrenExpanded_NullNode_ReturnsFalse', () => {
+    expect(allChildrenExpanded('/project', null, new Set())).toBe(false);
   });
 });

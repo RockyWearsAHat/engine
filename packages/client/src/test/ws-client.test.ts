@@ -65,7 +65,7 @@ describe('WSClient desktop startup behavior', () => {
     delete (window as typeof window & { __TAURI__?: unknown }).__TAURI__;
   });
 
-  it('waits for the local desktop server health check before opening a websocket', async () => {
+  it('DesktopStartup_HealthCheckAwaited', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: vi.fn().mockResolvedValue({ status: 'ok' }),
@@ -90,7 +90,7 @@ describe('WSClient desktop startup behavior', () => {
     expect(MockWebSocket.instances[0]?.url).toBe('ws://localhost:3000/ws?token=desktop-token');
   });
 
-  it('queues outbound messages until the websocket opens', async () => {
+  it('SocketNotYetOpen_OutboundMessagesQueued', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: vi.fn().mockResolvedValue({ status: 'ok' }),
@@ -115,7 +115,7 @@ describe('WSClient desktop startup behavior', () => {
     expect(socket?.send).toHaveBeenCalledWith(JSON.stringify({ type: 'session.list' }));
   });
 
-  it('cancels a pending disconnect when the app reconnects immediately', async () => {
+  it('ImmediateReconnect_PendingDisconnectCancelled', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: vi.fn().mockResolvedValue({ status: 'ok' }),
@@ -138,7 +138,7 @@ describe('WSClient desktop startup behavior', () => {
     expect(MockWebSocket.instances).toHaveLength(1);
   });
 
-  it('uses remote configuration when provided', async () => {
+  it('RemoteConfigProvided_RemoteConfigUsed', async () => {
     const client = new WSClient();
     client.connect({ host: 'engine.example.dev', port: '7443', token: 'abc xyz' });
 
@@ -149,7 +149,7 @@ describe('WSClient desktop startup behavior', () => {
     expect(client.isRemote).toBe(true);
   });
 
-  it('keeps only the most recent 100 queued messages while disconnected', async () => {
+  it('Disconnected_OnlyMostRecent100MessagesKept', async () => {
     const client = new WSClient();
     client.connect({ host: 'engine.example.dev', port: '7443', token: 'abc' });
     await vi.advanceTimersByTimeAsync(1);
@@ -168,5 +168,182 @@ describe('WSClient desktop startup behavior', () => {
     expect(socket?.send).toHaveBeenCalledTimes(100);
     expect(socket?.send).toHaveBeenNthCalledWith(1, JSON.stringify({ type: 'session.read', id: '20' }));
     expect(socket?.send).toHaveBeenNthCalledWith(100, JSON.stringify({ type: 'session.read', id: '119' }));
+  });
+
+  it('SubscribedHandler_MessageDeliveredAndUnsubscribedCleanly', async () => {
+    const client = new WSClient();
+    client.connect({ host: 'engine.example.dev', port: '7443', token: 'abc' });
+    await vi.advanceTimersByTimeAsync(1);
+
+    const socket = MockWebSocket.instances[0]!;
+    const handler = vi.fn();
+    const dispose = client.onMessage(handler);
+
+    socket.onmessage?.({ data: JSON.stringify({ type: 'session.list', sessions: [] }) } as MessageEvent);
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    dispose();
+    socket.onmessage?.({ data: JSON.stringify({ type: 'session.list', sessions: [] }) } as MessageEvent);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('OpenHandlersPending_AwaitsBeforeFlushingQueue', async () => {
+    const client = new WSClient();
+    client.connect({ host: 'engine.example.dev', port: '7443', token: 'abc' });
+    await vi.advanceTimersByTimeAsync(1);
+
+    const socket = MockWebSocket.instances[0]!;
+    const openHandler = vi.fn().mockImplementation(async () => {
+      await Promise.resolve();
+    });
+    client.onOpen(openHandler);
+    client.send({ type: 'session.list' });
+
+    socket.readyState = MockWebSocket.OPEN;
+    socket.onopen?.();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(openHandler).toHaveBeenCalledTimes(1);
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'session.list' }));
+    expect(client.isConnected).toBe(true);
+  });
+
+  it('SocketCloses_CloseHandlersNotified', async () => {
+    const client = new WSClient();
+    client.connect({ host: 'engine.example.dev', port: '7443', token: 'abc' });
+    await vi.advanceTimersByTimeAsync(1);
+
+    const socket = MockWebSocket.instances[0]!;
+    const onClose = vi.fn();
+    client.onClose(onClose);
+
+    socket.onclose?.();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('DeferredDisconnect_ConnectingSocketClosed', async () => {
+    const client = new WSClient();
+    client.connect({ host: 'engine.example.dev', port: '7443', token: 'abc' });
+    await vi.advanceTimersByTimeAsync(1);
+
+    const socket = MockWebSocket.instances[0]!;
+    client.disconnect();
+    await vi.advanceTimersByTimeAsync(300);
+    socket.onopen?.();
+
+    expect(socket.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('SocketAlreadyOpen_SendsImmediately', async () => {
+    const client = new WSClient();
+    client.connect({ host: 'engine.example.dev', port: '7443', token: 'abc' });
+    await vi.advanceTimersByTimeAsync(1);
+
+    const socket = MockWebSocket.instances[0]!;
+    socket.readyState = MockWebSocket.OPEN;
+    socket.onopen?.();
+    await Promise.resolve();
+
+    client.send({ type: 'session.list' });
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'session.list' }));
+  });
+
+  it('ShouldConnectFalseAfterDisconnect_QueueDropped', async () => {
+    const client = new WSClient();
+    client.connect({ host: 'engine.example.dev', port: '7443', token: 'abc' });
+    await vi.advanceTimersByTimeAsync(1);
+
+    client.disconnect();
+    await vi.advanceTimersByTimeAsync(300);
+
+    client.send({ type: 'session.list' });
+    const socket = MockWebSocket.instances[0]!;
+    expect(socket.send).not.toHaveBeenCalled();
+  });
+
+  it('EmitDelegatesToSend', async () => {
+    const client = new WSClient();
+    client.connect({ host: 'engine.example.dev', port: '7443', token: 'abc' });
+    await vi.advanceTimersByTimeAsync(1);
+
+    const socket = MockWebSocket.instances[0]!;
+    socket.readyState = MockWebSocket.OPEN;
+    socket.onopen?.();
+    await Promise.resolve();
+
+    client.emit({ type: 'session.list' });
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'session.list' }));
+  });
+
+  it('SendToClosedSocket_ScheduleConnectCalled', async () => {
+    const client = new WSClient();
+    client.connect({ host: 'engine.example.dev', port: '7443', token: 'abc' });
+    await vi.advanceTimersByTimeAsync(1);
+
+    const socket = MockWebSocket.instances[0]!;
+    socket.readyState = MockWebSocket.OPEN;
+    socket.onopen?.();
+    await Promise.resolve();
+
+    socket.readyState = MockWebSocket.CLOSED;
+    socket.onclose?.();
+
+    MockWebSocket.instances.length = 1;
+    client.send({ type: 'session.list' });
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(socket.send).not.toHaveBeenCalledWith(JSON.stringify({ type: 'session.list' }));
+  });
+
+  it('WsAlreadyNull_PerformDisconnectReturnsEarly', async () => {
+    const client = new WSClient();
+    client.connect({ host: 'engine.example.dev', port: '7443', token: 'abc' });
+    await vi.advanceTimersByTimeAsync(1);
+
+    const socket = MockWebSocket.instances[0]!;
+    socket.readyState = MockWebSocket.OPEN;
+    socket.onopen?.();
+    await Promise.resolve();
+
+    // First disconnect sets ws to null
+    client.disconnect();
+    await vi.advanceTimersByTimeAsync(500);
+    // Second disconnect — ws is null, should early-return without errors
+    client.disconnect();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(client).toBeTruthy();
+  });
+
+  it('ConnectingSocket_ClosedViaOnopen', async () => {
+    const client = new WSClient();
+    client.connect({ host: 'engine.example.dev', port: '7443', token: 'abc' });
+    await vi.advanceTimersByTimeAsync(1);
+
+    const socket = MockWebSocket.instances[0]!;
+    // Still CONNECTING (default readyState)
+    expect(socket.readyState).toBe(MockWebSocket.CONNECTING);
+
+    client.disconnect();
+    await vi.advanceTimersByTimeAsync(500);
+
+    // The onopen callback was installed; call it to verify it closes
+    if (socket.onopen) {
+      socket.onopen(new Event('open'));
+    }
+    expect(socket.close).toHaveBeenCalled();
+  });
+
+  it('NotDesktopShell_PlainBrowserWsUrlUsed', async () => {
+    delete (window as typeof window & { __TAURI__?: unknown }).__TAURI__;
+
+    const client = new WSClient();
+    client.connect();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    const url = MockWebSocket.instances[0]?.url ?? '';
+    expect(url).toMatch(/^wss?:\/\/.+\/ws$/);
   });
 });

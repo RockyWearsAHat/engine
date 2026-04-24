@@ -57,7 +57,7 @@ describe('folderUtils - Real Production Code Tests', () => {
   });
 
   describe('countFolders - Real Code', () => {
-    it('counts zero folders in empty project', () => {
+    it('EmptyProject_ZeroFoldersCounted', () => {
       const emptyProject: FileNode = {
         name: 'project',
         path: '/project',
@@ -70,7 +70,7 @@ describe('folderUtils - Real Production Code Tests', () => {
       expect(expandedCount).toBe(0);
     });
 
-    it('counts all folders in collapsed tree', () => {
+    it('CollapsedTree_AllFoldersCounted', () => {
       const tree = createTestTree();
       const expanded = new Set<string>(); // Nothing expanded
       const { total, expanded: expandedCount } = countFolders(tree, expanded, true);
@@ -79,7 +79,7 @@ describe('folderUtils - Real Production Code Tests', () => {
       expect(expandedCount).toBe(0); // None are expanded
     });
 
-    it('counts expanded folders correctly', () => {
+    it('ExpandedFolders_CountedCorrectly', () => {
       const tree = createTestTree();
       const expanded = new Set<string>(['/project/src', '/project/src/components']);
       const { total, expanded: expandedCount } = countFolders(tree, expanded, true);
@@ -89,7 +89,7 @@ describe('folderUtils - Real Production Code Tests', () => {
       expect(expandedCount).toBe(2);
     });
 
-    it('excludes files from folder count', () => {
+    it('Files_ExcludedFromFolderCount', () => {
       const tree = createTestTree();
       const expanded = new Set<string>();
       const { total } = countFolders(tree, expanded, true);
@@ -100,14 +100,14 @@ describe('folderUtils - Real Production Code Tests', () => {
   });
 
   describe('findNodeByPath - Real Code', () => {
-    it('finds root node', () => {
+    it('RootNode_Found', () => {
       const tree = createTestTree();
       const node = findNodeByPath('/project', tree);
       expect(node).toBeDefined();
       expect(node?.name).toBe('project');
     });
 
-    it('finds nested directory', () => {
+    it('NestedDirectory_Found', () => {
       const tree = createTestTree();
       const node = findNodeByPath('/project/src/components', tree);
       expect(node).toBeDefined();
@@ -115,7 +115,7 @@ describe('folderUtils - Real Production Code Tests', () => {
       expect(node?.type).toBe('directory');
     });
 
-    it('finds files', () => {
+    it('Files_Found', () => {
       const tree = createTestTree();
       const node = findNodeByPath('/project/src/components/App.tsx', tree);
       expect(node).toBeDefined();
@@ -123,13 +123,13 @@ describe('folderUtils - Real Production Code Tests', () => {
       expect(node?.type).toBe('file');
     });
 
-    it('returns undefined for non-existent path', () => {
+    it('NonExistentPath_Undefined', () => {
       const tree = createTestTree();
       const node = findNodeByPath('/project/nonexistent', tree);
       expect(node).toBeUndefined();
     });
 
-    it('handles null/undefined input', () => {
+    it('NullOrUndefinedInput_Handled', () => {
       const node1 = findNodeByPath('/project', null);
       const node2 = findNodeByPath('/project', undefined);
       expect(node1).toBeUndefined();
@@ -138,7 +138,7 @@ describe('folderUtils - Real Production Code Tests', () => {
   });
 
   describe('hasFolderWithCollapsedChildren - Real Code', () => {
-    it('returns true when folder has collapsed children', () => {
+    it('FolderWithCollapsedChildren_ReturnsTrue', () => {
       const tree = createTestTree();
       // Expand src but not its children
       const expanded = new Set<string>(['/project/src']);
@@ -147,7 +147,7 @@ describe('folderUtils - Real Production Code Tests', () => {
       expect(result).toBe(true);
     });
 
-    it('returns false when all children are expanded', () => {
+    it('AllChildrenExpanded_ReturnsFalse', () => {
       const tree = createTestTree();
       // Expand everything under src
       const expanded = new Set<string>(['/project/src', '/project/src/components']);
@@ -156,7 +156,7 @@ describe('folderUtils - Real Production Code Tests', () => {
       expect(result).toBe(false);
     });
 
-    it('returns false for leaf folders', () => {
+    it('LeafFolders_ReturnsFalse', () => {
       const tree = createTestTree();
       const expanded = new Set<string>();
       const result = hasFolderWithCollapsedChildren('/project/src/components', tree, expanded);
@@ -164,21 +164,21 @@ describe('folderUtils - Real Production Code Tests', () => {
       expect(result).toBe(false);
     });
 
-    it('handles non-existent paths', () => {
+    it('NonExistentPaths_Handled', () => {
       const tree = createTestTree();
       const expanded = new Set<string>();
       const result = hasFolderWithCollapsedChildren('/nonexistent', tree, expanded);
       expect(result).toBe(false);
     });
 
-    it('handles undefined node input', () => {
+    it('UndefinedNodeInput_Handled', () => {
       const expanded = new Set<string>();
       const result = hasFolderWithCollapsedChildren('/project', undefined, expanded);
       // Line 45: if (!node) return false;
       expect(result).toBe(false);
     });
 
-    it('returns false for folder with no children property', () => {
+    it('FolderNoChildrenProperty_ReturnsFalse', () => {
       const tree: FileNode = {
         name: 'project',
         path: '/project',
@@ -193,7 +193,7 @@ describe('folderUtils - Real Production Code Tests', () => {
   });
 
   describe('shouldShowExpandAll - Real Code', () => {
-    it('shows Expand All when collapsed children exist', () => {
+    it('CollapsedChildrenExist_ExpandAllShown', () => {
       const tree = createTestTree();
       // Expand src but not components
       const expanded = new Set<string>(['/project/src']);
@@ -201,7 +201,7 @@ describe('folderUtils - Real Production Code Tests', () => {
       expect(result).toBe(true);
     });
 
-    it('hides Expand All when all children expanded', () => {
+    it('AllChildrenExpanded_ExpandAllHidden', () => {
       const tree = createTestTree();
       // Expand everything
       const expanded = new Set<string>(['/project/src', '/project/src/components']);
@@ -209,21 +209,21 @@ describe('folderUtils - Real Production Code Tests', () => {
       expect(result).toBe(false);
     });
 
-    it('hides Expand All for leaf folders', () => {
+    it('LeafFolders_ExpandAllHidden', () => {
       const tree = createTestTree();
       const expanded = new Set<string>();
       const result = shouldShowExpandAll('/project/src/components', tree, expanded);
       expect(result).toBe(false);
     });
 
-    it('handles null tree input', () => {
+    it('NullTreeInput_Handled', () => {
       const expanded = new Set<string>();
       const result = shouldShowExpandAll('/project', null, expanded);
       // Line 97: tree || undefined
       expect(result).toBe(false);
     });
 
-    it('handles undefined tree input', () => {
+    it('UndefinedTreeInput_Handled', () => {
       const expanded = new Set<string>();
       const result = shouldShowExpandAll('/project', undefined, expanded);
       expect(result).toBe(false);
@@ -231,19 +231,19 @@ describe('folderUtils - Real Production Code Tests', () => {
   });
 
   describe('shouldShowCollapseAll - Real Code', () => {
-    it('shows Collapse All when folders are expanded', () => {
+    it('FoldersExpanded_CollapseAllShown', () => {
       const expanded = new Set<string>(['/project/src', '/project/public']);
       const result = shouldShowCollapseAll(expanded);
       expect(result).toBe(true);
     });
 
-    it('hides Collapse All when no folders expanded', () => {
+    it('NoFoldersExpanded_CollapseAllHidden', () => {
       const expanded = new Set<string>();
       const result = shouldShowCollapseAll(expanded);
       expect(result).toBe(false);
     });
 
-    it('shows Collapse All even with single expanded folder', () => {
+    it('SingleExpandedFolder_CollapseAllShown', () => {
       const expanded = new Set<string>(['/project/src']);
       const result = shouldShowCollapseAll(expanded);
       expect(result).toBe(true);
@@ -251,7 +251,7 @@ describe('folderUtils - Real Production Code Tests', () => {
   });
 
   describe('Edge Cases - Real Code', () => {
-    it('handles deeply nested structures', () => {
+    it('DeeplyNestedStructures_Handled', () => {
       const deepTree: FileNode = {
         name: 'root',
         path: '/root',
@@ -295,7 +295,7 @@ describe('folderUtils - Real Production Code Tests', () => {
       expect(found?.name).toBe('level3');
     });
 
-    it('handles single file at root', () => {
+    it('SingleFileAtRoot_Handled', () => {
       const singleFile: FileNode = {
         name: 'file.txt',
         path: '/file.txt',
@@ -306,7 +306,7 @@ describe('folderUtils - Real Production Code Tests', () => {
       expect(total).toBe(0); // Files don't count as folders
     });
 
-    it('handles folder with no children', () => {
+    it('FolderNoChildren_Handled', () => {
       const emptyFolder: FileNode = {
         name: 'empty',
         path: '/empty',
@@ -320,7 +320,7 @@ describe('folderUtils - Real Production Code Tests', () => {
   });
 
   describe('State Consistency - Real Code', () => {
-    it('maintains Set integrity through operations', () => {
+    it('SetIntegrity_MaintainedThroughOperations', () => {
       const tree = createTestTree();
       const expanded = new Set<string>();
 
@@ -342,7 +342,7 @@ describe('folderUtils - Real Production Code Tests', () => {
       expect(expandedCount).toBe(0);
     });
 
-    it('validates that Set.has() works correctly', () => {
+    it('SetHas_WorksCorrectly', () => {
       const expanded = new Set<string>();
       expanded.add('/project/src');
 
@@ -397,7 +397,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
   });
 
   describe('getAllCollapsedFolders - Global scope', () => {
-    it('returns all collapsed folders when nothing is expanded', () => {
+    it('NothingExpanded_AllCollapsedFoldersReturned', () => {
       const tree = createTestTree();
       const expanded = new Set<string>();
       
@@ -407,7 +407,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
       expect(collapsed).toContain('/project/public');
     });
 
-    it('returns only collapsed folders when some are expanded', () => {
+    it('SomeExpanded_OnlyCollapsedFoldersReturned', () => {
       const tree = createTestTree();
       const expanded = new Set<string>(['/project/src']);
       
@@ -422,7 +422,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
   });
 
   describe('getCollapsedWithinFolder - Scoped to target folder', () => {
-    it('returns only direct collapsed children of target folder', () => {
+    it('TargetFolder_OnlyDirectCollapsedChildrenReturned', () => {
       const tree = createTestTree();
       const expanded = new Set<string>(['/project/src']);
       
@@ -433,7 +433,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
       expect(collapsed.length).toBe(2);
     });
 
-    it('returns empty array for folders with no collapsed children', () => {
+    it('FolderNoCollapsedChildren_EmptyArrayReturned', () => {
       const tree = createTestTree();
       const expanded = new Set<string>([
         '/project/src',
@@ -445,7 +445,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
       expect(collapsed).toEqual([]);
     });
 
-    it('returns empty array when folder not found', () => {
+    it('FolderNotFound_EmptyArrayReturned', () => {
       const tree = createTestTree();
       const expanded = new Set<string>(['/project/src']);
       
@@ -453,7 +453,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
       expect(collapsed).toEqual([]);
     });
 
-    it('returns empty array when target is a file', () => {
+    it('TargetIsFile_EmptyArrayReturned', () => {
       const tree = createTestTree();
       const expanded = new Set<string>(['/project/src']);
       
@@ -463,7 +463,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
   });
 
   describe('expandAllFolders - Global expand', () => {
-    it('expands all collapsed folders in tree', () => {
+    it('AllCollapsedFolders_Expanded', () => {
       const tree = createTestTree();
       const expanded = new Set<string>();
       
@@ -476,7 +476,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
       expect(expanded.has('/project/src/utils')).toBe(true);
     });
 
-    it('handles partial expansion correctly', () => {
+    it('PartialExpansion_HandledCorrectly', () => {
       const tree = createTestTree();
       const expanded = new Set<string>(['/project/src']);
       
@@ -487,7 +487,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
       expect(expandedCount).toBe(total);
     });
 
-    it('handles null tree gracefully', () => {
+    it('NullTree_HandledGracefully', () => {
       const expanded = new Set<string>();
       
       expandAllFolders(null, expanded);
@@ -495,7 +495,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
       expect(expanded.size).toBe(0);
     });
 
-    it('handles undefined tree gracefully', () => {
+    it('UndefinedTree_HandledGracefully', () => {
       const expanded = new Set<string>();
       
       expandAllFolders(undefined, expanded);
@@ -505,7 +505,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
   });
 
   describe('expandFoldersWithin - Scoped expand', () => {
-    it('expands only collapsed folders within target folder', () => {
+    it('TargetFolderScoped_OnlyCollapsedExpanded', () => {
       const tree = createTestTree();
       const expanded = new Set<string>(['/project/src']);
       
@@ -518,7 +518,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
       expect(expanded.has('/project/public')).toBe(false);
     });
 
-    it('does not affect other branches', () => {
+    it('ExpandedOtherBranches_NotAffected', () => {
       const tree = createTestTree();
       const expanded = new Set<string>([
         '/project/src',
@@ -535,7 +535,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
   });
 
   describe('collapseAllFolders - Global collapse', () => {
-    it('collapses entire tree by clearing expanded set', () => {
+    it('EntireTreeCleared_CollapseAll', () => {
       const tree = createTestTree();
       const expanded = new Set<string>([
         '/project/src',
@@ -554,7 +554,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
   });
 
   describe('collapseFoldersWithin - Scoped collapse', () => {
-    it('collapses only folders within target folder', () => {
+    it('TargetFolderScoped_OnlyFoldersCollapsed', () => {
       const tree = createTestTree();
       const expanded = new Set<string>([
         '/project/src',
@@ -573,7 +573,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
       expect(expanded.has('/project/public')).toBe(true);
     });
 
-    it('does not affect other branches', () => {
+    it('CollapsedOtherBranches_NotAffected', () => {
       const tree = createTestTree();
       const expanded = new Set<string>([
         '/project/src',
@@ -591,7 +591,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
   });
 
   describe('End-to-End Workflow - User interactions', () => {
-    it('workflow: expand entire tree from root', () => {
+    it('ExpandEntireTreeFromRoot_Workflow', () => {
       const tree = createTestTree();
       const expanded = new Set<string>();
       
@@ -604,7 +604,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
       expect(expandedCount).toBe(total);
     });
 
-    it('workflow: expand only within src folder', () => {
+    it('ExpandOnlyWithinSrcFolder_Workflow', () => {
       const tree = createTestTree();
       const expanded = new Set<string>(['/project/src']);
       
@@ -618,7 +618,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
       expect(expanded.has('/project/public')).toBe(false);
     });
 
-    it('workflow: collapse entire tree from root', () => {
+    it('CollapseEntireTreeFromRoot_Workflow', () => {
       const tree = createTestTree();
       const expanded = new Set<string>([
         '/project/src',
@@ -635,7 +635,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
       expect(expanded.size).toBe(0);
     });
 
-    it('workflow: collapse only within src folder', () => {
+    it('CollapseOnlyWithinSrcFolder_Workflow', () => {
       const tree = createTestTree();
       const expanded = new Set<string>([
         '/project/src',
@@ -657,7 +657,7 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
   });
 
   describe('Edge case - Deeply nested collapsed folders', () => {
-    it('getAllCollapsedFolders finds ALL collapsed folders including nested ones', () => {
+    it('AllCollapsedFoldersIncludingNested_Found', () => {
       // Create a tree where a collapsed folder has subfolders inside
       const treeWithNestedCollapsed: FileNode = {
         name: 'project',
@@ -701,34 +701,33 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
   });
 
   describe('hasDirectChildDirCollapsed', () => {
-    it('returns false when node is undefined', () => {
-      expect(hasDirectChildDirCollapsed(undefined, new Set())).toBe(false);
+    it('HasDirectChildDirCollapsed_UndefinedNode_ReturnsFalse', () => {
     });
 
-    it('returns false when node is a file', () => {
+    it('HasDirectChildDirCollapsed_FileNode_ReturnsFalse', () => {
       const file: FileNode = { name: 'f.ts', path: '/f.ts', type: 'file' };
       expect(hasDirectChildDirCollapsed(file, new Set())).toBe(false);
     });
 
-    it('returns false when all direct child dirs are expanded', () => {
+    it('AllDirectChildDirsExpanded_ReturnsFalse', () => {
       const tree = createTestTree();
       const expanded = new Set<string>(['/project/src', '/project/public']);
       expect(hasDirectChildDirCollapsed(tree, expanded)).toBe(false);
     });
 
-    it('returns true when some direct child dirs are collapsed', () => {
+    it('SomeDirectChildDirsCollapsed_ReturnsTrue', () => {
       const tree = createTestTree();
       const expanded = new Set<string>(['/project/src']); // public is collapsed
       expect(hasDirectChildDirCollapsed(tree, expanded)).toBe(true);
     });
 
-    it('returns true when all direct child dirs are collapsed', () => {
+    it('AllDirectChildDirsCollapsed_ReturnsTrue', () => {
       const tree = createTestTree();
       const expanded = new Set<string>(); // nothing expanded
       expect(hasDirectChildDirCollapsed(tree, expanded)).toBe(true);
     });
 
-    it('ignores grandchild state — only checks direct children', () => {
+    it('GrandchildState_Ignored_OnlyDirectChildrenChecked', () => {
       const tree = createTestTree();
       // Both direct children (src, public) are expanded
       // But grandchild (components) is NOT — should still return false
@@ -736,12 +735,12 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
       expect(hasDirectChildDirCollapsed(tree, expanded)).toBe(false);
     });
 
-    it('returns false when folder has no children', () => {
+    it('FolderNoChildren_ReturnsFalse', () => {
       const empty: FileNode = { name: 'e', path: '/e', type: 'directory', children: [] };
       expect(hasDirectChildDirCollapsed(empty, new Set())).toBe(false);
     });
 
-    it('returns false when folder has only file children', () => {
+    it('FolderOnlyFileChildren_ReturnsFalse', () => {
       const onlyFiles: FileNode = {
         name: 'src', path: '/src', type: 'directory',
         children: [
@@ -754,46 +753,45 @@ describe('Scoped Expand/Collapse Functions - Integration', () => {
   });
 
   describe('hasDirectChildDirExpanded', () => {
-    it('returns false when node is undefined', () => {
-      expect(hasDirectChildDirExpanded(undefined, new Set())).toBe(false);
+    it('HasDirectChildDirExpanded_UndefinedNode_ReturnsFalse', () => {
     });
 
-    it('returns false when node is a file', () => {
+    it('HasDirectChildDirExpanded_FileNode_ReturnsFalse', () => {
       const file: FileNode = { name: 'f.ts', path: '/f.ts', type: 'file' };
       expect(hasDirectChildDirExpanded(file, new Set())).toBe(false);
     });
 
-    it('returns true when some direct child dirs are expanded', () => {
+    it('SomeDirectChildDirsExpanded_ReturnsTrue', () => {
       const tree = createTestTree();
       const expanded = new Set<string>(['/project/src']);
       expect(hasDirectChildDirExpanded(tree, expanded)).toBe(true);
     });
 
-    it('returns true when all direct child dirs are expanded', () => {
+    it('AllDirectChildDirsExpanded_ReturnsTrue', () => {
       const tree = createTestTree();
       const expanded = new Set<string>(['/project/src', '/project/public']);
       expect(hasDirectChildDirExpanded(tree, expanded)).toBe(true);
     });
 
-    it('returns false when no direct child dirs are expanded', () => {
+    it('NoDirectChildDirsExpanded_ReturnsFalse', () => {
       const tree = createTestTree();
       const expanded = new Set<string>(); // nothing expanded
       expect(hasDirectChildDirExpanded(tree, expanded)).toBe(false);
     });
 
-    it('ignores grandchild state — only checks direct children', () => {
+    it('GrandchildStateExpanded_Ignored_OnlyDirectChildrenChecked', () => {
       const tree = createTestTree();
       // No direct children expanded, but grandchild components IS
       const expanded = new Set<string>(['/project/src/components']);
       expect(hasDirectChildDirExpanded(tree, expanded)).toBe(false);
     });
 
-    it('returns false when folder has no children', () => {
+    it('FolderNoChildrenExpanded_ReturnsFalse', () => {
       const empty: FileNode = { name: 'e', path: '/e', type: 'directory', children: [] };
       expect(hasDirectChildDirExpanded(empty, new Set())).toBe(false);
     });
 
-    it('returns false when folder has only file children', () => {
+    it('FolderOnlyFileChildrenExpanded_ReturnsFalse', () => {
       const onlyFiles: FileNode = {
         name: 'src', path: '/src', type: 'directory',
         children: [

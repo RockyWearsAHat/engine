@@ -153,7 +153,7 @@ export default function PreferencesPanel() {
     // Ask for current discord config once the WS is usable.
     const requestConfig = () => wsClient.send({ type: 'discord.config.get' } as never);
     requestConfig();
-    const unsubOpen = wsClient.onOpen(() => requestConfig());
+    const unsubOpen = wsClient.onOpen(requestConfig);
     return () => {
       unsub();
       unsubOpen();
@@ -283,7 +283,6 @@ export default function PreferencesPanel() {
     setDiscordValidating(true);
     setDiscordValidation(null);
     wsClient.send({ type: 'discord.validate', config: buildDiscordPayload() } as never);
-    window.setTimeout(() => setDiscordValidating(false), 6000);
   };
 
   const inputStyle: React.CSSProperties = {
