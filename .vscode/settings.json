@@ -22,6 +22,9 @@
     // ── Rust ─────────────────────────────────────────────────────────────
     "rust-analyzer.cargo.targetDir": true,
     "rust-analyzer.testExplorer": true,
+    "rust-analyzer.linkedProjects": [
+        "packages/desktop-tauri/src-tauri/Cargo.toml"
+    ],
     "rust-analyzer.files.excludeDirs": [
         "target",
         "node_modules",

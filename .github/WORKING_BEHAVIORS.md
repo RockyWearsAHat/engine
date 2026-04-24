@@ -213,6 +213,13 @@ If code and this file fight, we fix code or fix file in same work session.
   - `rust-analyzer.linkedProjects` kept with single workspace-relative `Cargo.toml` entry for immediate crate discovery on reload.
   - All other discovery/coverage settings retained (portable).
 
+### 2026-04-24 (Session 12)
+
+- Rust test discovery fallback for startup race in [.vscode/settings.json](.vscode/settings.json):
+  - Set `rust-analyzer.linkedProjects` to the concrete crate manifest `packages/desktop-tauri/src-tauri/Cargo.toml`.
+  - This bypasses workspace-member auto-discovery timing and points rust-analyzer directly at the crate that actually owns test items.
+  - Path is workspace-relative (portable), no machine-specific absolute paths.
+
 ### 2026-04-24 (Session 8)
 
 - **Client coverage contract restored to 100% targets** in [packages/client/vitest.config.ts](packages/client/vitest.config.ts):
