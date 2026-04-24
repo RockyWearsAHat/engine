@@ -1,0 +1,8 @@
+{
+  "recommendations": [
+    "golang.go",
+    "vitest.explorer",
+    "rust-lang.rust-analyzer",
+    "ryanluker.vscode-coverage-gutters"
+  ]
+}

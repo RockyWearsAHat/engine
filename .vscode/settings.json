@@ -1,6 +1,73 @@
 {
     "editor.formatOnSave": false,
     "editor.codeActionsOnSave": {},
-    "go.testFlags": ["-count=1"],
-    "go.coverMode": "atomic"
+    "go.testFlags": [
+        "-count=1",
+        "-coverprofile=coverage.out",
+        "-covermode=atomic"
+    ],
+    "go.coverMode": "atomic",
+    "go.coverOnTestPackage": true,
+    "go.useLanguageServer": true,
+    "go.experiments": {
+        "testExplorer": true
+    },
+    "go.testExplorer.enable": true,
+    "go.testExplorer.packageDisplayMode": "flat",
+    "go.testExplorer.showOutput": true,
+    "go.terminal.activateEnvironment": true,
+    "go.toolsEnvVars": {
+        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/Users/alexwaldmann/go/bin"
+    },
+    "go.alternateTools": {
+        "gopls": "/Users/alexwaldmann/go/bin/gopls",
+        "go": "/opt/homebrew/bin/go"
+    },
+    "rust-analyzer.cargo.extraEnv": {
+        "PATH": "/Users/alexwaldmann/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    },
+    "rust-analyzer.runnables.command": "/Users/alexwaldmann/.cargo/bin/cargo",
+    "rust-analyzer.runnables.extraEnv": {
+        "PATH": "/Users/alexwaldmann/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    },
+    "rust-analyzer.cargo.targetDir": true,
+    "rust-analyzer.testExplorer": true,
+    "rust-analyzer.server.path": "/Users/alexwaldmann/.cargo/bin/rust-analyzer",
+    "rust-analyzer.files.excludeDirs": [
+        "target",
+        "node_modules",
+        ".git"
+    ],
+    "rust-analyzer.linkedProjects": [
+        "/Users/alexwaldmann/Desktop/MyEditor/Cargo.toml"
+    ],
+    "gopls": {
+        "build.workspaceFiles": [
+            "go.work",
+            "**/go.work",
+            "**/go.mod"
+        ],
+        "build.directoryFilters": [
+            "-**/node_modules",
+            "-**/target",
+            "-**/.git"
+        ]
+    },
+    "files.watcherExclude": {
+        "**/target/**": true,
+        "**/node_modules/**": true,
+        "**/.git/**": true
+    },
+    "coverage-gutters.coverageFileNames": [
+        "coverage.out",
+        "cover.out",
+        "lcov.info",
+        "cov.xml",
+        "coverage.xml",
+        "jacoco.xml"
+    ],
+    "coverage-gutters.showGutterCoverage": true,
+    "coverage-gutters.showLineCoverage": true,
+    "coverage-gutters.showRulerCoverage": true,
+    "coverage-gutters.coverageReductionThreshold": 0
 }
