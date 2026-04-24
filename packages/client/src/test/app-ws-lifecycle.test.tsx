@@ -1,4 +1,4 @@
-import { act, render } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../App.js';
 import { useStore } from '../store/index.js';
@@ -7,17 +7,24 @@ const wsMocks = vi.hoisted(() => ({
   connect: vi.fn(),
   disconnect: vi.fn(),
   send: vi.fn(),
-  onMessage: vi.fn(() => () => {}),
+  onMessage: vi.fn(),
   onOpen: vi.fn(() => () => {}),
   onClose: vi.fn(() => () => {}),
 }));
+
+let capturedMessageHandler: ((message: unknown) => void) | null = null;
 
 vi.mock('../ws/client.js', () => ({
   wsClient: {
     connect: wsMocks.connect,
     disconnect: wsMocks.disconnect,
     send: wsMocks.send,
-    onMessage: wsMocks.onMessage,
+    onMessage: vi.fn((handler: (message: unknown) => void) => {
+      capturedMessageHandler = handler;
+      return () => {
+        capturedMessageHandler = null;
+      };
+    }),
     onOpen: wsMocks.onOpen,
     onClose: wsMocks.onClose,
   },
@@ -84,12 +91,15 @@ vi.mock('../components/Connections/MachineConnectionsPanel.js', () => ({
 }));
 
 vi.mock('../components/CommandPalette/CommandPalette.js', () => ({
-  default: () => <div data-testid="command-palette" />,
+  default: ({ open, mode }: { open: boolean; mode: 'commands' | 'files' }) => (
+    <div data-testid="command-palette" data-open={String(open)} data-mode={mode} />
+  ),
 }));
 
 describe('App websocket lifecycle', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    capturedMessageHandler = null;
     wsMocks.connect.mockClear();
     wsMocks.disconnect.mockClear();
     wsMocks.send.mockClear();
@@ -123,7 +133,7 @@ describe('App websocket lifecycle', () => {
     vi.useRealTimers();
   });
 
-  it('keeps the websocket connected when open-file UI state changes', async () => {
+  it('OpenFileUiStateChanges_WebSocketStaysConnected', async () => {
     render(<App />);
     await vi.advanceTimersByTimeAsync(1100);
 
@@ -145,5 +155,52 @@ describe('App websocket lifecycle', () => {
 
     expect(wsMocks.connect).toHaveBeenCalledTimes(1);
     expect(wsMocks.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('KeyboardShortcut_PreferencesOpened', async () => {
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: ',', ctrlKey: true });
+    });
+
+    expect(screen.getByTestId('preferences-panel')).toBeTruthy();
+  });
+
+  it('KeyboardShortcuts_CommandPaletteOpenedInFileOrCommandMode', async () => {
+    render(<App />);
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'p', ctrlKey: true });
+    });
+    expect(screen.getByTestId('command-palette').getAttribute('data-open')).toBe('true');
+    expect(screen.getByTestId('command-palette').getAttribute('data-mode')).toBe('files');
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'p', ctrlKey: true, shiftKey: true });
+    });
+    expect(screen.getByTestId('command-palette').getAttribute('data-mode')).toBe('commands');
+  });
+
+  it('ApprovalRequestsFromWs_RespondsCorrectly', async () => {
+    render(<App />);
+    expect(capturedMessageHandler).not.toBeNull();
+
+    await act(async () => {
+      capturedMessageHandler?.({
+        type: 'approval.request',
+        request: {
+          id: 'approval-1',
+          title: 'Run shell command',
+          message: 'Allow this action?',
+          kind: 'shell_command',
+          sessionId: 'session-approval-1',
+          command: 'echo hi',
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /allow/i }));
+    expect(wsMocks.send).toHaveBeenCalledWith({ type: 'approval.respond', id: 'approval-1', allow: true });
   });
 });

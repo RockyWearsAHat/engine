@@ -45,7 +45,7 @@ describe('WebSocket Client Integration Tests', () => {
   });
 
   describe('message handling', () => {
-    it('should register and call message handlers with received server messages', () => {
+    it('ReceivedServerMessages_HandlersCalledWithMessages', () => {
       const handler = vi.fn();
       const testMessage: ServerMessage = {
         type: 'file_opened',
@@ -69,7 +69,7 @@ describe('WebSocket Client Integration Tests', () => {
       expect(handler).toHaveBeenCalledTimes(1);
     });
 
-    it('should queue messages when WebSocket is not connected', () => {
+    it('WebSocketNotConnected_MessagesQueued', () => {
       const queuedMessages: ClientMessage[] = [];
       const testMessage: ClientMessage = {
         type: 'file_create',
@@ -87,7 +87,7 @@ describe('WebSocket Client Integration Tests', () => {
       expect(queuedMessages[0]).toEqual(testMessage);
     });
 
-    it('should send queued messages when connection opens', () => {
+    it('ConnectionOpens_QueuedMessagesSent', () => {
       const queuedMessages: ClientMessage[] = [
         { type: 'file_create', path: '/test/file.ts' },
         { type: 'file_delete', path: '/test/other.ts' },
@@ -110,7 +110,7 @@ describe('WebSocket Client Integration Tests', () => {
       );
     });
 
-    it('should ignore malformed JSON messages', () => {
+    it('MalformedJson_Ignored', () => {
       const handler = vi.fn();
       const handlers = new Set<(msg: ServerMessage) => void>();
       handlers.add(handler);
@@ -129,7 +129,7 @@ describe('WebSocket Client Integration Tests', () => {
   });
 
   describe('connection lifecycle', () => {
-    it('should track connection state with isConnected property', () => {
+    it('ConnectionState_TrackedWithIsConnected', () => {
       mockWebSocket.readyState = WebSocket.OPEN;
       const isConnected = mockWebSocket.readyState === WebSocket.OPEN;
       expect(isConnected).toBe(true);
@@ -139,7 +139,7 @@ describe('WebSocket Client Integration Tests', () => {
       expect(isDisconnected).toBe(false);
     });
 
-    it('should handle reconnection delays with exponential backoff', () => {
+    it('ReconnectionDelays_ExponentialBackoff', () => {
       const delays: number[] = [];
       let reconnectDelay = 1000;
       const maxDelay = 16000;
@@ -153,7 +153,7 @@ describe('WebSocket Client Integration Tests', () => {
       expect(delays).toEqual([1000, 2000, 4000, 8000, 16000]);
     });
 
-    it('should cap reconnection delay at maximum value', () => {
+    it('ReconnectionDelay_CappedAtMaximum', () => {
       let delay = 8000;
       const maxDelay = 16000;
       delay = Math.min(delay * 2, maxDelay);
@@ -171,13 +171,13 @@ describe('Tauri IPC and Permissions Integration', () => {
   });
 
   describe('context menu handler setup', () => {
-    it('context menu handler is accessible via window.__engineContextMenuHandler', () => {
+    it('ContextMenuHandler_AccessibleViaWindowVar', () => {
       // Verify the bridge is properly set up in test setup
       expect(window.__engineContextMenuHandler).toBeDefined();
       expect(typeof window.__engineContextMenuHandler).toBe('function');
     });
 
-    it('context menu handler receives menu item selection events', () => {
+    it('ContextMenuHandler_ReceivesMenuItemSelectionEvents', () => {
       const handler = window.__engineContextMenuHandler as any;
 
       // Simulate a menu item selection
@@ -187,7 +187,7 @@ describe('Tauri IPC and Permissions Integration', () => {
       expect(handler).toBeDefined();
     });
 
-    it('invoke("show_context_menu") is called with correct parameters', async () => {
+    it('ShowContextMenu_InvokeCalledWithCorrectParams', async () => {
       const menuItems = [
         { label: 'New File', id: 'new-file' },
         { label: 'New Folder', id: 'new-folder' },
@@ -208,7 +208,7 @@ describe('Tauri IPC and Permissions Integration', () => {
   });
 
   describe('menu action execution', () => {
-    it('new-file action is properly wired through IPC', () => {
+    it('NewFileAction_WiredThroughIpc', () => {
       const action = 'new-file';
       const path = '/src';
 
@@ -217,7 +217,7 @@ describe('Tauri IPC and Permissions Integration', () => {
       expect(path).toBeDefined();
     });
 
-    it('new-folder action is properly wired through IPC', () => {
+    it('NewFolderAction_WiredThroughIpc', () => {
       const action = 'new-folder';
       const path = '/src';
 
@@ -225,7 +225,7 @@ describe('Tauri IPC and Permissions Integration', () => {
       expect(path).toBeDefined();
     });
 
-    it('expand-all action dispatches correctly', () => {
+    it('ExpandAllAction_DispatchedCorrectly', () => {
       const action = 'expand-all';
       const targetPath = '/src';
 
@@ -234,7 +234,7 @@ describe('Tauri IPC and Permissions Integration', () => {
       expect(targetPath).toBeDefined();
     });
 
-    it('collapse-all action dispatches correctly', () => {
+    it('CollapseAllAction_DispatchedCorrectly', () => {
       const action = 'collapse-all';
       const affectsEntireTree = true;
 
@@ -246,7 +246,7 @@ describe('Tauri IPC and Permissions Integration', () => {
 
 describe('Context Menu Visibility Logic', () => {
   describe('expand/collapse menu item visibility', () => {
-    it('Expand All appears when there are collapsed folders', () => {
+    it('CollapsedFolders_ExpandAllVisible', () => {
       const folders = [
         { path: '/src', expanded: true },
         { path: '/tests', expanded: false },
@@ -256,7 +256,7 @@ describe('Context Menu Visibility Logic', () => {
       expect(hasCollapsed).toBe(true);
     });
 
-    it('Expand All does not appear when all folders are expanded', () => {
+    it('AllFoldersExpanded_ExpandAllHidden', () => {
       const folders = [
         { path: '/src', expanded: true },
         { path: '/tests', expanded: true },
@@ -266,21 +266,21 @@ describe('Context Menu Visibility Logic', () => {
       expect(hasCollapsed).toBe(false);
     });
 
-    it('Collapse All appears when any folder beyond root is expanded', () => {
+    it('FolderBeyondRootExpanded_CollapseAllVisible', () => {
       const expandedFolders = new Set(['/src', '/tests/unit']);
       const showCollapseAll = expandedFolders.size > 0;
 
       expect(showCollapseAll).toBe(true);
     });
 
-    it('Collapse All does not appear when no folders are expanded', () => {
+    it('NoFoldersExpanded_CollapseAllHidden', () => {
       const expandedFolders = new Set<string>();
       const showCollapseAll = expandedFolders.size > 0;
 
       expect(showCollapseAll).toBe(false);
     });
 
-    it('Expand All appears on folder with collapsed children, even if parent is expanded', () => {
+    it('FolderWithCollapsedChildren_ExpandAllVisible', () => {
       const parentExpanded = true;
       const childrenExpanded = [false, false];
       const hasCollapsedChildren = childrenExpanded.some(exp => !exp);
@@ -290,7 +290,7 @@ describe('Context Menu Visibility Logic', () => {
   });
 
   describe('state-driven visibility', () => {
-    it('menu visibility reflects current expandedFolders state', () => {
+    it('ExpandedFoldersState_VisibilityReflected', () => {
       const expandedFolders = new Set(['/src']);
       const menu = {
         showExpandAll: false,
@@ -300,7 +300,7 @@ describe('Context Menu Visibility Logic', () => {
       expect(menu.showCollapseAll).toBe(true);
     });
 
-    it('visibility updates when state changes', () => {
+    it('StateChanges_VisibilityUpdated', () => {
       let expandedFolders = new Set<string>();
       let showCollapseAll = expandedFolders.size > 0;
       expect(showCollapseAll).toBe(false);
@@ -314,7 +314,7 @@ describe('Context Menu Visibility Logic', () => {
 });
 
 describe('File Operations Through Context Menu', () => {
-  it('new-file action prompts for filename and creates file', () => {
+  it('NewFile_PromptsForFilenameAndCreatesFile', () => {
     const createFileSpy = vi.fn((path: string) => ({ success: true, path }));
     const promptSpy = vi.fn(() => 'newfile.ts');
 
@@ -326,7 +326,7 @@ describe('File Operations Through Context Menu', () => {
     expect(createFileSpy).toHaveBeenCalledWith('/src/newfile.ts');
   });
 
-  it('new-folder action prompts for folder name and creates folder', () => {
+  it('NewFolder_PromptsForNameAndCreatesFolder', () => {
     const createFolderSpy = vi.fn((path: string) => ({ success: true, path }));
     const promptSpy = vi.fn(() => 'newfolder');
 
@@ -338,7 +338,7 @@ describe('File Operations Through Context Menu', () => {
     expect(createFolderSpy).toHaveBeenCalledWith('/src/newfolder');
   });
 
-  it('expand-all action expands all collapsed folders in the tree', () => {
+  it('ExpandAll_ExpandsAllCollapsedFolders', () => {
     const expandFolderSpy = vi.fn();
     const folders = ['/src', '/tests', '/public'];
 
@@ -352,7 +352,7 @@ describe('File Operations Through Context Menu', () => {
     expect(expandFolderSpy).toHaveBeenNthCalledWith(3, '/public');
   });
 
-  it('collapse-all action collapses all expanded folders in the tree', () => {
+  it('CollapseAll_CollapsesAllExpandedFolders', () => {
     const collapseFolderSpy = vi.fn();
     const expandedFolders = new Set(['/src', '/tests']);
 
@@ -365,20 +365,20 @@ describe('File Operations Through Context Menu', () => {
 });
 
 describe('Permission Handling', () => {
-  it('Tauri window.__TAURI__ is accessible in the environment', () => {
+  it('TauriWindowVar_Accessible', () => {
     const hasTauriAPI = typeof window !== 'undefined' && '__TAURI__' in window;
     // In test environment, this depends on mocking setup
     expect(typeof window).toBe('object');
   });
 
-  it('context menu events are properly routed from Rust to frontend', () => {
+  it('ContextMenuEvents_RoutedFromRustToFrontend', () => {
     const contextMenuHandler = window.__engineContextMenuHandler as any;
     const eventPayload = { itemId: 'expand-all', folderPath: '/src' };
 
     expect(contextMenuHandler).toBeDefined();
   });
 
-  it('multiple handlers can be registered for the same event', () => {
+  it('MultipleHandlers_RegisteredForSameEvent', () => {
     const handlers = new Set<() => void>();
     const handler1 = vi.fn();
     const handler2 = vi.fn();
@@ -393,7 +393,7 @@ describe('Permission Handling', () => {
 });
 
 describe('Edge Cases and Robustness', () => {
-  it('handles empty project (no folders)', () => {
+  it('EmptyProject_Handled', () => {
     const folders: any[] = [];
     const menu = {
       showExpandAll: folders.some(f => !f.expanded),
@@ -404,7 +404,7 @@ describe('Edge Cases and Robustness', () => {
     expect(menu.showExpandAll).toBe(false);
   });
 
-  it('handles deeply nested folder structure', () => {
+  it('DeeplyNestedFolderStructure_Handled', () => {
     const maxDepth = 50;
     const buildPath = (depth: number): string => {
       return Array(depth).fill('folder').join('/');
@@ -414,7 +414,7 @@ describe('Edge Cases and Robustness', () => {
     expect(deepPath.split('/').length).toBe(maxDepth);
   });
 
-  it('handles rapid click-expansion-collapse cycles', () => {
+  it('RapidClickExpansionCollapse_Handled', () => {
     const expandedFolders = new Set<string>();
     let toggleCount = 0;
 
@@ -437,14 +437,14 @@ describe('Edge Cases and Robustness', () => {
     expect(expandedFolders.has('/src')).toBe(false);
   });
 
-  it('handles context menu on root folder correctly', () => {
+  it('ContextMenuOnRootFolder_HandledCorrectly', () => {
     const contextPath = '/';
     const isRoot = contextPath === '/';
 
     expect(isRoot).toBe(true);
   });
 
-  it('distinguishes between files and folders for menu display', () => {
+  it('FilesVsFolders_DistinguishedForMenuDisplay', () => {
     const itemType = 'folder';
     const isFolder = itemType === 'folder';
 

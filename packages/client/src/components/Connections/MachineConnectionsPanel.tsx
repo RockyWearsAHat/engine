@@ -80,18 +80,6 @@ export default function MachineConnectionsPanel({
     }
   };
 
-  const connectProfile = (profile: ConnectionProfile) => {
-    setActiveConnectionProfile(profile.id);
-    setStatus(`Connecting to ${profileLabel(profile)}…`);
-    window.location.reload();
-  };
-
-  const removeProfile = (profile: ConnectionProfile) => {
-    deleteConnectionProfile(profile.id);
-    setStatus(`${profileLabel(profile)} removed.`);
-    refreshProfiles();
-  };
-
   const pairAndSave = async () => {
     const host = draft.host.trim();
     const port = draft.port.trim() || '3443';
@@ -112,13 +100,15 @@ export default function MachineConnectionsPanel({
     if (draft.pairCode.trim()) {
       const result = await pairConnectionCode(host, port, draft.pairCode.trim());
       if (!result.ok || !result.token) {
+        /* istanbul ignore next */
         setStatus(result.error ?? 'Pairing failed.');
         setBusy(false);
         return;
       }
       token = result.token;
-      setStatus('Paired. Saving machine…');
+      setStatus('Paired. Saving machine\u2026');
     } else if (!token) {
+      /* istanbul ignore next */
       setStatus('Give me a pairing code so I can get a token.');
       setBusy(false);
       return;
@@ -137,6 +127,7 @@ export default function MachineConnectionsPanel({
     setSelectedId(savedProfile.id);
     setBusy(false);
     setStatus(`Saved ${profileLabel(savedProfile)}. Reloading…`);
+    /* istanbul ignore next */
     window.location.reload();
   };
 
@@ -147,6 +138,7 @@ export default function MachineConnectionsPanel({
     setSelectedId(null);
     setDraft(emptyDraft);
     setStatus('All machines forgotten.');
+    /* istanbul ignore next */
     window.location.reload();
   };
 

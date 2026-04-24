@@ -16,16 +16,16 @@ describe('Tauri Capabilities Configuration', () => {
     '../desktop-tauri/src-tauri/capabilities/default.json'
   );
 
-  it('capabilities/default.json file exists', () => {
+  it('CapabilitiesDefaultJson_FileExists', () => {
     expect(fs.existsSync(capabilitiesPath)).toBe(true);
   });
 
-  it('default capability is valid JSON', () => {
+  it('DefaultCapability_ValidJson', () => {
     const content = fs.readFileSync(capabilitiesPath, 'utf-8');
     expect(() => JSON.parse(content)).not.toThrow();
   });
 
-  it('default capability has required fields', () => {
+  it('DefaultCapability_RequiredFieldsPresent', () => {
     const content = fs.readFileSync(capabilitiesPath, 'utf-8');
     const capability = JSON.parse(content);
 
@@ -34,7 +34,7 @@ describe('Tauri Capabilities Configuration', () => {
     expect(capability).toHaveProperty('permissions');
   });
 
-  it('identifier is valid (lowercase ASCII with hyphens)', () => {
+  it('Identifier_ValidLowercaseAsciiWithHyphens', () => {
     const content = fs.readFileSync(capabilitiesPath, 'utf-8');
     const capability = JSON.parse(content);
 
@@ -42,7 +42,7 @@ describe('Tauri Capabilities Configuration', () => {
     expect(capability.identifier).toMatch(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/);
   });
 
-  it('windows array includes "main" window', () => {
+  it('WindowsArray_IncludesMainWindow', () => {
     const content = fs.readFileSync(capabilitiesPath, 'utf-8');
     const capability = JSON.parse(content);
 
@@ -57,28 +57,28 @@ describe('Tauri Capabilities Configuration', () => {
       capability = JSON.parse(content);
     });
 
-    it('includes core:event:allow-listen for event listening', () => {
+      it('CoreEventAllowListen_IncludedForEventListening', () => {
       expect(capability.permissions).toContain('core:event:allow-listen');
     });
 
-    it('includes core:event:allow-emit for event emission', () => {
+      it('CoreEventAllowEmit_IncludedForEventEmission', () => {
       expect(capability.permissions).toContain('core:event:allow-emit');
     });
 
-    it('includes core:menu:allow-popup for context menu', () => {
+      it('CoreMenuAllowPopup_IncludedForContextMenu', () => {
       expect(capability.permissions).toContain('core:menu:allow-popup');
     });
 
-    it('includes core:window:allow-internal-toggle-maximize for window operations', () => {
+      it('CoreWindowToggleMaximize_IncludedForWindowOps', () => {
       expect(capability.permissions).toContain('core:window:allow-internal-toggle-maximize');
     });
 
-    it('does not include wildcard permissions (like core:event:allow-*)', () => {
+      it('WildcardPermissions_NotIncluded', () => {
       const hasWildcards = capability.permissions.some((perm: string) => perm.includes('*'));
       expect(hasWildcards).toBe(false);
     });
 
-    it('all permissions follow core:command:action format', () => {
+      it('AllPermissions_FollowCoreCommandActionFormat', () => {
       const validFormat = capability.permissions.every((perm: string) => {
         // Permission format: plugin:command:action or core:command:action
         return /^(core|plugin):[a-z0-9-]+:allow-[a-z0-9-]+$/.test(perm);
@@ -89,22 +89,22 @@ describe('Tauri Capabilities Configuration', () => {
 });
 
 describe('Permission System Behavior', () => {
-  it('core:event:allow-listen enables window.listen() in frontend', () => {
+  it('CoreEventAllowListen_EnablesWindowListen', () => {
     // This permission allows the frontend to listen to events from Rust
     expect(true).toBe(true);
   });
 
-  it('core:event:allow-emit enables app.emit() in Rust', () => {
+  it('CoreEventAllowEmit_EnablesAppEmitInRust', () => {
     // This permission allows Rust to emit events to frontend
     expect(true).toBe(true);
   });
 
-  it('core:menu:allow-popup enables popup_menu_at() in Rust', () => {
+  it('CoreMenuAllowPopup_EnablesPopupMenuInRust', () => {
     // This permission allows Rust to show native system context menu
     expect(true).toBe(true);
   });
 
-  it('window.eval() bypasses permission system for direct handler invocation', () => {
+  it('WindowEval_BypassesPermissionSystem', () => {
     // Current implementation uses window.eval() to call handlers directly
     // This avoids permission issues but should only be used for trusted code
     expect(true).toBe(true);
@@ -117,12 +117,12 @@ describe('Tauri Configuration', () => {
     '../desktop-tauri/src-tauri/tauri.conf.json'
   );
 
-  it('tauri.conf.json is valid JSON', () => {
+  it('TauriConfJson_ValidJson', () => {
     const content = fs.readFileSync(tauriConfPath, 'utf-8');
     expect(() => JSON.parse(content)).not.toThrow();
   });
 
-  it('tauri.conf.json does not have invalid webPreferences property', () => {
+  it('TauriConfJson_NoInvalidWebPreferencesProperty', () => {
     const content = fs.readFileSync(tauriConfPath, 'utf-8');
     const config = JSON.parse(content);
 
@@ -130,24 +130,24 @@ describe('Tauri Configuration', () => {
     expect(config.app?.windows?.[0]).not.toHaveProperty('webPreferences');
   });
 
-  it('build process validates capabilities without errors', () => {
+  it('BuildProcess_ValidatesCapabilitiesWithoutErrors', () => {
     // This would be tested by running `cargo check` in CI
     expect(true).toBe(true);
   });
 });
 
 describe('Dev vs Production Permission Behavior', () => {
-  it('dev builds open DevTools for debugging', () => {
+  it('DevBuild_DevToolsOpenedForDebugging', () => {
     // cfg!(debug_assertions) check in lib.rs should enable open_devtools()
     expect(true).toBe(true);
   });
 
-  it('production builds do not open DevTools', () => {
+  it('ProductionBuild_DevToolsNotOpened', () => {
     // Release builds should not expose dev tools to users
     expect(true).toBe(true);
   });
 
-  it('permissions are same in dev and production', () => {
+  it('DevAndProduction_SamePermissions', () => {
     // Capability grants should not depend on build type
     expect(true).toBe(true);
   });

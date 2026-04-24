@@ -9,149 +9,154 @@ import { describe, expect, it } from 'vitest';
 import { resolveSyntaxLanguage, highlightCode } from '../components/Editor/editorSyntax.js';
 
 describe('resolveSyntaxLanguage — file extension mapping', () => {
-  it('resolves TypeScript files to typescript', () => {
+  it('TypeScriptFile_ResolvesToTypescript', () => {
     expect(resolveSyntaxLanguage('/project/src/main.ts')).toBe('typescript');
   });
 
-  it('resolves TSX files to tsx', () => {
+  it('TsxFile_ResolvesToTsx', () => {
     expect(resolveSyntaxLanguage('/project/src/App.tsx')).toBe('tsx');
   });
 
-  it('resolves JavaScript files to javascript', () => {
+  it('JavaScriptFile_ResolvesToJavascript', () => {
     expect(resolveSyntaxLanguage('/project/src/index.js')).toBe('javascript');
   });
 
-  it('resolves JSX files to jsx', () => {
+  it('JsxFile_ResolvesToJsx', () => {
     expect(resolveSyntaxLanguage('/project/src/App.jsx')).toBe('jsx');
   });
 
-  it('resolves Go source files', () => {
+  it('GoSourceFile_Resolved', () => {
     expect(resolveSyntaxLanguage('/project/server/main.go')).toBe('go');
   });
 
-  it('resolves Rust source files', () => {
+  it('RustSourceFile_Resolved', () => {
     expect(resolveSyntaxLanguage('/project/src/lib.rs')).toBe('rust');
   });
 
-  it('resolves Python files', () => {
+  it('PythonFile_Resolved', () => {
     expect(resolveSyntaxLanguage('/project/scripts/build.py')).toBe('python');
   });
 
-  it('resolves shell scripts', () => {
+  it('ShellScript_Resolved', () => {
     expect(resolveSyntaxLanguage('/project/scripts/deploy.sh')).toBe('bash');
   });
 
-  it('resolves JSON config files', () => {
+  it('JsonConfigFile_Resolved', () => {
     expect(resolveSyntaxLanguage('/project/package.json')).toBe('json');
   });
 
-  it('resolves YAML CI configs', () => {
+  it('YamlCiConfig_Resolved', () => {
     expect(resolveSyntaxLanguage('/project/.github/workflows/ci.yml')).toBe('yaml');
     expect(resolveSyntaxLanguage('/project/config.yaml')).toBe('yaml');
   });
 
-  it('resolves markdown documentation files', () => {
+  it('MarkdownDocFile_Resolved', () => {
     expect(resolveSyntaxLanguage('/project/README.md')).toBe('markdown');
   });
 
-  it('resolves TOML config files like Cargo.toml', () => {
+  it('TomlConfigFile_Resolved', () => {
     expect(resolveSyntaxLanguage('/project/Cargo.toml')).toBe('toml');
   });
 
-  it('resolves SQL files', () => {
+  it('SqlFile_Resolved', () => {
     expect(resolveSyntaxLanguage('/project/schema.sql')).toBe('sql');
   });
 
-  it('resolves CSS and SCSS files', () => {
+  it('CssAndScssFiles_Resolved', () => {
     expect(resolveSyntaxLanguage('/project/styles.css')).toBe('css');
     expect(resolveSyntaxLanguage('/project/styles.scss')).toBe('css');
   });
 
-  it('resolves HTML files to markup', () => {
+  it('HtmlFile_ResolvesToMarkup', () => {
     expect(resolveSyntaxLanguage('/project/index.html')).toBe('markup');
   });
 
-  it('resolves GraphQL files', () => {
+  it('GraphQLFile_Resolved', () => {
     expect(resolveSyntaxLanguage('/project/schema.graphql')).toBe('graphql');
     expect(resolveSyntaxLanguage('/project/query.gql')).toBe('graphql');
   });
 
-  it('falls back to plain for unknown extensions', () => {
+  it('UnknownExtension_FallsBackToPlain', () => {
     expect(resolveSyntaxLanguage('/project/binary.exe')).toBe('plain');
     expect(resolveSyntaxLanguage('/project/data.bin')).toBe('plain');
   });
 
-  it('falls back to plain for files with no extension', () => {
+  it('NoExtension_FallsBackToPlain', () => {
     expect(resolveSyntaxLanguage('/project/Makefile')).toBe('plain');
     expect(resolveSyntaxLanguage('/project/Dockerfile')).toBe('plain');
   });
 });
 
 describe('resolveSyntaxLanguage — language hint overrides extension', () => {
-  it('uses the language hint when provided', () => {
+  it('LanguageHintProvided_HintOverridesExtension', () => {
     expect(resolveSyntaxLanguage('/project/file.txt', 'typescript')).toBe('typescript');
   });
 
-  it('resolves ts alias from language hint', () => {
+  it('TsAliasHint_ResolvedToTypescript', () => {
     expect(resolveSyntaxLanguage('/project/file', 'ts')).toBe('typescript');
   });
 
-  it('resolves typescriptreact alias', () => {
+  it('TypescriptreactAlias_Resolved', () => {
     expect(resolveSyntaxLanguage('/project/Comp', 'typescriptreact')).toBe('tsx');
   });
 
-  it('resolves javascriptreact alias', () => {
+  it('JavascriptreactAlias_Resolved', () => {
     expect(resolveSyntaxLanguage('/project/Comp', 'javascriptreact')).toBe('jsx');
   });
 
-  it('treats shell/zsh hints as bash', () => {
+  it('ShellZshHint_TreatedAsBash', () => {
     expect(resolveSyntaxLanguage('/project/script', 'zsh')).toBe('bash');
     expect(resolveSyntaxLanguage('/project/script', 'shell')).toBe('bash');
   });
 
-  it('maps rs hint to rust', () => {
+  it('RsHint_MappedToRust', () => {
     expect(resolveSyntaxLanguage('/project/lib', 'rs')).toBe('rust');
   });
 
-  it('maps yml hint to yaml', () => {
+  it('YmlHint_MappedToYaml', () => {
     expect(resolveSyntaxLanguage('/project/config', 'yml')).toBe('yaml');
   });
 
-  it('maps xml hint to markup', () => {
+  it('XmlHint_MappedToMarkup', () => {
     expect(resolveSyntaxLanguage('/project/data.xml', 'xml')).toBe('markup');
   });
 
-  it('maps plaintext/text hints to plain', () => {
+  it('PlaintextTextHint_MappedToPlain', () => {
     expect(resolveSyntaxLanguage('/project/notes', 'plaintext')).toBe('plain');
     expect(resolveSyntaxLanguage('/project/notes', 'text')).toBe('plain');
   });
 
-  it('falls back to extension when hint is empty', () => {
+  it('EmptyHint_FallsBackToExtension', () => {
     expect(resolveSyntaxLanguage('/project/main.go', '')).toBe('go');
   });
 
-  it('is case-insensitive for language hints', () => {
+  it('LanguageHintCaseInsensitive_Resolved', () => {
     expect(resolveSyntaxLanguage('/project/main', 'TypeScript')).toBe('typescript');
     expect(resolveSyntaxLanguage('/project/main', 'YAML')).toBe('yaml');
   });
 });
 
 describe('highlightCode', () => {
-  it('escapes < and & when no grammar matches the language', () => {
+  it('UnregisteredLanguage_HtmlEscaped', () => {
+    const result = highlightCode('<hello> & "world"', 'xyz-unknown-lang-99999');
+    expect(result).toBe('&lt;hello&gt; &amp; "world"');
+  });
+
+  it('NoMatchingGrammar_LtAndAmpEscaped', () => {
     const result = highlightCode('<hello> & "world"', 'plain');
     expect(result).toContain('&lt;');
     expect(result).toContain('&amp;');
     expect(result).not.toContain('<hello');
   });
 
-  it('returns highlighted HTML for a known language', () => {
+  it('KnownLanguage_HighlightedHtmlReturned', () => {
     const result = highlightCode('const x = 1;', 'javascript');
     // Prism wraps keywords in spans — verify it produced HTML
     expect(result).toMatch(/<span/);
     expect(result).toContain('const');
   });
 
-  it('handles empty input', () => {
+  it('EmptyInput_EmptyOutputReturned', () => {
     const result = highlightCode('', 'typescript');
     expect(result).toBe('');
   });

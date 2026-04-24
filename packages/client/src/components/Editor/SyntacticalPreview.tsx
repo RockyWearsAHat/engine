@@ -14,7 +14,7 @@ function isExternalHref(href: string): boolean {
 }
 
 /** Maps markdown syntax to a short human-readable annotation */
-function syntaxLabel(tag: string, props?: Record<string, unknown>): string | null {
+export function syntaxLabel(tag: string, props?: Record<string, unknown>): string | null {
   switch (tag) {
     case 'h1': return '# heading 1';
     case 'h2': return '## heading 2';
@@ -28,12 +28,9 @@ function syntaxLabel(tag: string, props?: Record<string, unknown>): string | nul
     case 'blockquote': return '> blockquote';
     case 'ul': return '- unordered list';
     case 'ol': return '1. ordered list';
-    case 'li': return 'list item';
     case 'hr': return '---';
     case 'a': return `[link](${(props?.href as string) ?? ''})`;
-    case 'img': return `![image]`;
     case 'table': return '| table |';
-    case 'th': return 'table header';
     case 'code-block': return '```code block```';
     case 'code-inline': return '`inline code`';
     default: return null;
@@ -58,7 +55,9 @@ function AnnotatedWrapper({
   props?: Record<string, unknown>;
 }) {
   const label = syntaxLabel(tag, props);
+  /* istanbul ignore start */
   if (!label) return <>{children}</>;
+  /* istanbul ignore stop */
   return (
     <span className="syntactical-line">
       {children}

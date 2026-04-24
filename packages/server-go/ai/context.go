@@ -19,6 +19,7 @@ import (
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/mem"
+	goprocess "github.com/shirou/gopsutil/v3/process"
 )
 
 const (
@@ -486,6 +487,59 @@ var toolRegistry = []anthropicTool{
 			"body":   strProp("Comment body"),
 		}),
 	},
+	// ── Additional git operations ─────────────────────────────────────────
+	{
+		Name:        "git_push",
+		Description: "Push the current branch to the remote repository. Requires user approval.",
+		InputSchema: objSchema(nil, map[string]interface{}{
+			"remote": strProp("Remote name (optional, defaults to 'origin')"),
+		}),
+	},
+	{
+		Name:        "git_pull",
+		Description: "Pull latest changes from the remote repository for the current branch.",
+		InputSchema: objSchema(nil, map[string]interface{}{
+			"remote": strProp("Remote name (optional, defaults to 'origin')"),
+		}),
+	},
+	{
+		Name:        "git_branch",
+		Description: "Create a new branch and switch to it, switch to an existing branch, or list all local branches.",
+		InputSchema: objSchema(nil, map[string]interface{}{
+			"name":   strProp("Branch name to create or switch to (optional — omit to list all branches)"),
+			"create": map[string]interface{}{"type": "boolean", "description": "Create the branch if true, otherwise switch to existing"},
+		}),
+	},
+	// ── System control ────────────────────────────────────────────────────
+	{
+		Name:        "process_list",
+		Description: "List running processes with PID, name, CPU%, and memory usage. Optionally filter by name.",
+		InputSchema: objSchema(nil, map[string]interface{}{
+			"filter": strProp("Substring to filter process names (optional)"),
+		}),
+	},
+	{
+		Name:        "process_kill",
+		Description: "Kill a running process by PID. Requires explicit approval. Use TERM for graceful shutdown, KILL to force.",
+		InputSchema: objSchema([]string{"pid"}, map[string]interface{}{
+			"pid":    map[string]interface{}{"type": "number", "description": "Process ID to kill"},
+			"signal": strProp("Signal to send: TERM (default, graceful) or KILL (force)"),
+		}),
+	},
+	{
+		Name:        "open_url",
+		Description: "Open a URL in the system default browser.",
+		InputSchema: objSchema([]string{"url"}, map[string]interface{}{
+			"url": strProp("URL to open"),
+		}),
+	},
+	{
+		Name:        "screenshot",
+		Description: "Capture a screenshot of the current screen. Returns the file path of the saved PNG for further inspection.",
+		InputSchema: objSchema(nil, map[string]interface{}{
+			"path": strProp("Output path for the PNG (optional, defaults to /tmp/engine-screenshot-{timestamp}.png)"),
+		}),
+	},
 }
 
 // toolRegistryIndex is a flat name→tool map for O(1) lookup.
@@ -935,6 +989,167 @@ func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) 
 			return err.Error(), true
 		}
 		return fmt.Sprintf("Comment added: %s", comment.HTMLURL), false
+
+	case "git_push":
+		if ctx.RequestApproval == nil {
+			return "git_push requires approval, but no approval handler is available.", true
+		}
+		branch, _ := gogit.GetCurrentBranch(ctx.ProjectPath)
+		remote := str("remote")
+		if remote == "" {
+			remote = "origin"
+		}
+		allowed, err := ctx.RequestApproval(
+			"git_push",
+			"Approve git push",
+			fmt.Sprintf("The assistant wants to push branch '%s' to remote '%s'.", branch, remote),
+			fmt.Sprintf("git push %s %s", remote, branch),
+		)
+		if err != nil {
+			return err.Error(), true
+		}
+		if !allowed {
+			return "The user denied the git push.", true
+		}
+		out, pushErr := gogit.Push(ctx.ProjectPath, remote)
+		if pushErr != nil {
+			return pushErr.Error(), true
+		}
+		return out, false
+
+	case "git_pull":
+		out, pullErr := gogit.Pull(ctx.ProjectPath, str("remote"))
+		if pullErr != nil {
+			return pullErr.Error(), true
+		}
+		return out, false
+
+	case "git_branch":
+		name := str("name")
+		create := boolVal("create")
+		if name == "" {
+			branches, branchErr := gogit.ListBranches(ctx.ProjectPath)
+			if branchErr != nil {
+				return branchErr.Error(), true
+			}
+			return strings.Join(branches, "\n"), false
+		}
+		out, branchErr := gogit.CreateBranch(ctx.ProjectPath, name, create)
+		if branchErr != nil {
+			return branchErr.Error(), true
+		}
+		return out, false
+
+	case "process_list":
+		filter := strings.ToLower(str("filter"))
+		procs, procErr := goprocess.Processes()
+		if procErr != nil {
+			return procErr.Error(), true
+		}
+		var sb strings.Builder
+		count := 0
+		for _, p := range procs {
+			n, _ := p.Name()
+			if filter != "" && !strings.Contains(strings.ToLower(n), filter) {
+				continue
+			}
+			cpuPct, _ := p.CPUPercent()
+			memInfo, _ := p.MemoryInfo()
+			memMB := 0.0
+			if memInfo != nil {
+				memMB = float64(memInfo.RSS) / 1e6
+			}
+			sb.WriteString(fmt.Sprintf("PID %-8d %-30s CPU: %5.1f%%  MEM: %6.1f MB\n",
+				p.Pid, n, cpuPct, memMB))
+			count++
+			if count >= 50 {
+				sb.WriteString(fmt.Sprintf("... (limited to %d results, use filter to narrow)\n", count))
+				break
+			}
+		}
+		if sb.Len() == 0 {
+			return "No matching processes found", false
+		}
+		return sb.String(), false
+
+	case "process_kill":
+		if ctx.RequestApproval == nil {
+			return "process_kill requires approval, but no approval handler is available.", true
+		}
+		pidF, _ := input["pid"].(float64)
+		pid := int32(pidF)
+		if pid == 0 {
+			return "pid is required", true
+		}
+		p, procErr := goprocess.NewProcess(pid)
+		if procErr != nil {
+			return fmt.Sprintf("process %d not found: %v", pid, procErr), true
+		}
+		procName, _ := p.Name()
+		signal := str("signal")
+		if signal == "" {
+			signal = "TERM"
+		}
+		allowed, err := ctx.RequestApproval(
+			"process_kill",
+			"Approve process termination",
+			fmt.Sprintf("The assistant wants to send SIG%s to PID %d (%s).", signal, pid, procName),
+			fmt.Sprintf("kill -%s %d", signal, pid),
+		)
+		if err != nil {
+			return err.Error(), true
+		}
+		if !allowed {
+			return "The user denied the process kill.", true
+		}
+		if signal == "KILL" {
+			if err := p.Kill(); err != nil {
+				return err.Error(), true
+			}
+		} else {
+			if err := p.Terminate(); err != nil {
+				return err.Error(), true
+			}
+		}
+		return fmt.Sprintf("Sent SIG%s to PID %d (%s)", signal, pid, procName), false
+
+	case "open_url":
+		urlStr := str("url")
+		if urlStr == "" {
+			return "url is required", true
+		}
+		var urlCmd *exec.Cmd
+		switch runtime.GOOS {
+		case "darwin":
+			urlCmd = exec.Command("open", urlStr)
+		case "linux":
+			urlCmd = exec.Command("xdg-open", urlStr)
+		default:
+			return fmt.Sprintf("open_url not supported on %s", runtime.GOOS), true
+		}
+		if err := urlCmd.Start(); err != nil {
+			return err.Error(), true
+		}
+		return "Opened: " + urlStr, false
+
+	case "screenshot":
+		outPath := str("path")
+		if outPath == "" {
+			outPath = fmt.Sprintf("/tmp/engine-screenshot-%d.png", time.Now().UnixMilli())
+		}
+		var ssCmd *exec.Cmd
+		switch runtime.GOOS {
+		case "darwin":
+			ssCmd = exec.Command("screencapture", "-x", outPath)
+		case "linux":
+			ssCmd = exec.Command("scrot", outPath)
+		default:
+			return fmt.Sprintf("screenshot not supported on %s", runtime.GOOS), true
+		}
+		if ssOut, ssErr := ssCmd.CombinedOutput(); ssErr != nil {
+			return fmt.Sprintf("screenshot failed: %v\n%s", ssErr, string(ssOut)), true
+		}
+		return "Screenshot saved: " + outPath, false
 
 	default:
 		return "Unknown tool: " + name, true

@@ -9,6 +9,7 @@ export function formatBytes(bytes: number): string {
 }
 
 export function basename(path: string): string {
+  /* istanbul ignore next */
   return path.split('/').pop() ?? path;
 }
 

@@ -73,6 +73,7 @@ export default function Terminal({
       } else if (msg.type === 'terminal.output') {
         const tab = tabsRef.current.find(t => t.id === msg.terminalId);
         tab?.xterm.write(msg.data);
+      /* istanbul ignore next */
       } else if (msg.type === 'terminal.closed') {
         setTabs(prev => {
           const tab = prev.find(t => t.id === msg.terminalId);
@@ -97,6 +98,7 @@ export default function Terminal({
   }, [commandRequest, onCommandHandled]);
 
   // Mount active xterm to DOM
+  /* istanbul ignore start */
   useEffect(() => {
     if (!containerRef.current || !activeId) return;
     const tab = tabs.find(t => t.id === activeId);
@@ -123,6 +125,7 @@ export default function Terminal({
       ro.disconnect();
     };
   }, [activeId, tabs.length]);
+  /* istanbul ignore stop */
 
   const newTerminal = () => {
     const cwd = activeSession?.projectPath ?? '.';

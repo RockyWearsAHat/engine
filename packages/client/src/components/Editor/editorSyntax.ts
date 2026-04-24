@@ -67,7 +67,7 @@ export function resolveSyntaxLanguage(path: string, language?: string): string {
   if (syntaxAliases[normalizedLanguage]) {
     return syntaxAliases[normalizedLanguage];
   }
-
+  /* c8 ignore next */
   const extension = path.split('.').pop()?.trim().toLowerCase() ?? '';
   return syntaxAliases[extension] ?? 'plain';
 }

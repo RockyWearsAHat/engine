@@ -16,7 +16,7 @@ describe('FileTree Utility Functions', () => {
       if (node.type === 'file') return { total: 0, expanded: 0 };
       
       let total = isRoot ? 0 : 1;
-      let expanded = isRoot ? 0 : (true ? 1 : 0); // Would be: expandedFolders.has(node.path) ? 1 : 0
+      let expanded = isRoot ? 0 : 1; // always expanded for test purposes
       
       if (node.children) {
         for (const child of node.children) {
@@ -28,7 +28,7 @@ describe('FileTree Utility Functions', () => {
       return { total, expanded };
     };
 
-    it('counts zero folders in empty project', () => {
+    it('EmptyProject_CountIsZero', () => {
       const emptyProject: FileNode = {
         name: 'project',
         path: '/project',
@@ -40,7 +40,7 @@ describe('FileTree Utility Functions', () => {
       expect(expanded).toBe(0);
     });
 
-    it('counts single level folder structure', () => {
+    it('SingleLevelFolder_CountIsOne', () => {
       const project: FileNode = {
         name: 'project',
         path: '/project',
@@ -60,7 +60,7 @@ describe('FileTree Utility Functions', () => {
       expect(expanded).toBe(1); // It's "expanded" in our mock
     });
 
-    it('counts nested folder structure', () => {
+    it('NestedFolders_CountIncludesAllLevels', () => {
       const project: FileNode = {
         name: 'project',
         path: '/project',
@@ -93,7 +93,7 @@ describe('FileTree Utility Functions', () => {
       expect(expanded).toBe(3);
     });
 
-    it('excludes root folder from count', () => {
+    it('RootFlag_RootExcludedFromCount', () => {
       const project: FileNode = {
         name: 'project',
         path: '/project',
@@ -151,36 +151,36 @@ describe('FileTree Utility Functions', () => {
       ],
     };
 
-    it('finds root node', () => {
+    it('RootPath_RootNodeFound', () => {
       const node = findNodeByPath('/project', mockTree);
       expect(node).toBeDefined();
       expect(node?.name).toBe('project');
     });
 
-    it('finds nested folder', () => {
+    it('NestedFolderPath_FolderNodeFound', () => {
       const node = findNodeByPath('/project/src/components', mockTree);
       expect(node).toBeDefined();
       expect(node?.name).toBe('components');
     });
 
-    it('finds deeply nested file', () => {
+    it('DeeplyNestedFilePath_FileNodeFound', () => {
       const node = findNodeByPath('/project/src/components/Button.tsx', mockTree);
       expect(node).toBeDefined();
       expect(node?.name).toBe('Button.tsx');
       expect(node?.type).toBe('file');
     });
 
-    it('returns undefined for non-existent path', () => {
+    it('NonExistentPath_ReturnsUndefined', () => {
       const node = findNodeByPath('/nonexistent', mockTree);
       expect(node).toBeUndefined();
     });
 
-    it('returns undefined for null node', () => {
+    it('NullNode_ReturnsUndefined', () => {
       const node = findNodeByPath('/project', null);
       expect(node).toBeUndefined();
     });
 
-    it('returns undefined for undefined node', () => {
+    it('UndefinedNode_ReturnsUndefined', () => {
       const node = findNodeByPath('/project', undefined);
       expect(node).toBeUndefined();
     });
@@ -211,7 +211,7 @@ describe('FileTree Utility Functions', () => {
       return false;
     };
 
-    it('detects collapsed children when some folders are closed', () => {
+    it('SomeFoldersCollapsed_DetectedTrue', () => {
       const folder: FileNode = {
         name: 'src',
         path: '/project/src',
@@ -228,7 +228,7 @@ describe('FileTree Utility Functions', () => {
       expect(result).toBe(true); // Both children are collapsed
     });
 
-    it('does not detect collapsed children when all are expanded', () => {
+    it('AllFoldersExpanded_DetectedFalse', () => {
       const folder: FileNode = {
         name: 'src',
         path: '/project/src',
@@ -245,7 +245,7 @@ describe('FileTree Utility Functions', () => {
       expect(result).toBe(false); // All children are expanded
     });
 
-    it('detects collapsed children in nested structure', () => {
+    it('NestedCollapsedFolder_DetectedTrue', () => {
       const folder: FileNode = {
         name: 'src',
         path: '/project/src',
@@ -268,14 +268,14 @@ describe('FileTree Utility Functions', () => {
       expect(result).toBe(true); // Button folder is collapsed
     });
 
-    it('returns false for file node', () => {
+    it('FileNode_ReturnsFalse', () => {
       const file: FileNode = { name: 'file.txt', path: '/project/file.txt', type: 'file' };
       const expandedFolders = new Set<string>();
       const result = hasFolderWithCollapsedChildren('/project/file.txt', file, expandedFolders);
       expect(result).toBe(false);
     });
 
-    it('returns false for undefined node', () => {
+    it('UndefinedNode_ReturnsFalse', () => {
       const expandedFolders = new Set<string>();
       const result = hasFolderWithCollapsedChildren('/project', undefined, expandedFolders);
       expect(result).toBe(false);
@@ -283,27 +283,27 @@ describe('FileTree Utility Functions', () => {
   });
 
   describe('Menu visibility logic', () => {
-    it('shows Expand All when collapsed folders exist', () => {
+    it('CollapsedFoldersExist_ShowExpandAllTrue', () => {
       const totalFolders = 3;
       const expandedCount = 1;
       const shouldShowExpand = totalFolders > 0 && expandedCount < totalFolders;
       expect(shouldShowExpand).toBe(true);
     });
 
-    it('hides Expand All when all folders expanded', () => {
+    it('AllFoldersExpanded_ShowExpandAllFalse', () => {
       const totalFolders = 3;
       const expandedCount = 3;
       const shouldShowExpand = totalFolders > 0 && expandedCount < totalFolders;
       expect(shouldShowExpand).toBe(false);
     });
 
-    it('shows Collapse All when any folder expanded', () => {
+    it('AnyFolderExpanded_ShowCollapseAllTrue', () => {
       const expandedFolders = new Set(['/project/src']);
       const shouldShowCollapse = expandedFolders.size > 0;
       expect(shouldShowCollapse).toBe(true);
     });
 
-    it('hides Collapse All when no folders expanded', () => {
+    it('NoFoldersExpanded_ShowCollapseAllFalse', () => {
       const expandedFolders = new Set<string>();
       const shouldShowCollapse = expandedFolders.size > 0;
       expect(shouldShowCollapse).toBe(false);
@@ -311,7 +311,7 @@ describe('FileTree Utility Functions', () => {
   });
 
   describe('State persistence', () => {
-    it('tracks multiple expanded folders', () => {
+    it('MultiplePaths_AllTrackedInSet', () => {
       const expandedFolders = new Set<string>();
       
       expandedFolders.add('/project/src');
@@ -323,7 +323,7 @@ describe('FileTree Utility Functions', () => {
       expect(expandedFolders.size).toBe(2);
     });
 
-    it('removes folders from expanded set', () => {
+    it('DeletePath_RemovedFromSet', () => {
       const expandedFolders = new Set(['/project/src', '/project/lib']);
       
       expandedFolders.delete('/project/src');
@@ -332,7 +332,7 @@ describe('FileTree Utility Functions', () => {
       expect(expandedFolders.size).toBe(1);
     });
 
-    it('preserves immutability with Set copy', () => {
+    it('SetCopy_OriginalUnchangedWhenCopyMutated', () => {
       const original = new Set(['/project/src']);
       const copy = new Set(original);
       
@@ -345,7 +345,7 @@ describe('FileTree Utility Functions', () => {
 });
 
 describe('Context Menu Action Handlers', () => {
-  it('determines correct action type from menu ID', () => {
+  it('ValidMenuId_ReturnsCorrectActionType', () => {
     const menuActions = ['new-file', 'new-folder', 'expand-all', 'collapse-all', 'group-folders'];
     
     expect(menuActions).toContain('new-file');
@@ -354,7 +354,7 @@ describe('Context Menu Action Handlers', () => {
     expect(menuActions.length).toBe(5);
   });
 
-  it('validates action exists before processing', () => {
+  it('InvalidAction_ValidatedFalse', () => {
     const validActions = new Set(['new-file', 'new-folder', 'expand-all', 'collapse-all', 'group-folders']);
     
     expect(validActions.has('expand-all')).toBe(true);
@@ -363,7 +363,7 @@ describe('Context Menu Action Handlers', () => {
 });
 
 describe('Performance - Memoization', () => {
-  it('callback references remain stable across renders', () => {
+  it('TwoCallbacks_DifferentReferences', () => {
     const callback1 = (path: string) => ({ path });
     const callback2 = (path: string) => ({ path });
     
@@ -374,7 +374,7 @@ describe('Performance - Memoization', () => {
     // (This would be verified in React component tests)
   });
 
-  it('Set operations are efficient for large trees', () => {
+  it('ThousandPaths_LookupIsO1', () => {
     const expandedFolders = new Set<string>();
     
     // Add 1000 paths
