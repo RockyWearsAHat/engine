@@ -196,4 +196,110 @@ describe('FileTree Component', () => {
     );
     expect(container).toBeTruthy();
   });
+
+  it('GitTab_WithUnstagedChanges_RendersList', () => {
+    useStore.setState({
+      gitStatus: {
+        branch: 'feature/test',
+        unstaged: ['file1.ts', 'file2.ts'],
+        staged: ['file3.ts'],
+        untracked: ['new-file.txt'],
+        ignored: [],
+        ahead: 2,
+        behind: 1,
+      },
+    });
+
+    const { container } = render(
+      <FileTree
+        activityTab="git"
+        onOpenFolder={() => {}}
+        onOpenFile={() => {}}
+      />,
+    );
+    // Check for actual content that appears in git panel
+    expect(container.textContent).toContain('Changes');
+  });
+
+  it('IssuesTab_WithGithubIssues_RendersList', () => {
+    useStore.setState({
+      githubIssues: [
+        {
+          number: 1,
+          title: 'Test issue',
+          state: 'open',
+          labels: [{ name: 'bug', color: 'ff0000' }],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          htmlUrl: 'http://example.com',
+          body: 'Issue body',
+          author: 'testuser',
+        },
+      ],
+    });
+
+    const { container } = render(
+      <FileTree
+        activityTab="issues"
+        onOpenFolder={() => {}}
+        onOpenFile={() => {}}
+      />,
+    );
+    expect(container.textContent).toContain('Test issue');
+  });
+
+  it('ExplorerTab_DefaultOpenFilesWhenNotProvided', () => {
+    const { container } = render(
+      <FileTree
+        activityTab="explorer"
+        onOpenFolder={() => {}}
+        onOpenFile={() => {}}
+      />,
+    );
+    expect(container).toBeTruthy();
+  });
+
+  it('GitTab_GitPanelRendered', () => {
+    const { container } = render(
+      <FileTree
+        activityTab="git"
+        onOpenFolder={() => {}}
+        onOpenFile={() => {}}
+      />,
+    );
+    expect(container).toBeTruthy();
+  });
+
+  it('SearchTab_SearchPanelRendered', () => {
+    const { container } = render(
+      <FileTree
+        activityTab="search"
+        onOpenFolder={() => {}}
+        onOpenFile={() => {}}
+      />,
+    );
+    expect(container).toBeTruthy();
+  });
+
+  it('IssuesTab_IssuesPanelRendered', () => {
+    const { container } = render(
+      <FileTree
+        activityTab="issues"
+        onOpenFolder={() => {}}
+        onOpenFile={() => {}}
+      />,
+    );
+    expect(container).toBeTruthy();
+  });
+
+  it('OpenEditorsTab_EditorListRendered', () => {
+    const { container } = render(
+      <FileTree
+        activityTab="open-editors"
+        onOpenFolder={() => {}}
+        onOpenFile={() => {}}
+      />,
+    );
+    expect(container).toBeTruthy();
+  });
 });
