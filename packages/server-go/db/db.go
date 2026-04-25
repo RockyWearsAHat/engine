@@ -348,6 +348,12 @@ func UpdateSessionSummary(sessionId, summary string) error {
 	return err
 }
 
+// UpdateSessionProjectPath updates the project_path of an existing session.
+func UpdateSessionProjectPath(id, path string) error {
+	_, err := globalDB.Exec(`UPDATE sessions SET project_path=?, updated_at=? WHERE id=?`, path, now(), id)
+	return err
+}
+
 // ValidationResult mirrors ai.BehavioralResult with DB metadata.
 type ValidationResult struct {
 	ID            string `json:"id"`

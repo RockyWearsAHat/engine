@@ -105,9 +105,12 @@ func CompleteTestRun(tlc *TestLoopController) BehavioralResult {
 
 // ReportTestResult sends the validation result back to the AI via the ChatContext.
 func ReportTestResult(tlc *TestLoopController, issue string) {
+	if tlc == nil {
+		return
+	}
 	result := CompleteTestRun(tlc)
 	report := FormatValidationReport(result, issue)
-	
+
 	if tlc.ctx != nil && tlc.ctx.SendToClient != nil {
 		tlc.ctx.SendToClient("test.result", map[string]interface{}{
 			"issue":           issue,

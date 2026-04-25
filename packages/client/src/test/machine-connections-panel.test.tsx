@@ -1,6 +1,20 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const wsClientMocks = vi.hoisted(() => {
+  const listeners: Array<(msg: Record<string, unknown>) => void> = [];
+  return {
+    send: vi.fn(),
+    onMessage: vi.fn((cb: (msg: Record<string, unknown>) => void) => {
+      listeners.push(cb);
+      return () => { listeners.splice(listeners.indexOf(cb), 1); };
+    }),
+    _emit: (msg: Record<string, unknown>) => listeners.forEach(l => l(msg)),
+  };
+});
+
+vi.mock('../ws/client.js', () => ({ wsClient: wsClientMocks }));
+
 const connectionMocks = vi.hoisted(() => ({
   clearConnectionProfiles: vi.fn(),
   deleteConnectionProfile: vi.fn(),
@@ -39,6 +53,8 @@ describe('MachineConnectionsPanel workflows', () => {
     connectionMocks.pairConnectionCode.mockReset();
     connectionMocks.saveConnectionProfile.mockReset();
     connectionMocks.setActiveConnectionProfile.mockReset();
+    wsClientMocks.send.mockClear();
+    wsClientMocks.onMessage.mockClear();
     connectionMocks.loadConnectionProfiles.mockReturnValue([]);
     connectionMocks.loadActiveConnectionProfile.mockReturnValue(null);
   });
@@ -264,5 +280,37 @@ describe('MachineConnectionsPanel workflows', () => {
     });
 
     expect((screen.getByPlaceholderText('192.168.1.20') as HTMLInputElement).value).toBe('10.1.1.1');
+  });
+
+  it('GenerateCodeButton_SendsWSMessage', async () => {
+    render(<MachineConnectionsPanel />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /generate code/i }));
+    });
+
+    expect(wsClientMocks.send).toHaveBeenCalledWith({ type: 'remote.pair.code.generate' });
+  });
+
+  it('RemotePairCodeMessage_DisplaysGeneratedCode', async () => {
+    render(<MachineConnectionsPanel />);
+
+    await act(async () => {
+      wsClientMocks._emit({ type: 'remote.pair.code', code: '123456', expiresIn: 300 });
+    });
+
+    expect(screen.getByTestId('generated-code')).toBeTruthy();
+    expect(screen.getByText('123456')).toBeTruthy();
+    expect(screen.getByText(/5 min/i)).toBeTruthy();
+  });
+
+  it('WsMessage_UnknownType_NoCodeDisplayed', async () => {
+    render(<MachineConnectionsPanel />);
+
+    await act(async () => {
+      wsClientMocks._emit({ type: 'some.other.message', payload: 'x' });
+    });
+
+    expect(screen.queryByTestId('generated-code')).toBeNull();
   });
 });

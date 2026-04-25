@@ -179,8 +179,8 @@ export type ClientMessage =
   | { type: 'terminal.close'; terminalId: string }
   | { type: 'editor.tabs.sync'; tabs: TabInfo[] }
   | { type: 'engine.config.get' }
-  | { type: 'engine.team.set'; team: string; provider: string; model: string };
-
+  | { type: 'engine.team.set'; team: string; provider: string; model: string }
+  | { type: 'remote.pair.code.generate' };
 // WebSocket protocol — Server → Client
 export type ServerMessage =
   | { type: 'chat.started'; sessionId: string }
@@ -214,9 +214,20 @@ export type ServerMessage =
   | { type: 'folder.created'; path: string }
   | { type: 'error'; message: string; code?: string }
   | { type: 'engine.config'; yaml: string; error?: string }
-  | { type: 'engine.team.updated'; team: string };
+  | { type: 'engine.team.updated'; team: string }
+  | { type: 'remote.pair.code'; code: string; expiresIn: number }
+  | { type: 'test.summary'; sessionId: string; summary: TestSummary };
 
 // Tab and system info types
+
+export interface TestSummary {
+  output: string;
+  errors: string[];
+  warnings: string[];
+  durationMs: number;
+  success: boolean;
+}
+
 export interface TabInfo {
   path: string;
   isActive: boolean;

@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -350,5 +352,19 @@ func TestHandleVPNPair_NoName_SetsDefault(t *testing.T) {
 	json.NewDecoder(rr.Body).Decode(&resp) //nolint:errcheck
 	if resp["ok"] != true {
 		t.Errorf("ok = %v, want true", resp["ok"])
+	}
+}
+
+func TestListenAndServeTLS_TLSConfigError(t *testing.T) {
+	tun := newTestTunnel(t)
+	badStorage := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(badStorage, []byte("x"), 0644); err != nil {
+		t.Fatalf("write bad storage marker: %v", err)
+	}
+	tun.Config.StoragePath = badStorage
+
+	err := tun.ListenAndServeTLS(http.NewServeMux())
+	if err == nil {
+		t.Fatal("expected ListenAndServeTLS error for invalid storage path")
 	}
 }

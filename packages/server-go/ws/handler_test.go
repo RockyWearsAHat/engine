@@ -13,6 +13,7 @@ import (
 
 	"github.com/engine/server/ai"
 	"github.com/engine/server/db"
+	"github.com/engine/server/remote"
 	"github.com/gorilla/websocket"
 )
 
@@ -374,5 +375,40 @@ func TestHandler_ChatMessage_CanWriteAndOpenFileThroughAITools(t *testing.T) {
 	}
 	if string(content) != "export const engineNote = 'cave';\n" {
 		t.Fatalf("unexpected file content: %q", string(content))
+	}
+}
+
+func TestHandler_RemotePairCodeGenerate_WhenNotEnabled_ReturnsError(t *testing.T) {
+	SetPairingManager(nil)
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "remote.pair.code.generate"})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "PAIRING_DISABLED" {
+		t.Fatalf("expected PAIRING_DISABLED error, got %+v", msg)
+	}
+}
+
+func TestHandler_RemotePairCodeGenerate_ReturnsCode(t *testing.T) {
+	pm := remote.NewPairingManager()
+	SetPairingManager(pm)
+	defer SetPairingManager(nil)
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "remote.pair.code.generate"})
+	msg := readWSMessageOfType(t, conn, "remote.pair.code")
+
+	code, ok := msg["code"].(string)
+	if !ok || len(code) != 6 {
+		t.Fatalf("expected 6-digit code string, got %+v", msg)
+	}
+	expiresIn, ok := msg["expiresIn"].(float64)
+	if !ok || expiresIn != 300 {
+		t.Fatalf("expected expiresIn:300, got %+v", msg)
 	}
 }

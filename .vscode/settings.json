@@ -20,16 +20,31 @@
     "go.terminal.activateEnvironment": true,
 
     // ── Rust ─────────────────────────────────────────────────────────────
-    "rust-analyzer.cargo.targetDir": true,
-    "rust-analyzer.testExplorer": true,
+    "rust-analyzer.server.path": "/Users/alexwaldmann/.cargo/bin/rust-analyzer",
     "rust-analyzer.linkedProjects": [
+        "Cargo.toml",
         "packages/desktop-tauri/src-tauri/Cargo.toml"
     ],
+    "rust-analyzer.runnables.command": "/Users/alexwaldmann/.cargo/bin/cargo",
+    "rust-analyzer.runnables.extraEnv": {
+        "PATH": "/Users/alexwaldmann/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    },
+    "rust-analyzer.cargo.targetDir": true,
+    "rust-analyzer.testExplorer": true,
+    "rust-analyzer.cargo.buildScripts.enable": false,
+    "rust-analyzer.procMacro.enable": false,
+    "rust-analyzer.check.workspace": false,
     "rust-analyzer.files.excludeDirs": [
         "target",
         "node_modules",
         ".git"
     ],
+
+    // ── Alternate Tools ──────────────────────────────────────────────────
+    "go.alternateTools": {
+        "gopls": "/Users/alexwaldmann/go/bin/gopls",
+        "go": "/opt/homebrew/bin/go"
+    },
 
     // ── gopls ────────────────────────────────────────────────────────────
     "gopls": {

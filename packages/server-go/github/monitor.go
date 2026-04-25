@@ -32,6 +32,8 @@ type RepoMonitor struct {
 	OnCIFailure func(payload json.RawMessage)
 	// OnIssueComment is called for new issue comments.
 	OnIssueComment func(payload json.RawMessage)
+	// OnIssueOpened is called when a new issue is opened.
+	OnIssueOpened func(payload json.RawMessage)
 }
 
 // NewRepoMonitor creates a RepoMonitor. Call Start() to begin processing.
@@ -119,6 +121,16 @@ func (m *RepoMonitor) dispatch(ev *MonitoredEvent) {
 	case "issue_comment":
 		if m.OnIssueComment != nil {
 			m.OnIssueComment(ev.Payload)
+		}
+
+	case "issues":
+		p, err := ParseIssue(&WebhookEvent{Type: ev.Type, Delivery: ev.Delivery, Payload: ev.Payload})
+		if err != nil {
+			log.Printf("monitor: parse issues: %v", err)
+			return
+		}
+		if p.Action == "opened" && m.OnIssueOpened != nil {
+			m.OnIssueOpened(ev.Payload)
 		}
 
 	default:

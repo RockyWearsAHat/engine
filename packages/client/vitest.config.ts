@@ -21,7 +21,7 @@ export default defineConfig({
         'src/bridge.ts',
       ],
       thresholds: {
-        branches: 85,
+        branches: 100,
         statements: 100,
         functions: 100,
         lines: 100,

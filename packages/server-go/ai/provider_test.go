@@ -1,6 +1,12 @@
 package ai
 
-import "testing"
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 func TestResolveProviderPrefersExplicitSetting(t *testing.T) {
 	if got := resolveProvider("ollama", "claude-sonnet-4-6"); got != "ollama" {
@@ -68,4 +74,128 @@ func TestOllamaRootURL(t *testing.T) {
 			t.Fatalf("expected Ollama root %q for %q, got %q", expected, input, got)
 		}
 	}
+}
+
+// ── newProvider ───────────────────────────────────────────────────────────────
+
+func TestNewProvider_Anthropic(t *testing.T) {
+	p := newProvider("anthropic")
+	if _, ok := p.(*anthropicProvider); !ok {
+		t.Errorf("expected anthropicProvider, got %T", p)
+	}
+}
+
+func TestNewProvider_OpenAI(t *testing.T) {
+	p := newProvider("openai")
+	if _, ok := p.(*openAIProvider); !ok {
+		t.Errorf("expected openAIProvider, got %T", p)
+	}
+}
+
+func TestNewProvider_Ollama(t *testing.T) {
+	p := newProvider("ollama")
+	if _, ok := p.(*ollamaProvider); !ok {
+		t.Errorf("expected ollamaProvider, got %T", p)
+	}
+}
+
+func TestNewProvider_Unknown_DefaultsToAnthropic(t *testing.T) {
+	p := newProvider("xyzunknown")
+	if _, ok := p.(*anthropicProvider); !ok {
+		t.Errorf("expected anthropicProvider for unknown name, got %T", p)
+	}
+}
+
+// ── ollamaProvider.RunLoop ────────────────────────────────────────────────────
+
+func TestOllamaProvider_RunLoop_Cancelled(t *testing.T) {
+	ch := make(chan struct{})
+	close(ch)
+	ctx := &ChatContext{
+		Cancel:      ch,
+		OnChunk:     func(string, bool) {},
+		OnToolCall:  func(string, interface{}) {},
+		OnToolResult: func(string, interface{}, bool) {},
+		OnError:     func(string) {},
+		ActiveTools: bootstrapTools(),
+	}
+	t.Setenv("OLLAMA_BASE_URL", "http://127.0.0.1:1")
+	var calls []ToolCall
+	var text strings.Builder
+	p := newProvider("ollama")
+	p.RunLoop(ctx, "llama3", "system", []anthropicMessage{}, &calls, &text)
+}
+
+func TestOllamaProvider_RunLoop_ServerResponse(t *testing.T) {
+	sseResponse := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, sseResponse)
+	}))
+	defer srv.Close()
+
+	var chunks []string
+	ctx := &ChatContext{
+		OnChunk:     func(content string, _ bool) { chunks = append(chunks, content) },
+		OnToolCall:  func(string, interface{}) {},
+		OnToolResult: func(string, interface{}, bool) {},
+		OnError:     func(string) {},
+		ActiveTools: bootstrapTools(),
+	}
+	t.Setenv("OLLAMA_BASE_URL", srv.URL)
+	var calls []ToolCall
+	var text strings.Builder
+	p := newProvider("ollama")
+	p.RunLoop(ctx, "llama3", "system", []anthropicMessage{}, &calls, &text)
+	if !strings.Contains(text.String(), "hi") {
+		t.Errorf("expected 'hi' in response, got %q", text.String())
+	}
+}
+
+// ── openAIProvider.RunLoop ────────────────────────────────────────────────────
+
+func TestOpenAIProvider_RunLoop_Cancelled(t *testing.T) {
+	ch := make(chan struct{})
+	close(ch)
+	ctx := &ChatContext{
+		Cancel:      ch,
+		OnChunk:     func(string, bool) {},
+		OnToolCall:  func(string, interface{}) {},
+		OnToolResult: func(string, interface{}, bool) {},
+		OnError:     func(string) {},
+		ActiveTools: bootstrapTools(),
+	}
+	t.Setenv("OPENAI_API_KEY", "fake-key")
+	var calls []ToolCall
+	var text strings.Builder
+	p := newProvider("openai")
+	p.RunLoop(ctx, "gpt-4o", "system", []anthropicMessage{}, &calls, &text)
+}
+
+// ── anthropicProvider.RunLoop ─────────────────────────────────────────────────
+
+func TestAnthropicProvider_RunLoop_Cancelled(t *testing.T) {
+	ch := make(chan struct{})
+	close(ch)
+	ctx := &ChatContext{
+		Cancel:      ch,
+		OnChunk:     func(string, bool) {},
+		OnToolCall:  func(string, interface{}) {},
+		OnToolResult: func(string, interface{}, bool) {},
+		OnError:     func(string) {},
+		ActiveTools: bootstrapTools(),
+		Usage:       &SessionUsage{},
+		Quarantine:  NewToolQuarantine(),
+	}
+	t.Setenv("ANTHROPIC_API_KEY", "fake-key")
+	old := http.DefaultClient
+	defer func() { http.DefaultClient = old }()
+	http.DefaultClient = &http.Client{Transport: failTransport{t}}
+	var calls []ToolCall
+	var text strings.Builder
+	p := newProvider("anthropic")
+	p.RunLoop(ctx, "claude-3-5-sonnet-20241022", "system", []anthropicMessage{}, &calls, &text)
 }

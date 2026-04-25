@@ -7,7 +7,7 @@ import path from 'node:path';
 const root = process.cwd();
 const reportPath = path.join(root, '.github', 'session-memory', 'agent-completion-report.json');
 const goCoverPath = path.join(root, 'packages', 'server-go', '.agent-cover.out');
-const minGoCoverage = 20;
+const requiredGoCoverage = 100;
 
 function emitResult(continueRun, message, details = []) {
   const payload = {
@@ -88,10 +88,10 @@ if (!totalMatch) {
 }
 
 const goCoverage = Number.parseFloat(totalMatch[1]);
-if (!Number.isFinite(goCoverage) || goCoverage < minGoCoverage) {
-  fail('Completion gate failed: Go total coverage is below required minimum.', [
+if (!Number.isFinite(goCoverage) || goCoverage < requiredGoCoverage) {
+  fail('Completion gate failed: Go total coverage is below required threshold.', [
     `Detected Go total coverage: ${goCoverage.toFixed(1)}%`,
-    `Required minimum: ${minGoCoverage.toFixed(1)}%`,
+    `Required coverage: ${requiredGoCoverage.toFixed(1)}%`,
   ]);
 }
 
@@ -133,6 +133,10 @@ if (!Number.isFinite(generatedAtMs)) {
 }
 
 const ageMinutes = (Date.now() - generatedAtMs) / 60000;
+if (ageMinutes < -1) {
+  fail('Completion gate failed: report.generatedAt is in the future.', [`Report time: ${report.generatedAt}`]);
+}
+
 if (ageMinutes > 60) {
   fail('Completion gate failed: report.generatedAt is stale. Refresh report before finishing.', [`Report age: ${ageMinutes.toFixed(1)} minutes`]);
 }

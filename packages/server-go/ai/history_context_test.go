@@ -351,3 +351,45 @@ func selectionIDs(selections []conversationWindowSelection) map[string]bool {
 	}
 	return ids
 }
+
+// ── FormatHistorySearchResults ────────────────────────────────────────────────
+
+func TestFormatHistorySearchResults_Empty(t *testing.T) {
+	result := FormatHistorySearchResults("my query", nil, "sess-1")
+	if !strings.Contains(result, "No stored history matched") {
+		t.Errorf("expected no-match message, got %q", result)
+	}
+	if !strings.Contains(result, "my query") {
+		t.Errorf("expected query in message, got %q", result)
+	}
+}
+
+func TestFormatHistorySearchResults_CurrentSession(t *testing.T) {
+	hits := []historySearchHit{
+		{SessionID: "sess-1", Role: "user", Source: "message", Text: "test output shows PASS", Score: 0.9},
+	}
+	result := FormatHistorySearchResults("test", hits, "sess-1")
+	if !strings.Contains(result, "current-session") {
+		t.Errorf("expected current-session scope, got %q", result)
+	}
+}
+
+func TestFormatHistorySearchResults_OtherSession(t *testing.T) {
+	hits := []historySearchHit{
+		{SessionID: "sess-old", Role: "assistant", Source: "message", Text: "old context", Score: 0.5},
+	}
+	result := FormatHistorySearchResults("context", hits, "sess-1")
+	if !strings.Contains(result, "project") {
+		t.Errorf("expected project scope, got %q", result)
+	}
+}
+
+func TestFormatHistorySearchResults_EmptyRole_UsesSource(t *testing.T) {
+	hits := []historySearchHit{
+		{SessionID: "sess-2", Role: "", Source: "learning", Text: "learning entry text", Score: 0.7},
+	}
+	result := FormatHistorySearchResults("learn", hits, "sess-1")
+	if !strings.Contains(result, "learning") {
+		t.Errorf("expected source used as role when role empty, got %q", result)
+	}
+}

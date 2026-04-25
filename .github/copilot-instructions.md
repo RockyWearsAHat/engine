@@ -2,7 +2,7 @@
 
 # TALK LIKE A CAVEMAN, ALWAYS, THIS HELPS SAVE CONTEXT, LESS CONTEXT = MORE WORK FOR LESS MONEY!!! Don't use subagents the rate limiting is kinda gnarly right now.
 
-# ALWAYS CHECK THE WORKING BEHAVIORS IN .github/WORKING_BEHAVIORS.md BEFORE DOING ANYTHING, THIS IS THE AGREEMENT OF HOW THE CODE SHOULD WORK AND BEHAVE, IF YOU NOTICE ANY DISCREPANCIES IN THE CODE AND THAT DOCUMENT, UPDATE THAT DOCUMENT IMMEDIATELY TO REFLECT THE CURRENT CODE BEHAVIOR AND THEN CONTINUE WITH WHATEVER YOU WERE DOING. This is the single source of truth for how the code should work and behave, if you notice something that is not reflected in there, update it immediately and report that update to the user in your response.
+# ALWAYS CHECK THE WORKING BEHAVIORS IN .github/WORKING_BEHAVIORS.md BEFORE DOING ANYTHING. This file is the user-facing feature contract — it lists every feature the app has, written from the user's perspective (what they can DO), not implementation details. Every feature in that file is tested and enforced. If a feature is missing, it is not guaranteed to work. If the code has a feature not in the file, add it. If the file lists a feature that is broken, fix it. Always report any update to this file to the user. Do NOT write implementation internals, null-safety details, or edge case wiring into this file — only user-visible features and behaviors.
 
 # Anything out of date, old, unnecessary, or causing bloat in the code should immediately be removed as per CS 3500 principles. Consider asking me (the user) about questionable things that you are unsure if they should be removed, but for the most part, if you stumble across something like an old markdown document that claims something don't take that as proof our code might have changed, and the markdown documents are not generated from code. Know that code could have been created and not linked (shouldn't ever happen) or could be outdated with something newer replacing it, figure out which and remove the old one so we don't suffer from code bloat and an unworkable project due to confusion.
 
@@ -52,10 +52,7 @@ Engine is an AI-native code editor. AI is not bolted onto a text editor — it i
 - Create abstractions that separate the AI from the editor experience
 
 ## Coding Conventions
-- (To be established once tech stack is chosen)
-- Prefer clear, traceable code over clever abstractions
-- Every module should have a clear single responsibility
-- Document architectural decisions and their rationale
+- CS3500 & 2420 best practices ALWAYS.
 
 ## Testing Strategy
 - Unit tests for individual modules
@@ -63,9 +60,10 @@ Engine is an AI-native code editor. AI is not bolted onto a text editor — it i
 - Behavioral tests: AI runs the app, observes, validates
 - For UI tests, prefer one lightweight mount/smoke assertion per surface, then spend the rest of the test budget on real interactions, state changes, websocket/runtime wiring, and persisted side effects.
 - Avoid brittle assertions that bind tests to exact copy, incidental layout, or a specific fully rendered static state unless that text/state is the contract being tested.
-- Read `.github/WORKING_BEHAVIORS.md` before significant test work and keep it as the quick-reference behavior agreement.
-- If observed behavior differs from `.github/WORKING_BEHAVIORS.md`, update that file in the same session.
-- Every write/update to `.github/WORKING_BEHAVIORS.md` must be explicitly reported to the user in the response.
+- Read `.github/WORKING_BEHAVIORS.md` before significant test work. It is the user-facing feature spec — write tests that enforce the features listed there.
+  - If observed behavior differs from `.github/WORKING_BEHAVIORS.md`, update that file in the same session.
+  - Every write/update to `.github/WORKING_BEHAVIORS.md` must be explicitly reported to the user in the response.
+  - WORKING_BEHAVIORS.md is a product feature list, not a test log. Write it as a user would describe what the app does — no internal wiring, no null-safety caveats, no websocket message names.
 - (Detailed strategy TBD once codebase exists)
 
 ## Mandatory Completion Gate (Hard Stop)

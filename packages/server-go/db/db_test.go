@@ -760,3 +760,20 @@ func TestGetProjectValidations_DefaultLimit(t *testing.T) {
 	}
 	_ = vals
 }
+
+func TestUpdateSessionProjectPath(t *testing.T) {
+	initTestDB(t)
+	if err := CreateSession("sess-upd", "/old/path", "main"); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := UpdateSessionProjectPath("sess-upd", "/new/path"); err != nil {
+		t.Fatalf("UpdateSessionProjectPath: %v", err)
+	}
+	sess, err := GetSession("sess-upd")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if sess.ProjectPath != "/new/path" {
+		t.Errorf("expected /new/path, got %q", sess.ProjectPath)
+	}
+}

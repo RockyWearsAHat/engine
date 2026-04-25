@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -207,5 +209,19 @@ func TestWS_RequiresAuth(t *testing.T) {
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rr.Code)
+	}
+}
+
+func TestListenAndServeTLS_TLSConfigError(t *testing.T) {
+	s := newTestServer(t)
+	badStorage := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(badStorage, []byte("x"), 0644); err != nil {
+		t.Fatalf("write bad storage marker: %v", err)
+	}
+	s.Config.StoragePath = badStorage
+
+	err := s.ListenAndServeTLS()
+	if err == nil {
+		t.Fatal("expected ListenAndServeTLS error for invalid storage path")
 	}
 }

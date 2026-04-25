@@ -13,6 +13,7 @@ import (
 	"github.com/engine/server/ai"
 	"github.com/engine/server/db"
 	"github.com/engine/server/discord"
+	gogit "github.com/engine/server/git"
 	"github.com/engine/server/github"
 	"github.com/engine/server/remote"
 	"github.com/engine/server/vpn"
@@ -95,6 +96,7 @@ func main() {
 			log.Fatalf("Failed to start remote server: %v", err)
 		}
 
+		ws.SetPairingManager(srv.Pairing)
 		log.Fatal(srv.ListenAndServeTLS())
 		return
 	}
@@ -129,7 +131,12 @@ func main() {
 		go triggerCIAnalysisSession(projectPath, payload)
 	}
 	repoMonitor.OnIssueComment = func(payload json.RawMessage) {
-		log.Printf("Issue comment received (payload size: %d bytes)", len(payload))
+		log.Printf("Issue comment received: launching AI issue session (payload %d bytes)", len(payload))
+		go triggerIssueSession(projectPath, payload)
+	}
+	repoMonitor.OnIssueOpened = func(payload json.RawMessage) {
+		log.Printf("Issue opened: launching AI issue session (payload %d bytes)", len(payload))
+		go triggerIssueOpenedSession(projectPath, payload)
 	}
 	webhookReceiver.AddHandler(repoMonitor.Enqueue)
 	repoMonitor.Start(context.Background())
@@ -161,12 +168,22 @@ func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
 	owner, repo := parts[0], parts[1]
 
 	sessionID := fmt.Sprintf("scaffold-%s-%d", repo, time.Now().UnixNano())
+	branch, _ := gogit.GetCurrentBranch(projectPath)
+	if err := db.CreateSession(sessionID, projectPath, branch); err != nil {
+		log.Printf("[scaffold %s/%s] create session: %v", owner, repo, err)
+	}
 	ctx := &ai.ChatContext{
 		ProjectPath: projectPath,
 		SessionID:   sessionID,
 		OnChunk: func(content string, done bool) {
 			if content != "" {
 				log.Printf("[scaffold %s/%s] %s", owner, repo, content)
+			}
+			if done {
+				msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
+				if dbErr := db.SaveMessage(msgID, sessionID, "assistant", content, nil); dbErr != nil {
+					log.Printf("[scaffold %s/%s] save message: %v", owner, repo, dbErr)
+				}
 			}
 		},
 		OnError: func(msg string) {
@@ -206,12 +223,22 @@ func triggerCIAnalysisSession(projectPath string, payload json.RawMessage) {
 	}
 
 	sessionID := fmt.Sprintf("ci-fix-%d", time.Now().UnixNano())
+	branch, _ := gogit.GetCurrentBranch(projectPath)
+	if err := db.CreateSession(sessionID, projectPath, branch); err != nil {
+		log.Printf("[ci-fix %s] create session: %v", ciEvent.Repository.FullName, err)
+	}
 	ctx := &ai.ChatContext{
 		ProjectPath: projectPath,
 		SessionID:   sessionID,
 		OnChunk: func(content string, done bool) {
 			if content != "" {
 				log.Printf("[ci-fix %s] %s", ciEvent.Repository.FullName, content)
+			}
+			if done {
+				msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
+				if dbErr := db.SaveMessage(msgID, sessionID, "assistant", content, nil); dbErr != nil {
+					log.Printf("[ci-fix %s] save message: %v", ciEvent.Repository.FullName, dbErr)
+				}
 			}
 		},
 		OnError: func(msg string) {
@@ -233,6 +260,113 @@ func triggerCIAnalysisSession(projectPath string, payload json.RawMessage) {
 		ciEvent.Repository.FullName,
 		ciEvent.WorkflowRun.Conclusion,
 		ciEvent.WorkflowRun.HTMLURL,
+	)
+	ai.Chat(ctx, prompt)
+}
+
+// triggerIssueSession fires an AI session when a new comment is posted on a GitHub issue.
+// It parses the issue_comment payload and asks the AI to understand and fix the issue.
+func triggerIssueSession(projectPath string, payload json.RawMessage) {
+	parsed, err := github.ParseIssueComment(&github.WebhookEvent{Type: "issue_comment", Payload: payload})
+	if err != nil || parsed.Issue.Number == 0 {
+		log.Printf("issue-session: cannot parse issue_comment payload: %v", err)
+		return
+	}
+
+	sessionID := fmt.Sprintf("issue-%d-%d", parsed.Issue.Number, time.Now().UnixNano())
+	branch, _ := gogit.GetCurrentBranch(projectPath)
+	if dbErr := db.CreateSession(sessionID, projectPath, branch); dbErr != nil {
+		log.Printf("issue-session: create session: %v", dbErr)
+	}
+
+	ctx := &ai.ChatContext{
+		ProjectPath: projectPath,
+		SessionID:   sessionID,
+		OnChunk: func(content string, done bool) {
+			if content != "" {
+				log.Printf("[issue #%d %s] %s", parsed.Issue.Number, parsed.Repository.FullName, content)
+			}
+			if done {
+				msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
+				if dbErr := db.SaveMessage(msgID, sessionID, "assistant", content, nil); dbErr != nil {
+					log.Printf("issue-session: save message: %v", dbErr)
+				}
+			}
+		},
+		OnError: func(msg string) {
+			log.Printf("[issue error #%d] %s", parsed.Issue.Number, msg)
+		},
+	}
+
+	prompt := fmt.Sprintf(
+		"GitHub issue #%d '%s' in %s received a new comment from %s.\n\n"+
+			"Comment: %s\n\n"+
+			"Your job:\n"+
+			"1. Read the issue and understand what needs to be fixed\n"+
+			"2. Use search_files and read_file to explore the relevant code\n"+
+			"3. Write code to fix the issue\n"+
+			"4. Run tests with the shell tool to verify the fix\n"+
+			"5. Commit the fix with git_commit\n"+
+			"Start by exploring the codebase to understand the issue now.",
+		parsed.Issue.Number,
+		parsed.Issue.Title,
+		parsed.Repository.FullName,
+		parsed.Comment.User.Login,
+		parsed.Comment.Body,
+	)
+	ai.Chat(ctx, prompt)
+}
+
+// triggerIssueOpenedSession fires an AI session when a new GitHub issue is opened.
+// It parses the issues payload and asks the AI to understand and fix the issue.
+func triggerIssueOpenedSession(projectPath string, payload json.RawMessage) {
+	parsed, err := github.ParseIssue(&github.WebhookEvent{Type: "issues", Payload: payload})
+	if err != nil || parsed.Issue.Number == 0 {
+		log.Printf("issue-opened: cannot parse issues payload: %v", err)
+		return
+	}
+
+	sessionID := fmt.Sprintf("issue-%d-%d", parsed.Issue.Number, time.Now().UnixNano())
+	branch, _ := gogit.GetCurrentBranch(projectPath)
+	if dbErr := db.CreateSession(sessionID, projectPath, branch); dbErr != nil {
+		log.Printf("issue-opened: create session: %v", dbErr)
+	}
+
+	ctx := &ai.ChatContext{
+		ProjectPath: projectPath,
+		SessionID:   sessionID,
+		OnChunk: func(content string, done bool) {
+			if content != "" {
+				log.Printf("[issue-opened #%d %s] %s", parsed.Issue.Number, parsed.Repository.FullName, content)
+			}
+			if done {
+				msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
+				if dbErr := db.SaveMessage(msgID, sessionID, "assistant", content, nil); dbErr != nil {
+					log.Printf("issue-opened: save message: %v", dbErr)
+				}
+			}
+		},
+		OnError: func(msg string) {
+			log.Printf("[issue-opened error #%d] %s", parsed.Issue.Number, msg)
+		},
+	}
+
+	prompt := fmt.Sprintf(
+		"A new GitHub issue #%d was opened in %s by %s.\n\n"+
+			"Issue title: %s\n"+
+			"Issue body: %s\n\n"+
+			"Your job:\n"+
+			"1. Read the issue and understand what needs to be fixed\n"+
+			"2. Use search_files and read_file to explore the relevant code\n"+
+			"3. Write code to fix the issue\n"+
+			"4. Run tests with the shell tool to verify the fix\n"+
+			"5. Commit the fix with git_commit\n"+
+			"Start by exploring the codebase to understand the issue now.",
+		parsed.Issue.Number,
+		parsed.Repository.FullName,
+		parsed.Sender.Login,
+		parsed.Issue.Title,
+		parsed.Issue.Body,
 	)
 	ai.Chat(ctx, prompt)
 }
