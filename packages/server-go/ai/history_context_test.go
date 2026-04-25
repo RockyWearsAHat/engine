@@ -393,3 +393,201 @@ func TestFormatHistorySearchResults_EmptyRole_UsesSource(t *testing.T) {
 		t.Errorf("expected source used as role when role empty, got %q", result)
 	}
 }
+
+// ── Pure helper coverage ──────────────────────────────────────────────────────
+
+func TestCurrentSessionID_Nil(t *testing.T) {
+	if got := currentSessionID(nil); got != "" {
+		t.Errorf("expected empty string for nil session, got %q", got)
+	}
+}
+
+func TestCurrentSessionID_NonNil(t *testing.T) {
+	sess := &db.Session{ID: "sess-abc"}
+	if got := currentSessionID(sess); got != "sess-abc" {
+		t.Errorf("expected sess-abc, got %q", got)
+	}
+}
+
+func TestRecencyScore_InvalidTimestamp(t *testing.T) {
+	if got := recencyScore("not-a-time"); got != 0 {
+		t.Errorf("expected 0 for invalid timestamp, got %f", got)
+	}
+}
+
+func TestRecencyScore_VeryOld(t *testing.T) {
+	old := time.Now().Add(-30 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	if got := recencyScore(old); got != 0.05 {
+		t.Errorf("expected 0.05 for old timestamp, got %f", got)
+	}
+}
+
+func TestRecencyScore_Recent(t *testing.T) {
+	recent := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	if got := recencyScore(recent); got != 0.6 {
+		t.Errorf("expected 0.6 for recent timestamp, got %f", got)
+	}
+}
+
+func TestRecencyScore_WithinDay(t *testing.T) {
+	ts := time.Now().Add(-12 * time.Hour).UTC().Format(time.RFC3339)
+	if got := recencyScore(ts); got != 0.4 {
+		t.Errorf("expected 0.4 for 12h-old timestamp, got %f", got)
+	}
+}
+
+func TestRecencyScore_WithinWeek(t *testing.T) {
+	ts := time.Now().Add(-3 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	if got := recencyScore(ts); got != 0.2 {
+		t.Errorf("expected 0.2 for 3-day-old timestamp, got %f", got)
+	}
+}
+
+func TestHistoryScopeAllows_NotCurrentSession(t *testing.T) {
+	if !historyScopeAllows("project", "sess-1", "sess-2") {
+		t.Error("expected true for non-current-session scope")
+	}
+}
+
+func TestHistoryScopeAllows_CurrentSession_Match(t *testing.T) {
+	if !historyScopeAllows("current-session", "sess-1", "sess-1") {
+		t.Error("expected true when session IDs match")
+	}
+}
+
+func TestHistoryScopeAllows_CurrentSession_NoMatch(t *testing.T) {
+	if historyScopeAllows("current-session", "sess-1", "sess-2") {
+		t.Error("expected false when session IDs differ")
+	}
+}
+
+func TestHistoryScopeAllows_CurrentSession_EmptyID(t *testing.T) {
+	if historyScopeAllows("current-session", "", "sess-2") {
+		t.Error("expected false when currentSessionID is empty")
+	}
+}
+
+func TestMaxInt_FirstLarger(t *testing.T) {
+	if got := maxInt(5, 3); got != 5 {
+		t.Errorf("expected 5, got %d", got)
+	}
+}
+
+func TestMaxInt_SecondLarger(t *testing.T) {
+	if got := maxInt(3, 5); got != 5 {
+		t.Errorf("expected 5, got %d", got)
+	}
+}
+
+// ─── formatSelectiveContextPrompt ─────────────────────────────────────────────
+
+func TestFormatSelectiveContextPrompt_Empty(t *testing.T) {
+	got := formatSelectiveContextPrompt(nil)
+	if got != "" {
+		t.Errorf("expected empty string for nil blocks, got %q", got)
+	}
+}
+
+func TestFormatSelectiveContextPrompt_WithBlocks(t *testing.T) {
+	blocks := []contextBlock{
+		{Weight: 0.9, Title: "Block A", Body: "body content A"},
+		{Weight: 0.5, Title: "Block B", Body: "body content B"},
+	}
+	got := formatSelectiveContextPrompt(blocks)
+	if got == "" {
+		t.Error("expected non-empty output for blocks")
+	}
+	if !strings.Contains(got, "Block A") {
+		t.Errorf("expected Block A in output, got %q", got)
+	}
+}
+
+func TestFormatSelectiveContextPrompt_EmptyBody(t *testing.T) {
+	blocks := []contextBlock{
+		{Weight: 0.9, Title: "Empty Body Block", Body: ""},
+	}
+	// Block with empty body should be skipped.
+	got := formatSelectiveContextPrompt(blocks)
+	_ = got // Should not panic.
+}
+
+// ─── BuildAttentionResidualRecords ────────────────────────────────────────────
+
+func TestBuildAttentionResidualRecords_ZeroWeight(t *testing.T) {
+	window := conversationWindowResult{}
+	ctx := selectiveContextResult{}
+	records := BuildAttentionResidualRecords("sess", "msg", "query text", window, ctx)
+	if records == nil {
+		t.Error("expected non-nil slice")
+	}
+}
+
+func TestBuildAttentionResidualRecords_WithSelections(t *testing.T) {
+	window := conversationWindowResult{
+		Selections: []conversationWindowSelection{
+			{MessageID: "m1", Role: "user", Content: "hello world", Weight: 0.8, Score: 1.2},
+			{MessageID: "m2", Role: "user", Content: "skipped", Weight: 0.0, Score: 0.0}, // zero weight, skipped
+		},
+	}
+	ctx := selectiveContextResult{
+		Blocks: []contextBlock{
+			{Key: "k1", Title: "T1", Body: "body", Weight: 0.7, Score: 1.0},
+			{Key: "k2", Title: "T2", Body: "body2", Weight: 0.0, Score: 0.0}, // zero weight, skipped
+		},
+		HistoryHits: []historySearchHit{},
+	}
+	records := BuildAttentionResidualRecords("sess", "msg", "user query", window, ctx)
+	if len(records) < 2 {
+		t.Errorf("expected at least 2 records (selection + block), got %d", len(records))
+	}
+}
+
+func TestBuildAttentionResidualRecords_WithHistoryHits(t *testing.T) {
+	window := conversationWindowResult{}
+	ctx := selectiveContextResult{
+		HistoryHits: []historySearchHit{
+			{Source: "src", SourceKey: "sk1", Text: "hit text", Weight: 0.6, Score: 2.0},
+			{Source: "src2", SourceKey: "sk2", Text: "skip", Weight: 0.0, Score: 0.0},
+		},
+	}
+	records := BuildAttentionResidualRecords("sess", "msg", "query", window, ctx)
+	found := false
+	for _, r := range records {
+		if r.SourceKey == "sk1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected history hit sk1 in records")
+	}
+}
+
+// ─── BuildAttentionResidualProfile ───────────────────────────────────────────
+
+func TestBuildAttentionResidualProfile_EmptyDB(t *testing.T) {
+	setupHistoryTestProject(t) // initializes DB
+	// A project path with no residuals should succeed with an empty map.
+	profile, err := BuildAttentionResidualProfile("/no-such-project-xyz", "sess", "query", nil)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if profile == nil {
+		t.Error("expected non-nil profile")
+	}
+}
+
+func TestFormatSelectiveContextPrompt_NonEmpty(t *testing.T) {
+	result := formatSelectiveContextPrompt([]contextBlock{
+		{Title: "File", Body: "content", Key: "k1", Weight: 1.0, Score: 0.5},
+	})
+	if result == "" {
+		t.Error("expected non-empty prompt")
+	}
+}
+
+func TestFormatSelectiveContextPrompt_ExistingEmpty(t *testing.T) {
+	result := formatSelectiveContextPrompt([]contextBlock{})
+	if result != "" {
+		t.Errorf("expected empty string for empty blocks, got %q", result)
+	}
+}

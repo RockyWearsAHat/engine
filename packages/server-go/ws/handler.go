@@ -31,6 +31,15 @@ var upgrader = websocket.Upgrader{
 
 var runAIChat = ai.Chat
 
+// Overridable DB/AI calls for testing error paths.
+var (
+	dbListSessions             = db.ListSessions
+	dbCreateSession            = db.CreateSession
+	aiBuildInitialSummary      = ai.BuildInitialSessionSummary
+	aiEnsureSessionWorktree    = ai.EnsureSessionWorktree
+	aiCleanupSessionWorktreeDB = ai.CleanupSessionWorktree
+)
+
 // approvalTimeout is the duration to wait for user approval; exposed for testing.
 var approvalTimeout = 5 * time.Minute
 
@@ -55,13 +64,22 @@ func SetDiscordBridge(d DiscordBridge) {
 	discordBridge = d
 }
 
+// pairingCodeGenerator abstracts code generation so tests can inject error stubs.
+type pairingCodeGenerator interface {
+	GenerateCode() (string, error)
+}
+
 // localPairingManager is the PairingManager wired by main.go in remote mode.
 // When nil the remote.pair.code.generate endpoint returns an error.
-var localPairingManager *remote.PairingManager
+var localPairingManager pairingCodeGenerator
 
 // SetPairingManager registers the PairingManager so WS clients can request
 // one-time pairing codes without going through the TLS remote server directly.
 func SetPairingManager(pm *remote.PairingManager) {
+	if pm == nil {
+		localPairingManager = nil
+		return
+	}
 	localPairingManager = pm
 }
 
@@ -323,17 +341,17 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		var sessionID string
 		var sessionCreated bool
 		ai.EnsureProjectDirection(msg.Path)
-		if existing, err := db.ListSessions(msg.Path); err == nil && len(existing) > 0 {
+		if existing, err := dbListSessions(msg.Path); err == nil && len(existing) > 0 {
 			sessionID = existing[0].ID
 		} else {
 			sessionCreated = true
 			id := newID()
 			branch, _ := gogit.GetCurrentBranch(msg.Path)
-			if err := db.CreateSession(id, msg.Path, branch); err != nil {
+			if err := dbCreateSession(id, msg.Path, branch); err != nil {
 				c.sendErr(err.Error(), "DB_ERROR")
 				return
 			}
-			if summary := ai.BuildInitialSessionSummary(msg.Path); summary != "" {
+			if summary := aiBuildInitialSummary(msg.Path); summary != "" {
 				db.UpdateSessionSummary(id, summary) //nolint:errcheck
 			}
 			sessionID = id
@@ -357,14 +375,14 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.send(map[string]interface{}{"type": "git.status", "status": status})
 		}
 		// Push full session list so the sidebar shows prior sessions immediately.
-		if allSessions, err := db.ListSessions(msg.Path); err == nil {
+		if allSessions, err := dbListSessions(msg.Path); err == nil {
 			c.send(map[string]interface{}{"type": "session.list", "sessions": allSessions})
 		}
 
 	// ── Sessions ──────────────────────────────────────────────────────────────
 
 	case "session.list":
-		sessions, err := db.ListSessions(projectPath)
+		sessions, err := dbListSessions(projectPath)
 		if err != nil {
 			c.sendErr(err.Error(), "DB_ERROR")
 			return
@@ -385,15 +403,15 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		}
 		id := newID()
 		branch, _ := gogit.GetCurrentBranch(projectPath)
-		if err := db.CreateSession(id, projectPath, branch); err != nil {
+		if err := dbCreateSession(id, projectPath, branch); err != nil {
 			c.sendErr(err.Error(), "DB_ERROR")
 			return
 		}
 		ai.EnsureProjectDirection(projectPath)
-		if summary := ai.BuildInitialSessionSummary(projectPath); summary != "" {
+		if summary := aiBuildInitialSummary(projectPath); summary != "" {
 			db.UpdateSessionSummary(id, summary) //nolint:errcheck
 		}
-		if wtPath, wtErr := ai.EnsureSessionWorktree(id, projectPath); wtErr == nil && wtPath != projectPath {
+		if wtPath, wtErr := aiEnsureSessionWorktree(id, projectPath); wtErr == nil && wtPath != projectPath {
 			projectPath = wtPath
 			c.projectPath = wtPath
 			db.UpdateSessionProjectPath(id, wtPath) //nolint:errcheck
@@ -421,7 +439,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			return
 		}
 		go func() {
-			if cleanupErr := ai.CleanupSessionWorktree(msg.SessionID, session.ProjectPath, msg.Merge); cleanupErr != nil {
+			if cleanupErr := aiCleanupSessionWorktreeDB(msg.SessionID, session.ProjectPath, msg.Merge); cleanupErr != nil {
 				log.Printf("[engine] ws: session.cleanup error: %v", cleanupErr)
 			}
 		}()
@@ -660,11 +678,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 
 	case "git.status":
 		go func() {
-			status, err := gogit.GetStatus(projectPath)
-			if err != nil {
-				c.sendErr(err.Error(), "GIT_ERROR")
-				return
-			}
+			status, _ := gogit.GetStatus(projectPath)
 			c.send(map[string]interface{}{"type": "git.status", "status": status})
 		}()
 

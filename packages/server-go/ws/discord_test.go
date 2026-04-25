@@ -1,6 +1,8 @@
 package ws
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/engine/server/discord"
@@ -190,5 +192,75 @@ func TestHandleDiscordConfigGet_NilBridge_ReturnsOnDiskConfig(t *testing.T) {
 	// config should be present.
 	if _, ok := response["config"]; !ok {
 		t.Error("expected config field in discord.config response")
+	}
+}
+
+func TestHandleDiscordConfigSet_WriteError(t *testing.T) {
+	SetDiscordBridge(nil)
+	t.Cleanup(func() { SetDiscordBridge(nil) })
+
+	projectDir := setupWSProject(t)
+	// ENGINE_STATE_DIR is set by setupWSProject — block discord.json there.
+	stateDir := os.Getenv("ENGINE_STATE_DIR")
+	if stateDir == "" {
+		stateDir = filepath.Join(projectDir, ".engine")
+	}
+	// Put a directory named "discord.json" so WriteFile fails.
+	badPath := filepath.Join(stateDir, "discord.json")
+	if err := os.MkdirAll(badPath, 0755); err != nil {
+		t.Fatalf("mkdir discord.json block: %v", err)
+	}
+
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "project.open",
+		"path": projectDir,
+	})
+	readWSMessageOfType(t, conn, "session.created")
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "discord.config.set",
+		"config": map[string]interface{}{
+			"token":   "token",
+			"guildId": "guild",
+			"enabled": false,
+		},
+	})
+
+	response := readWSMessageOfType(t, conn, "error")
+	if response["code"] != "DISCORD_WRITE" {
+		t.Errorf("expected DISCORD_WRITE error, got %+v", response)
+	}
+}
+
+func TestHandleDiscordValidate_WithOverride(t *testing.T) {
+	SetDiscordBridge(nil)
+	t.Cleanup(func() { SetDiscordBridge(nil) })
+
+	projectDir := setupWSProject(t)
+
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "project.open",
+		"path": projectDir,
+	})
+	readWSMessageOfType(t, conn, "session.created")
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "discord.validate",
+		"config": map[string]interface{}{
+			"token":   "tkn",
+			"guildId": "gid",
+			"enabled": false,
+		},
+	})
+
+	response := readWSMessageOfType(t, conn, "discord.validate.result")
+	if _, ok := response["result"]; !ok {
+		t.Errorf("expected result field, got %+v", response)
 	}
 }

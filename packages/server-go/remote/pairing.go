@@ -26,12 +26,15 @@ func NewPairingManager() *PairingManager {
 	return &PairingManager{sessions: make(map[string]*PairingSession)}
 }
 
+// randIntFn is injectable for tests to simulate random-int failure.
+var randIntFn = rand.Int
+
 // GenerateCode creates a 6-digit one-time pairing code valid for 5 minutes.
 func (pm *PairingManager) GenerateCode() (string, error) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
-	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	n, err := randIntFn(rand.Reader, big.NewInt(1000000))
 	if err != nil {
 		return "", fmt.Errorf("generate random: %w", err)
 	}

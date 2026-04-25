@@ -15,6 +15,14 @@ import (
 	"github.com/engine/server/remote"
 )
 
+var (
+	newTrustStoreFn   = NewTrustStore
+	issueTokenFn      = func(a *remote.AuthManager, deviceID string, ttl time.Duration) (string, error) { return a.IssueToken(deviceID, ttl) }
+	netInterfaceAddrs = net.InterfaceAddrs
+	genPairingCodeFn  = func(pm *remote.PairingManager) (string, error) { return pm.GenerateCode() }
+	httpServeTLSFn    = func(s *http.Server) error { return s.ListenAndServeTLS("", "") }
+)
+
 // Config holds VPN tunnel server settings.
 type Config struct {
 	Enabled     bool
@@ -52,7 +60,7 @@ func NewTunnel(cfg Config) (*Tunnel, error) {
 		return nil, fmt.Errorf("load identity: %w", err)
 	}
 
-	trust, err := NewTrustStore(cfg.StoragePath)
+	trust, err := newTrustStoreFn(cfg.StoragePath)
 	if err != nil {
 		return nil, fmt.Errorf("load trust store: %w", err)
 	}
@@ -73,33 +81,17 @@ func NewTunnel(cfg Config) (*Tunnel, error) {
 
 // RegisterRoutes adds VPN-specific endpoints to an HTTP mux.
 func (t *Tunnel) RegisterRoutes(mux *http.ServeMux, wsHandler http.HandlerFunc) {
-	// Tunnel pairing: client sends their Ed25519 public key + pairing code
 	mux.HandleFunc("/vpn/pair", t.handleVPNPair)
-
-	// List trusted devices
 	mux.Handle("/vpn/devices", t.Auth.AuthMiddleware(http.HandlerFunc(t.handleDevices)))
-
-	// Revoke a device
 	mux.Handle("/vpn/revoke", t.Auth.AuthMiddleware(http.HandlerFunc(t.handleRevoke)))
-
-	// Server identity fingerprint (public, no auth)
 	mux.HandleFunc("/vpn/fingerprint", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"fingerprint": hex.EncodeToString(t.Identity.PublicKey),
-		})
+		json.NewEncoder(w).Encode(map[string]string{"fingerprint": hex.EncodeToString(t.Identity.PublicKey)}) //nolint:errcheck
 	})
-
-	// WebSocket with auth
 	mux.Handle("/ws", t.Auth.AuthMiddleware(http.HandlerFunc(wsHandler)))
-
-	// Health
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status": "ok",
-			"vpn":    true,
-		})
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "vpn": true}) //nolint:errcheck
 	})
 }
 
@@ -121,10 +113,7 @@ func (t *Tunnel) handleVPNPair(w http.ResponseWriter, r *http.Request) {
 
 	if !t.Pairing.ValidateCode(req.Code) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"ok":    false,
-			"error": "invalid or expired pairing code",
-		})
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "invalid or expired pairing code"}) //nolint:errcheck
 		return
 	}
 
@@ -145,7 +134,7 @@ func (t *Tunnel) handleVPNPair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := t.Auth.IssueToken(deviceID, 24*time.Hour)
+	token, err := issueTokenFn(t.Auth, deviceID, 24*time.Hour)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -154,11 +143,11 @@ func (t *Tunnel) handleVPNPair(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[engine-vpn] Device trusted: %s (%s)", deviceName, deviceID[:8])
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":               true,
-		"token":            token,
-		"deviceId":         deviceID,
-		"serverPublicKey":  hex.EncodeToString(t.Identity.PublicKey),
+	json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+		"ok":                true,
+		"token":             token,
+		"deviceId":          deviceID,
+		"serverPublicKey":   hex.EncodeToString(t.Identity.PublicKey),
 		"serverFingerprint": hex.EncodeToString(t.Identity.PublicKey[:16]),
 	})
 }
@@ -166,9 +155,7 @@ func (t *Tunnel) handleVPNPair(w http.ResponseWriter, r *http.Request) {
 func (t *Tunnel) handleDevices(w http.ResponseWriter, _ *http.Request) {
 	devices := t.Trust.List()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"devices": devices,
-	})
+	json.NewEncoder(w).Encode(map[string]interface{}{"devices": devices}) //nolint:errcheck
 }
 
 func (t *Tunnel) handleRevoke(w http.ResponseWriter, r *http.Request) {
@@ -191,11 +178,10 @@ func (t *Tunnel) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	t.Auth.RevokeDevice(req.DeviceID)
-
 	log.Printf("[engine-vpn] Device revoked: %s", req.DeviceID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true}) //nolint:errcheck
 }
 
 // ListenAndServeTLS starts the VPN tunnel with TLS and Ed25519 authentication.
@@ -205,7 +191,7 @@ func (t *Tunnel) ListenAndServeTLS(mux *http.ServeMux) error {
 		return fmt.Errorf("load tls config: %w", err)
 	}
 
-	code, err := t.Pairing.GenerateCode()
+	code, err := genPairingCodeFn(t.Pairing)
 	if err != nil {
 		return fmt.Errorf("generate pairing code: %w", err)
 	}
@@ -231,11 +217,11 @@ func (t *Tunnel) ListenAndServeTLS(mux *http.ServeMux) error {
 		}
 	}()
 
-	return server.ListenAndServeTLS("", "")
+	return httpServeTLSFn(server)
 }
 
 func getLocalIP() string {
-	addrs, err := net.InterfaceAddrs()
+	addrs, err := netInterfaceAddrs()
 	if err != nil {
 		return "localhost"
 	}

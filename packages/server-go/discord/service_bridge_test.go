@@ -2,16 +2,114 @@ package discord
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strings"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/engine/server/db"
 )
+
+func installDiscordGuildAPIShim(t *testing.T, guildID string, channels map[string]*discordgo.Channel) (func(), *[]string) {
+	t.Helper()
+	sent := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+
+		if r.Method == http.MethodGet && strings.HasPrefix(path, "/channels/") {
+			id := strings.TrimPrefix(path, "/channels/")
+			if ch, ok := channels[id]; ok {
+				_ = json.NewEncoder(w).Encode(ch)
+				return
+			}
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		guildChannelsPath := fmt.Sprintf("/guilds/%s/channels", guildID)
+		if path == guildChannelsPath {
+			switch r.Method {
+			case http.MethodGet:
+				list := make([]*discordgo.Channel, 0, len(channels))
+				for _, ch := range channels {
+					list = append(list, ch)
+				}
+				_ = json.NewEncoder(w).Encode(list)
+				return
+			case http.MethodPost:
+				var req struct {
+					Name string `json:"name"`
+					Type int    `json:"type"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, "bad request", http.StatusBadRequest)
+					return
+				}
+				id := "created-" + slug(req.Name)
+				ch := &discordgo.Channel{ID: id, Name: req.Name, Type: discordgo.ChannelType(req.Type)}
+				channels[id] = ch
+				_ = json.NewEncoder(w).Encode(ch)
+				return
+			}
+		}
+
+		if r.Method == http.MethodPost && strings.HasPrefix(path, "/channels/") && strings.HasSuffix(path, "/messages") {
+			var req struct {
+				Content string `json:"content"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			sent = append(sent, req.Content)
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "m1", "content": req.Content})
+			return
+		}
+
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+
+	oldEndpointAPI := discordgo.EndpointAPI
+	oldEndpointDiscord := discordgo.EndpointDiscord
+	oldEndpointGuilds := discordgo.EndpointGuilds
+	oldEndpointChannels := discordgo.EndpointChannels
+	oldEndpointGuild := discordgo.EndpointGuild
+	oldEndpointGuildChannels := discordgo.EndpointGuildChannels
+	oldEndpointChannel := discordgo.EndpointChannel
+	oldEndpointChannelMessages := discordgo.EndpointChannelMessages
+
+	discordgo.EndpointDiscord = server.URL + "/"
+	discordgo.EndpointAPI = server.URL + "/"
+	discordgo.EndpointGuilds = discordgo.EndpointAPI + "guilds/"
+	discordgo.EndpointChannels = discordgo.EndpointAPI + "channels/"
+	discordgo.EndpointGuild = func(gID string) string {
+		return discordgo.EndpointGuilds + gID
+	}
+	discordgo.EndpointGuildChannels = func(gID string) string {
+		return discordgo.EndpointGuild(gID) + "/channels"
+	}
+	discordgo.EndpointChannel = func(channelID string) string {
+		return discordgo.EndpointChannels + channelID
+	}
+	discordgo.EndpointChannelMessages = func(channelID string) string {
+		return discordgo.EndpointChannels + channelID + "/messages"
+	}
+
+	cleanup := func() {
+		discordgo.EndpointDiscord = oldEndpointDiscord
+		discordgo.EndpointAPI = oldEndpointAPI
+		discordgo.EndpointGuilds = oldEndpointGuilds
+		discordgo.EndpointChannels = oldEndpointChannels
+		discordgo.EndpointGuild = oldEndpointGuild
+		discordgo.EndpointGuildChannels = oldEndpointGuildChannels
+		discordgo.EndpointChannel = oldEndpointChannel
+		discordgo.EndpointChannelMessages = oldEndpointChannelMessages
+		server.Close()
+	}
+
+	return cleanup, &sent
+}
 
 func makeDiscordRESTSession(t *testing.T) *discordgo.Session {
 	t.Helper()
@@ -182,6 +280,127 @@ func TestHandleStatusCommand_ProjectFound(t *testing.T) {
 
 	// no panic — GetStatus handles non-git dirs gracefully, send is nil-safe
 	svc.handleStatusCommand(msg("ch-status", ""), nil)
+}
+
+func TestAddProject_ValidationErrors(t *testing.T) {
+	svc, _ := newDisabledSvc(t)
+
+	if err := svc.addProject("reply", "   "); err == nil {
+		t.Fatal("expected error for empty path")
+	}
+
+	if err := svc.addProject("reply", filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("expected error for missing directory")
+	}
+}
+
+func TestEnsureProjectChannel_FindOrCreate(t *testing.T) {
+	svc, _ := newDisabledSvc(t)
+	svc.cfg.GuildID = "guild-1"
+	svc.dg = makeDiscordRESTSession(t)
+
+	channels := map[string]*discordgo.Channel{
+		"ch-existing": {ID: "ch-existing", Name: "proj-repo", Type: discordgo.ChannelTypeGuildText},
+	}
+	cleanup, _ := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
+	defer cleanup()
+
+	ch, err := svc.ensureProjectChannel("proj-repo")
+	if err != nil {
+		t.Fatalf("ensureProjectChannel existing: %v", err)
+	}
+	if ch.ID != "ch-existing" {
+		t.Fatalf("existing channel id = %q, want ch-existing", ch.ID)
+	}
+
+	created, err := svc.ensureProjectChannel("proj-new")
+	if err != nil {
+		t.Fatalf("ensureProjectChannel create: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("expected created channel id")
+	}
+}
+
+func TestEnsureControlChannel_CreateAndSend(t *testing.T) {
+	svc, stateRoot := newDisabledSvc(t)
+	svc.project = stateRoot
+	svc.cfg.GuildID = "guild-1"
+	svc.cfg.ControlChannelName = "engine-control"
+	svc.dg = makeDiscordRESTSession(t)
+
+	channels := map[string]*discordgo.Channel{}
+	cleanup, sent := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
+	defer cleanup()
+
+	id, err := svc.ensureControlChannel()
+	if err != nil {
+		t.Fatalf("ensureControlChannel: %v", err)
+	}
+	if strings.TrimSpace(id) == "" {
+		t.Fatal("expected control channel id")
+	}
+	if len(*sent) == 0 {
+		t.Fatal("expected welcome message to be sent")
+	}
+}
+
+func TestEnsureControlChannel_ReusesExisting(t *testing.T) {
+	svc, _ := newDisabledSvc(t)
+	svc.cfg.GuildID = "guild-1"
+	svc.cfg.ControlChannelName = "engine-control"
+	svc.dg = makeDiscordRESTSession(t)
+
+	channels := map[string]*discordgo.Channel{
+		"ctrl-1": {ID: "ctrl-1", Name: "engine-control", Type: discordgo.ChannelTypeGuildText},
+	}
+	cleanup, sent := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
+	defer cleanup()
+
+	svc.stateMu.Lock()
+	svc.state.ControlChannelID = "ctrl-1"
+	svc.stateMu.Unlock()
+
+	id, err := svc.ensureControlChannel()
+	if err != nil {
+		t.Fatalf("ensureControlChannel reuse: %v", err)
+	}
+	if id != "ctrl-1" {
+		t.Fatalf("control channel id = %q, want ctrl-1", id)
+	}
+	if len(*sent) != 0 {
+		t.Fatalf("expected no welcome send on reuse, got %d sends", len(*sent))
+	}
+}
+
+func TestAddProject_Success(t *testing.T) {
+	svc, stateRoot := newDisabledSvc(t)
+	svc.project = stateRoot
+	svc.cfg.GuildID = "guild-1"
+	svc.dg = makeDiscordRESTSession(t)
+
+	channels := map[string]*discordgo.Channel{}
+	cleanup, sent := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
+	defer cleanup()
+
+	projectDir := t.TempDir()
+	err := svc.addProject("reply-channel", projectDir)
+	if err != nil {
+		t.Fatalf("addProject: %v", err)
+	}
+
+	svc.stateMu.RLock()
+	binding, ok := svc.state.Projects[projectDir]
+	svc.stateMu.RUnlock()
+	if !ok {
+		t.Fatal("expected project binding to be saved")
+	}
+	if strings.TrimSpace(binding.ChannelID) == "" {
+		t.Fatal("expected bound project channel id")
+	}
+	if len(*sent) < 2 {
+		t.Fatalf("expected at least two outbound messages, got %d", len(*sent))
+	}
 }
 
 // ── handleSessionsCommand ──────────────────────────────────────────────────────
@@ -494,4 +713,386 @@ func TestParseCommand_BasicCases(t *testing.T) {
 	if len(args) != 1 || args[0] != "project1" {
 		t.Fatalf("args = %#v, want [project1]", args)
 	}
+}
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+
+func TestStart_Disabled(t *testing.T) {
+	svc, _ := newDisabledSvc(t)
+	if err := svc.Start(); err != nil {
+		t.Fatalf("Start() on disabled service should return nil, got: %v", err)
+	}
+}
+
+// ── send / sendTagged empty-msg path (requires non-nil dg) ────────────────────
+
+func TestSend_EmptyMsg_WithNonNilDG(t *testing.T) {
+	svc, _ := newDisabledSvc(t)
+	svc.dg = makeDiscordRESTSession(t)
+	svc.send("ch-id", "")
+	svc.send("ch-id", "   ")
+}
+
+func TestSendTagged_EmptyMsg_WithNonNilDG(t *testing.T) {
+	svc, _ := newDisabledSvc(t)
+	svc.dg = makeDiscordRESTSession(t)
+	svc.sendTagged("ch-id", "", "agent", "s1")
+	svc.sendTagged("ch-id", "   ", "agent", "s1")
+}
+
+// ── send / sendTagged success path via shim ───────────────────────────────────
+
+func TestSend_SuccessPath_WithShim(t *testing.T) {
+	svc, _ := newDisabledSvc(t)
+	cleanup, sent := installDiscordGuildAPIShim(t, "guild-send", map[string]*discordgo.Channel{})
+	defer cleanup()
+	svc.dg = makeDiscordRESTSession(t)
+
+	svc.send("channel-123", "hello world")
+
+	if len(*sent) == 0 {
+		t.Fatal("expected message to be sent via shim")
+	}
+	if (*sent)[0] != "hello world" {
+		t.Fatalf("expected 'hello world', got %q", (*sent)[0])
+	}
+}
+
+func TestSendTagged_SuccessPath_WithShim(t *testing.T) {
+	svc, projectPath := newDisabledSvc(t)
+	cleanup, sent := installDiscordGuildAPIShim(t, "guild-tagged", map[string]*discordgo.Channel{})
+	defer cleanup()
+	svc.dg = makeDiscordRESTSession(t)
+
+	svc.sendTagged("channel-xyz", "tagged message", "agent", "session-1")
+
+	if len(*sent) == 0 {
+		t.Fatal("expected tagged message to be sent via shim")
+	}
+	if (*sent)[0] != "tagged message" {
+		t.Fatalf("expected 'tagged message', got %q", (*sent)[0])
+	}
+	_ = projectPath
+}
+
+// ── send error path via error-returning shim ──────────────────────────────────
+
+func installErrorMessageShim(t *testing.T) func() {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/messages") {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	oldAPI := discordgo.EndpointAPI
+	oldDiscord := discordgo.EndpointDiscord
+	oldChannels := discordgo.EndpointChannels
+	oldChannel := discordgo.EndpointChannel
+	oldChannelMessages := discordgo.EndpointChannelMessages
+	discordgo.EndpointDiscord = srv.URL + "/"
+	discordgo.EndpointAPI = srv.URL + "/"
+	discordgo.EndpointChannels = srv.URL + "/channels/"
+	discordgo.EndpointChannel = func(id string) string { return srv.URL + "/channels/" + id }
+	discordgo.EndpointChannelMessages = func(id string) string { return srv.URL + "/channels/" + id + "/messages" }
+	return func() {
+		discordgo.EndpointAPI = oldAPI
+		discordgo.EndpointDiscord = oldDiscord
+		discordgo.EndpointChannels = oldChannels
+		discordgo.EndpointChannel = oldChannel
+		discordgo.EndpointChannelMessages = oldChannelMessages
+		srv.Close()
+	}
+}
+
+func TestSend_SendError(t *testing.T) {
+	svc, _ := newDisabledSvc(t)
+	cleanup := installErrorMessageShim(t)
+	defer cleanup()
+	svc.dg = makeDiscordRESTSession(t)
+	svc.send("ch-err", "this should fail")
+}
+
+func TestSendTagged_SendError(t *testing.T) {
+	svc, _ := newDisabledSvc(t)
+	cleanup := installErrorMessageShim(t)
+	defer cleanup()
+	svc.dg = makeDiscordRESTSession(t)
+	svc.sendTagged("ch-err", "tagged fail", "agent", "sess")
+}
+
+// ── onReady via shim ──────────────────────────────────────────────────────────
+
+func TestOnReady_WithShim(t *testing.T) {
+	guildID := "guild-onready"
+	channels := map[string]*discordgo.Channel{}
+	cleanup, _ := installDiscordGuildAPIShim(t, guildID, channels)
+	defer cleanup()
+
+	dir := initDiscordTestDB(t)
+	svc, err := NewService(Config{
+		Enabled:            true,
+		GuildID:            guildID,
+		ControlChannelName: "engine-control",
+		CommandPrefix:      "!",
+		StoragePath:        dir,
+	}, dir)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	svc.dg = makeDiscordRESTSession(t)
+
+	svc.onReady(nil, nil)
+
+	svc.stateMu.RLock()
+	chanID := svc.state.ControlChannelID
+	svc.stateMu.RUnlock()
+	if chanID == "" {
+		t.Fatal("expected control channel to be created by onReady")
+	}
+}
+
+// ── ensureControlChannel error path ──────────────────────────────────────────
+
+func TestEnsureControlChannel_GuildChannelsError(t *testing.T) {
+	shimGuildID := "guild-shim"
+	cleanup, _ := installDiscordGuildAPIShim(t, shimGuildID, map[string]*discordgo.Channel{})
+	defer cleanup()
+
+	dir := initDiscordTestDB(t)
+	svc, err := NewService(Config{
+		Enabled:            true,
+		GuildID:            "different-guild",
+		ControlChannelName: "engine-control",
+		CommandPrefix:      "!",
+		StoragePath:        dir,
+	}, dir)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	svc.dg = makeDiscordRESTSession(t)
+
+	_, cerr := svc.ensureControlChannel()
+	if cerr == nil {
+		t.Fatal("expected error when GuildChannels returns 404")
+	}
+}
+
+// ── handleSearchCommand results path ─────────────────────────────────────────
+
+func TestHandleSearchCommand_WithResults(t *testing.T) {
+	svc, projectPath := newDisabledSvc(t)
+	addProject(svc, projectPath, "ch-search", "repo")
+
+	_ = db.DiscordRecordMessage(db.DiscordMessage{
+		ID:          "dm-results-1",
+		ProjectPath: projectPath,
+		ChannelID:   "ch-search",
+		AuthorName:  "testuser",
+		Direction:   "in",
+		Kind:        "message",
+		Content:     "hello unique-xyz-term",
+	})
+
+	svc.handleSearchCommand(msg("ch-search", ""), []string{"unique-xyz-term"})
+}
+
+// ── Reload with enabled config + loadState error ──────────────────────────────
+
+func TestServiceReload_Enabled_LoadStateError(t *testing.T) {
+	svc, dir := newDisabledSvc(t)
+
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	corrupt := filepath.Join(dir, defaultStateFileName)
+	if err := os.WriteFile(corrupt, []byte("{invalid json}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Enabled:       true,
+		BotToken:      "fake-token",
+		GuildID:       "guild-1",
+		AllowedUsers:  map[string]bool{"user1": true},
+		StoragePath:   dir,
+		CommandPrefix: "!",
+	}
+	if err := svc.Reload(cfg); err == nil {
+		t.Fatal("expected error from corrupt state file in Reload")
+	}
+}
+
+// ── handleSessionsCommand with sessions present ───────────────────────────────
+
+func TestHandleSessionsCommand_WithSessions(t *testing.T) {
+	svc, projectPath := newDisabledSvc(t)
+	addProject(svc, projectPath, "ch-with-sess", "repo")
+
+	if err := db.CreateSession("sess-1", projectPath, "main"); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	svc.handleSessionsCommand(msg("ch-with-sess", ""), nil)
+}
+
+func TestHandleSessionsCommand_ManySessions(t *testing.T) {
+	svc, projectPath := newDisabledSvc(t)
+	addProject(svc, projectPath, "ch-many-sess", "repo")
+
+	for i := 0; i < 7; i++ {
+		if err := db.CreateSession(fmt.Sprintf("sess-%d", i), projectPath, "main"); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+	}
+
+	svc.handleSessionsCommand(msg("ch-many-sess", ""), nil)
+}
+
+// ── handleHistoryCommand with messages present ────────────────────────────────
+
+func TestHandleHistoryCommand_WithMessages(t *testing.T) {
+	svc, projectPath := newDisabledSvc(t)
+	addProject(svc, projectPath, "ch-hist", "repo")
+
+	_ = db.DiscordRecordMessage(db.DiscordMessage{
+		ID:          "hist-msg-1",
+		ProjectPath: projectPath,
+		ChannelID:   "ch-hist",
+		AuthorName:  "user1",
+		Direction:   "in",
+		Kind:        "message",
+		Content:     "some chat message for history test",
+	})
+
+	svc.handleHistoryCommand(msg("ch-hist", ""), nil)
+}
+
+// ── splitForDiscord long text ─────────────────────────────────────────────────
+
+func TestSplitForDiscord_LongText(t *testing.T) {
+	long := strings.Repeat("a", 3000)
+	parts := splitForDiscord(long, maxDiscordMessageChars)
+	if len(parts) < 2 {
+		t.Fatalf("expected multiple parts for long text, got %d", len(parts))
+	}
+	for _, p := range parts {
+		if len(p) > maxDiscordMessageChars {
+			t.Errorf("part exceeds maxDiscordMessageChars: len=%d", len(p))
+		}
+	}
+}
+
+// ── WriteConfig covered path ──────────────────────────────────────────────────
+
+func TestWriteConfig_Success(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{
+		Enabled:       false,
+		CommandPrefix: "!",
+	}
+	if err := WriteConfig(dir, cfg); err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+}
+
+func TestWriteConfig_MkdirError(t *testing.T) {
+	notADir := t.TempDir() + "/file.txt"
+	_ = os.WriteFile(notADir, []byte("x"), 0600)
+	err := WriteConfig(filepath.Join(notADir, "subdir"), Config{})
+	if err == nil {
+		t.Fatal("expected error when path is under a file")
+	}
+}
+
+// ── Close with non-nil dg ─────────────────────────────────────────────────────
+
+func TestClose_WithNonNilDG(t *testing.T) {
+	svc, _ := newDisabledSvc(t)
+	svc.dg = makeDiscordRESTSession(t)
+	// Close on a never-opened session returns an error or nil — both are OK.
+	// The key is no panic.
+	_ = svc.Close()
+}
+
+// ── Start enabled path (dg.Open() fails) ─────────────────────────────────────
+
+func TestStart_Enabled_OpenFails(t *testing.T) {
+	// Point gateway endpoint to a server that returns an error so dg.Open() fails.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"401: Unauthorized"}`, http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	oldGWB := discordgo.EndpointGatewayBot
+	defer func() { discordgo.EndpointGatewayBot = oldGWB }()
+	discordgo.EndpointGatewayBot = srv.URL + "/gateway/bot"
+
+	dir := initDiscordTestDB(t)
+	svc, err := NewService(Config{
+		Enabled:            true,
+		GuildID:            "guild-start-err",
+		BotToken:           "fake-token",
+		ControlChannelName: "engine-control",
+		CommandPrefix:      "!",
+		StoragePath:        dir,
+	}, dir)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	if err := svc.Start(); err == nil {
+		t.Error("expected error from Start when gateway unreachable")
+		_ = svc.Close()
+	}
+}
+
+// ── onReady error path ────────────────────────────────────────────────────────
+
+func TestOnReady_EnsureChannelError(t *testing.T) {
+	// No endpoint shim — dg.GuildChannels will fail with HTTP error, covering
+	// the log.Printf error branch in onReady.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	oldAPI := discordgo.EndpointAPI
+	oldDiscord := discordgo.EndpointDiscord
+	oldGuilds := discordgo.EndpointGuilds
+	oldGuild := discordgo.EndpointGuild
+	oldGuildChannels := discordgo.EndpointGuildChannels
+	oldChannels := discordgo.EndpointChannels
+	oldChannel := discordgo.EndpointChannel
+	defer func() {
+		discordgo.EndpointAPI = oldAPI
+		discordgo.EndpointDiscord = oldDiscord
+		discordgo.EndpointGuilds = oldGuilds
+		discordgo.EndpointGuild = oldGuild
+		discordgo.EndpointGuildChannels = oldGuildChannels
+		discordgo.EndpointChannels = oldChannels
+		discordgo.EndpointChannel = oldChannel
+	}()
+	discordgo.EndpointDiscord = srv.URL + "/"
+	discordgo.EndpointAPI = srv.URL + "/"
+	discordgo.EndpointGuilds = srv.URL + "/guilds/"
+	discordgo.EndpointGuild = func(gID string) string { return srv.URL + "/guilds/" + gID }
+	discordgo.EndpointGuildChannels = func(gID string) string { return srv.URL + "/guilds/" + gID + "/channels" }
+	discordgo.EndpointChannels = srv.URL + "/channels/"
+	discordgo.EndpointChannel = func(id string) string { return srv.URL + "/channels/" + id }
+
+	dir := initDiscordTestDB(t)
+	svc, err := NewService(Config{
+		Enabled:            true,
+		GuildID:            "guild-err-ready",
+		ControlChannelName: "engine-control",
+		CommandPrefix:      "!",
+		StoragePath:        dir,
+	}, dir)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	svc.dg = makeDiscordRESTSession(t)
+	svc.onReady(nil, nil)
 }

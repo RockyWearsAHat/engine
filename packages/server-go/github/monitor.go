@@ -21,9 +21,10 @@ type MonitoredEvent struct {
 // RepoMonitor processes webhook events from a background queue.
 // It is the single consumer of events enqueued by WebhookReceiver.
 type RepoMonitor struct {
-	mu       sync.Mutex
-	queue    []*MonitoredEvent
-	notifyCh chan struct{}
+	mu           sync.Mutex
+	queue        []*MonitoredEvent
+	notifyCh     chan struct{}
+	tickInterval time.Duration // 0 means default (10s)
 
 	// OnReadmeChange is called when a push touches README.md.
 	// Receives the full push payload JSON.
@@ -64,8 +65,12 @@ func (m *RepoMonitor) Enqueue(event *WebhookEvent) {
 // Start begins the background event processing loop.
 // Call with a context that is cancelled on shutdown.
 func (m *RepoMonitor) Start(ctx context.Context) {
+	interval := m.tickInterval
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
 	go func() {
-		ticker := time.NewTicker(10 * time.Second)
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {

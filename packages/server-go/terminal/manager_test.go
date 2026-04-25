@@ -123,3 +123,31 @@ func TestManager_KillAll(t *testing.T) {
 	}
 }
 
+func TestManager_Create_NoSHELL(t *testing.T) {
+	t.Setenv("SHELL", "")
+	m := NewManager()
+	_, err := m.Create("shell-default", t.TempDir(), func(string) {}, func() {})
+	if err != nil {
+		t.Skipf("pty not available: %v", err)
+	}
+	m.Kill("shell-default")
+}
+
+func TestManager_Create_BadSHELL_FallsBackToBash(t *testing.T) {
+	t.Setenv("SHELL", "/nonexistent-xyz-shell-8473")
+	m := NewManager()
+	_, err := m.Create("bash-fallback", t.TempDir(), func(string) {}, func() {})
+	if err != nil {
+		t.Skipf("pty not available: %v", err)
+	}
+	m.Kill("bash-fallback")
+}
+
+func TestManager_Create_BadCwd(t *testing.T) {
+	m := NewManager()
+	_, err := m.Create("bad-cwd", "/nonexistent-cwd-xyzabc", func(string) {}, func() {})
+	if err == nil {
+		t.Fatal("expected error for nonexistent cwd")
+	}
+}
+

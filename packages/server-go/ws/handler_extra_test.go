@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/bwmarrin/discordgo"
 	"github.com/engine/server/ai"
 	"github.com/engine/server/db"
 	"github.com/engine/server/discord"
@@ -1437,3 +1439,39 @@ func TestHandler_RemotePairCodeGenerate_Success(t *testing.T) {
 // Suppress unused import lint.
 var _ = json.Marshal
 var _ *websocket.Conn
+var _ = httptest.NewServer
+var _ = discordgo.EndpointGatewayBot
+
+// TestHandler_DiscordConfigSet_NilBridge_EnabledStartFails covers the
+// discordBridge==nil && cfg.Enabled==true && service.Start() fails path.
+func TestHandler_DiscordConfigSet_NilBridge_EnabledStartFails(t *testing.T) {
+	SetDiscordBridge(nil)
+	defer SetDiscordBridge(nil)
+
+	// Intercept Discord gateway endpoint to return 401 so dg.Open() fails.
+	errSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"401: Unauthorized","code":0}`, http.StatusUnauthorized)
+	}))
+	defer errSrv.Close()
+
+	origGWB := discordgo.EndpointGatewayBot
+	defer func() { discordgo.EndpointGatewayBot = origGWB }()
+	discordgo.EndpointGatewayBot = errSrv.URL + "/gateway/bot"
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "discord.config.set",
+		"config": map[string]interface{}{
+			"enabled": true,
+			"token":   "fake-bot-token",
+			"guildId": "guild-ws-test",
+		},
+	})
+	msg := drainWSUntilType(t, conn, "discord.config.saved")
+	if msg["warning"] == nil {
+		t.Fatalf("expected start-failed warning, got %+v", msg)
+	}
+}

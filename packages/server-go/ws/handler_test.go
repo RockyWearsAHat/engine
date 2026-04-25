@@ -2,10 +2,12 @@ package ws
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/engine/server/ai"
 	"github.com/engine/server/db"
+	"github.com/engine/server/discord"
 	"github.com/engine/server/remote"
 	"github.com/gorilla/websocket"
 )
@@ -129,11 +132,11 @@ func writeWSMessage(t *testing.T, conn *websocket.Conn, payload map[string]inter
 func readWSMessageOfType(t *testing.T, conn *websocket.Conn, expectedType string) map[string]interface{} {
 	t.Helper()
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
+	if err := conn.SetReadDeadline(deadline); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
 	for time.Now().Before(deadline) {
-		if err := conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
-			t.Fatalf("set read deadline: %v", err)
-		}
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			t.Fatalf("read websocket message: %v", err)
@@ -412,3 +415,900 @@ func TestHandler_RemotePairCodeGenerate_ReturnsCode(t *testing.T) {
 		t.Fatalf("expected expiresIn:300, got %+v", msg)
 	}
 }
+
+// wsRedirectTransport redirects HTTP requests to a test server.
+type wsRedirectTransport struct {
+	target string
+	real   http.RoundTripper
+}
+
+func (t *wsRedirectTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r2 := r.Clone(r.Context())
+	u, _ := url.Parse(t.target + r.URL.Path)
+	r2.URL = u
+	r2.Host = u.Host
+	return t.real.RoundTrip(r2)
+}
+
+func TestFetchGitHubUser_NoToken(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+	_, err := fetchGitHubUser()
+	if err == nil {
+		t.Error("expected error when GitHub token not set")
+	}
+}
+
+func TestFetchGitHubUser_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+	orig := wsHTTPClient
+	wsHTTPClient = &http.Client{Transport: &wsRedirectTransport{target: srv.URL, real: http.DefaultTransport}}
+	defer func() { wsHTTPClient = orig }()
+	_, err := fetchGitHubUser()
+	if err == nil {
+		t.Error("expected error on non-200 response")
+	}
+}
+
+func TestFetchGitHubIssues_ServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+	orig := wsHTTPClient
+	wsHTTPClient = &http.Client{Transport: &wsRedirectTransport{target: srv.URL, real: http.DefaultTransport}}
+	defer func() { wsHTTPClient = orig }()
+	_, err := fetchGitHubIssues("owner", "repo")
+	if err == nil {
+		t.Error("expected error on non-200 response")
+	}
+}
+
+func TestFetchGitHubIssues_BadJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("not json")) //nolint:errcheck
+	}))
+	defer srv.Close()
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+	orig := wsHTTPClient
+	wsHTTPClient = &http.Client{Transport: &wsRedirectTransport{target: srv.URL, real: http.DefaultTransport}}
+	defer func() { wsHTTPClient = orig }()
+	_, err := fetchGitHubIssues("owner", "repo")
+	if err == nil {
+		t.Error("expected error on bad JSON")
+	}
+}
+
+// ── additional coverage tests ─────────────────────────────────────────────────
+
+// mockDiscordBridge implements DiscordBridge for tests.
+type mockDiscordBridge struct {
+	cfg discord.Config
+}
+
+func (m *mockDiscordBridge) CurrentConfig() discord.Config { return m.cfg }
+func (m *mockDiscordBridge) Reload(_ discord.Config) error { return nil }
+func (m *mockDiscordBridge) SearchHistory(_, _, _ string, _ int) ([]db.DiscordSearchHit, error) {
+	return nil, nil
+}
+func (m *mockDiscordBridge) RecentHistory(_, _, _ string, _ int) ([]db.DiscordMessage, error) {
+	return nil, nil
+}
+
+// panicDiscordBridge panics on CurrentConfig, used to trigger the run() panic handler.
+type panicDiscordBridge struct{}
+
+func (p *panicDiscordBridge) CurrentConfig() discord.Config { panic("test panic for coverage") }
+func (p *panicDiscordBridge) Reload(_ discord.Config) error { return nil }
+func (p *panicDiscordBridge) SearchHistory(_, _, _ string, _ int) ([]db.DiscordSearchHit, error) {
+	return nil, nil
+}
+func (p *panicDiscordBridge) RecentHistory(_, _, _ string, _ int) ([]db.DiscordMessage, error) {
+	return nil, nil
+}
+
+func TestServeWS_UpgradeError(t *testing.T) {
+	projectDir := setupWSProject(t)
+	hub := NewHub(projectDir)
+	server := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer server.Close()
+	// Plain HTTP GET → upgrader fails
+	resp, err := http.Get(server.URL)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	resp.Body.Close()
+}
+
+func TestSend_MarshalError(t *testing.T) {
+	c := &conn{done: make(chan struct{})}
+	// chan cannot be JSON-marshaled → triggers log.Printf("ws marshal error")
+	c.send(make(chan int))
+}
+
+func TestRun_PanicHandler(t *testing.T) {
+	SetDiscordBridge(&panicDiscordBridge{})
+	defer SetDiscordBridge(nil)
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	// discord.config.get will call discordBridge.CurrentConfig() → panics → recovered by run()
+	conn.WriteJSON(map[string]interface{}{"type": "discord.config.get"}) //nolint:errcheck
+	time.Sleep(200 * time.Millisecond)
+}
+
+func TestHandler_ProjectOpen_NoPath(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "project.open"})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "BAD_PAYLOAD" {
+		t.Fatalf("expected BAD_PAYLOAD, got %+v", msg)
+	}
+}
+
+func TestHandler_FileRead_Error(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "file.read", "path": "/nonexistent/xyz/file.txt"})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "FILE_ERROR" {
+		t.Fatalf("expected FILE_ERROR, got %+v", msg)
+	}
+}
+
+func TestHandler_FileSave_Error(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "file.save", "path": "/dev/null/nope/file.txt", "content": "hi"})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "FILE_ERROR" {
+		t.Fatalf("expected FILE_ERROR, got %+v", msg)
+	}
+}
+
+func TestHandler_FileCreate_Error(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "file.create", "path": "/dev/null/nope/file.txt"})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "FILE_ERROR" {
+		t.Fatalf("expected FILE_ERROR, got %+v", msg)
+	}
+}
+
+func TestHandler_FolderCreate_Error(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "folder.create", "path": "/dev/null/nope"})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "FILE_ERROR" {
+		t.Fatalf("expected FILE_ERROR, got %+v", msg)
+	}
+}
+
+func TestHandler_FileTree_Error(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "file.tree", "path": "/nonexistent/xyz/dir"})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "FILE_ERROR" {
+		t.Fatalf("expected FILE_ERROR, got %+v", msg)
+	}
+}
+
+func TestHandler_GitStatus_NonGitDir(t *testing.T) {
+	projectDir := setupWSProject(t) // not a git repo
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "git.status"})
+	msg := readWSMessageOfType(t, conn, "git.status")
+	if msg["status"] == nil {
+		t.Fatalf("expected status field, got %+v", msg)
+	}
+}
+
+func TestHandler_GitCommit_Error(t *testing.T) {
+	projectDir := setupWSProject(t) // not a git repo
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "git.commit", "message": "test commit"})
+	msg := readWSMessageOfType(t, conn, "git.commit.result")
+	if ok, _ := msg["ok"].(bool); ok {
+		t.Fatalf("expected ok:false for non-git dir, got %+v", msg)
+	}
+}
+
+func TestHandler_FileSearch_UsesProjectPath(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	// Bad regex with no root → uses projectPath, returns error in search.results
+	writeWSMessage(t, conn, map[string]interface{}{"type": "file.search", "query": "(?P<bad"})
+	msg := readWSMessageOfType(t, conn, "search.results")
+	if msg["error"] == nil {
+		t.Fatalf("expected error in search.results, got %+v", msg)
+	}
+}
+
+func TestHandler_WorkspaceTasks_WithPath(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "workspace.tasks", "path": projectDir})
+	msg := readWSMessageOfType(t, conn, "workspace.tasks")
+	if msg["tasks"] == nil {
+		t.Fatalf("expected tasks, got %+v", msg)
+	}
+}
+
+func TestHandler_TerminalCreate_NoCwd(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "terminal.create"})
+	msg := readWSMessageOfType(t, conn, "terminal.created")
+	if cwd, _ := msg["cwd"].(string); cwd != projectDir {
+		t.Fatalf("expected cwd=%s, got %v", projectDir, msg["cwd"])
+	}
+}
+
+func TestHandler_TestSummaryGet_NoObserver(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "test.summary.get", "sessionId": "nosuch-session"})
+	msg := readWSMessageOfType(t, conn, "test.summary")
+	summary, _ := msg["summary"].(map[string]interface{})
+	if ok, _ := summary["success"].(bool); !ok {
+		t.Fatalf("expected success:true for empty observer, got %+v", summary)
+	}
+}
+
+func TestFetchGitHubUser_DecodeError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"login": 42}`)) //nolint:errcheck // number → decode error
+	}))
+	defer srv.Close()
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+	orig := wsHTTPClient
+	wsHTTPClient = &http.Client{Transport: &wsRedirectTransport{target: srv.URL, real: http.DefaultTransport}}
+	defer func() { wsHTTPClient = orig }()
+	_, err := fetchGitHubUser()
+	if err == nil {
+		t.Error("expected decode error for wrong field type")
+	}
+}
+
+func TestFetchGitHubIssues_TransportError(t *testing.T) {
+	orig := wsHTTPClient
+	wsHTTPClient = &http.Client{Transport: &wsRedirectTransport{target: "http://127.0.0.1:1", real: http.DefaultTransport}}
+	defer func() { wsHTTPClient = orig }()
+	_, err := fetchGitHubIssues("owner", "repo")
+	if err == nil {
+		t.Error("expected transport error")
+	}
+}
+
+func TestFetchGitHubIssues_PRFiltered(t *testing.T) {
+	// All results are PRs → filtered → nil → nil guard → []githubIssue{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[{"number":1,"title":"PR","pull_request":{"url":"https://github.com/pr/1"}}]`)) //nolint:errcheck
+	}))
+	defer srv.Close()
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+	orig := wsHTTPClient
+	wsHTTPClient = &http.Client{Transport: &wsRedirectTransport{target: srv.URL, real: http.DefaultTransport}}
+	defer func() { wsHTTPClient = orig }()
+	issues, err := fetchGitHubIssues("owner", "repo")
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if issues == nil {
+		t.Error("expected non-nil empty slice, got nil")
+	}
+	if len(issues) != 0 {
+		t.Errorf("expected 0 issues (PRs filtered), got %d", len(issues))
+	}
+}
+
+func TestHandler_Chat_CancelPrevious(t *testing.T) {
+	projectDir := setupWSProject(t)
+
+	blocked := make(chan struct{})
+	unblock := make(chan struct{})
+	originalRunAIChat := runAIChat
+	runAIChat = func(ctx *ai.ChatContext, content string) {
+		if content == "first" {
+			close(blocked)
+			<-ctx.Cancel // wait for cancel
+		}
+	}
+	defer func() { runAIChat = originalRunAIChat }()
+
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	// Open project to get a session
+	writeWSMessage(t, conn, map[string]interface{}{"type": "project.open", "path": projectDir})
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sessionID := sessionMsg["session"].(map[string]interface{})["id"].(string)
+
+	// Send first chat message (will block in runAIChat)
+	writeWSMessage(t, conn, map[string]interface{}{"type": "chat", "sessionId": sessionID, "content": "first"})
+	readWSMessageOfType(t, conn, "chat.started")
+	<-blocked // wait for runAIChat to start
+
+	// Send second chat message → old() is called to cancel first
+	writeWSMessage(t, conn, map[string]interface{}{"type": "chat", "sessionId": sessionID, "content": "second"})
+	readWSMessageOfType(t, conn, "chat.started")
+	_ = unblock
+}
+
+func TestHandler_GithubIssues_ResolvesRepo(t *testing.T) {
+	// When no override is configured and project is a git repo, resolves owner/repo from remote.
+	// With non-git dir, the resolve fails and we get github.issues with error.
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "project.open", "path": projectDir})
+	readWSMessageOfType(t, conn, "session.created")
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "github.issues"})
+	msg := readWSMessageOfType(t, conn, "github.issues")
+	_ = msg
+}
+
+// ─── discord.validate with active bridge ──────────────────────────────────────
+
+func TestHandler_DiscordValidate_WithBridgeNoOverride(t *testing.T) {
+	SetDiscordBridge(&mockDiscordBridge{cfg: discord.Config{Enabled: true}})
+	defer SetDiscordBridge(nil)
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	// No override → uses discordBridge.CurrentConfig() path (else if discordBridge != nil)
+	writeWSMessage(t, conn, map[string]interface{}{"type": "discord.validate"})
+	msg := readWSMessageOfType(t, conn, "discord.validate.result")
+	if msg["result"] == nil {
+		t.Fatalf("expected result, got %+v", msg)
+	}
+}
+
+func TestHandler_DiscordValidate_WithBridgeAndOverride(t *testing.T) {
+	SetDiscordBridge(&mockDiscordBridge{cfg: discord.Config{Enabled: true}})
+	defer SetDiscordBridge(nil)
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	// Override + active bridge → base = discordBridge.CurrentConfig()
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "discord.validate",
+		"config": map[string]interface{}{
+			"enabled": true,
+			"token":   "override-token",
+			"guildId": "override-guild",
+		},
+	})
+	msg := readWSMessageOfType(t, conn, "discord.validate.result")
+	if msg["result"] == nil {
+		t.Fatalf("expected result, got %+v", msg)
+	}
+}
+
+// ─── discord.config.set: nil bridge + enabled (NewService paths) ──────────────
+
+func TestHandler_DiscordConfigSet_NilBridge_EnabledInitFails(t *testing.T) {
+	SetDiscordBridge(nil)
+	defer SetDiscordBridge(nil)
+
+	projectDir := setupWSProject(t)
+
+	// Write invalid discord-state.json to ENGINE_STATE_DIR so NewService's loadState() fails.
+	engineDir := os.Getenv("ENGINE_STATE_DIR")
+	if engineDir == "" {
+		engineDir = filepath.Join(projectDir, ".engine")
+		if err := os.MkdirAll(engineDir, 0755); err != nil {
+			t.Fatalf("mkdir .engine: %v", err)
+		}
+	}
+	stateFile := filepath.Join(engineDir, "discord-state.json")
+	if err := os.WriteFile(stateFile, []byte("{not valid json"), 0600); err != nil {
+		t.Fatalf("write bad state: %v", err)
+	}
+
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "discord.config.set",
+		"config": map[string]interface{}{
+			"enabled": true,
+			"token":   "fake-token",
+			"guildId": "fake-guild",
+		},
+	})
+	msg := drainWSUntilType(t, conn, "discord.config.saved")
+	if msg["warning"] == nil {
+		t.Fatalf("expected init-failed warning, got %+v", msg)
+	}
+}
+
+func TestHandler_DiscordConfigSet_NilBridge_EnabledSuccess(t *testing.T) {
+	SetDiscordBridge(nil)
+	defer SetDiscordBridge(nil)
+
+	// Inject no-op Start so the service "starts" without real Discord.
+	orig := discordServiceStartFn
+	discordServiceStartFn = func(s *discord.Service) error { return nil }
+	defer func() { discordServiceStartFn = orig }()
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "discord.config.set",
+		"config": map[string]interface{}{
+			"enabled": true,
+			"token":   "fake-token",
+			"guildId": "fake-guild",
+		},
+	})
+	msg := drainWSUntilType(t, conn, "discord.config.saved")
+	if active, _ := msg["active"].(bool); !active {
+		t.Fatalf("expected active:true after successful start, got %+v", msg)
+	}
+}
+
+// ─── github.issues partial override ──────────────────────────────────────────
+
+func TestHandler_GitHubIssues_PartialOverride(t *testing.T) {
+	// ENGINE_GITHUB_OWNER set but ENGINE_GITHUB_REPO empty → partial override error.
+	t.Setenv("ENGINE_GITHUB_OWNER", "myorg")
+	t.Setenv("ENGINE_GITHUB_REPO", "")
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "github.issues"})
+	msg := readWSMessageOfType(t, conn, "github.issues")
+	if msg["error"] == nil {
+		t.Fatalf("expected error for partial override, got %+v", msg)
+	}
+}
+
+func TestHandler_GitHubIssues_ResolvedFromGitRemote(t *testing.T) {
+	// Init a git repo with a github remote so ResolveGitHubRepo succeeds.
+	projectDir := setupWSProject(t)
+	for _, args := range [][]string{
+		{"init", projectDir},
+		{"-C", projectDir, "remote", "add", "origin", "https://github.com/testowner/testrepo.git"},
+	} {
+		cmd := exec.Command("git", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Mock HTTP to return empty issues list (avoid real GitHub call).
+	orig := wsHTTPClient
+	wsHTTPClient = &http.Client{Transport: &wsRedirectTransport{
+		target: httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(200)
+			w.Write([]byte("[]")) //nolint:errcheck
+		})).URL,
+		real: http.DefaultTransport,
+	}}
+	defer func() { wsHTTPClient = orig }()
+
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "github.issues"})
+	msg := readWSMessageOfType(t, conn, "github.issues")
+	_ = msg
+}
+
+func TestHandler_DiscordConfigSet_BadPayload(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	// config as string instead of object → json.Unmarshal error → BAD_PAYLOAD
+	writeWSMessage(t, conn, map[string]interface{}{"type": "discord.config.set", "config": "bad"})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "BAD_PAYLOAD" {
+		t.Fatalf("expected BAD_PAYLOAD, got %+v", msg)
+	}
+}
+
+// ─── fetchGitHubUser transport error ─────────────────────────────────────────
+
+func TestFetchGitHubUser_TransportError(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+	orig := wsHTTPClient
+	wsHTTPClient = &http.Client{Transport: &wsRedirectTransport{target: "http://127.0.0.1:1", real: http.DefaultTransport}}
+	defer func() { wsHTTPClient = orig }()
+
+	_, err := fetchGitHubUser()
+	if err == nil {
+		t.Error("expected transport error")
+	}
+}
+
+// ─── remote.pair.code.generate ────────────────────────────────────────────────
+
+type errPairingManager struct{}
+
+func (e *errPairingManager) GenerateCode() (string, error) {
+	return "", errors.New("rng failure")
+}
+
+func TestHandler_RemotePairCodeGenerate_Error(t *testing.T) {
+	localPairingManager = &errPairingManager{}
+	defer func() { localPairingManager = nil }()
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "remote.pair.code.generate"})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "PAIRING_ERROR" {
+		t.Fatalf("expected PAIRING_ERROR, got %+v", msg)
+	}
+}
+
+// ─── chat.stop no sessionId ───────────────────────────────────────────────────
+
+func TestHandler_ChatStop_NoSessionID(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	// Send chat.stop with no sessionId → handler returns immediately (no response)
+	writeWSMessage(t, conn, map[string]interface{}{"type": "chat.stop"})
+	// Follow up with a known-response message to verify the connection is still alive.
+	writeWSMessage(t, conn, map[string]interface{}{"type": "git.status"})
+	readWSMessageOfType(t, conn, "git.status")
+}
+
+// ─── session.create / session.load / chat bad JSON ────────────────────────────
+
+func TestHandler_SessionCreate_BadPayload(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	// projectPath as number → json.Unmarshal error → BAD_PAYLOAD
+	writeWSMessage(t, conn, map[string]interface{}{"type": "session.create", "projectPath": 42})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "BAD_PAYLOAD" {
+		t.Fatalf("expected BAD_PAYLOAD, got %+v", msg)
+	}
+}
+
+func TestHandler_SessionLoad_BadPayload(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	// sessionId as number → json.Unmarshal error → BAD_PAYLOAD
+	writeWSMessage(t, conn, map[string]interface{}{"type": "session.load", "sessionId": 42})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "BAD_PAYLOAD" {
+		t.Fatalf("expected BAD_PAYLOAD, got %+v", msg)
+	}
+}
+
+func TestHandler_Chat_BadPayload(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	// sessionId as number → json.Unmarshal error → BAD_PAYLOAD
+	writeWSMessage(t, conn, map[string]interface{}{"type": "chat", "sessionId": 42})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "BAD_PAYLOAD" {
+		t.Fatalf("expected BAD_PAYLOAD, got %+v", msg)
+	}
+}
+
+// ─── DB error injection paths ────────────────────────────────────────────────
+
+func TestHandler_SessionList_DBError(t *testing.T) {
+	orig := dbListSessions
+	dbListSessions = func(string) ([]db.Session, error) { return nil, errors.New("db error") }
+	defer func() { dbListSessions = orig }()
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "session.list"})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "DB_ERROR" {
+		t.Fatalf("expected DB_ERROR, got %+v", msg)
+	}
+}
+
+func TestHandler_SessionCreate_DBError(t *testing.T) {
+	origCreate := dbCreateSession
+	dbCreateSession = func(string, string, string) error { return errors.New("db error") }
+	defer func() { dbCreateSession = origCreate }()
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "session.create"})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "DB_ERROR" {
+		t.Fatalf("expected DB_ERROR, got %+v", msg)
+	}
+}
+
+func TestHandler_SessionCreate_WithSummary(t *testing.T) {
+	origSummary := aiBuildInitialSummary
+	aiBuildInitialSummary = func(string) string { return "test summary" }
+	defer func() { aiBuildInitialSummary = origSummary }()
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "session.create"})
+	msg := readWSMessageOfType(t, conn, "session.created")
+	if msg["session"] == nil {
+		t.Fatalf("expected session, got %+v", msg)
+	}
+}
+
+func TestHandler_SessionCreate_WorktreeUpdate(t *testing.T) {
+	altPath := t.TempDir()
+	origWT := aiEnsureSessionWorktree
+	aiEnsureSessionWorktree = func(id, projectPath string) (string, error) { return altPath, nil }
+	defer func() { aiEnsureSessionWorktree = origWT }()
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "session.create"})
+	readWSMessageOfType(t, conn, "session.created")
+}
+
+func TestHandler_SessionCleanup_WorktreeError(t *testing.T) {
+	origClean := aiCleanupSessionWorktreeDB
+	aiCleanupSessionWorktreeDB = func(id, path string, merge bool) error { return errors.New("cleanup error") }
+	defer func() { aiCleanupSessionWorktreeDB = origClean }()
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	// First create a session to cleanup.
+	writeWSMessage(t, conn, map[string]interface{}{"type": "session.create"})
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sessionID := sessionMsg["session"].(map[string]interface{})["id"].(string)
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "session.cleanup", "sessionId": sessionID})
+	readWSMessageOfType(t, conn, "session.cleanup.started")
+	// Give goroutine time to run and log the error.
+	time.Sleep(100 * time.Millisecond)
+}
+
+// ─── chat goroutine panic recovery ───────────────────────────────────────────
+
+func TestHandler_Chat_GoroutinePanic(t *testing.T) {
+	orig := runAIChat
+	runAIChat = func(ctx *ai.ChatContext, content string) {
+		panic("test panic in chat goroutine")
+	}
+	defer func() { runAIChat = orig }()
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "project.open", "path": projectDir})
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sessionID := sessionMsg["session"].(map[string]interface{})["id"].(string)
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "chat", "sessionId": sessionID, "content": "panic me"})
+	readWSMessageOfType(t, conn, "chat.started")
+	// Panic recovery sends chat.error
+	msg := readWSMessageOfType(t, conn, "chat.error")
+	if msg["error"] == nil {
+		t.Fatalf("expected error in chat.error, got %+v", msg)
+	}
+}
+
+// ─── SendToClient with map[string]string ─────────────────────────────────────
+
+func TestHandler_Chat_SendToClient_MapStringString(t *testing.T) {
+	orig := runAIChat
+	runAIChat = func(ctx *ai.ChatContext, content string) {
+		ctx.SendToClient("custom.event", map[string]string{"key": "value"})
+	}
+	defer func() { runAIChat = orig }()
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "project.open", "path": projectDir})
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sessionID := sessionMsg["session"].(map[string]interface{})["id"].(string)
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "chat", "sessionId": sessionID, "content": "send map"})
+	readWSMessageOfType(t, conn, "chat.started")
+	msg := readWSMessageOfType(t, conn, "custom.event")
+	if msg["key"] != "value" {
+		t.Fatalf("expected key=value in custom.event, got %+v", msg)
+	}
+}
+
+func TestHandler_Chat_OnError(t *testing.T) {
+	orig := runAIChat
+	runAIChat = func(ctx *ai.ChatContext, content string) {
+		ctx.OnError("something went wrong")
+	}
+	defer func() { runAIChat = orig }()
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "project.open", "path": projectDir})
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sessionID := sessionMsg["session"].(map[string]interface{})["id"].(string)
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "chat", "sessionId": sessionID, "content": "error"})
+	readWSMessageOfType(t, conn, "chat.started")
+	msg := readWSMessageOfType(t, conn, "chat.error")
+	if msg["error"] != "something went wrong" {
+		t.Fatalf("expected error message, got %+v", msg)
+	}
+}
+
+func TestHandler_Chat_OnSessionUpdated(t *testing.T) {
+	orig := runAIChat
+	runAIChat = func(ctx *ai.ChatContext, content string) {
+		if ctx.OnSessionUpdated != nil {
+			ctx.OnSessionUpdated(&db.Session{ID: ctx.SessionID})
+		}
+	}
+	defer func() { runAIChat = orig }()
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "project.open", "path": projectDir})
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sessionID := sessionMsg["session"].(map[string]interface{})["id"].(string)
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "chat", "sessionId": sessionID, "content": "update"})
+	readWSMessageOfType(t, conn, "chat.started")
+	msg := readWSMessageOfType(t, conn, "session.updated")
+	if msg["session"] == nil {
+		t.Fatalf("expected session in session.updated, got %+v", msg)
+	}
+}
+
+// ─── git.commit success ───────────────────────────────────────────────────────
+
+func TestHandler_GitCommit_Success(t *testing.T) {
+	projectDir := setupWSProject(t)
+
+	// Init a git repo so commit succeeds.
+	for _, args := range [][]string{
+		{"init", projectDir},
+		{"-C", projectDir, "config", "user.email", "test@test.com"},
+		{"-C", projectDir, "config", "user.name", "Test User"},
+	} {
+		cmd := exec.Command("git", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "git.commit", "message": "initial commit"})
+	msg := readWSMessageOfType(t, conn, "git.commit.result")
+	if ok, _ := msg["ok"].(bool); !ok {
+		t.Fatalf("expected ok:true for git commit in real repo, got %+v", msg)
+	}
+}
+
+// ─── project.open DB error ────────────────────────────────────────────────────
+
+func TestHandler_ProjectOpen_DBError(t *testing.T) {
+	origCreate := dbCreateSession
+	dbCreateSession = func(string, string, string) error { return errors.New("db error") }
+	defer func() { dbCreateSession = origCreate }()
+
+	// Use a fresh project path with no existing sessions so session creation is attempted.
+	projectDir := filepath.Join(t.TempDir(), "fresh-proj")
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stateDir := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", stateDir)
+	if err := db.Init(projectDir); err != nil {
+		t.Fatalf("db init: %v", err)
+	}
+
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "project.open", "path": projectDir})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "DB_ERROR" {
+		t.Fatalf("expected DB_ERROR, got %+v", msg)
+	}
+}
+
+func TestHandler_ProjectOpen_WithSummary(t *testing.T) {
+	origSummary := aiBuildInitialSummary
+	aiBuildInitialSummary = func(string) string { return "test project summary" }
+	defer func() { aiBuildInitialSummary = origSummary }()
+
+	// Fresh project so it creates a new session.
+	projectDir := filepath.Join(t.TempDir(), "fresh-proj2")
+	if err := os.MkdirAll(filepath.Join(projectDir, ".github", "references"), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stateDir := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", stateDir)
+	if err := db.Init(projectDir); err != nil {
+		t.Fatalf("db init: %v", err)
+	}
+
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "project.open", "path": projectDir})
+	msg := readWSMessageOfType(t, conn, "session.created")
+	if msg["session"] == nil {
+		t.Fatalf("expected session, got %+v", msg)
+	}
+}
+

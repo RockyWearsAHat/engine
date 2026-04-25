@@ -6,6 +6,9 @@ import (
 	"github.com/engine/server/discord"
 )
 
+// discordServiceStartFn is injectable for testing the Start() success/failure paths.
+var discordServiceStartFn = func(s *discord.Service) error { return s.Start() }
+
 // discordConfigPayload is the wire shape used by discord.config.get/set.
 // Secrets are sent masked unless explicitly requested with reveal=true.
 type discordConfigPayload struct {
@@ -130,7 +133,7 @@ func (c *conn) handleDiscordConfigSet(payload discordConfigPayload) {
 			})
 			return
 		}
-		if err := service.Start(); err != nil {
+		if err := discordServiceStartFn(service); err != nil {
 			c.send(map[string]interface{}{
 				"type":    "discord.config.saved",
 				"config":  toPayload(cfg),

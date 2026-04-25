@@ -20,47 +20,92 @@ import (
 	"github.com/engine/server/ws"
 )
 
+type discordRuntime interface {
+	Start() error
+	Close() error
+	CurrentConfig() discord.Config
+	Reload(cfg discord.Config) error
+	SearchHistory(projectPath, query, since string, limit int) ([]db.DiscordSearchHit, error)
+	RecentHistory(projectPath, threadID, since string, limit int) ([]db.DiscordMessage, error)
+}
+
+var (
+	runFn                = run
+	logFatalFn           = log.Fatal
+	dbInitFn             = db.Init
+	createSessionFn      = db.CreateSession
+	saveMessageFn        = db.SaveMessage
+	newHubFn             = ws.NewHub
+	loadDiscordConfigFn  = discord.LoadConfig
+	newDiscordServiceFn  = func(cfg discord.Config, projectPath string) (discordRuntime, error) { return discord.NewService(cfg, projectPath) }
+	setDiscordBridgeFn   = ws.SetDiscordBridge
+	newWebhookReceiverFn = github.NewWebhookReceiver
+	newRepoMonitorFn     = github.NewRepoMonitor
+	repoMonitorStartFn   = func(rm *github.RepoMonitor) { rm.Start(context.Background()) }
+	newVPNTunnelFn       = vpn.NewTunnel
+	vpnRegisterRoutesFn  = (*vpn.Tunnel).RegisterRoutes
+	vpnListenTLSFn       = (*vpn.Tunnel).ListenAndServeTLS
+	newRemoteServerFn    = remote.NewServer
+	setPairingManagerFn  = ws.SetPairingManager
+	remoteListenTLSFn    = (*remote.Server).ListenAndServeTLS
+	httpHandleFuncFn     = http.HandleFunc
+	httpHandleFn         = http.Handle
+	httpListenAndServeFn = http.ListenAndServe
+)
+
+// osGetwdFn and osUserHomeDirFn are injectable for tests.
+var (
+	osGetwdFn        = os.Getwd
+	osUserHomeDirFn  = os.UserHomeDir
+)
+
 func defaultProjectPath() string {
-	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+	if cwd, err := osGetwdFn(); err == nil && cwd != "" {
 		return cwd
 	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
+	if home, err := osUserHomeDirFn(); err == nil && home != "" {
 		return home
 	}
 	return "."
 }
 
 func main() {
+	if err := runFn(); err != nil {
+		logFatalFn(err)
+	}
+}
+
+func run() error {
 	projectPath := os.Getenv("PROJECT_PATH")
 	if projectPath == "" {
 		projectPath = defaultProjectPath()
 	}
 
-	if err := db.Init(projectPath); err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+	if err := dbInitFn(projectPath); err != nil {
+		return fmt.Errorf("failed to initialize database: %w", err)
 	}
 
-	hub := ws.NewHub(projectPath)
+	hub := newHubFn(projectPath)
 
-	if cfg, err := discord.LoadConfig(projectPath); err != nil {
-		log.Fatalf("Invalid Discord config: %v", err)
+	if cfg, err := loadDiscordConfigFn(projectPath); err != nil {
+		return fmt.Errorf("invalid discord config: %w", err)
 	} else if cfg.Enabled {
-		discordService, err := discord.NewService(cfg, projectPath)
+		discordService, err := newDiscordServiceFn(cfg, projectPath)
 		if err != nil {
-			log.Fatalf("Failed to initialize Discord service: %v", err)
+			return fmt.Errorf("failed to initialize discord service: %w", err)
 		}
 		if err := discordService.Start(); err != nil {
-			log.Fatalf("Failed to start Discord service: %v", err)
+			return fmt.Errorf("failed to start discord service: %w", err)
 		}
-		ws.SetDiscordBridge(discordService)
+		setDiscordBridgeFn(discordService)
 		defer discordService.Close() //nolint:errcheck
 	} else {
 		// Even when disabled, allow the UI to save/validate config via WS by
 		// wiring a stub that proxies only the bridge methods relying on the
 		// config + archive. We construct a non-started service so CurrentConfig
 		// and history queries work.
-		if stub, err := discord.NewService(cfg, projectPath); err == nil {
-			ws.SetDiscordBridge(stub)
+		if stub, err := newDiscordServiceFn(cfg, projectPath); err == nil {
+			setDiscordBridgeFn(stub)
 		}
 	}
 
@@ -72,15 +117,14 @@ func main() {
 		}
 		vpnCfg.Enabled = true
 
-		tunnel, err := vpn.NewTunnel(vpnCfg)
+		tunnel, err := newVPNTunnelFn(vpnCfg)
 		if err != nil {
-			log.Fatalf("Failed to start VPN tunnel: %v", err)
+			return fmt.Errorf("failed to start vpn tunnel: %w", err)
 		}
 
 		mux := http.NewServeMux()
-		tunnel.RegisterRoutes(mux, hub.ServeWS)
-		log.Fatal(tunnel.ListenAndServeTLS(mux))
-		return
+		vpnRegisterRoutesFn(tunnel, mux, hub.ServeWS)
+		return vpnListenTLSFn(tunnel, mux)
 	}
 
 	// Remote mode: ENGINE_REMOTE=1 starts a TLS-secured server with pairing and auth
@@ -91,14 +135,13 @@ func main() {
 		}
 		cfg.Enabled = true
 
-		srv, err := remote.NewServer(cfg, hub.ServeWS)
+		srv, err := newRemoteServerFn(cfg, hub.ServeWS)
 		if err != nil {
-			log.Fatalf("Failed to start remote server: %v", err)
+			return fmt.Errorf("failed to start remote server: %w", err)
 		}
 
-		ws.SetPairingManager(srv.Pairing)
-		log.Fatal(srv.ListenAndServeTLS())
-		return
+		setPairingManagerFn(srv.Pairing)
+		return remoteListenTLSFn(srv)
 	}
 
 	// Local mode: plain HTTP, no authentication needed
@@ -106,8 +149,8 @@ func main() {
 	if port == "" {
 		port = "3000"
 	}
-	http.HandleFunc("/ws", hub.ServeWS)
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	httpHandleFuncFn("/ws", hub.ServeWS)
+	httpHandleFuncFn("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
 		if r.Method == http.MethodOptions {
@@ -120,8 +163,8 @@ func main() {
 
 	// GitHub webhook receiver for repo monitoring.
 	webhookSecret := os.Getenv("GITHUB_WEBHOOK_SECRET")
-	webhookReceiver := github.NewWebhookReceiver(webhookSecret)
-	repoMonitor := github.NewRepoMonitor()
+	webhookReceiver := newWebhookReceiverFn(webhookSecret)
+	repoMonitor := newRepoMonitorFn()
 	repoMonitor.OnReadmeChange = func(payload json.RawMessage) {
 		log.Printf("README changed: launching AI scaffold session (payload %d bytes)", len(payload))
 		go triggerScaffoldSession(projectPath, payload)
@@ -139,13 +182,13 @@ func main() {
 		go triggerIssueOpenedSession(projectPath, payload)
 	}
 	webhookReceiver.AddHandler(repoMonitor.Enqueue)
-	repoMonitor.Start(context.Background())
+	repoMonitorStartFn(repoMonitor)
 	// Register the webhook route.
-	http.Handle("/webhook/github", webhookReceiver)
+	httpHandleFn("/webhook/github", webhookReceiver)
 
 	addr := ":" + port
 	fmt.Printf("Server running on http://localhost%s\n", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	return httpListenAndServeFn(addr, nil)
 }
 
 // triggerScaffoldSession fires an AI session when a README changes on GitHub.
@@ -169,7 +212,7 @@ func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
 
 	sessionID := fmt.Sprintf("scaffold-%s-%d", repo, time.Now().UnixNano())
 	branch, _ := gogit.GetCurrentBranch(projectPath)
-	if err := db.CreateSession(sessionID, projectPath, branch); err != nil {
+	if err := createSessionFn(sessionID, projectPath, branch); err != nil {
 		log.Printf("[scaffold %s/%s] create session: %v", owner, repo, err)
 	}
 	ctx := &ai.ChatContext{
@@ -181,7 +224,7 @@ func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
 			}
 			if done {
 				msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
-				if dbErr := db.SaveMessage(msgID, sessionID, "assistant", content, nil); dbErr != nil {
+				if dbErr := saveMessageFn(msgID, sessionID, "assistant", content, nil); dbErr != nil {
 					log.Printf("[scaffold %s/%s] save message: %v", owner, repo, dbErr)
 				}
 			}
@@ -224,7 +267,7 @@ func triggerCIAnalysisSession(projectPath string, payload json.RawMessage) {
 
 	sessionID := fmt.Sprintf("ci-fix-%d", time.Now().UnixNano())
 	branch, _ := gogit.GetCurrentBranch(projectPath)
-	if err := db.CreateSession(sessionID, projectPath, branch); err != nil {
+	if err := createSessionFn(sessionID, projectPath, branch); err != nil {
 		log.Printf("[ci-fix %s] create session: %v", ciEvent.Repository.FullName, err)
 	}
 	ctx := &ai.ChatContext{
@@ -236,7 +279,7 @@ func triggerCIAnalysisSession(projectPath string, payload json.RawMessage) {
 			}
 			if done {
 				msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
-				if dbErr := db.SaveMessage(msgID, sessionID, "assistant", content, nil); dbErr != nil {
+				if dbErr := saveMessageFn(msgID, sessionID, "assistant", content, nil); dbErr != nil {
 					log.Printf("[ci-fix %s] save message: %v", ciEvent.Repository.FullName, dbErr)
 				}
 			}
@@ -275,7 +318,7 @@ func triggerIssueSession(projectPath string, payload json.RawMessage) {
 
 	sessionID := fmt.Sprintf("issue-%d-%d", parsed.Issue.Number, time.Now().UnixNano())
 	branch, _ := gogit.GetCurrentBranch(projectPath)
-	if dbErr := db.CreateSession(sessionID, projectPath, branch); dbErr != nil {
+	if dbErr := createSessionFn(sessionID, projectPath, branch); dbErr != nil {
 		log.Printf("issue-session: create session: %v", dbErr)
 	}
 
@@ -288,7 +331,7 @@ func triggerIssueSession(projectPath string, payload json.RawMessage) {
 			}
 			if done {
 				msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
-				if dbErr := db.SaveMessage(msgID, sessionID, "assistant", content, nil); dbErr != nil {
+				if dbErr := saveMessageFn(msgID, sessionID, "assistant", content, nil); dbErr != nil {
 					log.Printf("issue-session: save message: %v", dbErr)
 				}
 			}
@@ -328,7 +371,7 @@ func triggerIssueOpenedSession(projectPath string, payload json.RawMessage) {
 
 	sessionID := fmt.Sprintf("issue-%d-%d", parsed.Issue.Number, time.Now().UnixNano())
 	branch, _ := gogit.GetCurrentBranch(projectPath)
-	if dbErr := db.CreateSession(sessionID, projectPath, branch); dbErr != nil {
+	if dbErr := createSessionFn(sessionID, projectPath, branch); dbErr != nil {
 		log.Printf("issue-opened: create session: %v", dbErr)
 	}
 
@@ -341,7 +384,7 @@ func triggerIssueOpenedSession(projectPath string, payload json.RawMessage) {
 			}
 			if done {
 				msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
-				if dbErr := db.SaveMessage(msgID, sessionID, "assistant", content, nil); dbErr != nil {
+				if dbErr := saveMessageFn(msgID, sessionID, "assistant", content, nil); dbErr != nil {
 					log.Printf("issue-opened: save message: %v", dbErr)
 				}
 			}

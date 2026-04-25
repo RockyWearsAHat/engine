@@ -48,6 +48,8 @@ var ollamaModelPrefixes = []string{
 	"nemotron",
 }
 
+var openURLCommand = exec.Command
+
 // ollamaWarmKeepInterval is how often we ping Ollama to reset the model TTL.
 // Must be less than OLLAMA_KEEP_ALIVE (default 30m) so the model never expires.
 const ollamaWarmKeepInterval = 20 * time.Minute
@@ -1121,9 +1123,9 @@ func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) 
 		var urlCmd *exec.Cmd
 		switch runtime.GOOS {
 		case "darwin":
-			urlCmd = exec.Command("open", urlStr)
+			urlCmd = openURLCommand("open", urlStr)
 		case "linux":
-			urlCmd = exec.Command("xdg-open", urlStr)
+			urlCmd = openURLCommand("xdg-open", urlStr)
 		default:
 			return fmt.Sprintf("open_url not supported on %s", runtime.GOOS), true
 		}

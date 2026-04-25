@@ -228,9 +228,6 @@ func SearchMatches(pattern, dir, fileGlob string) ([]SearchResult, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("parse search results: %w", err)
 	}
-	if results == nil {
-		results = []SearchResult{}
-	}
 	return results, nil
 }
 

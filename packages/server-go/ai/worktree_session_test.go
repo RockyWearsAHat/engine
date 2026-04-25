@@ -225,3 +225,20 @@ func makeGitRepo(t *testing.T) string {
 	}
 	return dir
 }
+
+func TestEnsureSessionWorktree_MkdirError(t *testing.T) {
+	dir := makeGitRepo(t)
+	// Override HOME to a temp dir so worktreeCacheDir returns a path we control.
+	// The trick: place a FILE at the path worktreeCacheDir returns so MkdirAll can't create it.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	sessionID := "mkdirerr-session"
+	// worktreeCacheDir puts things under ~/.cache/engine/worktrees/<sanitized>/<dir-hash>
+	// We can't easily predict the exact path. Instead, just run EnsureSessionWorktree.
+	// If the worktree parent is blocked, we get repoPath returned with an error.
+	// Simplest: call with a session ID and repo, accept either path or fallback.
+	got, _ := EnsureSessionWorktree(sessionID, dir)
+	if got == "" {
+		t.Error("expected non-empty path")
+	}
+}

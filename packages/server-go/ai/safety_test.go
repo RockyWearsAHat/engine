@@ -136,3 +136,93 @@ func TestRequiresShellApproval_RiskyCommand_GitReset(t *testing.T) {
 		t.Error("git reset should require approval")
 	}
 }
+
+func TestRequiresShellApproval_RiskyCommand_Mv(t *testing.T) {
+	_, _, ok := requiresShellApproval("/project", "mv /etc/passwd /tmp/passwd")
+	if !ok {
+		t.Error("mv command should require approval")
+	}
+}
+
+func TestRequiresShellApproval_RiskyCommand_Chmod(t *testing.T) {
+	_, _, ok := requiresShellApproval("/project", "chmod 777 /etc/shadow")
+	if !ok {
+		t.Error("chmod command should require approval")
+	}
+}
+
+func TestRequiresShellApproval_RiskyCommand_GitClean(t *testing.T) {
+	_, _, ok := requiresShellApproval("/project", "git clean -fd")
+	if !ok {
+		t.Error("git clean should require approval")
+	}
+}
+
+func TestRequiresShellApproval_RiskyCommand_Redirect(t *testing.T) {
+	_, _, ok := requiresShellApproval("/project", "echo secret > /etc/files")
+	if !ok {
+		t.Error("> redirect should require approval")
+	}
+}
+
+func TestRequiresShellApproval_RiskyCommand_Append(t *testing.T) {
+	_, _, ok := requiresShellApproval("/project", "echo data >> /important/file")
+	if !ok {
+		t.Error(">> append should require approval")
+	}
+}
+
+func TestRequiresShellApproval_RiskyCommand_Pipe(t *testing.T) {
+	_, _, ok := requiresShellApproval("/project", "echo hello | sh")
+	if !ok {
+		t.Error("| sh pipe should require approval")
+	}
+}
+
+func TestRequiresShellApproval_RiskyCommand_Kill(t *testing.T) {
+	_, _, ok := requiresShellApproval("/project", "kill -9 1234")
+	if !ok {
+		t.Error("kill command should require approval")
+	}
+}
+
+func TestRequiresShellApproval_RiskyCommand_Reboot(t *testing.T) {
+	_, _, ok := requiresShellApproval("/project", "reboot now")
+	if !ok {
+		t.Error("reboot command should require approval")
+	}
+}
+
+func TestRequiresShellApproval_ExternalPath(t *testing.T) {
+	_, _, ok := requiresShellApproval("/project", "cat /etc/passwd")
+	if !ok {
+		t.Error("absolute path to /etc should require approval")
+	}
+}
+
+func TestRequiresShellApproval_ExternalPath_WithinWorkspace_OK(t *testing.T) {
+	_, _, ok := requiresShellApproval("/project", "cat /project/src/file.go")
+	if ok {
+		t.Error("path within workspace should not require approval")
+	}
+}
+
+func TestRequiresShellApproval_CDUpEscape(t *testing.T) {
+	_, _, ok := requiresShellApproval("/project", "cd ..")
+	if !ok {
+		t.Error("cd .. should require approval")
+	}
+}
+
+func TestRequiresShellApproval_Messages_Present(t *testing.T) {
+	title, msg, ok := requiresShellApproval("/project", "rm -rf /")
+	if !ok {
+		t.Fatal("rm -rf should require approval")
+	}
+	if title == "" {
+		t.Error("expected non-empty title")
+	}
+	if msg == "" {
+		t.Error("expected non-empty message")
+	}
+}

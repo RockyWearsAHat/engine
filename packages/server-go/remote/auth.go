@@ -28,6 +28,12 @@ type AuthManager struct {
 	revokedIDs map[string]bool
 }
 
+// randReadFn is injectable for tests to simulate random-read failure.
+var randReadFn = rand.Read
+
+// jsonMarshalFn is injectable for tests to simulate JSON marshal failure.
+var jsonMarshalFn = json.Marshal
+
 // NewAuthManager loads an existing HMAC secret or generates a new one.
 func NewAuthManager(storagePath string) (*AuthManager, error) {
 	secretPath := filepath.Join(storagePath, "secret.key")
@@ -35,7 +41,7 @@ func NewAuthManager(storagePath string) (*AuthManager, error) {
 	secret, err := os.ReadFile(secretPath)
 	if err != nil || len(secret) < 32 {
 		secret = make([]byte, 32)
-		if _, err := rand.Read(secret); err != nil {
+		if _, err := randReadFn(secret); err != nil {
 			return nil, fmt.Errorf("generate secret: %w", err)
 		}
 		if err := os.WriteFile(secretPath, secret, 0600); err != nil {
@@ -55,7 +61,7 @@ func (am *AuthManager) IssueToken(deviceID string, ttl time.Duration) (string, e
 		ExpiresAt: now.Add(ttl).Unix(),
 	}
 
-	payloadBytes, err := json.Marshal(payload)
+	payloadBytes, err := jsonMarshalFn(payload)
 	if err != nil {
 		return "", fmt.Errorf("marshal payload: %w", err)
 	}
@@ -129,7 +135,7 @@ func (am *AuthManager) RotateSecret(storagePath string) error {
 	defer am.mu.Unlock()
 
 	newSecret := make([]byte, 32)
-	if _, err := rand.Read(newSecret); err != nil {
+	if _, err := randReadFn(newSecret); err != nil {
 		return fmt.Errorf("generate new secret: %w", err)
 	}
 

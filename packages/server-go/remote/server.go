@@ -95,6 +95,18 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("/ws", s.Auth.AuthMiddleware(http.HandlerFunc(s.wsHandler)))
 }
 
+// randReadFn2 is injectable for tests to simulate random-read failure in pair handler.
+var randReadFn2 = rand.Read
+
+// genPairingCodeFn is injectable for tests to simulate code-generation failure.
+var serverGenPairingCodeFn = func(pm *PairingManager) (string, error) { return pm.GenerateCode() }
+
+// serverListenAndServeTLSFn is injectable for tests to simulate listen error.
+var serverListenAndServeTLSFn = func(s *http.Server) error { return s.ListenAndServeTLS("", "") }
+
+// serverPairingCleanupTimerFn is injectable for tests to skip the 1-minute sleep.
+var serverPairingCleanupTimerFn = func() { time.Sleep(time.Minute) }
+
 func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -119,7 +131,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	}
 
 	deviceIDBytes := make([]byte, 16)
-	if _, err := rand.Read(deviceIDBytes); err != nil {
+	if _, err := randReadFn2(deviceIDBytes); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -169,7 +181,7 @@ func (s *Server) ListenAndServeTLS() error {
 		return err
 	}
 
-	code, err := s.Pairing.GenerateCode()
+	code, err := serverGenPairingCodeFn(s.Pairing)
 	if err != nil {
 		return err
 	}
@@ -187,10 +199,10 @@ func (s *Server) ListenAndServeTLS() error {
 	// Start background cleanup of expired pairing codes
 	go func() {
 		for {
-			time.Sleep(time.Minute)
+			serverPairingCleanupTimerFn()
 			s.Pairing.Cleanup()
 		}
 	}()
 
-	return server.ListenAndServeTLS("", "")
+	return serverListenAndServeTLSFn(server)
 }

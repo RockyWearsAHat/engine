@@ -1,8 +1,8 @@
 {
   "controlChannelId": "",
   "projects": {
-    "/var/folders/5f/4h6tgvh971b_978284101_b00000gn/T/TestHandlePauseResume_Resume2872739687/001": {
-      "projectPath": "/var/folders/5f/4h6tgvh971b_978284101_b00000gn/T/TestHandlePauseResume_Resume2872739687/001",
+    "/var/folders/5f/4h6tgvh971b_978284101_b00000gn/T/TestHandlePauseResume_Resume662760662/001": {
+      "projectPath": "/var/folders/5f/4h6tgvh971b_978284101_b00000gn/T/TestHandlePauseResume_Resume662760662/001",
       "repoName": "repo",
       "channelId": "ch-resume",
       "paused": false
