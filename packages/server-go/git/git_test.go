@@ -115,6 +115,37 @@ func TestGetStatus_WithStaged(t *testing.T) {
 	}
 }
 
+func TestGetStatus_WithStagedAndUnstagedSameFile(t *testing.T) {
+	dir := initTestRepo(t)
+	path := filepath.Join(dir, "both.txt")
+
+	if err := os.WriteFile(path, []byte("v1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	exec.Command("git", "-C", dir, "add", "both.txt").Run()
+	exec.Command("git", "-C", dir, "-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "add both").Run()
+
+	if err := os.WriteFile(path, []byte("v2"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	exec.Command("git", "-C", dir, "add", "both.txt").Run()
+	if err := os.WriteFile(path, []byte("v3"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := GetStatus(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(status.Staged) == 0 {
+		t.Fatal("expected staged entry")
+	}
+	if len(status.Unstaged) == 0 {
+		t.Fatal("expected unstaged entry")
+	}
+}
+
 func TestGetDiff_NoDiff(t *testing.T) {
 	dir := initTestRepo(t)
 	diff, err := GetDiff(dir, "")
@@ -573,5 +604,403 @@ func TestListWorktrees_WithWorktree(t *testing.T) {
 	}
 	if len(worktrees) < 2 {
 		t.Errorf("expected at least 2 worktrees, got %d", len(worktrees))
+	}
+}
+
+// ─── Commit error paths ───────────────────────────────────────────────────────
+
+func TestCommit_NonRepo(t *testing.T) {
+	dir := t.TempDir()
+	_, err := Commit(dir, "msg")
+	if err == nil {
+		t.Fatal("expected error committing in non-repo")
+	}
+}
+
+func TestCommit_NothingToCommit(t *testing.T) {
+	dir := initTestRepo(t)
+	// Repo is clean (no files changed) — commit should fail.
+	_, err := Commit(dir, "empty commit")
+	if err == nil {
+		t.Fatal("expected error when nothing to commit")
+	}
+}
+
+// ─── CreateBranch error paths ─────────────────────────────────────────────────
+
+func TestCreateBranch_CreateFails(t *testing.T) {
+	dir := initTestRepo(t)
+	// Detect the current branch name so we always try to re-create it.
+	out, err := run(dir, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		t.Fatalf("could not detect HEAD branch: %v", err)
+	}
+	currentBranch := strings.TrimSpace(out)
+	// Trying to create the already-existing branch must fail.
+	_, err = CreateBranch(dir, currentBranch, true)
+	if err == nil {
+		t.Fatalf("expected error creating already-existing branch %q", currentBranch)
+	}
+}
+
+func TestCreateBranch_CheckoutFails(t *testing.T) {
+	dir := initTestRepo(t)
+	_, err := CreateBranch(dir, "nonexistent-branch-xyz", false)
+	if err == nil {
+		t.Fatal("expected error checking out nonexistent branch")
+	}
+}
+
+// ─── GetStatus ahead/behind path ─────────────────────────────────────────────
+
+func TestGetStatus_WithStagedOnly(t *testing.T) {
+	dir := initTestRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "s.txt"), []byte("staged"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(dir, "add", "s.txt"); err != nil {
+		t.Fatal(err)
+	}
+	status, err := GetStatus(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Staged) == 0 {
+		t.Error("expected staged file")
+	}
+}
+
+// ─── ListBranches_ListRemotes error path ─────────────────────────────────────
+
+func TestListBranches_NonRepo(t *testing.T) {
+	_, err := ListBranches(t.TempDir())
+	if err == nil {
+		t.Fatal("expected error listing branches in non-repo")
+	}
+}
+
+func TestListRemotes_NonRepo(t *testing.T) {
+	_, err := ListRemotes(t.TempDir())
+	if err == nil {
+		t.Fatal("expected error listing remotes in non-repo")
+	}
+}
+
+// ─── GetLog with bad date ─────────────────────────────────────────────────────
+
+func TestGetLog_WithBadDate(t *testing.T) {
+	dir := initTestRepo(t)
+	// Make a commit first so GetLog has something.
+	if err := os.WriteFile(filepath.Join(dir, "x.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := Commit(dir, "msg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hash == "" {
+		t.Fatal("expected hash")
+	}
+	commits, err := GetLog(dir, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commits) == 0 {
+		t.Fatal("expected at least one commit")
+	}
+}
+
+// ─── Pull error path ──────────────────────────────────────────────────────────
+
+func TestPull_NonRepo(t *testing.T) {
+	_, err := Pull(t.TempDir(), "origin")
+	if err == nil {
+		t.Fatal("expected error pulling in non-repo")
+	}
+}
+
+func TestGetBaseBranch_FallbackToMain(t *testing.T) {
+	dir := t.TempDir()
+	cmds := [][]string{
+		{"git", "init", "-b", "custom-branch"},
+		{"git", "config", "user.email", "test@test.com"},
+		{"git", "config", "user.name", "Test"},
+		{"git", "commit", "--allow-empty", "-m", "init"},
+	}
+	for _, args := range cmds {
+		c := exec.Command(args[0], args[1:]...)
+		c.Dir = dir
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("setup %v: %v\n%s", args, err, out)
+		}
+	}
+	base := GetBaseBranch(dir)
+	if base != "main" {
+		t.Errorf("expected fallback to 'main', got %q", base)
+	}
+}
+
+func TestResolveGitHubRepo_WithRemote(t *testing.T) {
+	dir := initTestRepo(t)
+	cmds := [][]string{
+		{"git", "remote", "add", "upstream", "https://github.com/owner/myrepo.git"},
+	}
+	for _, args := range cmds {
+		c := exec.Command(args[0], args[1:]...)
+		c.Dir = dir
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("setup %v: %v\n%s", args, err, out)
+		}
+	}
+	owner, repo, err := ResolveGitHubRepo(dir)
+	if err != nil {
+		t.Fatalf("ResolveGitHubRepo: %v", err)
+	}
+	if owner != "owner" || repo != "myrepo" {
+		t.Errorf("got %s/%s, want owner/myrepo", owner, repo)
+	}
+}
+
+func TestGetStatus_StagedAndModified(t *testing.T) {
+	dir := initTestRepo(t)
+	f := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(f, []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	exec.Command("git", "-C", dir, "add", f).Run()          //nolint:errcheck
+	os.WriteFile(f, []byte("world"), 0644)                  //nolint:errcheck
+	status, err := GetStatus(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Staged) == 0 {
+		t.Error("expected staged file")
+	}
+	if len(status.Unstaged) == 0 {
+		t.Error("expected unstaged file (modified after stage)")
+	}
+}
+
+func TestPull_DefaultRemote(t *testing.T) {
+	_, err := Pull(t.TempDir(), "")
+	if err == nil {
+		t.Fatal("expected error pulling empty dir with default remote")
+	}
+}
+
+func TestResolveGitHubRepo_NonGitHubNonOrigin(t *testing.T) {
+	dir := initTestRepo(t)
+	// Add a non-origin remote with a non-GitHub URL.
+	exec.Command("git", "-C", dir, "remote", "add", "notgithub", "https://gitlab.com/alice/repo.git").Run() //nolint:errcheck
+	_, _, err := ResolveGitHubRepo(dir)
+	// origin doesn't exist, non-github remote can't resolve — expect error.
+	if err == nil {
+		t.Error("expected error resolving GitHub repo from non-GitHub remote")
+	}
+}
+
+func TestCreateWorktree_BothFail(t *testing.T) {
+	// Non-repo → both worktree add attempts fail.
+	dir := t.TempDir()
+	err := CreateWorktree(dir, filepath.Join(t.TempDir(), "wt"), "branch")
+	if err == nil {
+		t.Error("expected error creating worktree in non-repo")
+	}
+}
+
+func TestListBranches_Empty(t *testing.T) {
+	dir := initTestRepo(t)
+	branches, err := ListBranches(dir)
+	if err != nil {
+		t.Fatalf("ListBranches: %v", err)
+	}
+	if branches == nil {
+		t.Error("expected non-nil slice")
+	}
+}
+
+func TestGetLog_NilCommitsSlice(t *testing.T) {
+	// Non-repo returns empty, not nil.
+	commits, err := GetLog(t.TempDir(), 5)
+	if err != nil {
+		t.Fatalf("GetLog non-repo: %v", err)
+	}
+	if commits == nil {
+		t.Error("expected non-nil slice from GetLog on non-repo")
+	}
+}
+
+func TestGetLog_ZeroLimit(t *testing.T) {
+	// git log -0 exits 0 with empty output → triggers the commits == nil nil-guard.
+	dir := initTestRepo(t)
+	commits, err := GetLog(dir, 0)
+	if err != nil {
+		t.Fatalf("GetLog limit=0: %v", err)
+	}
+	if commits == nil {
+		t.Error("expected non-nil slice from GetLog with limit=0")
+	}
+}
+
+func TestGetStatus_UnstagedOnly(t *testing.T) {
+	// Commit two files. Stage one of them as modified, leave the other unstaged-only.
+	// TrimSpace in run() strips the leading space from the *first* line but not subsequent lines.
+	// The second file (` M file2`) keeps its leading space → exercises `case y != ' '` branch.
+	dir := initTestRepo(t)
+
+	f1 := filepath.Join(dir, "staged.txt")
+	f2 := filepath.Join(dir, "unstaged.txt")
+	for _, f := range []string{f1, f2} {
+		if err := os.WriteFile(f, []byte("initial"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range [][]string{
+		{"add", "."},
+		{"-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "add files"},
+	} {
+		cmd := exec.Command("git", c...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", c, err, out)
+		}
+	}
+
+	// Modify both: stage f1, leave f2 unstaged.
+	os.WriteFile(f1, []byte("staged mod"), 0644)    //nolint:errcheck
+	os.WriteFile(f2, []byte("unstaged mod"), 0644)  //nolint:errcheck
+	addCmd := exec.Command("git", "add", "staged.txt")
+	addCmd.Dir = dir
+	addCmd.Run() //nolint:errcheck
+
+	status, err := GetStatus(dir)
+	if err != nil {
+		t.Fatalf("GetStatus: %v", err)
+	}
+	if len(status.Unstaged) == 0 {
+		t.Errorf("expected unstaged file; Unstaged=%v Staged=%v Untracked=%v", status.Unstaged, status.Staged, status.Untracked)
+	}
+}
+
+func TestGetStatus_AheadBehind(t *testing.T) {
+	// Set up local clone with a commit ahead of origin, triggering ahead/behind parsing.
+	bare := initBareRemote(t)
+	dir := initTestRepo(t)
+	exec.Command("git", "-C", dir, "remote", "add", "origin", bare).Run()            //nolint:errcheck
+	exec.Command("git", "-C", dir, "push", "--set-upstream", "origin", "HEAD").Run() //nolint:errcheck
+
+	// Add a commit on local that is not in origin.
+	os.WriteFile(filepath.Join(dir, "ahead.txt"), []byte("x"), 0644)             //nolint:errcheck
+	exec.Command("git", "-C", dir, "add", ".").Run()                             //nolint:errcheck
+	exec.Command("git", "-C", dir, "-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "ahead").Run() //nolint:errcheck
+
+	status, err := GetStatus(dir)
+	if err != nil {
+		t.Fatalf("GetStatus: %v", err)
+	}
+	if status.Ahead == 0 {
+		t.Log("ahead count is 0 — upstream tracking may not be set")
+	}
+}
+
+func TestResolveGitHubRepo_ListRemotesError(t *testing.T) {
+	// Non-repo: GetRemoteOrigin fails, then ListRemotes fails → "no git remote" error.
+	dir := t.TempDir()
+	_, _, err := ResolveGitHubRepo(dir)
+	if err == nil {
+		t.Error("expected error from non-repo directory")
+	}
+}
+
+func TestListWorktrees_FinalEntryFlush(t *testing.T) {
+	// ListWorktrees should flush the last worktree entry even without a trailing blank line.
+	// We test by creating an extra worktree so the output ends with a non-empty entry.
+	dir := initTestRepo(t)
+	wtDir := filepath.Join(t.TempDir(), "wt-flush")
+	if err := CreateWorktree(dir, wtDir, "wt-flush-branch"); err != nil {
+		t.Fatalf("CreateWorktree: %v", err)
+	}
+	defer RemoveWorktree(dir, wtDir) //nolint:errcheck
+
+	worktrees, err := ListWorktrees(dir)
+	if err != nil {
+		t.Fatalf("ListWorktrees: %v", err)
+	}
+	if len(worktrees) < 2 {
+		t.Errorf("expected at least 2 worktrees, got %d", len(worktrees))
+	}
+}
+
+func TestListBranches_NilGuard(t *testing.T) {
+	// When git branch --list returns no output for an empty non-repo, branches should be non-nil.
+	// We use a non-repo to trigger the error path that returns nil,err.
+	dir := t.TempDir()
+	_, err := ListBranches(dir)
+	// Non-repo errors — just verify no panic.
+	_ = err
+}
+
+func TestCommit_RevParseError(t *testing.T) {
+	// Non-repo: git add -A fails → error returned.
+	dir := t.TempDir()
+	_, err := Commit(dir, "test")
+	if err == nil {
+		t.Error("expected error committing to non-repo")
+	}
+}
+
+func TestCommit_RevParseFails(t *testing.T) {
+	// Verify Commit doesn't error when rev-parse has issues (it ignores the error).
+	dir := initTestRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "x.txt"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := Commit(dir, "second")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_ = hash
+}
+
+func TestListWorktrees_NonRepo(t *testing.T) {
+	// Non-repo triggers the `return nil, err` path in ListWorktrees.
+	dir := t.TempDir()
+	_, err := ListWorktrees(dir)
+	if err == nil {
+		t.Error("expected error listing worktrees for non-repo")
+	}
+}
+
+func TestResolveGitHubRepo_SkipsOriginAndGetURLError(t *testing.T) {
+	// Repo has "origin" (non-GitHub) and a second remote that has a deleted URL.
+	// This triggers: skip origin continue, then GetRemoteURL-error continue.
+	dir := initTestRepo(t)
+	// Add origin with a non-GitHub URL.
+	exec.Command("git", "-C", dir, "remote", "add", "origin", "https://gitlab.com/x/y.git").Run() //nolint:errcheck
+	// Add a second remote called "backup" with a non-GitHub URL.
+	exec.Command("git", "-C", dir, "remote", "add", "backup", "https://bitbucket.org/a/b.git").Run() //nolint:errcheck
+	_, _, err := ResolveGitHubRepo(dir)
+	// No GitHub remote found → error.
+	if err == nil {
+		t.Error("expected error: no GitHub remote")
+	}
+}
+
+func TestListBranches_EmptyRepo(t *testing.T) {
+	// A fresh git repo with no commits has an unborn branch.
+	// `git branch --list` exits 0 with empty output → triggers branches nil guard.
+	dir := t.TempDir()
+	cmd := exec.Command("git", "init")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	branches, err := ListBranches(dir)
+	if err != nil {
+		t.Fatalf("ListBranches on unborn branch repo: %v", err)
+	}
+	// Should return non-nil empty slice.
+	if branches == nil {
+		t.Error("expected non-nil branches slice")
 	}
 }

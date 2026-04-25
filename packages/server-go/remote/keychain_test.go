@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"testing"
@@ -183,5 +184,64 @@ func TestDeriveKey(t *testing.T) {
 	key := deriveKey()
 	if len(key) != 32 {
 		t.Errorf("key length = %d, want 32", len(key))
+	}
+}
+
+// TestKeychainStore_LoadStore_TooShortFile: valid base64 that decodes to fewer than
+// gcm.NonceSize() (12) bytes — should return "credential file too short" error.
+func TestKeychainStore_LoadStore_TooShortFile(t *testing.T) {
+	ks := newTestKeychainStore(t)
+	dir := filepath.Dir(ks.fallback)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// "short" is 5 bytes — well under the 12-byte nonce requirement.
+	encoded := base64.StdEncoding.EncodeToString([]byte("short"))
+	if err := os.WriteFile(ks.fallback, []byte(encoded), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ks.loadStore()
+	if err == nil {
+		t.Fatal("expected error for too-short credential file")
+	}
+}
+
+func TestKeychainStore_SaveStore_MkdirAllError(t *testing.T) {
+	// Use a path whose parent is a file (cannot MkdirAll into it).
+	tmp := t.TempDir()
+	blockFile := filepath.Join(tmp, "block")
+	if err := os.WriteFile(blockFile, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ks := &KeychainStore{fallback: filepath.Join(blockFile, "sub", "creds.enc")}
+	if err := ks.saveStore(map[string]string{}); err == nil {
+		t.Fatal("expected MkdirAll error")
+	}
+}
+
+func TestKeychainStore_SaveStore_WriteError(t *testing.T) {
+	// Create a dir named after the fallback file so WriteFile fails.
+	tmp := t.TempDir()
+	credDir := filepath.Join(tmp, "creds.enc")
+	if err := os.Mkdir(credDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	ks := &KeychainStore{fallback: credDir}
+	if err := ks.saveStore(map[string]string{"k": "v"}); err == nil {
+		t.Fatal("expected WriteFile error when fallback is a dir")
+	}
+}
+
+func TestKeychainStore_FileGet_LoadError(t *testing.T) {
+	tmp := t.TempDir()
+	fallback := filepath.Join(tmp, "creds.enc")
+	// Write invalid base64 to trigger loadStore error in fileGet.
+	if err := os.WriteFile(fallback, []byte("not-valid-base64!!!"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ks := &KeychainStore{fallback: fallback}
+	_, err := ks.fileGet("anykey")
+	if err == nil {
+		t.Fatal("expected error from fileGet when store is corrupt")
 	}
 }

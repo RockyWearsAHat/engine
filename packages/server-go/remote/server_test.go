@@ -225,3 +225,40 @@ func TestListenAndServeTLS_TLSConfigError(t *testing.T) {
 		t.Fatal("expected ListenAndServeTLS error for invalid storage path")
 	}
 }
+
+// TestHandleRefresh_DirectCall_InvalidToken calls handleRefresh directly (bypassing
+// AuthMiddleware) to cover the ValidateToken-error branch inside the handler.
+func TestHandleRefresh_DirectCall_InvalidToken(t *testing.T) {
+	s := newTestServer(t)
+	req := httptest.NewRequest("POST", "/remote/refresh", nil)
+	rr := httptest.NewRecorder()
+	s.handleRefresh(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rr.Code)
+	}
+}
+func TestNewServer_EnsureStorageDirError(t *testing.T) {
+        // Make storage path a file so EnsureStorageDir fails.
+        badPath := filepath.Join(t.TempDir(), "not-a-dir")
+        if err := os.WriteFile(badPath, []byte("x"), 0644); err != nil {
+                t.Fatal(err)
+        }
+        cfg := Config{StoragePath: badPath, Port: "0"}
+        _, err := NewServer(cfg, nil)
+        if err == nil {
+                t.Fatal("expected error when storage path is a file")
+        }
+}
+
+func TestNewServer_AuthManagerError(t *testing.T) {
+        dir := t.TempDir()
+        // Put a directory named secret.key so NewAuthManager os.WriteFile fails.
+        if err := os.Mkdir(filepath.Join(dir, "secret.key"), 0755); err != nil {
+                t.Fatal(err)
+        }
+        cfg := Config{StoragePath: dir, Port: "0"}
+        _, err := NewServer(cfg, nil)
+        if err == nil {
+                t.Fatal("expected error when secret.key is a directory")
+        }
+}

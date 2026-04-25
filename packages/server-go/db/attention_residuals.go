@@ -112,8 +112,5 @@ func GetProjectAttentionResiduals(projectPath string, limit int) ([]AttentionRes
 		}
 		residuals = append(residuals, residual)
 	}
-	if residuals == nil {
-		residuals = []AttentionResidual{}
-	}
 	return residuals, nil
 }

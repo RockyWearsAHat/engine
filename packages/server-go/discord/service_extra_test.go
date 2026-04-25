@@ -524,3 +524,88 @@ func TestShortTime_RFC3339Nano(t *testing.T) {
 		t.Error("expected reformatted time")
 	}
 }
+
+// ── LoadConfig error paths ────────────────────────────────────────────────────
+
+func TestLoadConfig_EnabledMissingToken(t *testing.T) {
+	t.Setenv("ENGINE_DISCORD", "true")
+	t.Setenv("ENGINE_DISCORD_BOT_TOKEN", "")
+	t.Setenv("ENGINE_DISCORD_GUILD_ID", "")
+	t.Setenv("ENGINE_DISCORD_ALLOWED_USER_IDS", "")
+	projectDir := t.TempDir()
+	_, err := LoadConfig(projectDir)
+	if err == nil {
+		t.Error("expected error for missing bot token")
+	}
+}
+
+func TestLoadConfig_EnabledMissingGuild(t *testing.T) {
+	t.Setenv("ENGINE_DISCORD", "true")
+	t.Setenv("ENGINE_DISCORD_BOT_TOKEN", "some-token")
+	t.Setenv("ENGINE_DISCORD_GUILD_ID", "")
+	t.Setenv("ENGINE_DISCORD_ALLOWED_USER_IDS", "")
+	projectDir := t.TempDir()
+	_, err := LoadConfig(projectDir)
+	if err == nil {
+		t.Error("expected error for missing guild ID")
+	}
+}
+
+func TestLoadConfig_EnabledMissingAllowedUsers(t *testing.T) {
+	t.Setenv("ENGINE_DISCORD", "true")
+	t.Setenv("ENGINE_DISCORD_BOT_TOKEN", "some-token")
+	t.Setenv("ENGINE_DISCORD_GUILD_ID", "some-guild")
+	t.Setenv("ENGINE_DISCORD_ALLOWED_USER_IDS", "")
+	projectDir := t.TempDir()
+	_, err := LoadConfig(projectDir)
+	if err == nil {
+		t.Error("expected error for missing allowed users")
+	}
+}
+
+// ── handleProjectCommand error paths ─────────────────────────────────────────
+
+func TestHandleProjectCommand_AddError(t *testing.T) {
+	svc := &Service{
+		cfg:   Config{CommandPrefix: "!"},
+		state: persistedState{Projects: make(map[string]ProjectBinding)},
+	}
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			ChannelID: "ch-1",
+			GuildID:   "guild-1",
+			Author:    &discordgo.User{ID: "u1"},
+		},
+	}
+	// addProject with nonexistent path → error → send no-op (dg==nil)
+	svc.handleProjectCommand(m, []string{"add", "/nonexistent-path-xyz"})
+}
+
+func TestHandleProjectCommand_RemoveError(t *testing.T) {
+	svc := &Service{
+		cfg:   Config{CommandPrefix: "!"},
+		state: persistedState{Projects: make(map[string]ProjectBinding)},
+	}
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			ChannelID: "ch-1",
+			GuildID:   "guild-1",
+			Author:    &discordgo.User{ID: "u1"},
+		},
+	}
+	// removeProject with nonexistent project → error → send no-op (dg==nil)
+	svc.handleProjectCommand(m, []string{"remove", "no-such-project"})
+}
+
+// ── stateDir env override path ────────────────────────────────────────────────
+
+func TestStateDir_WithEnvOverride(t *testing.T) {
+	custom := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", custom)
+	got := stateDir("/some/project")
+	if got != custom {
+		t.Errorf("expected %q, got %q", custom, got)
+	}
+}
+
+

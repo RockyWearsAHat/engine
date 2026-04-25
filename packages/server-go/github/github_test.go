@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -566,3 +567,383 @@ func TestRepoMonitor_Enqueue_FullNotifyChannel(t *testing.T) {
 	default:
 	}
 }
+
+func TestListIssues_ParseError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not-json"))
+	}))
+	defer srv.Close()
+
+	c := newClientWithBase(srv.URL)
+	_, err := c.ListIssues("open", nil)
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
+func TestGetIssue_ParseError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not-json"))
+	}))
+	defer srv.Close()
+
+	c := newClientWithBase(srv.URL)
+	_, err := c.GetIssue(1)
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
+func TestCreateIssue_DoPostError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := newClientWithBase(srv.URL)
+	_, err := c.CreateIssue("title", "body", nil)
+	if err == nil {
+		t.Fatal("expected create issue error")
+	}
+}
+
+func TestCreateIssue_ParseError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("not-json"))
+	}))
+	defer srv.Close()
+
+	c := newClientWithBase(srv.URL)
+	_, err := c.CreateIssue("title", "body", nil)
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
+func TestAddComment_DoPostError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := newClientWithBase(srv.URL)
+	_, err := c.AddComment(1, "hello")
+	if err == nil {
+		t.Fatal("expected add comment error")
+	}
+}
+
+func TestAddComment_ParseError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("not-json"))
+	}))
+	defer srv.Close()
+
+	c := newClientWithBase(srv.URL)
+	_, err := c.AddComment(1, "hello")
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
+func TestCloseIssue_AddCommentError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(`{"number":1,"state":"closed"}`))
+	}))
+	defer srv.Close()
+
+	c := newClientWithBase(srv.URL)
+	err := c.CloseIssue(1, "closing")
+	if err == nil {
+		t.Fatal("expected close issue add-comment error")
+	}
+}
+
+func TestCloseIssue_DoPatchError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := newClientWithBase(srv.URL)
+	err := c.CloseIssue(1, "")
+	if err == nil {
+		t.Fatal("expected close issue patch error")
+	}
+}
+
+func TestUpdateIssue_DoPatchError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := newClientWithBase(srv.URL)
+	_, err := c.UpdateIssue(1, map[string]interface{}{"title": "x"})
+	if err == nil {
+		t.Fatal("expected update issue error")
+	}
+}
+
+func TestUpdateIssue_ParseError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not-json"))
+	}))
+	defer srv.Close()
+
+	c := newClientWithBase(srv.URL)
+	_, err := c.UpdateIssue(1, map[string]interface{}{"title": "x"})
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
+func TestDoGet_BadURL(t *testing.T) {
+	c := newClientWithBase("http://example.com")
+	_, err := c.doGet("://bad-url")
+	if err == nil {
+		t.Fatal("expected bad URL error")
+	}
+}
+
+func TestDoPost_MarshalError(t *testing.T) {
+	c := newClientWithBase("http://example.com")
+	_, err := c.doPost("http://example.com/x", map[string]interface{}{"bad": make(chan int)})
+	if err == nil {
+		t.Fatal("expected marshal error")
+	}
+}
+
+func TestDoPatch_MarshalError(t *testing.T) {
+	c := newClientWithBase("http://example.com")
+	_, err := c.doPatch("http://example.com/x", map[string]interface{}{"bad": make(chan int)})
+	if err == nil {
+		t.Fatal("expected marshal error")
+	}
+}
+
+func TestDoRequest_ReadBodyError(t *testing.T) {
+	c := &Client{
+		token: "tok",
+		httpClient: &http.Client{Transport: roundTripFuncGH(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       readErrBodyGH{},
+				Header:     make(http.Header),
+			}, nil
+		})},
+	}
+	req, _ := http.NewRequest(http.MethodGet, "https://api.github.com/test", nil)
+	_, err := c.doRequest(req)
+	if err == nil {
+		t.Fatal("expected body read error")
+	}
+}
+
+type roundTripFuncGH func(*http.Request) (*http.Response, error)
+
+func (f roundTripFuncGH) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type readErrBodyGH struct{}
+
+func (readErrBodyGH) Read(p []byte) (int, error) { return 0, errors.New("read error") }
+
+func (readErrBodyGH) Close() error { return nil }
+
+func TestRepoMonitor_DispatchIssues_Opened(t *testing.T) {
+	m := NewRepoMonitor()
+	called := false
+	m.OnIssueOpened = func(_ json.RawMessage) { called = true }
+
+	payload := json.RawMessage(`{"action":"opened","issue":{"number":1,"title":"Bug","body":"desc"},"repository":{"full_name":"owner/repo"},"sender":{"login":"alice"}}`)
+	m.Enqueue(&WebhookEvent{Type: "issues", Payload: payload})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	m.Start(ctx)
+	time.Sleep(100 * time.Millisecond)
+	if !called {
+		t.Error("expected OnIssueOpened to be called")
+	}
+}
+
+func TestRepoMonitor_DispatchIssues_BadJSON(t *testing.T) {
+	m := NewRepoMonitor()
+	m.OnIssueOpened = func(_ json.RawMessage) { t.Error("should not be called on bad JSON") }
+
+	m.Enqueue(&WebhookEvent{Type: "issues", Payload: json.RawMessage(`{bad`)})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	m.Start(ctx)
+	time.Sleep(100 * time.Millisecond)
+}
+
+func TestRepoMonitor_DispatchIssues_NotOpened(t *testing.T) {
+	m := NewRepoMonitor()
+	m.OnIssueOpened = func(_ json.RawMessage) { t.Error("should not be called for non-opened action") }
+
+	payload := json.RawMessage(`{"action":"closed","issue":{"number":1,"title":"Bug"},"repository":{"full_name":"owner/repo"},"sender":{"login":"alice"}}`)
+	m.Enqueue(&WebhookEvent{Type: "issues", Payload: payload})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	m.Start(ctx)
+	time.Sleep(100 * time.Millisecond)
+}
+
+func TestRepoMonitor_TickerPath(t *testing.T) {
+	m := NewRepoMonitor()
+	m.tickInterval = 5 * time.Millisecond
+	processed := make(chan struct{}, 1)
+	m.OnReadmeChange = func(_ json.RawMessage) { processed <- struct{}{} }
+
+	payload := json.RawMessage(`{"ref":"refs/heads/main","commits":[{"added":[],"removed":[],"modified":["README.md"]}],"repository":{"full_name":"o/r"}}`)
+	// Directly inject into queue without sending to notifyCh, so only the ticker fires.
+	m.mu.Lock()
+	m.queue = append(m.queue, &MonitoredEvent{Type: "push", Payload: payload, Received: time.Now()})
+	m.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	m.Start(ctx)
+	select {
+	case <-processed:
+	case <-ctx.Done():
+		t.Fatal("ticker path: process() never called via ticker")
+	}
+}
+
+func TestListIssues_GetError(t *testing.T) {
+	c := &Client{
+		token: "tok",
+		httpClient: &http.Client{Transport: roundTripFuncGH(func(req *http.Request) (*http.Response, error) {
+			return nil, errors.New("connection refused")
+		})},
+		owner: "o",
+		repo:  "r",
+	}
+	_, err := c.ListIssues("open", nil)
+	if err == nil {
+		t.Fatal("expected error from ListIssues")
+	}
+}
+
+func TestDoPost_NewRequestError(t *testing.T) {
+	c := newClientWithBase("http://example.com")
+	_, err := c.doPost("://bad-url", map[string]string{"k": "v"})
+	if err == nil {
+		t.Fatal("expected NewRequest error")
+	}
+}
+
+func TestDoPatch_NewRequestError(t *testing.T) {
+	c := newClientWithBase("http://example.com")
+	_, err := c.doPatch("://bad-url", map[string]string{"k": "v"})
+	if err == nil {
+		t.Fatal("expected NewRequest error")
+	}
+}
+
+func TestDoRequest_DoError(t *testing.T) {
+	c := &Client{
+		token: "tok",
+		httpClient: &http.Client{Transport: roundTripFuncGH(func(req *http.Request) (*http.Response, error) {
+			return nil, errors.New("transport error")
+		})},
+	}
+	req, _ := http.NewRequest(http.MethodGet, "https://api.github.com/test", nil)
+	_, err := c.doRequest(req)
+	if err == nil {
+		t.Fatal("expected transport error")
+	}
+}
+
+func TestStartDeviceFlow_RequestError(t *testing.T) {
+	old := deviceCodeURL
+	deviceCodeURL = "http://127.0.0.1:1" // port 1 is unreachable
+	defer func() { deviceCodeURL = old }()
+	_, err := StartDeviceFlow("client-id", "")
+	if err == nil {
+		t.Fatal("expected request error")
+	}
+}
+
+func TestStartDeviceFlow_ParseQueryError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("%gg=invalid"))
+	}))
+	defer srv.Close()
+	old := deviceCodeURL
+	deviceCodeURL = srv.URL
+	defer func() { deviceCodeURL = old }()
+	_, err := StartDeviceFlow("client-id", "")
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
+func TestPollForToken_HTTPError(t *testing.T) {
+	old := oauthTokenURL
+	oauthTokenURL = "http://127.0.0.1:1"
+	defer func() { oauthTokenURL = old }()
+	dcr := &DeviceCodeResponse{DeviceCode: "dc", Interval: 0, ExpiresIn: 1}
+	var statusCalls []string
+	_, _ = PollForToken("client-id", dcr, func(s string) { statusCalls = append(statusCalls, s) })
+	found := false
+	for _, s := range statusCalls {
+		if len(s) > 6 && s[:6] == "error:" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected onStatus called with error: prefix")
+	}
+}
+
+func TestGetAuthenticatedUser_TransportError(t *testing.T) {
+	old := oauthHTTPClient
+	oauthHTTPClient = &http.Client{Transport: roundTripFuncGH(func(req *http.Request) (*http.Response, error) {
+		return nil, errors.New("transport error")
+	})}
+	defer func() { oauthHTTPClient = old }()
+	_, err := GetAuthenticatedUser("tok")
+	if err == nil {
+		t.Fatal("expected transport error")
+	}
+}
+
+func TestRevokeToken_TransportError(t *testing.T) {
+	old := oauthHTTPClient
+	oauthHTTPClient = &http.Client{Transport: roundTripFuncGH(func(req *http.Request) (*http.Response, error) {
+		return nil, errors.New("transport error")
+	})}
+	defer func() { oauthHTTPClient = old }()
+	err := RevokeToken("client-id", "secret", "token")
+	if err == nil {
+		t.Fatal("expected transport error")
+	}
+}
+
+func TestWebhookServeHTTP_BodyReadError(t *testing.T) {
+	wr := NewWebhookReceiver("")
+	req := httptest.NewRequest("POST", "/webhook", &errReader{})
+	rr := httptest.NewRecorder()
+	wr.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rr.Code)
+	}
+}
+
+type errReader struct{}
+
+func (errReader) Read(p []byte) (int, error) { return 0, errors.New("read error") }

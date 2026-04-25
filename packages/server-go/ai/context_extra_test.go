@@ -2,10 +2,12 @@ package ai
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -936,6 +938,9 @@ func TestRunAnthropicLoop_TextResponse(t *testing.T) {
 // redirectTransport intercepts any HTTP request and sends it to the target server.
 type redirectTransport struct {
 	target string
+	// real is the underlying transport to use; if nil, http.DefaultTransport is NOT
+	// called recursively — use only when DefaultTransport is NOT this transport.
+	real http.RoundTripper
 }
 
 func (rt redirectTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -944,7 +949,11 @@ func (rt redirectTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	req2.URL.Scheme = "http"
 	req2.URL.Host = strings.TrimPrefix(rt.target, "http://")
 	req2.RequestURI = ""
-	return http.DefaultTransport.RoundTrip(req2)
+	underlying := rt.real
+	if underlying == nil {
+		underlying = http.DefaultTransport
+	}
+	return underlying.RoundTrip(req2)
 }
 
 // failTransport fails if called — for tests where NO HTTP calls should be made.
@@ -955,4 +964,715 @@ type failTransport struct {
 func (ft failTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	ft.t.Errorf("unexpected HTTP call to %s (should have cancelled early)", req.URL)
 	return nil, fmt.Errorf("unexpected call")
+}
+
+// ── resolveProvider ───────────────────────────────────────────────────────────
+
+func TestResolveProvider_ExplicitProviders(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"anthropic", "anthropic"},
+		{"openai", "openai"},
+		{"ollama", "ollama"},
+		{"ANTHROPIC", "anthropic"},
+		{"OpenAI", "openai"},
+	}
+	for _, tc := range cases {
+		got := resolveProvider(tc.in, "any-model")
+		if got != tc.want {
+			t.Errorf("resolveProvider(%q, _) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestResolveProvider_AutoFallsThrough(t *testing.T) {
+	if got := resolveProvider("", "gpt-4o"); got != "openai" {
+		t.Errorf("expected openai for gpt-4o, got %q", got)
+	}
+	if got := resolveProvider("auto", "claude-3-5-sonnet-20241022"); got != "anthropic" {
+		t.Errorf("expected anthropic for claude-3, got %q", got)
+	}
+}
+
+func TestResolveProvider_UnknownExplicitFallsThrough(t *testing.T) {
+	// Unrecognized explicit provider falls through to model inference
+	got := resolveProvider("unknown-provider-xyz", "gpt-4o")
+	if got != "openai" {
+		t.Errorf("expected openai for unknown provider with gpt-4o model, got %q", got)
+	}
+}
+
+// ── ollamaChatCompletionsURL ──────────────────────────────────────────────────
+
+func TestOllamaChatCompletionsURL_AlreadyFull(t *testing.T) {
+	in := "http://localhost:11434/v1/chat/completions"
+	got := ollamaChatCompletionsURL(in)
+	if got != in {
+		t.Errorf("expected passthrough, got %q", got)
+	}
+}
+
+// TestOllamaChatCompletionsURL_NakedChatCompletions exercises the first case
+// in ollamaChatCompletionsURL: the URL already ends in /chat/completions (no /v1 prefix).
+func TestOllamaChatCompletionsURL_NakedChatCompletions(t *testing.T) {
+	in := "http://localhost:11434/chat/completions"
+	got := ollamaChatCompletionsURL(in)
+	if !strings.HasSuffix(got, "/chat/completions") {
+		t.Errorf("expected /chat/completions suffix, got %q", got)
+	}
+}
+
+func TestOllamaChatCompletionsURL_V1Suffix(t *testing.T) {
+	got := ollamaChatCompletionsURL("http://localhost:11434/v1")
+	if !strings.HasSuffix(got, "/chat/completions") {
+		t.Errorf("expected /chat/completions suffix, got %q", got)
+	}
+}
+
+func TestOllamaChatCompletionsURL_Default(t *testing.T) {
+	got := ollamaChatCompletionsURL("http://localhost:11434")
+	if !strings.HasSuffix(got, "/v1/chat/completions") {
+		t.Errorf("expected /v1/chat/completions suffix, got %q", got)
+	}
+}
+
+// ── looksLikeOllamaModel ──────────────────────────────────────────────────────
+
+func TestLooksLikeOllamaModel_FalseCase(t *testing.T) {
+	if looksLikeOllamaModel("totally-random-model-name-xyz") {
+		t.Error("expected false for non-ollama model")
+	}
+}
+
+func TestLooksLikeOllamaModel_WithColon(t *testing.T) {
+	if !looksLikeOllamaModel("llama3:latest") {
+		t.Error("expected true for model with colon")
+	}
+}
+
+// ── inferredProviderForModel ──────────────────────────────────────────────────
+
+func TestInferredProviderForModel_O3Prefix(t *testing.T) {
+	if got := inferredProviderForModel("o3-mini"); got != "openai" {
+		t.Errorf("expected openai for o3-mini, got %q", got)
+	}
+}
+
+func TestInferredProviderForModel_O4Prefix(t *testing.T) {
+	if got := inferredProviderForModel("o4-preview"); got != "openai" {
+		t.Errorf("expected openai for o4-preview, got %q", got)
+	}
+}
+
+func TestInferredProviderForModel_DefaultAnthropic(t *testing.T) {
+	if got := inferredProviderForModel("totally-unknown-model-xyz"); got != "anthropic" {
+		t.Errorf("expected anthropic default, got %q", got)
+	}
+}
+
+// ── streamRequest: tool_use block ────────────────────────────────────────────
+
+func TestStreamRequest_ToolUseBlock(t *testing.T) {
+	sseResponse := "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu1\",\"name\":\"read_file\"}}\n" +
+		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"/tmp\\\"}\" }}\n" +
+		"data: {\"type\":\"content_block_stop\"}\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n" +
+		"data: [DONE]\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sseResponse)
+	}))
+	defer srv.Close()
+
+	old := http.DefaultClient
+	defer func() { http.DefaultClient = old }()
+	http.DefaultClient = &http.Client{Transport: redirectTransport{target: srv.URL}}
+
+	ctx := &ChatContext{
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, interface{}) {},
+		OnToolResult: func(string, interface{}, bool) {},
+		OnError:      func(string) {},
+		Usage:        &SessionUsage{},
+	}
+	var text strings.Builder
+	blocks, stopReason, err := streamRequest("fake-key", anthropicRequest{
+		Model:    "claude-3-5-sonnet-20241022",
+		Messages: []anthropicMessage{{Role: "user", Content: "hello"}},
+	}, ctx, &text)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stopReason != "tool_use" {
+		t.Errorf("expected stop_reason 'tool_use', got %q", stopReason)
+	}
+	found := false
+	for _, b := range blocks {
+		if b.Type == "tool_use" && b.Name == "read_file" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected tool_use block for read_file, blocks: %+v", blocks)
+	}
+}
+
+// ── runAnthropicLoop: tool_use cycle ─────────────────────────────────────────
+
+func TestRunAnthropicLoop_ToolUse_ThenText(t *testing.T) {
+	projectDir := setupHistoryTestProject(t)
+	callCount := 0
+	// Use a real writable temp dir so read_file can succeed.
+	tmpFile := t.TempDir() + "/f.txt"
+	if err := os.WriteFile(tmpFile, []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Escape the path for JSON embedding.
+	pathJSON, _ := json.Marshal(tmpFile)
+	toolUseSSE := "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu1\",\"name\":\"read_file\"}}\n" +
+		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":" + string(pathJSON) + "}\"}}\n" +
+		"data: {\"type\":\"content_block_stop\"}\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n" +
+		"data: [DONE]\n"
+	textSSE := "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\"}}\n" +
+		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"done\"}}\n" +
+		"data: {\"type\":\"content_block_stop\"}\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n" +
+		"data: [DONE]\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		callCount++
+		if callCount == 1 {
+			fmt.Fprint(w, toolUseSSE)
+		} else {
+			fmt.Fprint(w, textSSE)
+		}
+	}))
+	defer srv.Close()
+
+	old := http.DefaultClient
+	defer func() { http.DefaultClient = old }()
+	http.DefaultClient = &http.Client{Transport: redirectTransport{target: srv.URL}}
+
+	var toolCalls []string
+	ctx := &ChatContext{
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(name string, _ interface{}) { toolCalls = append(toolCalls, name) },
+		OnToolResult: func(string, interface{}, bool) {},
+		OnError:      func(string) {},
+		ActiveTools:  bootstrapTools(),
+		Usage:        &SessionUsage{},
+		Quarantine:   NewToolQuarantine(),
+		ProjectPath:  projectDir,
+	}
+	var calls []ToolCall
+	var text strings.Builder
+	runAnthropicLoop(ctx, "claude-3-5-sonnet-20241022", "fake-key", "system", []anthropicMessage{}, &calls, &text)
+	if !strings.Contains(text.String(), "done") {
+		t.Errorf("expected 'done' in final text, got %q", text.String())
+	}
+}
+
+// ── runAnthropicLoop: transient retry ────────────────────────────────────────
+
+func TestRunAnthropicLoop_TransientRetry(t *testing.T) {
+	callCount := 0
+	textSSE := "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\"}}\n" +
+		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"retried\"}}\n" +
+		"data: {\"type\":\"content_block_stop\"}\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n" +
+		"data: [DONE]\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount == 1 {
+			w.WriteHeader(429)
+			fmt.Fprint(w, `{"error":"rate limit"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, textSSE)
+	}))
+	defer srv.Close()
+
+	old := http.DefaultClient
+	defer func() { http.DefaultClient = old }()
+	http.DefaultClient = &http.Client{Transport: redirectTransport{target: srv.URL}}
+
+	var errs []string
+	ctx := &ChatContext{
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, interface{}) {},
+		OnToolResult: func(string, interface{}, bool) {},
+		OnError:      func(e string) { errs = append(errs, e) },
+		ActiveTools:  bootstrapTools(),
+		Usage:        &SessionUsage{},
+		Quarantine:   NewToolQuarantine(),
+	}
+	var calls []ToolCall
+	var text strings.Builder
+	runAnthropicLoop(ctx, "claude-3-5-sonnet-20241022", "fake-key", "system", []anthropicMessage{}, &calls, &text)
+	if !strings.Contains(text.String(), "retried") {
+		t.Errorf("expected retry to succeed with 'retried', got %q, errs: %v", text.String(), errs)
+	}
+}
+
+// ── runOpenAICompatibleLoop: tool_calls cycle ─────────────────────────────────
+
+func TestRunOpenAICompatibleLoop_ToolCall_ThenText(t *testing.T) {
+	projectDir := setupHistoryTestProject(t)
+	tmpFile := t.TempDir() + "/f.txt"
+	if err := os.WriteFile(tmpFile, []byte("oai-content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Build arguments as a properly JSON-encoded string (arguments is a string value in OAI tool calls)
+	argsObj := map[string]string{"path": tmpFile}
+	argsBytes, _ := json.Marshal(argsObj)
+	argsJSON, _ := json.Marshal(string(argsBytes)) // double-encode for embedding in JSON
+	callCount := 0
+	toolCallSSE := "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"read_file\",\"arguments\":" + string(argsJSON) + "}}]},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" +
+		"data: [DONE]\n\n"
+	textSSE := "data: {\"choices\":[{\"delta\":{\"content\":\"oai-done\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if callCount == 1 {
+			fmt.Fprint(w, toolCallSSE)
+		} else {
+			fmt.Fprint(w, textSSE)
+		}
+	}))
+	defer srv.Close()
+
+	var toolCalls []string
+	ctx := &ChatContext{
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(name string, _ interface{}) { toolCalls = append(toolCalls, name) },
+		OnToolResult: func(string, interface{}, bool) {},
+		OnError:      func(string) {},
+		ActiveTools:  bootstrapTools(),
+		ProjectPath:  projectDir,
+	}
+	var calls []ToolCall
+	var text strings.Builder
+	runOpenAICompatibleLoop(ctx, "openai", "gpt-4o", srv.URL+"/v1/chat/completions", "key", true,
+		"system", []anthropicMessage{}, &calls, &text)
+	if !strings.Contains(text.String(), "oai-done") {
+		t.Errorf("expected 'oai-done' in output, got %q", text.String())
+	}
+}
+
+// ── runAnthropicLoop: quarantined tool ───────────────────────────────────────
+
+func TestRunAnthropicLoop_QuarantinedTool(t *testing.T) {
+	callCount := 0
+	toolUseSSE := "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu2\",\"name\":\"read_file\"}}\n" +
+		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n" +
+		"data: {\"type\":\"content_block_stop\"}\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n" +
+		"data: [DONE]\n"
+	textSSE := "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\"}}\n" +
+		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"quarantine-done\"}}\n" +
+		"data: {\"type\":\"content_block_stop\"}\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n" +
+		"data: [DONE]\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if callCount == 1 {
+			fmt.Fprint(w, toolUseSSE)
+		} else {
+			fmt.Fprint(w, textSSE)
+		}
+	}))
+	defer srv.Close()
+
+	old := http.DefaultClient
+	defer func() { http.DefaultClient = old }()
+	http.DefaultClient = &http.Client{Transport: redirectTransport{target: srv.URL}}
+
+	q := NewToolQuarantine()
+	// Pre-quarantine the tool so the first call hits the quarantine path.
+	q.RecordOutcome("read_file", true, func(string) {})
+	q.RecordOutcome("read_file", true, func(string) {})
+
+	ctx := &ChatContext{
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, interface{}) {},
+		OnToolResult: func(string, interface{}, bool) {},
+		OnError:      func(string) {},
+		ActiveTools:  bootstrapTools(),
+		Usage:        &SessionUsage{},
+		Quarantine:   q,
+	}
+	var calls []ToolCall
+	var text strings.Builder
+	runAnthropicLoop(ctx, "claude-3-5-sonnet-20241022", "fake-key", "system", []anthropicMessage{}, &calls, &text)
+	// Should have completed via quarantine path then second request for text.
+	if !strings.Contains(text.String(), "quarantine-done") {
+		t.Errorf("expected 'quarantine-done' in output, got %q", text.String())
+	}
+}
+// ── aiExecuteTool additional paths ──────────────────────────────────────────
+
+func TestExecuteToolForTest_Shell_ApprovalError(t *testing.T) {
+	ctx := makeChatCtx(t)
+	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
+		return false, errors.New("approval service unavailable")
+	}
+	result, isErr := ExecuteToolForTest("shell", map[string]interface{}{"command": "rm -rf /tmp/engine-approval-error-test"}, ctx)
+	if !isErr {
+		t.Errorf("expected error from approval handler error, got %q", result)
+	}
+	if !strings.Contains(result, "approval service unavailable") {
+		t.Errorf("expected approval error in result, got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_Shell_EmptyOutput(t *testing.T) {
+	ctx := makeChatCtx(t)
+	// "true" exits 0 and produces no output → should return "(no output)"
+	result, isErr := ExecuteToolForTest("shell", map[string]interface{}{"command": "true"}, ctx)
+	if isErr {
+		t.Errorf("unexpected error: %s", result)
+	}
+	if result != "(no output)" {
+		t.Errorf("expected '(no output)', got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_GitCommit_ApprovalError(t *testing.T) {
+	ctx := makeChatCtx(t)
+	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
+		return false, errors.New("commit approval error")
+	}
+	result, isErr := ExecuteToolForTest("git_commit", map[string]interface{}{"message": "test"}, ctx)
+	if !isErr {
+		t.Errorf("expected error, got %q", result)
+	}
+	if !strings.Contains(result, "commit approval error") {
+		t.Errorf("expected approval error, got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_GitPush_ApprovalError(t *testing.T) {
+	ctx := makeChatCtx(t)
+	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
+		return false, errors.New("push approval error")
+	}
+	result, isErr := ExecuteToolForTest("git_push", map[string]interface{}{}, ctx)
+	if !isErr {
+		t.Errorf("expected error, got %q", result)
+	}
+	if !strings.Contains(result, "push approval error") {
+		t.Errorf("expected approval error, got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_GitListIssues_EmptyList(t *testing.T) {
+	// Mock HTTP server returning empty array — covers the "No issues found" path.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("[]")) //nolint:errcheck
+	}))
+	defer srv.Close()
+	realRT := http.DefaultTransport
+	defer func() { http.DefaultTransport = realRT }()
+	http.DefaultTransport = redirectTransport{target: srv.URL, real: realRT}
+	t.Setenv("GITHUB_TOKEN", "test-tok")
+
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("github_list_issues", map[string]interface{}{
+		"owner": "owner", "repo": "repo", "state": "open",
+	}, ctx)
+	if isErr {
+		t.Errorf("unexpected error: %s", result)
+	}
+	if result != "No issues found" {
+		t.Errorf("expected 'No issues found', got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_GitListIssues_WithItems(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"number":1,"title":"Test Bug","state":"open","labels":[{"name":"bug"}]}]`)) //nolint:errcheck
+	}))
+	defer srv.Close()
+	realRT := http.DefaultTransport
+	defer func() { http.DefaultTransport = realRT }()
+	http.DefaultTransport = redirectTransport{target: srv.URL, real: realRT}
+	t.Setenv("GITHUB_TOKEN", "test-tok")
+
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("github_list_issues", map[string]interface{}{
+		"owner": "owner", "repo": "repo",
+	}, ctx)
+	if isErr {
+		t.Errorf("unexpected error: %s", result)
+	}
+	if !strings.Contains(result, "#1") {
+		t.Errorf("expected issue #1 in result, got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_GitGetIssue_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"number":42,"title":"Fix crash","state":"open","html_url":"https://github.com/o/r/issues/42","body":"details"}`)) //nolint:errcheck
+	}))
+	defer srv.Close()
+	realRT := http.DefaultTransport
+	defer func() { http.DefaultTransport = realRT }()
+	http.DefaultTransport = redirectTransport{target: srv.URL, real: realRT}
+	t.Setenv("GITHUB_TOKEN", "test-tok")
+
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("github_get_issue", map[string]interface{}{
+		"owner": "o", "repo": "r", "number": float64(42),
+	}, ctx)
+	if isErr {
+		t.Errorf("unexpected error: %s", result)
+	}
+	if !strings.Contains(result, "#42") {
+		t.Errorf("expected issue 42, got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_GitCreateIssue_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"number":5,"title":"New feature","html_url":"https://github.com/o/r/issues/5"}`)) //nolint:errcheck
+	}))
+	defer srv.Close()
+	realRT := http.DefaultTransport
+	defer func() { http.DefaultTransport = realRT }()
+	http.DefaultTransport = redirectTransport{target: srv.URL, real: realRT}
+	t.Setenv("GITHUB_TOKEN", "test-tok")
+
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("github_create_issue", map[string]interface{}{
+		"owner": "o", "repo": "r", "title": "New feature", "body": "body text",
+	}, ctx)
+	if isErr {
+		t.Errorf("unexpected error: %s", result)
+	}
+	if !strings.Contains(result, "#5") {
+		t.Errorf("expected issue #5, got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_GitCloseIssue_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"number":7,"title":"Closed bug","state":"closed","html_url":"","body":""}`)) //nolint:errcheck
+	}))
+	defer srv.Close()
+	realRT := http.DefaultTransport
+	defer func() { http.DefaultTransport = realRT }()
+	http.DefaultTransport = redirectTransport{target: srv.URL, real: realRT}
+	t.Setenv("GITHUB_TOKEN", "test-tok")
+
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("github_close_issue", map[string]interface{}{
+		"owner": "o", "repo": "r", "number": float64(7), "comment": "fixed",
+	}, ctx)
+	if isErr {
+		t.Errorf("unexpected error: %s", result)
+	}
+	if !strings.Contains(result, "7") {
+		t.Errorf("expected issue 7 in result, got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_GitCloseIssue_ZeroNumber(t *testing.T) {
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("github_close_issue", map[string]interface{}{
+		"owner": "o", "repo": "r", "number": float64(0),
+	}, ctx)
+	if !isErr {
+		t.Errorf("expected error for zero issue number, got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_GitComment_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"id":99,"body":"thanks","html_url":"https://github.com/o/r/issues/1#issuecomment-99"}`)) //nolint:errcheck
+	}))
+	defer srv.Close()
+	realRT := http.DefaultTransport
+	defer func() { http.DefaultTransport = realRT }()
+	http.DefaultTransport = redirectTransport{target: srv.URL, real: realRT}
+	t.Setenv("GITHUB_TOKEN", "test-tok")
+
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("github_comment", map[string]interface{}{
+		"owner": "o", "repo": "r", "number": float64(1), "body": "thanks",
+	}, ctx)
+	if isErr {
+		t.Errorf("unexpected error: %s", result)
+	}
+	if !strings.Contains(result, "Comment added") {
+		t.Errorf("expected 'Comment added', got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_ProcessKill_ApprovalDenied(t *testing.T) {
+	ctx := makeChatCtx(t)
+	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
+		return false, nil
+	}
+	result, isErr := ExecuteToolForTest("process_kill", map[string]interface{}{"pid": float64(1)}, ctx)
+	if !isErr {
+		t.Errorf("expected error, got %q", result)
+	}
+	if !strings.Contains(result, "denied") {
+		t.Errorf("expected denial, got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_ProcessKill_ApprovalError(t *testing.T) {
+	ctx := makeChatCtx(t)
+	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
+		return false, errors.New("kill approval error")
+	}
+	result, isErr := ExecuteToolForTest("process_kill", map[string]interface{}{"pid": float64(1)}, ctx)
+	if !isErr {
+		t.Errorf("expected error, got %q", result)
+	}
+	if !strings.Contains(result, "kill approval error") {
+		t.Errorf("expected approval error, got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_GitComment_ZeroNumber(t *testing.T) {
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("github_comment", map[string]interface{}{
+		"owner": "engine", "repo": "test", "number": float64(0), "body": "hello",
+	}, ctx)
+	if !isErr {
+		t.Errorf("expected error for zero issue number, got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_OpenURL_Darwin(t *testing.T) {
+	origOpenURLCommand := openURLCommand
+	t.Cleanup(func() { openURLCommand = origOpenURLCommand })
+
+	var calledName string
+	var calledArg string
+	openURLCommand = func(name string, arg ...string) *exec.Cmd {
+		calledName = name
+		if len(arg) > 0 {
+			calledArg = arg[0]
+		}
+		return exec.Command("true")
+	}
+
+	ctx := makeChatCtx(t)
+	const targetURL = "http://localhost:1"
+	result, isErr := ExecuteToolForTest("open_url", map[string]interface{}{
+		"url": targetURL,
+	}, ctx)
+	if isErr {
+		t.Logf("open_url returned error (acceptable on CI): %s", result)
+	} else if !strings.Contains(result, "Opened:") {
+		t.Errorf("expected 'Opened:' in result, got %q", result)
+	}
+
+	if calledName == "" {
+		t.Fatal("expected open_url command to be invoked")
+	}
+	if calledArg != targetURL {
+		t.Errorf("expected command arg %q, got %q", targetURL, calledArg)
+	}
+}
+
+func TestExecuteToolForTest_Screenshot_Darwin(t *testing.T) {
+	ctx := makeChatCtx(t)
+	outPath := t.TempDir() + "/screenshot.png"
+	result, isErr := ExecuteToolForTest("screenshot", map[string]interface{}{
+		"path": outPath,
+	}, ctx)
+	// screencapture may fail in headless CI; either outcome is acceptable.
+	if isErr {
+		t.Logf("screenshot failed (expected in headless): %s", result)
+	} else {
+		if !strings.Contains(result, "Screenshot saved:") {
+			t.Errorf("expected 'Screenshot saved:', got %q", result)
+		}
+	}
+}
+
+func TestExecuteToolForTest_ProcessKill_SuccessTerm(t *testing.T) {
+	// Start a short-lived process to kill.
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("could not start sleep process: %v", err)
+	}
+	pid := int32(cmd.Process.Pid)
+	defer cmd.Process.Kill() //nolint:errcheck
+
+	ctx := makeChatCtx(t)
+	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
+		return true, nil
+	}
+	result, isErr := ExecuteToolForTest("process_kill", map[string]interface{}{
+		"pid": float64(pid), "signal": "TERM",
+	}, ctx)
+	if isErr {
+		t.Logf("process_kill with TERM returned error: %s", result)
+	} else if !strings.Contains(result, "SigTERM") && !strings.Contains(result, "SIGTERM") && !strings.Contains(result, "TERM") {
+		t.Errorf("expected TERM in result, got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_ProcessKill_SuccessKill(t *testing.T) {
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("could not start sleep process: %v", err)
+	}
+	pid := int32(cmd.Process.Pid)
+
+	ctx := makeChatCtx(t)
+	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
+		return true, nil
+	}
+	result, isErr := ExecuteToolForTest("process_kill", map[string]interface{}{
+		"pid": float64(pid), "signal": "KILL",
+	}, ctx)
+	if isErr {
+		t.Errorf("expected success for KILL, got %q", result)
+	} else if !strings.Contains(result, "KILL") {
+		t.Errorf("expected KILL in result, got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_GitComment_NewClientError(t *testing.T) {
+	ctx := makeChatCtx(t)
+	// No GITHUB_TOKEN env var set in test env → NewClient fails.
+	result, isErr := ExecuteToolForTest("github_comment", map[string]interface{}{
+		"number": float64(1), "body": "hello",
+	}, ctx)
+	// If GITHUB_TOKEN is set in environment, skip.
+	if !isErr && strings.Contains(result, "Comment added:") {
+		t.Skip("GITHUB_TOKEN set in environment; skipping NewClient error test")
+	}
+	if !isErr {
+		t.Errorf("expected error when no token/owner, got %q", result)
+	}
 }

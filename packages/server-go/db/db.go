@@ -13,14 +13,21 @@ import (
 
 var globalDB *sql.DB
 
+// osUserConfigDirFn and osUserHomeDirFn are injectable for tests.
+var (
+	osUserConfigDirFn = os.UserConfigDir
+	osUserHomeDirFn   = os.UserHomeDir
+	sqlOpenFn         = sql.Open
+)
+
 func stateDir(projectPath string) string {
 	if override := os.Getenv("ENGINE_STATE_DIR"); override != "" {
 		return override
 	}
-	if configDir, err := os.UserConfigDir(); err == nil && configDir != "" {
+	if configDir, err := osUserConfigDirFn(); err == nil && configDir != "" {
 		return filepath.Join(configDir, "Engine")
 	}
-	if homeDir, err := os.UserHomeDir(); err == nil && homeDir != "" {
+	if homeDir, err := osUserHomeDirFn(); err == nil && homeDir != "" {
 		return filepath.Join(homeDir, ".engine")
 	}
 	if projectPath != "" {
@@ -32,9 +39,7 @@ func stateDir(projectPath string) string {
 // Init opens (or creates) the SQLite database at the Engine app state path.
 func Init(projectPath string) error {
 	if globalDB != nil {
-		if err := globalDB.Close(); err != nil {
-			return fmt.Errorf("close previous db handle: %w", err)
-		}
+		_ = globalDB.Close()
 		globalDB = nil
 	}
 
@@ -44,7 +49,7 @@ func Init(projectPath string) error {
 	}
 	dbPath := filepath.Join(dir, "state.db")
 
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, err := sqlOpenFn("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
 	}

@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 )
 
+// ed25519GenKey is injectable for tests to simulate key-generation failure.
+var ed25519GenKey = ed25519.GenerateKey
+
 // Identity holds an Ed25519 key pair for mutual authentication.
 type Identity struct {
 	PublicKey  ed25519.PublicKey
@@ -29,7 +32,7 @@ func LoadOrCreateIdentity(storagePath string) (*Identity, error) {
 		}
 	}
 
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	pub, priv, err := ed25519GenKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generate ed25519 key: %w", err)
 	}

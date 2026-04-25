@@ -3,6 +3,10 @@ package vpn
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -143,5 +147,100 @@ func TestTrustStore_RemoveNonexistent(t *testing.T) {
 
 	if err := ts.RemoveDevice("nonexistent"); err != nil {
 		t.Fatalf("RemoveDevice nonexistent: %v", err)
+	}
+}
+
+func TestTrustStore_Save_Error(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewTrustStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Make the storage dir read-only so save() fails on write.
+	if err := os.Chmod(dir, 0444); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0755) //nolint:errcheck
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	if err := ts.AddDevice("id1", "dev1", pub); err == nil {
+		t.Fatal("expected save error when dir is read-only")
+	}
+}
+
+func TestLoadOrCreateIdentity_WritePubKeyError(t *testing.T) {
+	dir := t.TempDir()
+	// Block writing the public key by creating a directory named identity.pub.
+	if err := os.Mkdir(filepath.Join(dir, "identity.pub"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadOrCreateIdentity(dir)
+	if err == nil {
+		t.Fatal("expected error when identity.pub is a directory")
+	}
+}
+
+func TestLoadOrCreateIdentity_KeyGenError(t *testing.T) {
+	dir := t.TempDir()
+	orig := ed25519GenKey
+	ed25519GenKey = func(_ io.Reader) (ed25519.PublicKey, ed25519.PrivateKey, error) {
+		return nil, nil, errors.New("injected key gen error")
+	}
+	defer func() { ed25519GenKey = orig }()
+	_, err := LoadOrCreateIdentity(dir)
+	if err == nil {
+		t.Fatal("expected error when key gen fails")
+	}
+}
+
+func TestNewTrustStore_InvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	// Write invalid JSON to trusted_devices.json.
+	if err := os.WriteFile(filepath.Join(dir, "trusted_devices.json"), []byte("not-json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ts, err := NewTrustStore(dir)
+	if err != nil {
+		t.Fatalf("NewTrustStore should not error: %v", err)
+	}
+	// devices should be nil/empty after unmarshal failure
+	if len(ts.List()) != 0 {
+		t.Errorf("expected 0 devices after invalid JSON, got %d", len(ts.List()))
+	}
+}
+
+func TestTrustStore_RemoveDevice_KeepOthers(t *testing.T) {
+	dir := t.TempDir()
+	ts, _ := NewTrustStore(dir)
+
+	pub1, _, _ := ed25519.GenerateKey(rand.Reader)
+	pub2, _, _ := ed25519.GenerateKey(rand.Reader)
+	_ = ts.AddDevice("keep-me", "Keeper", pub1)
+	_ = ts.AddDevice("remove-me", "Remover", pub2)
+
+	if err := ts.RemoveDevice("remove-me"); err != nil {
+		t.Fatalf("RemoveDevice: %v", err)
+	}
+
+	devices := ts.List()
+	if len(devices) != 1 || devices[0].ID != "keep-me" {
+		t.Errorf("expected keep-me to remain, got %v", devices)
+	}
+}
+
+func TestTrustStore_Save_MarshalError(t *testing.T) {
+	dir := t.TempDir()
+	ts, _ := NewTrustStore(dir)
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	_ = ts.AddDevice("d1", "Dev1", pub)
+
+	orig := jsonMarshalIndentFn
+	jsonMarshalIndentFn = func(_ interface{}, _, _ string) ([]byte, error) {
+		return nil, errors.New("injected marshal error")
+	}
+	defer func() { jsonMarshalIndentFn = orig }()
+
+	pub2, _, _ := ed25519.GenerateKey(rand.Reader)
+	if err := ts.AddDevice("d2", "Dev2", pub2); err == nil {
+		t.Fatal("expected error when marshal fails")
 	}
 }

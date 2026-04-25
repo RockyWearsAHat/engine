@@ -2,6 +2,7 @@ package remote
 
 import (
 	"testing"
+	"time"
 )
 
 func TestNewPairingManager(t *testing.T) {
@@ -94,4 +95,38 @@ func TestValidateCode_AfterCleanup(t *testing.T) {
 	}
 	pm.Cleanup()
 	_ = pm.ValidateCode(code)
+}
+
+func TestValidateCode_Expired(t *testing.T) {
+	pm := NewPairingManager()
+	// Manually insert an expired session.
+	pm.sessions["999999"] = &PairingSession{
+		Code:      "999999",
+		ExpiresAt: time.Now().Add(-1 * time.Minute),
+	}
+	ok := pm.ValidateCode("999999")
+	if ok {
+		t.Error("expected false for expired code")
+	}
+}
+
+func TestCleanup_RemovesExpired(t *testing.T) {
+	pm := NewPairingManager()
+	// Add an expired session.
+	pm.sessions["123456"] = &PairingSession{
+		Code:      "123456",
+		ExpiresAt: time.Now().Add(-1 * time.Minute),
+	}
+	// Add a valid session.
+	pm.sessions["654321"] = &PairingSession{
+		Code:      "654321",
+		ExpiresAt: time.Now().Add(5 * time.Minute),
+	}
+	pm.Cleanup()
+	if _, ok := pm.sessions["123456"]; ok {
+		t.Error("expected expired session to be cleaned up")
+	}
+	if _, ok := pm.sessions["654321"]; !ok {
+		t.Error("expected valid session to remain")
+	}
 }

@@ -860,3 +860,194 @@ func TestOnMessage_HistoryCommand(t *testing.T) {
 	}
 	svc.onMessage(nil, m)
 }
+
+func TestValidate_WithTokenGatewayFail(t *testing.T) {
+	// Valid-format token, all required fields — fails at dg.Open() because fake token.
+	cfg := Config{
+		Enabled:      true,
+		BotToken:     "FAKE_BOT_TOKEN_xyz",
+		GuildID:      "guild-id",
+		AllowedUsers: map[string]bool{"user123": true},
+	}
+	result := Validate(cfg)
+	// Should fail at Open() — not OK.
+	if result.OK {
+		t.Skip("Discord gateway unexpectedly accepted a fake token — skipping")
+	}
+	if len(result.Errors) == 0 {
+		t.Error("expected errors for invalid token at gateway")
+	}
+}
+
+func TestStateDir_EnvOverride2(t *testing.T) {
+	t.Setenv("ENGINE_STATE_DIR", "/override")
+	got := stateDir("/project")
+	if got != "/override" {
+		t.Errorf("expected /override, got %q", got)
+	}
+}
+
+func TestStateDir_ProjectPath(t *testing.T) {
+	t.Setenv("ENGINE_STATE_DIR", "")
+	got := stateDir("/myproject")
+	if got != "/myproject/.engine" {
+		t.Errorf("expected /myproject/.engine, got %q", got)
+	}
+}
+
+func TestSaveState_WriteError(t *testing.T) {
+	dir := t.TempDir()
+	svc := &Service{
+		cfg: Config{StoragePath: dir},
+		state: persistedState{
+			Projects: make(map[string]ProjectBinding),
+		},
+	}
+	// Make discord-state.json a directory so WriteFile fails.
+	badPath := filepath.Join(dir, "discord-state.json")
+	if err := os.MkdirAll(badPath, 0755); err != nil {
+		t.Fatalf("mkdir discord-state.json: %v", err)
+	}
+	err := svc.saveState()
+	if err == nil {
+		t.Error("expected error when discord-state.json is a directory")
+	}
+}
+
+func TestWriteConfig_WriteFileError(t *testing.T) {
+	dir := t.TempDir()
+	// Make discord.json a directory.
+	badPath := filepath.Join(dir, "discord.json")
+	if err := os.MkdirAll(badPath, 0755); err != nil {
+		t.Fatalf("mkdir discord.json: %v", err)
+	}
+	t.Setenv("ENGINE_STATE_DIR", dir)
+	err := WriteConfig("/project", Config{Enabled: false})
+	if err == nil {
+		t.Error("expected error when discord.json is a directory")
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Additional coverage tests
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestAddProject_Error_InvalidPath(t *testing.T) {
+	svc := &Service{
+		cfg: Config{StoragePath: t.TempDir()},
+		state: persistedState{
+			Projects: make(map[string]ProjectBinding),
+		},
+	}
+
+	err := svc.addProject("ch1", "")
+	if err == nil {
+		t.Error("addProject with empty path should error")
+	}
+}
+
+func TestRemoveProject_NoMatch_Error(t *testing.T) {
+	svc := &Service{
+		cfg: Config{StoragePath: t.TempDir()},
+		state: persistedState{
+			Projects: make(map[string]ProjectBinding),
+		},
+	}
+
+	err := svc.removeProject("ch1", "nonexistent")
+	if err != nil {
+		t.Logf("removeProject error (expected): %v", err)
+	}
+}
+
+func TestHandleSessionsCommand_Empty_NoError(t *testing.T) {
+	svc := &Service{
+		cfg: Config{StoragePath: t.TempDir()},
+		state: persistedState{
+			Projects: make(map[string]ProjectBinding),
+		},
+	}
+
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{ChannelID: "ch1"},
+	}
+
+	// Verify this doesn't panic
+	svc.handleSessionsCommand(m, []string{})
+}
+
+func TestHandleLastCommitCommand_NoBinding_NoError(t *testing.T) {
+	svc := &Service{
+		cfg: Config{StoragePath: t.TempDir()},
+		state: persistedState{
+			Projects: make(map[string]ProjectBinding),
+		},
+	}
+
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{ChannelID: "unknown"},
+	}
+
+	// Verify this doesn't panic
+	svc.handleLastCommitCommand(m, []string{})
+}
+
+func TestHandlePauseResume_NoBinding_NoError(t *testing.T) {
+	svc := &Service{
+		cfg: Config{StoragePath: t.TempDir()},
+		state: persistedState{
+			Projects: make(map[string]ProjectBinding),
+		},
+	}
+
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{ChannelID: "unknown"},
+	}
+
+	// Verify this doesn't panic
+	svc.handlePauseResume(m, true, []string{})
+}
+
+func TestRecordInbound_NoBinding_NoError(t *testing.T) {
+	svc := &Service{
+		cfg: Config{StoragePath: t.TempDir()},
+		state: persistedState{
+			Projects: make(map[string]ProjectBinding),
+		},
+	}
+
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			ChannelID: "unknown",
+			Author:    &discordgo.User{Username: "user1"},
+			Content:   "test message",
+		},
+	}
+
+	// Verify this doesn't panic
+	svc.recordInbound(m)
+}
+
+func TestRecordOutbound_NoError(t *testing.T) {
+	svc := &Service{
+		cfg: Config{StoragePath: t.TempDir()},
+		state: persistedState{
+			Projects: make(map[string]ProjectBinding),
+		},
+	}
+
+	// Verify this doesn't panic (no dg means it will fail silently)
+	svc.recordOutbound("ch1", "test", "message", "session1")
+}
+
+func TestSendTagged_NoSession_NoError(t *testing.T) {
+	svc := &Service{
+		cfg: Config{StoragePath: t.TempDir()},
+		state: persistedState{
+			Projects: make(map[string]ProjectBinding),
+		},
+	}
+
+	// Verify this doesn't panic (no dg means it will fail silently)
+	svc.sendTagged("ch1", "test message", "agent", "session1")
+}

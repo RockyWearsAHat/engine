@@ -16,6 +16,18 @@ import (
 	"time"
 )
 
+// ecdsaGenKeyFn is injectable for tests to simulate ECDSA key generation failure.
+var ecdsaGenKeyFn = ecdsa.GenerateKey
+
+// randIntTLSFn is injectable for tests to simulate random serial generation failure.
+var randIntTLSFn = rand.Int
+
+// pemEncodeWriterFn, x509MarshalECKeyFn, tlsLoadX509KeyPairFn, x509CreateCertFn are injectable for tests.
+var pemEncodeWriterFn = pem.Encode
+var x509MarshalECKeyFn = x509.MarshalECPrivateKey
+var tlsLoadX509KeyPairFn = tls.LoadX509KeyPair
+var x509CreateCertFn = x509.CreateCertificate
+
 // LoadOrCreateTLSConfig loads an existing TLS certificate from the storage path
 // or generates a new self-signed ECDSA certificate for remote access.
 func LoadOrCreateTLSConfig(storagePath string) (*tls.Config, error) {
@@ -29,12 +41,12 @@ func LoadOrCreateTLSConfig(storagePath string) (*tls.Config, error) {
 		}
 	}
 
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsaGenKeyFn(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generate key: %w", err)
 	}
 
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	serial, err := randIntTLSFn(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
 		return nil, fmt.Errorf("generate serial: %w", err)
 	}
@@ -54,7 +66,7 @@ func LoadOrCreateTLSConfig(storagePath string) (*tls.Config, error) {
 		DNSNames:              []string{"localhost"},
 	}
 
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	certDER, err := x509CreateCertFn(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
 		return nil, fmt.Errorf("create certificate: %w", err)
 	}
@@ -63,13 +75,13 @@ func LoadOrCreateTLSConfig(storagePath string) (*tls.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("write cert: %w", err)
 	}
-	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: certDER}); err != nil {
+	if err := pemEncodeWriterFn(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: certDER}); err != nil {
 		certOut.Close()
 		return nil, fmt.Errorf("encode cert: %w", err)
 	}
 	certOut.Close()
 
-	keyDER, err := x509.MarshalECPrivateKey(key)
+	keyDER, err := x509MarshalECKeyFn(key)
 	if err != nil {
 		return nil, fmt.Errorf("marshal key: %w", err)
 	}
@@ -77,13 +89,13 @@ func LoadOrCreateTLSConfig(storagePath string) (*tls.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("write key: %w", err)
 	}
-	if err := pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}); err != nil {
+	if err := pemEncodeWriterFn(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}); err != nil {
 		keyOut.Close()
 		return nil, fmt.Errorf("encode key: %w", err)
 	}
 	keyOut.Close()
 
-	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	cert, err := tlsLoadX509KeyPairFn(certPath, keyPath)
 	if err != nil {
 		return nil, fmt.Errorf("load generated cert: %w", err)
 	}

@@ -777,3 +777,73 @@ func TestUpdateSessionProjectPath(t *testing.T) {
 		t.Errorf("expected /new/path, got %q", sess.ProjectPath)
 	}
 }
+
+// ─── nil-db error paths ───────────────────────────────────────────────────────
+
+func TestDiscordRecordMessage_NilDB(t *testing.T) {
+	prevDB := globalDB
+	globalDB = nil
+	defer func() { globalDB = prevDB }()
+	if err := DiscordRecordMessage(DiscordMessage{Content: "x"}); err == nil {
+		t.Fatal("expected error with nil db")
+	}
+}
+
+func TestDiscordBindSessionThread_NilDB(t *testing.T) {
+	prevDB := globalDB
+	globalDB = nil
+	defer func() { globalDB = prevDB }()
+	if err := DiscordBindSessionThread("s", "/p", "t", "c"); err == nil {
+		t.Fatal("expected error with nil db")
+	}
+}
+
+func TestDiscordGetSessionByThread_NilDB(t *testing.T) {
+	prevDB := globalDB
+	globalDB = nil
+	defer func() { globalDB = prevDB }()
+	_, err := DiscordGetSessionByThread("tid")
+	if err == nil {
+		t.Fatal("expected error with nil db")
+	}
+}
+
+func TestStateDir_EnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", dir)
+	got := stateDir("/project")
+	if got != dir {
+		t.Errorf("expected %q, got %q", dir, got)
+	}
+}
+
+func TestStateDir_ProjectPathFallback(t *testing.T) {
+	// Clear env vars that the normal config path would use.
+	t.Setenv("ENGINE_STATE_DIR", "")
+	// Can't mock UserConfigDir or UserHomeDir without OS injection.
+	// Just call stateDir with a path and verify we get some non-empty result.
+	got := stateDir("/myproject")
+	if got == "" {
+		t.Error("expected non-empty stateDir")
+	}
+}
+
+func TestInit_MkdirAllError(t *testing.T) {
+	// Point ENGINE_STATE_DIR to a file path so MkdirAll fails.
+	tmpFile, err := os.CreateTemp("", "dbtest")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.Close()
+
+	// A subpath of the file — MkdirAll will fail because parent is a file.
+	badDir := tmpFile.Name() + "/subdir"
+	t.Setenv("ENGINE_STATE_DIR", badDir)
+	defer func() { globalDB = nil }()
+
+	err = Init("/project")
+	if err == nil {
+		t.Error("expected error when MkdirAll fails")
+	}
+}

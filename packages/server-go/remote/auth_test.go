@@ -1,8 +1,13 @@
 package remote
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -256,4 +261,86 @@ func TestExtractToken_EmptyBearerHeader(t *testing.T) {
 	r.Header.Set("Authorization", "Bearer ")
 	token := ExtractToken(r)
 	_ = token
+}
+
+func TestRotateSecret_WriteError(t *testing.T) {
+	dir := t.TempDir()
+	am, err := NewAuthManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Make the dir read-only so WriteFile fails.
+	if err := os.Chmod(dir, 0444); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0755) //nolint:errcheck
+	if err := am.RotateSecret(dir); err == nil {
+		t.Fatal("expected error when dir is read-only")
+	}
+}
+
+func TestNewAuthManager_WriteError(t *testing.T) {
+	dir := t.TempDir()
+	// Put a directory named secret.key to force WriteFile error.
+	if err := os.Mkdir(filepath.Join(dir, "secret.key"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewAuthManager(dir)
+	if err == nil {
+		t.Fatal("expected error when secret.key is a directory")
+	}
+}
+
+func TestValidateToken_BadPayloadBase64(t *testing.T) {
+	dir := t.TempDir()
+	am, err := NewAuthManager(dir)
+	if err != nil {
+		t.Fatalf("NewAuthManager: %v", err)
+	}
+	_, err = am.ValidateToken("!!!invalid-base64!!.anothersig")
+	if err == nil {
+		t.Error("expected error for bad payload base64")
+	}
+}
+
+func TestValidateToken_BadSigBase64(t *testing.T) {
+	dir := t.TempDir()
+	am, err := NewAuthManager(dir)
+	if err != nil {
+		t.Fatalf("NewAuthManager: %v", err)
+	}
+	// Issue a valid token, then corrupt only the signature part.
+	token, err := am.IssueToken("dev1", time.Hour)
+	if err != nil {
+		t.Fatalf("IssueToken: %v", err)
+	}
+	dotIdx := len(token) - len("SIG")
+	for i := 0; i < len(token); i++ {
+		if token[i] == '.' {
+			dotIdx = i
+			break
+		}
+	}
+	corruptedToken := token[:dotIdx+1] + "!!!bad-base64"
+	_, err = am.ValidateToken(corruptedToken)
+	if err == nil {
+		t.Error("expected error for bad signature base64")
+	}
+}
+
+func TestValidateToken_BadPayloadJSON(t *testing.T) {
+	dir := t.TempDir()
+	am, err := NewAuthManager(dir)
+	if err != nil {
+		t.Fatalf("NewAuthManager: %v", err)
+	}
+	// Craft a token with valid base64 payload that doesn't parse as JSON.
+	badPayload := base64.RawURLEncoding.EncodeToString([]byte("not json"))
+	mac2 := hmac.New(sha256.New, am.secret)
+	mac2.Write([]byte("not json"))
+	sig := base64.RawURLEncoding.EncodeToString(mac2.Sum(nil))
+	_, err = am.ValidateToken(badPayload + "." + sig)
+	if err == nil {
+		t.Error("expected error for bad JSON payload")
+	}
 }

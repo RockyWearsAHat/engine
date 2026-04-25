@@ -10,6 +10,9 @@ import (
 	"sync"
 )
 
+// jsonMarshalIndentFn is injectable for tests to simulate marshalling failure.
+var jsonMarshalIndentFn = json.MarshalIndent
+
 // TrustedDevice represents a client approved for VPN tunnel access.
 type TrustedDevice struct {
 	ID        string `json:"id"`
@@ -95,7 +98,7 @@ func (ts *TrustStore) List() []TrustedDevice {
 }
 
 func (ts *TrustStore) save() error {
-	data, err := json.MarshalIndent(ts.devices, "", "  ")
+	data, err := jsonMarshalIndentFn(ts.devices, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal trust store: %w", err)
 	}

@@ -65,17 +65,32 @@ func (k *KeychainStore) Delete(key string) error {
 }
 
 // ── OS-native keychain (platform-specific build tags) ────────────────────────
+// Overridable keychain hooks (swapped in tests to force file fallback or errors).
+var (
+	osKeychainSetFn = osKeychainSet
+	osKeychainGetFn = osKeychainGet
+	osKeychainDelFn = osKeychainDelete
+)
+
+// randReadFullFn is injectable for tests to simulate nonce-generation failure.
+var randReadFullFn = io.ReadFull
+
+// aesCipherFn, jsonMarshalStoreFn, jsonUnmarshalStoreFn are injectable for tests.
+var aesCipherFn = aes.NewCipher
+var jsonMarshalStoreFn = json.Marshal
+var jsonUnmarshalStoreFn = json.Unmarshal
+
 
 func (k *KeychainStore) osSet(key, value string) error {
-	return osKeychainSet(keychainService, key, value)
+	return osKeychainSetFn(keychainService, key, value)
 }
 
 func (k *KeychainStore) osGet(key string) (string, error) {
-	return osKeychainGet(keychainService, key)
+	return osKeychainGetFn(keychainService, key)
 }
 
 func (k *KeychainStore) osDel(key string) error {
-	return osKeychainDelete(keychainService, key)
+	return osKeychainDelFn(keychainService, key)
 }
 
 // ── File-based AES-256-GCM fallback ──────────────────────────────────────────
@@ -103,7 +118,7 @@ func (k *KeychainStore) loadStore() (map[string]string, error) {
 	}
 
 	key := deriveKey()
-	block, err := aes.NewCipher(key)
+	block, err := aesCipherFn(key)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +138,7 @@ func (k *KeychainStore) loadStore() (map[string]string, error) {
 	}
 
 	var store map[string]string
-	if err := json.Unmarshal(plaintext, &store); err != nil {
+	if err := jsonUnmarshalStoreFn(plaintext, &store); err != nil {
 		return nil, err
 	}
 	return store, nil
@@ -134,20 +149,20 @@ func (k *KeychainStore) saveStore(store map[string]string) error {
 		return err
 	}
 
-	plaintext, err := json.Marshal(store)
+	plaintext, err := jsonMarshalStoreFn(store)
 	if err != nil {
 		return err
 	}
 
 	key := deriveKey()
-	block, err := aes.NewCipher(key)
+	block, err := aesCipherFn(key)
 	if err != nil {
 		return err
 	}
 	gcm, _ := cipher.NewGCM(block)
 
 	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+	if _, err := randReadFullFn(rand.Reader, nonce); err != nil {
 		return err
 	}
 

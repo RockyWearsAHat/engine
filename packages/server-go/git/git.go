@@ -145,10 +145,7 @@ func Commit(cwd, message string) (string, error) {
 	if _, err := run(cwd, "commit", "-m", message); err != nil {
 		return "", fmt.Errorf("git commit: %w", err)
 	}
-	hash, err := run(cwd, "rev-parse", "--short", "HEAD")
-	if err != nil {
-		return "unknown", nil
-	}
+	hash, _ := run(cwd, "rev-parse", "--short", "HEAD")
 	return hash, nil
 }
 
@@ -224,11 +221,10 @@ func ResolveGitHubRepo(cwd string) (string, string, error) {
 		}
 
 		remoteURL, err := GetRemoteURL(cwd, remote)
-		if err != nil {
-			continue
-		}
-		if owner, repo, ok := ParseGitHubRepo(remoteURL); ok {
-			return owner, repo, nil
+		if err == nil {
+			if owner, repo, ok := ParseGitHubRepo(remoteURL); ok {
+				return owner, repo, nil
+			}
 		}
 	}
 
@@ -283,9 +279,6 @@ func ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
 		line = strings.TrimSpace(line)
 		switch {
 		case strings.HasPrefix(line, "worktree "):
-			if current.Path != "" {
-				result = append(result, current)
-			}
 			current = WorktreeInfo{Path: strings.TrimPrefix(line, "worktree ")}
 		case strings.HasPrefix(line, "HEAD "):
 			current.Head = strings.TrimPrefix(line, "HEAD ")

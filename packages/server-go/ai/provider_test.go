@@ -99,6 +99,139 @@ func TestNewProvider_Ollama(t *testing.T) {
 	}
 }
 
+func TestNewProvider_UnknownFallsBackToAnthropic(t *testing.T) {
+	p := newProvider("unknown")
+	if _, ok := p.(*anthropicProvider); !ok {
+		t.Errorf("expected anthropicProvider for unknown, got %T", p)
+	}
+}
+
+// ── inferredProviderForModel ──────────────────────────────────────────────────
+
+func TestInferredProviderForModel_GPT(t *testing.T) {
+	tests := []string{"gpt-4o", "gpt-4o-mini", "o1-preview", "o3-mini", "o4-ultra"}
+	for _, model := range tests {
+		if got := inferredProviderForModel(model); got != "openai" {
+			t.Errorf("expected openai for %s, got %q", model, got)
+		}
+	}
+}
+
+func TestInferredProviderForModel_Claude(t *testing.T) {
+	tests := []string{"claude-opus-4-5", "claude-sonnet-4-6", "claude-haiku-4.5"}
+	for _, model := range tests {
+		if got := inferredProviderForModel(model); got != "anthropic" {
+			t.Errorf("expected anthropic for %s, got %q", model, got)
+		}
+	}
+}
+
+func TestInferredProviderForModel_OllamaFamily(t *testing.T) {
+	tests := []string{"llama3.2", "gemma:7b", "mistral", "mixtral", "deepseek-coder", "qwen"}
+	for _, model := range tests {
+		if got := inferredProviderForModel(model); got != "ollama" {
+			t.Errorf("expected ollama for %s, got %q", model, got)
+		}
+	}
+}
+
+func TestInferredProviderForModel_EmptyFallsToOllama(t *testing.T) {
+	if got := inferredProviderForModel(""); got != "ollama" {
+		t.Errorf("expected ollama for empty model, got %q", got)
+	}
+}
+
+func TestInferredProviderForModel_CaseInsensitive(t *testing.T) {
+	if got := inferredProviderForModel("GPT-4O"); got != "openai" {
+		t.Errorf("expected case-insensitive openai for GPT-4O, got %q", got)
+	}
+	if got := inferredProviderForModel("CLAUDE-SONNET-4-6"); got != "anthropic" {
+		t.Errorf("expected case-insensitive anthropic, got %q", got)
+	}
+}
+
+// ── looksLikeOllamaModel ──────────────────────────────────────────────────────
+
+func TestLooksLikeOllamaModel_WithTag(t *testing.T) {
+	tests := []string{"llama3.2", "gemma:7b", "mistral:7b"}
+	for _, model := range tests {
+		if !looksLikeOllamaModel(model) {
+			t.Errorf("expected %s to look like ollama model", model)
+		}
+	}
+}
+
+func TestLooksLikeOllamaModel_WithPrefix(t *testing.T) {
+	tests := []string{"llama2", "gemma4", "mistral-small", "qwen-large", "deepseek"}
+	for _, model := range tests {
+		if !looksLikeOllamaModel(model) {
+			t.Errorf("expected %s to look like ollama model", model)
+		}
+	}
+}
+
+func TestLooksLikeOllamaModel_NotOllama(t *testing.T) {
+	tests := []string{"gpt-4o", "claude-sonnet", "my-custom-model"}
+	for _, model := range tests {
+		if looksLikeOllamaModel(model) {
+			t.Errorf("expected %s to not look like ollama model", model)
+		}
+	}
+}
+
+// ── detectOllamaModel ─────────────────────────────────────────────────────────
+
+func TestDetectOllamaModel_MockServer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/api/ps") {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"models":[{"name":"llama3.2"},{"name":"gemma:7b"}]}`)
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	if got := detectOllamaModel(server.URL); got != "llama3.2" {
+		t.Errorf("expected llama3.2, got %q", got)
+	}
+}
+
+func TestDetectOllamaModel_Fallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/api/ps") {
+			w.WriteHeader(http.StatusNotFound)
+		} else if strings.Contains(r.URL.Path, "/v1/models") {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"data":[{"id":"mistral"}]}`)
+		}
+	}))
+	defer server.Close()
+
+	if got := detectOllamaModel(server.URL); got != "mistral" {
+		t.Errorf("expected mistral from fallback, got %q", got)
+	}
+}
+
+func TestDetectOllamaModel_NoServer(t *testing.T) {
+	// Invalid URL that will fail to connect.
+	if got := detectOllamaModel("http://localhost:65535"); got != "" {
+		t.Errorf("expected empty model for failed connection, got %q", got)
+	}
+}
+
+func TestDetectOllamaModel_EmptyList(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"models":[]}`)
+	}))
+	defer server.Close()
+
+	if got := detectOllamaModel(server.URL); got != "" {
+		t.Errorf("expected empty model for empty list, got %q", got)
+	}
+}
+
 func TestNewProvider_Unknown_DefaultsToAnthropic(t *testing.T) {
 	p := newProvider("xyzunknown")
 	if _, ok := p.(*anthropicProvider); !ok {
