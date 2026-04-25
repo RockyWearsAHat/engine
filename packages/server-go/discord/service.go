@@ -712,8 +712,10 @@ func (s *Service) handleHistoryCommand(m *discordgo.MessageCreate, args []string
 	since := time.Now().Add(-time.Duration(hours) * time.Hour).UTC().Format(time.RFC3339)
 	threadID := ""
 	projectPath := ""
-	if ch, err := s.dg.Channel(m.ChannelID); err == nil && ch != nil && isThread(ch) {
-		threadID = ch.ID
+	if s.dg != nil {
+		if ch, err := s.dg.Channel(m.ChannelID); err == nil && ch != nil && isThread(ch) {
+			threadID = ch.ID
+		}
 	}
 	if binding, ok := s.resolveProjectForMessage(m.ChannelID, nil); ok {
 		projectPath = binding.ProjectPath

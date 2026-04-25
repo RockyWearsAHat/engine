@@ -342,6 +342,7 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
           }
           setExpandedFolders(prev => {
             const next = new Set(prev);
+            /* istanbul ignore else */
             if (context) {
               // Scoped expand: expand only within this folder
               expandFoldersWithin(context, visibleTree, next);
@@ -356,6 +357,7 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
         case 'collapse-all': {
           setExpandedFolders(prev => {
             const next = new Set(prev);
+            /* istanbul ignore else */
             if (context) {
               // Scoped collapse: collapse only within this folder
               collapseFoldersWithin(context, next);

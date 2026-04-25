@@ -1148,6 +1148,14 @@ export default function App() {
         case 'editor.tab.focus':
           setActiveFile(msg.path);
           break;
+
+        case 'test.summary': {
+          const errCount = msg.summary.errors.length;
+          updateAgentSession(msg.sessionId, {
+            currentActivity: errCount > 0 ? `${errCount} error${errCount !== 1 ? 's' : ''} detected` : '',
+          });
+          break;
+        }
       }
     });
     const offOpen = wsClient.onOpen(initializeConnection);

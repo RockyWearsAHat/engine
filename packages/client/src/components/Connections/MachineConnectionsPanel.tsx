@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, Laptop, Link2, Plus, RefreshCw, Trash2, Wifi } from 'lucide-react';
+import { ArrowRight, Key, Laptop, Link2, Plus, RefreshCw, Wifi } from 'lucide-react';
+import { wsClient } from '../../ws/client.js';
 import {
   clearConnectionProfiles,
   deleteConnectionProfile,
@@ -42,6 +43,19 @@ export default function MachineConnectionsPanel({
   const [draft, setDraft] = useState<ConnectionDraft>(emptyDraft);
   const [status, setStatus] = useState<string>('');
   const [busy, setBusy] = useState(false);
+
+  const [generatedCode, setGeneratedCode] = useState<string | null>(null);
+  const [codeExpiresIn, setCodeExpiresIn] = useState<number>(0);
+
+  // Listen for the generated pairing code pushed back from the server.
+  useEffect(() => {
+    return wsClient.onMessage((msg) => {
+      if (msg.type === 'remote.pair.code') {
+        setGeneratedCode(msg.code);
+        setCodeExpiresIn(msg.expiresIn);
+      }
+    });
+  }, []);
 
   const selectedProfile = useMemo(
     () => profiles.find(profile => profile.id === selectedId) ?? null,
@@ -204,6 +218,29 @@ export default function MachineConnectionsPanel({
         }) : (
           <div className="connections-empty">
             No machine saved yet. Pair the first one below.
+          </div>
+        )}
+      </div>
+
+      <div className="connections-generate">
+        <div className="connections-generate-title">
+          <Key size={14} />
+          <span>Generate a pairing code</span>
+        </div>
+        <p className="connections-muted">
+          Run this on the machine you want to pair from. Share the code with the device that will connect.
+        </p>
+        <button
+          className="btn-secondary"
+          type="button"
+          onClick={() => wsClient.send({ type: 'remote.pair.code.generate' })}
+        >
+          Generate code
+        </button>
+        {generatedCode && (
+          <div className="connections-code-display" data-testid="generated-code">
+            <span className="connections-code-value">{generatedCode}</span>
+            <span className="connections-muted">expires in {Math.round(codeExpiresIn / 60)} min</span>
           </div>
         )}
       </div>

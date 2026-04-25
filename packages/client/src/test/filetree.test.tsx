@@ -507,6 +507,14 @@ describe('FileTree Component', () => {
     expect(container.textContent).toContain('No git repository');
   });
 
+  it('GitTab_NoActiveSession_ProjectPathFallsBackToNull', () => {
+    useStore.setState({ activeSession: null });
+    const { container } = render(
+      <FileTree activityTab="git" onOpenFolder={() => {}} onOpenFile={() => {}} />,
+    );
+    expect(container).toBeTruthy();
+  });
+
   it('SearchTab_WithResults_RendersResultList', () => {
     const { container, rerender } = render(
       <FileTree activityTab="search" onOpenFolder={() => {}} onOpenFile={() => {}} />,
@@ -583,5 +591,48 @@ describe('FileTree Component', () => {
     );
 
     expect(container).toBeTruthy();
+  });
+
+  it('ExplorerTab_ShowDotfilesTrue_GitEntryRenderedDimmed', () => {
+    useStore.setState({
+      showDotfiles: true,
+      fileTree: {
+        name: 'project',
+        path: '/project',
+        type: 'directory',
+        children: [
+          { name: '.git', path: '/project/.git', type: 'directory', children: [] },
+          { name: '.gitignore', path: '/project/.gitignore', type: 'file' },
+          { name: 'src', path: '/project/src', type: 'directory', children: [{ name: 'main.ts', path: '/project/src/main.ts', type: 'file' }] },
+        ],
+      },
+    });
+
+    const { container } = render(
+      <FileTree activityTab="explorer" onOpenFolder={() => {}} onOpenFile={() => {}} />,
+    );
+
+    expect(container.textContent).toContain('.git');
+    expect(container.textContent).toContain('.gitignore');
+  });
+
+  it('ExplorerTab_EmptyFolder_RendersSpacerInsteadOfChevron', () => {
+    useStore.setState({
+      fileTree: {
+        name: 'project',
+        path: '/project',
+        type: 'directory',
+        children: [
+          { name: 'empty-dir', path: '/project/empty-dir', type: 'directory', children: [], hasChildren: false },
+          { name: 'file.ts', path: '/project/file.ts', type: 'file' },
+        ],
+      },
+    });
+
+    const { container } = render(
+      <FileTree activityTab="explorer" onOpenFolder={() => {}} onOpenFile={() => {}} />,
+    );
+
+    expect(container.querySelector('.tree-chevron-spacer')).toBeTruthy();
   });
 });

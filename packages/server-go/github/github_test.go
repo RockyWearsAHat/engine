@@ -169,6 +169,29 @@ func TestParseIssueComment_BadJSON(t *testing.T) {
 	}
 }
 
+func TestParseIssue(t *testing.T) {
+	payload := `{"action":"opened","issue":{"number":42,"title":"Feature","body":"Add X"},"repository":{"full_name":"org/repo"}}`
+	ev := &WebhookEvent{Type: "issues", Payload: json.RawMessage(payload)}
+	p, err := ParseIssue(ev)
+	if err != nil {
+		t.Fatalf("ParseIssue: %v", err)
+	}
+	if p.Action != "opened" {
+		t.Errorf("Action = %q, want opened", p.Action)
+	}
+	if p.Issue.Number != 42 {
+		t.Errorf("Issue.Number = %d, want 42", p.Issue.Number)
+	}
+}
+
+func TestParseIssue_BadJSON(t *testing.T) {
+	ev := &WebhookEvent{Type: "issues", Payload: json.RawMessage(`invalid`)}
+	_, err := ParseIssue(ev)
+	if err == nil {
+		t.Error("expected error for invalid JSON")
+	}
+}
+
 func TestParseWorkflowRun(t *testing.T) {
 	payload := `{"action":"completed","conclusion":"failure","workflow_run":{"name":"CI","status":"completed","html_url":"https://github.com"}}`
 	ev := &WebhookEvent{Type: "workflow_run", Payload: json.RawMessage(payload)}

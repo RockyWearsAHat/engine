@@ -128,6 +128,25 @@ type IssueCommentPayload struct {
 		Number int    `json:"number"`
 		Title  string `json:"title"`
 	} `json:"issue"`
+	Repository struct {
+		FullName string `json:"full_name"`
+	} `json:"repository"`
+}
+
+// IssuePayload is the payload for "issues" events.
+type IssuePayload struct {
+	Action string `json:"action"`
+	Issue  struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		Body   string `json:"body"`
+	} `json:"issue"`
+	Repository struct {
+		FullName string `json:"full_name"`
+	} `json:"repository"`
+	Sender struct {
+		Login string `json:"login"`
+	} `json:"sender"`
 }
 
 // WorkflowRunPayload is the payload for "workflow_run" events.
@@ -155,6 +174,15 @@ func ParseIssueComment(e *WebhookEvent) (*IssueCommentPayload, error) {
 	var p IssueCommentPayload
 	if err := json.Unmarshal(e.Payload, &p); err != nil {
 		return nil, fmt.Errorf("parse issue_comment payload: %w", err)
+	}
+	return &p, nil
+}
+
+// ParseIssue parses an IssuePayload from a WebhookEvent with Type=="issues".
+func ParseIssue(e *WebhookEvent) (*IssuePayload, error) {
+	var p IssuePayload
+	if err := json.Unmarshal(e.Payload, &p); err != nil {
+		return nil, fmt.Errorf("parse issues payload: %w", err)
 	}
 	return &p, nil
 }

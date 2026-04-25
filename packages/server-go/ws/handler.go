@@ -31,6 +31,12 @@ var upgrader = websocket.Upgrader{
 
 var runAIChat = ai.Chat
 
+// approvalTimeout is the duration to wait for user approval; exposed for testing.
+var approvalTimeout = 5 * time.Minute
+
+// wsHTTPClient is used for GitHub API calls; exposed for testing.
+var wsHTTPClient = http.DefaultClient
+
 // DiscordBridge is the subset of the Discord service the WS handler uses.
 // Kept narrow so tests can stub it.
 type DiscordBridge interface {
@@ -47,6 +53,16 @@ var discordBridge DiscordBridge
 // Passing nil disables the discord.* endpoints.
 func SetDiscordBridge(d DiscordBridge) {
 	discordBridge = d
+}
+
+// localPairingManager is the PairingManager wired by main.go in remote mode.
+// When nil the remote.pair.code.generate endpoint returns an error.
+var localPairingManager *remote.PairingManager
+
+// SetPairingManager registers the PairingManager so WS clients can request
+// one-time pairing codes without going through the TLS remote server directly.
+func SetPairingManager(pm *remote.PairingManager) {
+	localPairingManager = pm
 }
 
 // Hub manages the WebSocket server and default project path.
@@ -109,6 +125,10 @@ type conn struct {
 	chatCancelFns map[string]func() // keyed by sessionID
 
 	writeMu sync.Mutex
+
+	// testObserverMu guards testObservers, which accumulate per-session output.
+	testObserverMu sync.Mutex
+	testObservers  map[string]*ai.TestObserver // keyed by sessionID
 }
 
 type runtimeConfig struct {
@@ -152,8 +172,10 @@ func newConn(ws *websocket.Conn, projectPath string) *conn {
 		termIDs:         make(map[string]bool),
 		approvalWaiters: make(map[string]chan bool),
 		chatCancelFns:   make(map[string]func()),
+		testObservers:   make(map[string]*ai.TestObserver),
 	}
 }
+
 
 // send marshals and writes a message to the WebSocket client (thread-safe).
 // Returns silently if the connection has already been closed.
@@ -209,7 +231,7 @@ func (c *conn) requestApproval(sessionID, kind, title, message, command string) 
 	select {
 	case allow := <-waiter:
 		return allow, nil
-	case <-time.After(5 * time.Minute):
+	case <-time.After(approvalTimeout):
 		c.approvalMu.Lock()
 		delete(c.approvalWaiters, id)
 		c.approvalMu.Unlock()
@@ -371,9 +393,39 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		if summary := ai.BuildInitialSessionSummary(projectPath); summary != "" {
 			db.UpdateSessionSummary(id, summary) //nolint:errcheck
 		}
+		if wtPath, wtErr := ai.EnsureSessionWorktree(id, projectPath); wtErr == nil && wtPath != projectPath {
+			projectPath = wtPath
+			c.projectPath = wtPath
+			db.UpdateSessionProjectPath(id, wtPath) //nolint:errcheck
+		}
 		c.sessionID = id
 		session, _ := db.GetSession(id)
 		c.send(map[string]interface{}{"type": "session.created", "session": session})
+
+	case "session.cleanup":
+		var msg struct {
+			SessionID string `json:"sessionId"`
+			Merge     bool   `json:"merge"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.sendErr("Bad payload", "BAD_PAYLOAD")
+			return
+		}
+		if strings.TrimSpace(msg.SessionID) == "" {
+			c.sendErr("sessionId required", "BAD_PAYLOAD")
+			return
+		}
+		session, err := db.GetSession(msg.SessionID)
+		if err != nil || session == nil {
+			c.sendErr("Session not found", "NOT_FOUND")
+			return
+		}
+		go func() {
+			if cleanupErr := ai.CleanupSessionWorktree(msg.SessionID, session.ProjectPath, msg.Merge); cleanupErr != nil {
+				log.Printf("[engine] ws: session.cleanup error: %v", cleanupErr)
+			}
+		}()
+		c.send(map[string]interface{}{"type": "session.cleanup.started", "sessionId": msg.SessionID})
 
 	case "session.load":
 		var msg struct {
@@ -730,7 +782,13 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		_ = json.Unmarshal(raw, &msg)
 		c.handleDiscordHistoryRecent(msg.ProjectPath, msg.ThreadID, msg.Since, msg.Limit)
 
-	// ── GitHub Issues ─────────────────────────────────────────────────────────
+
+	// ── Remote pairing ─────────────────────────────────────────────────────────────────────────────
+
+	case "remote.pair.code.generate":
+		c.handleRemotePairCodeGenerate()
+
+	// ── GitHub Issues ─────────────────────────────────────────────────────────────────────────────
 
 	case "github.user":
 		c.handleGitHubUser()
@@ -853,9 +911,91 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			"team": msg.Team,
 		})
 
+
+	// ── Test Observer ─────────────────────────────────────────────────────────
+
+	case "test.observe":
+		var msg struct {
+			SessionID string `json:"sessionId"`
+			Line      string `json:"line"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.sendErr("Bad payload", "BAD_PAYLOAD")
+			return
+		}
+		if strings.TrimSpace(msg.SessionID) == "" {
+			c.sendErr("sessionId required", "BAD_PAYLOAD")
+			return
+		}
+		c.testObserverMu.Lock()
+		obs, ok := c.testObservers[msg.SessionID]
+		if !ok {
+			obs = ai.NewTestObserver()
+			c.testObservers[msg.SessionID] = obs
+		}
+		prevErrCount := len(obs.GetSummary().Errors)
+		obs.Observe(msg.Line)
+		summary := obs.GetSummary()
+		newErrCount := len(summary.Errors)
+		lineCount := strings.Count(summary.Output, "\n")
+		c.testObserverMu.Unlock()
+		if lineCount%20 == 0 || newErrCount > prevErrCount {
+			c.send(map[string]interface{}{
+				"type":      "test.summary",
+				"sessionId": msg.SessionID,
+				"summary":   summary,
+			})
+		}
+
+	case "test.summary.get":
+		var msg struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.sendErr("Bad payload", "BAD_PAYLOAD")
+			return
+		}
+		if strings.TrimSpace(msg.SessionID) == "" {
+			c.sendErr("sessionId required", "BAD_PAYLOAD")
+			return
+		}
+		c.testObserverMu.Lock()
+		obs, ok := c.testObservers[msg.SessionID]
+		var summary ai.TestSummary
+		if ok {
+			summary = obs.GetSummary()
+		} else {
+			summary = ai.TestSummary{Errors: []string{}, Warnings: []string{}, Success: true}
+		}
+		c.testObserverMu.Unlock()
+		c.send(map[string]interface{}{
+			"type":      "test.summary",
+			"sessionId": msg.SessionID,
+			"summary":   summary,
+		})
+
 	default:
 		c.sendErr(fmt.Sprintf("Unknown message type: %s", msgType), "UNKNOWN_TYPE")
 	}
+}
+
+// handleRemotePairCodeGenerate generates a one-time pairing code and sends it back.
+func (c *conn) handleRemotePairCodeGenerate() {
+	pm := localPairingManager
+	if pm == nil {
+		c.sendErr("Remote pairing is not enabled on this server", "PAIRING_DISABLED")
+		return
+	}
+	code, err := pm.GenerateCode()
+	if err != nil {
+		c.sendErr("Failed to generate pairing code", "PAIRING_ERROR")
+		return
+	}
+	c.send(map[string]interface{}{
+		"type":      "remote.pair.code",
+		"code":      code,
+		"expiresIn": 300,
+	})
 }
 
 func (c *conn) handleGitHubIssues(projectPath string) {
@@ -945,7 +1085,7 @@ func fetchGitHubUser() (*githubUser, error) {
 	req.Header.Set("User-Agent", "Engine/0.1")
 	req.Header.Set("Authorization", "token "+token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := wsHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -980,7 +1120,7 @@ func fetchGitHubIssues(owner, repo string) ([]githubIssue, error) {
 		req.Header.Set("Authorization", "token "+token)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := wsHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
