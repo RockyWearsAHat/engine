@@ -1312,3 +1312,86 @@ func TestHandler_ProjectOpen_WithSummary(t *testing.T) {
 	}
 }
 
+func TestHandler_UsageDashboard_Get_SuccessAndFallbackProjectPath(t *testing.T) {
+	projectDir := setupWSProject(t)
+	if err := db.CreateSession("usage-session", projectDir, "main"); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := db.LogUsageEvent("usage-1", "usage-session", projectDir, "openai", "gpt-4o", 12, 8, 20, 0.002, 400); err != nil {
+		t.Fatalf("LogUsageEvent: %v", err)
+	}
+
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	// Request without explicit projectPath to cover fallback-to-connection project path.
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type":       "usage.dashboard.get",
+		"scope":      "",
+		"projectPath": "",
+	})
+
+	msg := readWSMessageOfType(t, conn, "usage.dashboard")
+	rawDashboard, ok := msg["dashboard"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected dashboard payload, got %+v", msg)
+	}
+	rawTotals, ok := rawDashboard["totals"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected totals payload, got %+v", rawDashboard)
+	}
+	if requests, _ := rawTotals["requests"].(float64); requests < 1 {
+		t.Fatalf("expected at least one request, got %+v", rawTotals)
+	}
+}
+
+func TestHandler_UsageDashboard_Get_ErrorResponses(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type":       "usage.dashboard.get",
+		"scope":      "project",
+		"projectPath": 17,
+	})
+	badPayload := readWSMessageOfType(t, conn, "usage.dashboard")
+	if badPayload["error"] != "Bad payload" {
+		t.Fatalf("expected bad payload error, got %+v", badPayload)
+	}
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type":       "usage.dashboard.get",
+		"scope":      "invalid",
+		"projectPath": projectDir,
+	})
+	badScope := readWSMessageOfType(t, conn, "usage.dashboard")
+	if _, ok := badScope["error"].(string); !ok {
+		t.Fatalf("expected usage scope error, got %+v", badScope)
+	}
+}
+
+func TestHandler_RepoAddRemove_BadPayloadErrors(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type":      "repo.add",
+		"urlOrPath": 5,
+	})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "BAD_PAYLOAD" {
+		t.Fatalf("expected BAD_PAYLOAD for repo.add, got %+v", msg)
+	}
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "repo.remove",
+		"name": 12,
+	})
+	msg = readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "BAD_PAYLOAD" {
+		t.Fatalf("expected BAD_PAYLOAD for repo.remove, got %+v", msg)
+	}
+}
+

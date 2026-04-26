@@ -298,9 +298,11 @@ func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
 	if err := createSessionFn(sessionID, targetProjectPath, branch); err != nil {
 		log.Printf("[scaffold %s/%s] create session: %v", owner, repo, err)
 	}
+	scaffoldPolicy := ai.ResolveAutonomousPolicy(targetProjectPath)
 	ctx := &ai.ChatContext{
-		ProjectPath: targetProjectPath,
-		SessionID:   sessionID,
+		ProjectPath:     targetProjectPath,
+		SessionID:       sessionID,
+		AutonomousPolicy: &scaffoldPolicy,
 		OnChunk: func(content string, done bool) {
 			if content != "" {
 				log.Printf("[scaffold %s/%s] %s", owner, repo, content)
@@ -343,9 +345,11 @@ func triggerCIAnalysisSession(projectPath string, payload json.RawMessage) {
 	if err := createSessionFn(sessionID, projectPath, branch); err != nil {
 		log.Printf("[ci-fix %s] create session: %v", ciEvent.Repository.FullName, err)
 	}
+	ciPolicy := ai.ResolveAutonomousPolicy(projectPath)
 	ctx := &ai.ChatContext{
-		ProjectPath: projectPath,
-		SessionID:   sessionID,
+		ProjectPath:     projectPath,
+		SessionID:       sessionID,
+		AutonomousPolicy: &ciPolicy,
 		OnChunk: func(content string, done bool) {
 			if content != "" {
 				log.Printf("[ci-fix %s] %s", ciEvent.Repository.FullName, content)
@@ -395,9 +399,11 @@ func triggerIssueSession(projectPath string, payload json.RawMessage) {
 		log.Printf("issue-session: create session: %v", dbErr)
 	}
 
+	issuePolicy := ai.ResolveAutonomousPolicy(projectPath)
 	ctx := &ai.ChatContext{
-		ProjectPath: projectPath,
-		SessionID:   sessionID,
+		ProjectPath:     projectPath,
+		SessionID:       sessionID,
+		AutonomousPolicy: &issuePolicy,
 		OnChunk: func(content string, done bool) {
 			if content != "" {
 				log.Printf("[issue #%d %s] %s", parsed.Issue.Number, parsed.Repository.FullName, content)
@@ -448,9 +454,11 @@ func triggerIssueOpenedSession(projectPath string, payload json.RawMessage) {
 		log.Printf("issue-opened: create session: %v", dbErr)
 	}
 
+	issueOpenedPolicy := ai.ResolveAutonomousPolicy(projectPath)
 	ctx := &ai.ChatContext{
-		ProjectPath: projectPath,
-		SessionID:   sessionID,
+		ProjectPath:     projectPath,
+		SessionID:       sessionID,
+		AutonomousPolicy: &issueOpenedPolicy,
 		OnChunk: func(content string, done bool) {
 			if content != "" {
 				log.Printf("[issue-opened #%d %s] %s", parsed.Issue.Number, parsed.Repository.FullName, content)

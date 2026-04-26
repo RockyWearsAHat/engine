@@ -278,3 +278,80 @@ func TestParseTeamConfigYAML_OrphanedIndentBeforeTeam(t *testing.T) {
 		t.Fatalf("expected model openai:gpt-4o-mini despite orphaned line, got %q", got)
 	}
 }
+
+func TestParseAutonomousPolicy_Defaults(t *testing.T) {
+	p := parseAutonomousPolicy("teams:\n  fast:\n    orchestrator:\n      model: \"openai:gpt-4o-mini\"\n")
+	if p.AutoCommit || p.AutoPush || p.Branch != "" {
+		t.Fatalf("expected zero policy for config without autonomous section, got %+v", p)
+	}
+}
+
+func TestParseAutonomousPolicy_AutoCommitTrue(t *testing.T) {
+	yaml := "autonomous:\n  auto_commit: true\n"
+	p := parseAutonomousPolicy(yaml)
+	if !p.AutoCommit {
+		t.Fatal("expected AutoCommit=true")
+	}
+	if p.AutoPush {
+		t.Fatal("expected AutoPush=false")
+	}
+}
+
+func TestParseAutonomousPolicy_AutoPushTrue(t *testing.T) {
+	yaml := "autonomous:\n  auto_commit: true\n  auto_push: true\n"
+	p := parseAutonomousPolicy(yaml)
+	if !p.AutoCommit {
+		t.Fatal("expected AutoCommit=true")
+	}
+	if !p.AutoPush {
+		t.Fatal("expected AutoPush=true")
+	}
+}
+
+func TestParseAutonomousPolicy_Branch(t *testing.T) {
+	yaml := "autonomous:\n  auto_commit: true\n  branch: \"engine/work\"\n"
+	p := parseAutonomousPolicy(yaml)
+	if p.Branch != "engine/work" {
+		t.Fatalf("expected branch engine/work, got %q", p.Branch)
+	}
+}
+
+func TestParseAutonomousPolicy_CommentLines(t *testing.T) {
+	yaml := "autonomous:\n  # auto_push is deliberately off\n  auto_commit: true\n"
+	p := parseAutonomousPolicy(yaml)
+	if !p.AutoCommit {
+		t.Fatal("expected AutoCommit=true despite comment line")
+	}
+	if p.AutoPush {
+		t.Fatal("expected AutoPush=false")
+	}
+}
+
+func TestResolveAutonomousPolicy_MissingConfig(t *testing.T) {
+	p := ResolveAutonomousPolicy(t.TempDir())
+	if p.AutoCommit || p.AutoPush || p.Branch != "" {
+		t.Fatalf("expected zero policy for missing config, got %+v", p)
+	}
+}
+
+func TestResolveAutonomousPolicy_FromFile(t *testing.T) {
+	projectDir := t.TempDir()
+	engineDir := filepath.Join(projectDir, ".engine")
+	if err := os.MkdirAll(engineDir, 0o755); err != nil {
+		t.Fatalf("mkdir .engine: %v", err)
+	}
+	content := "autonomous:\n  auto_commit: true\n  auto_push: true\n  branch: \"engine/ci\"\n"
+	if err := os.WriteFile(filepath.Join(engineDir, "config.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	p := ResolveAutonomousPolicy(projectDir)
+	if !p.AutoCommit {
+		t.Fatal("expected AutoCommit=true")
+	}
+	if !p.AutoPush {
+		t.Fatal("expected AutoPush=true")
+	}
+	if p.Branch != "engine/ci" {
+		t.Fatalf("expected branch engine/ci, got %q", p.Branch)
+	}
+}

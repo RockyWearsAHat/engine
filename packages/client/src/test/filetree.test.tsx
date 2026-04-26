@@ -159,6 +159,31 @@ describe('FileTree Component', () => {
     expect(container).toBeTruthy();
   });
 
+  it('UsageTab_UsageDashboardRendered', () => {
+    const { container } = render(
+      <FileTree
+        activityTab="usage"
+        onOpenFolder={() => {}}
+        onOpenFile={() => {}}
+      />,
+    );
+    expect(container).toBeTruthy();
+    expect(container.textContent).toContain('Usage Dashboard');
+  });
+
+  it('UsageTab_WithoutActiveSession_UsesNullProjectPath', () => {
+    useStore.setState({ activeSession: null });
+    const { container } = render(
+      <FileTree
+        activityTab="usage"
+        onOpenFolder={() => {}}
+        onOpenFile={() => {}}
+      />,
+    );
+    expect(container).toBeTruthy();
+    expect(container.textContent).toContain('Open a project to view project-specific usage.');
+  });
+
   it('OpenEditorsTab_EditorListRendered', () => {
     const { container } = render(
       <FileTree

@@ -17,6 +17,7 @@ import (
 	"github.com/engine/server/db"
 	"github.com/engine/server/discord"
 	"github.com/engine/server/remote"
+	"github.com/engine/server/workspace"
 	"github.com/gorilla/websocket"
 )
 
@@ -1510,5 +1511,133 @@ func TestHandler_DiscordConfigSet_NilBridge_EnabledStartFails(t *testing.T) {
 	msg := drainWSUntilType(t, conn, "discord.config.saved")
 	if msg["warning"] == nil {
 		t.Fatalf("expected start-failed warning, got %+v", msg)
+	}
+}
+
+// ── Repository Registry WS handler tests ─────────────────────────────────────
+
+func TestHandler_RepoList_Empty(t *testing.T) {
+	origLoad := repoRegistryLoadFn
+	defer func() { repoRegistryLoadFn = origLoad }()
+	repoRegistryLoadFn = func(_ string) ([]workspace.RegistryEntry, error) {
+		return []workspace.RegistryEntry{}, nil
+	}
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "repo.list"})
+	msg := drainWSUntilType(t, conn, "repo.list")
+	entries, ok := msg["entries"].([]interface{})
+	if !ok {
+		t.Fatalf("expected entries array, got %T", msg["entries"])
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries, got %d", len(entries))
+	}
+}
+
+func TestHandler_RepoList_Error(t *testing.T) {
+	origLoad := repoRegistryLoadFn
+	defer func() { repoRegistryLoadFn = origLoad }()
+	repoRegistryLoadFn = func(_ string) ([]workspace.RegistryEntry, error) {
+		return nil, fmt.Errorf("disk error")
+	}
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "repo.list"})
+	msg := drainWSUntilType(t, conn, "error")
+	if code, _ := msg["code"].(string); code != "REPO_LIST_ERROR" {
+		t.Errorf("code = %q, want REPO_LIST_ERROR", code)
+	}
+}
+
+func TestHandler_RepoAdd_Success(t *testing.T) {
+	origAdd := repoRegistryAddFn
+	defer func() { repoRegistryAddFn = origAdd }()
+	repoRegistryAddFn = func(_ string, p string) (*workspace.RegistryEntry, error) {
+		return &workspace.RegistryEntry{Name: "testrepo", LocalPath: p, URL: ""}, nil
+	}
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type":      "repo.add",
+		"urlOrPath": "/some/path",
+	})
+	msg := drainWSUntilType(t, conn, "repo.added")
+	entry, ok := msg["entry"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected entry map, got %T", msg["entry"])
+	}
+	if entry["name"] != "testrepo" {
+		t.Errorf("name = %v, want testrepo", entry["name"])
+	}
+}
+
+func TestHandler_RepoAdd_Error(t *testing.T) {
+	origAdd := repoRegistryAddFn
+	defer func() { repoRegistryAddFn = origAdd }()
+	repoRegistryAddFn = func(_ string, _ string) (*workspace.RegistryEntry, error) {
+		return nil, fmt.Errorf("clone failed")
+	}
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type":      "repo.add",
+		"urlOrPath": "https://github.com/x/y.git",
+	})
+	msg := drainWSUntilType(t, conn, "error")
+	if code, _ := msg["code"].(string); code != "REPO_ADD_ERROR" {
+		t.Errorf("code = %q, want REPO_ADD_ERROR", code)
+	}
+}
+
+func TestHandler_RepoRemove_Success(t *testing.T) {
+	origRemove := repoRegistryRemoveFn
+	defer func() { repoRegistryRemoveFn = origRemove }()
+	repoRegistryRemoveFn = func(_ string, _ string) error { return nil }
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "repo.remove",
+		"name": "testrepo",
+	})
+	msg := drainWSUntilType(t, conn, "repo.removed")
+	if msg["name"] != "testrepo" {
+		t.Errorf("name = %v, want testrepo", msg["name"])
+	}
+}
+
+func TestHandler_RepoRemove_Error(t *testing.T) {
+	origRemove := repoRegistryRemoveFn
+	defer func() { repoRegistryRemoveFn = origRemove }()
+	repoRegistryRemoveFn = func(_ string, _ string) error {
+		return fmt.Errorf("not found")
+	}
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "repo.remove",
+		"name": "ghost",
+	})
+	msg := drainWSUntilType(t, conn, "error")
+	if code, _ := msg["code"].(string); code != "REPO_REMOVE_ERROR" {
+		t.Errorf("code = %q, want REPO_REMOVE_ERROR", code)
 	}
 }

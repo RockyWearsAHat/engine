@@ -94,6 +94,26 @@ func migrate() error {
 			duration_ms INTEGER NOT NULL DEFAULT 0,
 			created_at  TEXT NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS usage_events (
+			id              TEXT PRIMARY KEY,
+			session_id      TEXT NOT NULL,
+			project_path    TEXT NOT NULL,
+			provider        TEXT NOT NULL,
+			model           TEXT NOT NULL,
+			input_tokens    INTEGER NOT NULL DEFAULT 0,
+			output_tokens   INTEGER NOT NULL DEFAULT 0,
+			total_tokens    INTEGER NOT NULL DEFAULT 0,
+			cost_usd        REAL NOT NULL DEFAULT 0,
+			api_duration_ms INTEGER NOT NULL DEFAULT 0,
+			created_at      TEXT NOT NULL,
+			FOREIGN KEY(session_id) REFERENCES sessions(id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_usage_events_session_created
+			ON usage_events(session_id, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_usage_events_project_created
+			ON usage_events(project_path, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_usage_events_model_created
+			ON usage_events(model, created_at DESC);
 		CREATE TABLE IF NOT EXISTS validation_results (
 			id             TEXT PRIMARY KEY,
 			session_id     TEXT NOT NULL,

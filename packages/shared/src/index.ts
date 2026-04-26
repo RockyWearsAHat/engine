@@ -144,6 +144,51 @@ export interface WorkspaceTask {
   description?: string;
 }
 
+export interface UsageTotals {
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  aiComputeMs: number;
+  activeDevelopmentMs: number;
+  averagePricePerToken: number;
+}
+
+export interface UsageModelBreakdown {
+  provider: string;
+  model: string;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  aiComputeMs: number;
+  averagePricePerToken: number;
+}
+
+export interface UsageProjectBreakdown {
+  projectPath: string;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  aiComputeMs: number;
+  activeDevelopmentMs: number;
+  averagePricePerToken: number;
+}
+
+export interface UsageDashboard {
+  scope: 'project' | 'user';
+  projectPath?: string;
+  modelFilter?: string;
+  generatedAt: string;
+  totals: UsageTotals;
+  models: UsageModelBreakdown[];
+  projects: UsageProjectBreakdown[];
+}
+
 // Terminal types
 export interface TerminalInfo {
   id: string;
@@ -182,7 +227,17 @@ export type ClientMessage =
   | { type: 'engine.config.get' }
   | { type: 'engine.team.set'; team: string; provider: string; model: string }
   | { type: 'discord.unlink'; leaveGuild?: boolean }
-  | { type: 'remote.pair.code.generate' };
+  | { type: 'discord.config.get' }
+  | { type: 'discord.config.set'; config: DiscordConfig }
+  | { type: 'discord.validate'; config?: DiscordConfig }
+  | { type: 'discord.history.search'; projectPath?: string; query: string; since?: string; limit?: number }
+  | { type: 'discord.history.recent'; projectPath?: string; threadId?: string; since?: string; limit?: number }
+  | { type: 'session.cleanup'; sessionId: string }
+  | { type: 'repo.list' }
+  | { type: 'repo.add'; urlOrPath: string }
+  | { type: 'repo.remove'; name: string }
+  | { type: 'remote.pair.code.generate' }
+  | { type: 'usage.dashboard.get'; scope: 'project' | 'user'; projectPath?: string; model?: string };
 // WebSocket protocol — Server → Client
 export type ServerMessage =
   | { type: 'chat.started'; sessionId: string }
@@ -218,7 +273,17 @@ export type ServerMessage =
   | { type: 'engine.config'; yaml: string; error?: string }
   | { type: 'engine.team.updated'; team: string }
   | { type: 'remote.pair.code'; code: string; expiresIn: number }
-  | { type: 'test.summary'; sessionId: string; summary: TestSummary };
+  | { type: 'test.summary'; sessionId: string; summary: TestSummary }
+  | { type: 'discord.config'; config: DiscordConfig; active: boolean }
+  | { type: 'discord.config.saved'; config: DiscordConfig; active: boolean; warning?: string }
+  | { type: 'discord.validate.result'; result: DiscordValidationResult }
+  | { type: 'discord.history.results'; query: string; hits: DiscordSearchHit[] }
+  | { type: 'discord.history.recent'; threadId: string; rows: DiscordMessageRecord[] }
+  | { type: 'session.cleanup.started'; sessionId: string }
+  | { type: 'repo.list'; entries: RepositoryEntry[] }
+  | { type: 'repo.added'; entry: RepositoryEntry }
+  | { type: 'repo.removed'; name: string }
+  | { type: 'usage.dashboard'; dashboard?: UsageDashboard; error?: string };
 
 // Tab and system info types
 
@@ -301,6 +366,13 @@ export interface EngineTeamConfig {
 export interface EngineConfig {
   teams: Record<string, EngineTeamConfig>;
   activeTeam?: string;
+}
+
+// Repository registry types
+export interface RepositoryEntry {
+  name: string;
+  localPath: string;
+  url: string;
 }
 
 // Remote connection types
