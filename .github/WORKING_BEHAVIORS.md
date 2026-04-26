@@ -18,7 +18,7 @@ Cmd/Ctrl+P opens file search across the active workspace. Cmd/Ctrl+Shift+P opens
 
 ## Agent Panel
 
-Create new AI sessions for the active project. Load and switch between previous sessions. See live agent activity and recent tool calls as the agent works. Each agent session shows its active branch and worktree, so multiple agents working on the same project remain isolated and do not interfere with each other.
+Create new AI sessions for the active project. Load and switch between previous sessions. See live agent activity and recent tool calls as the agent works. Each agent session shows its active branch and worktree, so multiple agents working on the same project remain isolated and do not interfere with each other. The selected Engine team persists and is automatically resolved from `.engine/config.yaml` for autonomous runs (including issue/Discord-triggered work), so orchestrator model routing stays consistent without needing a manual reselection each session.
 
 ---
 

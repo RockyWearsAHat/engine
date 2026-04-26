@@ -1279,6 +1279,17 @@ func formatTree(node *gofs.FileNode, depth int) string {
 func Chat(ctx *ChatContext, userMessage string) {
 	explicitProvider := os.Getenv("ENGINE_MODEL_PROVIDER")
 	model := strings.TrimSpace(os.Getenv("ENGINE_MODEL"))
+	if resolvedTeam, teamProvider, teamModel, ok := ResolveTeamOrchestratorModel(ctx.ProjectPath, os.Getenv("ENGINE_ACTIVE_TEAM")); ok {
+		if model == "" {
+			model = teamModel
+		}
+		if strings.TrimSpace(explicitProvider) == "" || strings.EqualFold(strings.TrimSpace(explicitProvider), "auto") {
+			explicitProvider = teamProvider
+		}
+		if strings.TrimSpace(os.Getenv("ENGINE_ACTIVE_TEAM")) == "" {
+			os.Setenv("ENGINE_ACTIVE_TEAM", resolvedTeam) //nolint:errcheck
+		}
+	}
 	provider := resolveProvider(explicitProvider, model)
 	ollamaBaseURL := os.Getenv("OLLAMA_BASE_URL")
 	if provider == "ollama" && model == "" {
@@ -1383,6 +1394,12 @@ func Chat(ctx *ChatContext, userMessage string) {
 		userMessage,
 		windowResult,
 		selectiveContext,
+		func() string {
+			if session == nil {
+				return ""
+			}
+			return session.Summary
+		}(),
 	))
 	if summary := BuildUpdatedSessionSummary(func() string {
 		if session == nil {

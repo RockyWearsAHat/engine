@@ -502,10 +502,15 @@ func BuildAttentionResidualRecords(
 	userMessage string,
 	window conversationWindowResult,
 	contextResult selectiveContextResult,
+	sessionSummary string,
 ) []db.AttentionResidual {
 	queryText := truncateSummary(normalizeSummaryText(userMessage), 280)
 	historyLimit := minInt(len(contextResult.HistoryHits), 4)
-	residuals := make([]db.AttentionResidual, 0, len(window.Selections)+len(contextResult.Blocks)+historyLimit)
+	cap := len(window.Selections) + len(contextResult.Blocks) + historyLimit
+	if strings.TrimSpace(sessionSummary) != "" {
+		cap++
+	}
+	residuals := make([]db.AttentionResidual, 0, cap)
 
 	for _, selection := range window.Selections {
 		if selection.Weight <= 0 {
@@ -559,6 +564,24 @@ func BuildAttentionResidualRecords(
 			Weight:      hit.Weight,
 			Score:       hit.Score,
 			Context:     truncateSummary(normalizeSummaryText(hit.Text), 220),
+		})
+	}
+
+	// Persist a session_conclusion residual so the session summary re-surfaces at
+	// high weight when context is rebuilt on future turns — even after the messages
+	// that produced the conclusion have scrolled out of the context window.
+	if summary := strings.TrimSpace(sessionSummary); summary != "" {
+		residuals = append(residuals, db.AttentionResidual{
+			ID:          newID(),
+			SessionID:   sessionID,
+			MessageID:   messageID,
+			SourceKey:   attentionSourceKey("block", "session-memory"),
+			SourceType:  "session_conclusion",
+			SourceLabel: "session summary",
+			QueryText:   queryText,
+			Weight:      1.5,
+			Score:       0,
+			Context:     truncateSummary(normalizeSummaryText(summary), 400),
 		})
 	}
 

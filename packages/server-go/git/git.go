@@ -333,7 +333,8 @@ func Pull(cwd, remote string) (string, error) {
 	if remote == "" {
 		remote = "origin"
 	}
-	out, err := run(cwd, "pull", remote)
+	branch, _ := GetCurrentBranch(cwd)
+	out, err := run(cwd, "pull", remote, branch)
 	if err != nil {
 		return out, fmt.Errorf("git pull: %w", err)
 	}

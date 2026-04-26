@@ -87,6 +87,11 @@ func withRunDepsReset(t *testing.T) {
 	origHandleFunc := httpHandleFuncFn
 	origHandle := httpHandleFn
 	origListen := httpListenAndServeFn
+	origRunAsync := runAsyncFn
+	origTriggerScaffold := triggerScaffoldSessionFn
+	origTriggerCI := triggerCIAnalysisSessionFn
+	origTriggerIssue := triggerIssueSessionFn
+	origTriggerIssueOpened := triggerIssueOpenedSessionFn
 
 	t.Cleanup(func() {
 		runFn = origRun
@@ -110,6 +115,11 @@ func withRunDepsReset(t *testing.T) {
 		httpHandleFuncFn = origHandleFunc
 		httpHandleFn = origHandle
 		httpListenAndServeFn = origListen
+		runAsyncFn = origRunAsync
+		triggerScaffoldSessionFn = origTriggerScaffold
+		triggerCIAnalysisSessionFn = origTriggerCI
+		triggerIssueSessionFn = origTriggerIssue
+		triggerIssueOpenedSessionFn = origTriggerIssueOpened
 	})
 }
 
@@ -934,6 +944,11 @@ func TestRun_RepoMonitorCallbacks_InvokeTriggerClosures(t *testing.T) {
 	httpHandleFuncFn = func(pattern string, handler func(http.ResponseWriter, *http.Request)) {}
 	httpHandleFn = func(pattern string, handler http.Handler) {}
 	httpListenAndServeFn = func(addr string, handler http.Handler) error { return errors.New("stop") }
+	runAsyncFn = func(fn func()) { fn() }
+	triggerScaffoldSessionFn = func(string, json.RawMessage) {}
+	triggerCIAnalysisSessionFn = func(string, json.RawMessage) {}
+	triggerIssueSessionFn = func(string, json.RawMessage) {}
+	triggerIssueOpenedSessionFn = func(string, json.RawMessage) {}
 
 	_ = run()
 	if monitor == nil {

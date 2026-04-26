@@ -517,7 +517,7 @@ func TestFormatSelectiveContextPrompt_EmptyBody(t *testing.T) {
 func TestBuildAttentionResidualRecords_ZeroWeight(t *testing.T) {
 	window := conversationWindowResult{}
 	ctx := selectiveContextResult{}
-	records := BuildAttentionResidualRecords("sess", "msg", "query text", window, ctx)
+	records := BuildAttentionResidualRecords("sess", "msg", "query text", window, ctx, "")
 	if records == nil {
 		t.Error("expected non-nil slice")
 	}
@@ -537,7 +537,7 @@ func TestBuildAttentionResidualRecords_WithSelections(t *testing.T) {
 		},
 		HistoryHits: []historySearchHit{},
 	}
-	records := BuildAttentionResidualRecords("sess", "msg", "user query", window, ctx)
+	records := BuildAttentionResidualRecords("sess", "msg", "user query", window, ctx, "")
 	if len(records) < 2 {
 		t.Errorf("expected at least 2 records (selection + block), got %d", len(records))
 	}
@@ -551,7 +551,7 @@ func TestBuildAttentionResidualRecords_WithHistoryHits(t *testing.T) {
 			{Source: "src2", SourceKey: "sk2", Text: "skip", Weight: 0.0, Score: 0.0},
 		},
 	}
-	records := BuildAttentionResidualRecords("sess", "msg", "query", window, ctx)
+	records := BuildAttentionResidualRecords("sess", "msg", "query", window, ctx, "")
 	found := false
 	for _, r := range records {
 		if r.SourceKey == "sk1" {
@@ -560,6 +560,44 @@ func TestBuildAttentionResidualRecords_WithHistoryHits(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected history hit sk1 in records")
+	}
+}
+
+func TestBuildAttentionResidualRecords_SessionConclusionAdded(t *testing.T) {
+	window := conversationWindowResult{}
+	ctx := selectiveContextResult{}
+	summary := "We decided to use SQLite for the attention residual store."
+	records := BuildAttentionResidualRecords("sess", "msg", "query", window, ctx, summary)
+
+	var found *db.AttentionResidual
+	for i := range records {
+		if records[i].SourceType == "session_conclusion" {
+			found = &records[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected a session_conclusion residual when sessionSummary is non-empty")
+	}
+	if found.SourceKey != attentionSourceKey("block", "session-memory") {
+		t.Errorf("session_conclusion SourceKey = %q, want %q", found.SourceKey, attentionSourceKey("block", "session-memory"))
+	}
+	if found.Weight < 1.0 {
+		t.Errorf("session_conclusion Weight = %.2f, want >= 1.0", found.Weight)
+	}
+	if found.Context == "" {
+		t.Error("session_conclusion Context should not be empty")
+	}
+}
+
+func TestBuildAttentionResidualRecords_EmptySummaryOmitted(t *testing.T) {
+	window := conversationWindowResult{}
+	ctx := selectiveContextResult{}
+	records := BuildAttentionResidualRecords("sess", "msg", "query", window, ctx, "   ")
+	for _, r := range records {
+		if r.SourceType == "session_conclusion" {
+			t.Error("expected no session_conclusion residual for blank summary")
+		}
 	}
 }
 

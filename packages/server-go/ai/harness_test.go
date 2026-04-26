@@ -381,3 +381,111 @@ func TestWindowByVitality_Empty(t *testing.T) {
 		t.Error("expected empty result for nil input")
 	}
 }
+
+// ── extractMessageText ────────────────────────────────────────────────────────
+
+func TestExtractMessageText_StringContent(t *testing.T) {
+	got := extractMessageText("hello world")
+	if got != "hello world" {
+		t.Errorf("expected string passthrough, got %q", got)
+	}
+}
+
+func TestExtractMessageText_ContentBlocks(t *testing.T) {
+	blocks := []contentBlock{
+		{Type: "text", Text: "first"},
+		{Type: "text", Text: " second"},
+		{Type: "tool_use", Text: ""},
+	}
+	got := extractMessageText(blocks)
+	if got != "first second" {
+		t.Errorf("expected concatenated text blocks, got %q", got)
+	}
+}
+
+func TestExtractMessageText_ContentBlocksNonText(t *testing.T) {
+	blocks := []contentBlock{
+		{Type: "tool_use", Text: ""},
+	}
+	got := extractMessageText(blocks)
+	if got != "" {
+		t.Errorf("expected empty string for non-text blocks, got %q", got)
+	}
+}
+
+func TestExtractMessageText_DefaultType(t *testing.T) {
+	got := extractMessageText(42)
+	if got != "(tool interaction)" {
+		t.Errorf("expected tool interaction fallback, got %q", got)
+	}
+}
+
+// ── compactOldMessages ────────────────────────────────────────────────────────
+
+func TestCompactOldMessages_Basic(t *testing.T) {
+	msgs := []anthropicMessage{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "world"},
+	}
+	result := compactOldMessages(msgs)
+	if result.Role != "user" {
+		t.Errorf("expected user role in compacted message, got %q", result.Role)
+	}
+	if !strings.Contains(result.Content.(string), "2 messages compacted") {
+		t.Errorf("expected compacted header in content, got %q", result.Content)
+	}
+}
+
+func TestCompactOldMessages_ToolInteractionFallback(t *testing.T) {
+	msgs := []anthropicMessage{
+		{Role: "user", Content: []contentBlock{{Type: "tool_use", Text: ""}}},
+	}
+	result := compactOldMessages(msgs)
+	if !strings.Contains(result.Content.(string), "(tool interaction)") {
+		t.Errorf("expected tool interaction fallback in compacted content, got %q", result.Content)
+	}
+}
+
+func TestCompactOldMessages_TruncatesLongText(t *testing.T) {
+	long := strings.Repeat("a", compactCharsPerMsg+100)
+	msgs := []anthropicMessage{
+		{Role: "user", Content: long},
+	}
+	result := compactOldMessages(msgs)
+	if !strings.Contains(result.Content.(string), "…") {
+		t.Errorf("expected ellipsis for truncated long message, got %q", result.Content)
+	}
+}
+
+// ── TrimToTokenBudgetAnthropicFormat (additional branches) ───────────────────
+
+func TestTrimToTokenBudgetAnthropicFormat_OnlySystemMessages(t *testing.T) {
+	// Only system messages — cannot compact, must return as-is even over budget.
+	msgs := []anthropicMessage{
+		{Role: "system", Content: strings.Repeat("x", 10000)},
+	}
+	trimmed, estimated := TrimToTokenBudgetAnthropicFormat(msgs, 0)
+	if len(trimmed) != 1 {
+		t.Errorf("expected 1 message preserved, got %d", len(trimmed))
+	}
+	if estimated <= 0 {
+		t.Error("expected positive estimated token count")
+	}
+}
+
+func TestTrimToTokenBudgetAnthropicFormat_CompactionDoesNotReduceTokens(t *testing.T) {
+	// 4 tiny messages — compacting them produces a larger summary header,
+	// so newEstimated >= estimated → exit loop.
+	msgs := []anthropicMessage{
+		{Role: "user", Content: "a"},
+		{Role: "user", Content: "b"},
+		{Role: "user", Content: "c"},
+		{Role: "user", Content: "d"},
+	}
+	// Budget=0 forces compaction attempt; compaction overhead > savings for tiny messages.
+	trimmed, _ := TrimToTokenBudgetAnthropicFormat(msgs, 0)
+	// Should return without infinite loop regardless of outcome.
+	if trimmed == nil {
+		t.Error("expected non-nil result")
+	}
+}
