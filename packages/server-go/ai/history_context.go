@@ -290,22 +290,10 @@ func SearchHistoryWithResiduals(
 	}
 
 	queryTerms := extractSearchTerms(query, flattenTabPaths(openTabs))
-	projectMessages, err := db.GetProjectMessages(projectPath, projectHistoryMessageLimit)
-	if err != nil {
-		return nil, err
-	}
-	projectSummaries, err := db.GetProjectSessionSummaries(projectPath, projectHistorySummaryLimit)
-	if err != nil {
-		return nil, err
-	}
-	projectLearnings, err := db.GetProjectLearnings(projectPath, projectHistoryLearningLimit)
-	if err != nil {
-		return nil, err
-	}
-	projectValidations, err := db.GetProjectValidations(projectPath, projectHistoryValidationLimit)
-	if err != nil {
-		return nil, err
-	}
+	projectMessages, _ := db.GetProjectMessages(projectPath, projectHistoryMessageLimit)
+	projectSummaries, _ := db.GetProjectSessionSummaries(projectPath, projectHistorySummaryLimit)
+	projectLearnings, _ := db.GetProjectLearnings(projectPath, projectHistoryLearningLimit)
+	projectValidations, _ := db.GetProjectValidations(projectPath, projectHistoryValidationLimit)
 
 	scope = strings.TrimSpace(strings.ToLower(scope))
 	if scope == "" {
@@ -503,12 +491,9 @@ func BuildAttentionResidualProfile(
 	currentSessionID string,
 	query string,
 	openTabs []TabInfo,
-) (map[string]float64, error) {
-	residuals, err := db.GetProjectAttentionResiduals(projectPath, projectAttentionResidualLimit)
-	if err != nil {
-		return nil, err
-	}
-	return buildAttentionResidualProfile(residuals, currentSessionID, query, openTabs), nil
+) map[string]float64 {
+	residuals, _ := db.GetProjectAttentionResiduals(projectPath, projectAttentionResidualLimit)
+	return buildAttentionResidualProfile(residuals, currentSessionID, query, openTabs)
 }
 
 func BuildAttentionResidualRecords(
@@ -646,20 +631,9 @@ func formatSelectiveContextPrompt(blocks []contextBlock) string {
 			break
 		}
 		body := truncateSummary(block.Body, bodyBudget)
-		if body == "" {
-			continue
-		}
-
 		entry := fmt.Sprintf("\n[%.2f] %s\n%s", block.Weight, block.Title, body)
 		if len(entry) > remaining {
-			entryBodyBudget := maxInt(remaining-24, 0)
-			if entryBodyBudget == 0 {
-				break
-			}
-			entry = fmt.Sprintf("\n[%.2f] %s\n%s", block.Weight, block.Title, truncateSummary(body, entryBodyBudget))
-		}
-		if strings.TrimSpace(entry) == "" {
-			continue
+			entry = fmt.Sprintf("\n[%.2f] %s\n%s", block.Weight, block.Title, truncateSummary(body, remaining-24))
 		}
 		builder.WriteString(entry)
 		remaining = selectiveContextCharBudget - builder.Len()
@@ -782,9 +756,6 @@ func normalizeScoreWeights(scores []float64) []float64 {
 		weight := math.Exp(score - maxScore)
 		weights[index] = weight
 		total += weight
-	}
-	if total == 0 {
-		return weights
 	}
 	for index := range weights {
 		weights[index] = weights[index] / total

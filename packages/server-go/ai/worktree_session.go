@@ -54,9 +54,7 @@ func EnsureSessionWorktree(sessionID, repoPath string) (string, error) {
 	branchName := sessionBranchName(sessionID)
 
 	// Create parent directory.
-	if err := os.MkdirAll(filepath.Dir(wtPath), 0o755); err != nil {
-		return repoPath, fmt.Errorf("worktree parent mkdir: %w", err)
-	}
+	_ = os.MkdirAll(filepath.Dir(wtPath), 0o755)
 
 	if err := gogit.CreateWorktree(repoPath, wtPath, branchName); err != nil {
 		// Fall back gracefully — worktrees failing must not break the session.

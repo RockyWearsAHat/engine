@@ -97,6 +97,21 @@ func TestCompleteTestRun_PersistsResult(t *testing.T) {
 	_ = result
 }
 
+func TestCompleteTestRun_WithErrors_UsesErrorPatternCategory(t *testing.T) {
+	projectDir := setupHistoryTestProject(t)
+	if err := setupTestDB(t, projectDir); err != nil {
+		t.Fatalf("db setup: %v", err)
+	}
+
+	ctx := &ChatContext{ProjectPath: projectDir, SessionID: "test-session-err"}
+	tlc := NewTestLoopController(ctx, "some bug", "term-err")
+	// Send error output so ErrorCount > 0 → category = "error-pattern"
+	ReceiveTestOutput(tlc, "TypeError: cannot read property of undefined")
+	ReceiveTestOutput(tlc, "FAIL github.com/engine/server/ai")
+	result := CompleteTestRun(tlc)
+	_ = result
+}
+
 // ── ReportTestResult ──────────────────────────────────────────────────────────
 
 func TestReportTestResult_NilTLC_NoOp(t *testing.T) {
@@ -267,6 +282,26 @@ func TestAutoCloseIssueIfResolved_NoValidation_ReturnsFalse(t *testing.T) {
 		t.Error("expected not closed without validation record")
 	}
 	_ = err // error is acceptable
+}
+
+func TestAutoCloseIssueIfResolved_NotResolved_ReturnsFalse(t *testing.T) {
+	projectDir := setupHistoryTestProject(t)
+	sessionID := "autoclose-notresolved"
+	issueText := "not resolved issue"
+	if err := db.CreateSession(sessionID, projectDir, "main"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	// Save a validation record where IssueResolved=false
+	if err := db.SaveValidationResult("vr-notresolved", sessionID, issueText, false, false, 1, 0, 500, "tests failed", "go test"); err != nil {
+		t.Fatalf("save validation: %v", err)
+	}
+	closed, err := AutoCloseIssueIfResolved(sessionID, 99, "owner", "repo", issueText)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if closed {
+		t.Error("expected not closed when issue not resolved")
+	}
 }
 
 type stubIssueCloser struct {

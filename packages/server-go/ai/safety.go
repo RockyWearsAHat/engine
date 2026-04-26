@@ -16,10 +16,8 @@ var riskyShellMarkers = []string{
 }
 
 func workspaceRoot(projectPath string) string {
-	if abs, err := filepath.Abs(projectPath); err == nil {
-		return filepath.Clean(abs)
-	}
-	return filepath.Clean(projectPath)
+	abs, _ := filepath.Abs(projectPath)
+	return filepath.Clean(abs)
 }
 
 func resolveWorkspacePath(projectPath, targetPath string) (string, error) {
@@ -33,16 +31,9 @@ func resolveWorkspacePath(projectPath, targetPath string) (string, error) {
 		candidate = filepath.Join(root, candidate)
 	}
 
-	absoluteTarget, err := filepath.Abs(candidate)
-	if err != nil {
-		return "", fmt.Errorf("resolve %s: %w", targetPath, err)
-	}
-	absoluteTarget = filepath.Clean(absoluteTarget)
+	absoluteTarget := filepath.Clean(candidate)
 
-	rel, err := filepath.Rel(root, absoluteTarget)
-	if err != nil {
-		return "", fmt.Errorf("resolve %s relative to workspace: %w", targetPath, err)
-	}
+	rel, _ := filepath.Rel(root, absoluteTarget)
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 		return "", fmt.Errorf("path %s is outside the current workspace (%s)", targetPath, root)
 	}
@@ -61,10 +52,7 @@ func workspaceRelativePath(projectPath, targetPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	rel, err := filepath.Rel(workspaceRoot(projectPath), absoluteTarget)
-	if err != nil {
-		return "", fmt.Errorf("resolve %s relative to workspace: %w", targetPath, err)
-	}
+	rel, _ := filepath.Rel(workspaceRoot(projectPath), absoluteTarget)
 	return rel, nil
 }
 

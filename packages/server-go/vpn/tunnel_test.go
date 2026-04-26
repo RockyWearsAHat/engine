@@ -583,3 +583,13 @@ func TestIssueTokenFn_Default(t *testing.T) {
 		t.Fatal("expected non-empty token")
 	}
 }
+
+func TestHttpServeTLSFn_Default(t *testing.T) {
+	srv := &http.Server{Addr: "127.0.0.1:0"}
+	// Calling httpServeTLSFn exercises the default function body.
+	// ListenAndServeTLS("", "") fails immediately (no cert files), which is fine.
+	err := httpServeTLSFn(srv)
+	if err == nil {
+		t.Fatal("expected error from ListenAndServeTLS with no cert")
+	}
+}

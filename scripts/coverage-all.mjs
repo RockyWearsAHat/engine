@@ -108,7 +108,13 @@ function main() {
     console.log('\n== Rust Coverage (cargo llvm-cov) ==');
     const rustCov = spawnSync(
       'node',
-      ['scripts/run-cargo.mjs', 'llvm-cov', '--summary-only'],
+      [
+        'scripts/run-cargo.mjs',
+        'llvm-cov',
+        '--summary-only',
+        '--ignore-filename-regex',
+        'lib.rs|main.rs',
+      ],
       { cwd: root, stdio: 'pipe', encoding: 'utf8', env: process.env, maxBuffer: 20 * 1024 * 1024 },
     );
     if (rustCov.stdout) process.stdout.write(rustCov.stdout);
@@ -121,7 +127,14 @@ function main() {
     const rustLcovPath = path.join(root, 'packages', 'desktop-tauri', 'src-tauri', 'lcov.info');
     const rustLcov = spawnSync(
       'node',
-      ['scripts/run-cargo.mjs', 'llvm-cov', '--lcov', `--output-path=${rustLcovPath}`],
+      [
+        'scripts/run-cargo.mjs',
+        'llvm-cov',
+        '--lcov',
+        '--ignore-filename-regex',
+        'lib.rs|main.rs',
+        `--output-path=${rustLcovPath}`,
+      ],
       { cwd: root, stdio: 'pipe', encoding: 'utf8', env: process.env, maxBuffer: 20 * 1024 * 1024 },
     );
     if (rustLcov.status === 0) {

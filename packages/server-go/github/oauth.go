@@ -168,7 +168,7 @@ func PollForToken(clientID string, dcr *DeviceCodeResponse, onStatus func(string
 // GetAuthenticatedUser returns the login name for the given token.
 // Used to verify a token is valid after the device flow completes.
 func GetAuthenticatedUser(token string) (string, error) {
-	req, _ := http.NewRequest("GET", apiBase+"/user", nil)
+	req, _ := http.NewRequest("GET", apiBase()+"/user", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
@@ -199,7 +199,7 @@ func GetAuthenticatedUser(token string) (string, error) {
 func RevokeToken(clientID, clientSecret, token string) error {
 	body := strings.NewReader(`{"access_token":"` + token + `"}`)
 	req, _ := http.NewRequest("DELETE",
-		fmt.Sprintf("%s/applications/%s/token", apiBase, clientID), body)
+		fmt.Sprintf("%s/applications/%s/token", apiBase(), clientID), body)
 	req.SetBasicAuth(clientID, clientSecret)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Content-Type", "application/json")
