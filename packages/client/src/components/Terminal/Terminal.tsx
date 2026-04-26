@@ -22,6 +22,20 @@ interface CommandRequest {
   label: string;
 }
 
+function readCssVar(name: string, fallback: string): string {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+function createTerminalTheme() {
+  return {
+    background: readCssVar('--terminal-bg', '#0b0f12'),
+    foreground: readCssVar('--terminal-fg', '#d7e2da'),
+    cursor: readCssVar('--terminal-cursor', '#8de8c9'),
+    selectionBackground: readCssVar('--terminal-selection', 'rgba(102, 221, 184, 0.26)'),
+  };
+}
+
 export default function Terminal({
   commandRequest,
   onCommandHandled,
@@ -40,13 +54,8 @@ export default function Terminal({
 
   const createTerminal = (terminalId: string, cwd: string, label: string) => {
     const xterm = new XTerm({
-      theme: {
-        background: '#0d0d0d',
-        foreground: '#e2e2e2',
-        cursor: '#528bff',
-        selectionBackground: '#264f78',
-      },
-      fontFamily: "'JetBrains Mono', 'Fira Code', Menlo, monospace",
+      theme: createTerminalTheme(),
+      fontFamily: readCssVar('--font-mono', "'JetBrains Mono', Menlo, monospace"),
       fontSize: 13,
       lineHeight: 1.4,
       cursorBlink: true,
@@ -139,33 +148,45 @@ export default function Terminal({
   };
 
   return (
-    <div className="flex flex-col h-full bg-editor-bg">
+    <div className="terminal-shell">
       {/* Tab bar */}
-      <div className="flex items-center bg-editor-surface border-b border-editor-border shrink-0">
+      <div className="terminal-tabs" role="tablist" aria-label="Terminals">
         {tabs.map(tab => (
           <div
             key={tab.id}
             onClick={() => setActiveId(tab.id)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer border-r border-editor-border ${
-              tab.id === activeId ? 'bg-editor-bg text-gray-200' : 'text-gray-500 hover:bg-editor-hover'
-            }`}
+            className={`terminal-tab-item ${tab.id === activeId ? 'active' : ''}`}
+            role="tab"
+            aria-selected={tab.id === activeId}
+            aria-label={`Terminal ${tab.label}`}
+            title={tab.cwd}
           >
-            <span>{tab.label}</span>
-            <button onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }} className="hover:text-red-400">
+            <span className="terminal-tab-label">{tab.label}</span>
+            <button
+              onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
+              className="terminal-tab-close"
+              aria-label={`Close terminal ${tab.label}`}
+              title="Close terminal"
+            >
               <X size={10} />
             </button>
           </div>
         ))}
-        <button onClick={newTerminal} className="p-1.5 text-gray-500 hover:text-gray-300 hover:bg-editor-hover ml-1">
+        <button
+          onClick={newTerminal}
+          className="terminal-new-btn"
+          aria-label="Create terminal"
+          title="Create terminal"
+        >
           <Plus size={14} />
         </button>
         {tabs.length === 0 && (
-          <span className="px-3 text-xs text-gray-600 py-1.5">No terminals — click + to open one</span>
+          <span className="terminal-empty">No terminals — click + to open one</span>
         )}
       </div>
 
       {/* xterm container */}
-      <div ref={containerRef} className="flex-1 overflow-hidden p-1" />
+      <div ref={containerRef} className="terminal-body" />
     </div>
   );
 }

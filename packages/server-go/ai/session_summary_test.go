@@ -269,9 +269,16 @@ func TestWeakPointsSummary_ApprovalAndBlockedKeywords(t *testing.T) {
 		t.Errorf("expected approval-gated weak point, got %q", approval)
 	}
 
+	// "cannot proceed without more info" is AI-resolvable (agent can infer/default).
 	blocked := weakPointsSummary("do it", "cannot proceed without more info", nil)
-	if !strings.Contains(blocked, "missing information") {
-		t.Errorf("expected missing-information weak point, got %q", blocked)
+	if !strings.Contains(blocked, "ai-resolvable blocker") {
+		t.Errorf("expected ai-resolvable blocker weak point, got %q", blocked)
+	}
+
+	// "blocked" + human-required signal (api key) → "missing information" branch.
+	humanBlocked := weakPointsSummary("do it", "blocked: need an api key to continue", nil)
+	if !strings.Contains(humanBlocked, "missing information or constraint is blocking completion") {
+		t.Errorf("expected missing-information weak point for human-required blocker, got %q", humanBlocked)
 	}
 }
 
@@ -282,9 +289,91 @@ func TestWeakPointsSummary_ToolErrors(t *testing.T) {
 	}
 }
 
+// ── ClassifyBlocker ───────────────────────────────────────────────────────────
+
+func TestClassifyBlocker_HumanRequired_Credentials(t *testing.T) {
+	cases := []string{
+		"I need an api key to proceed",
+		"please provide your password",
+		"missing credential for this service",
+		"the private key is not available",
+	}
+	for _, c := range cases {
+		if got := ClassifyBlocker(c); got != BlockerHumanRequired {
+			t.Errorf("expected BlockerHumanRequired for %q, got %v", c, got)
+		}
+	}
+}
+
+func TestClassifyBlocker_HumanRequired_Destructive(t *testing.T) {
+	cases := []string{
+		"this action cannot be undone",
+		"irreversible change to production",
+		"permanent deletion of all records",
+		"no safe default exists for this operation",
+	}
+	for _, c := range cases {
+		if got := ClassifyBlocker(c); got != BlockerHumanRequired {
+			t.Errorf("expected BlockerHumanRequired for %q, got %v", c, got)
+		}
+	}
+}
+
+func TestClassifyBlocker_AIResolvable_Ambiguity(t *testing.T) {
+	cases := []string{
+		"not sure which approach to use",
+		"either option would work here",
+		"the naming is ambiguous",
+		"it is unclear which file to edit",
+		"need more info to continue",
+	}
+	for _, c := range cases {
+		if got := ClassifyBlocker(c); got != BlockerAIResolvable {
+			t.Errorf("expected BlockerAIResolvable for %q, got %v", c, got)
+		}
+	}
+}
+
+func TestClassifyBlocker_AIResolvable_ToolError(t *testing.T) {
+	cases := []string{
+		"file not found: main.go",
+		"command not found: go",
+		"failed to run the test suite",
+	}
+	for _, c := range cases {
+		if got := ClassifyBlocker(c); got != BlockerAIResolvable {
+			t.Errorf("expected BlockerAIResolvable for %q, got %v", c, got)
+		}
+	}
+}
+
+func TestClassifyBlocker_None_NormalText(t *testing.T) {
+	cases := []string{
+		"implementation complete",
+		"tests are passing",
+		"refactored the module",
+	}
+	for _, c := range cases {
+		if got := ClassifyBlocker(c); got != BlockerNone {
+			t.Errorf("expected BlockerNone for %q, got %v", c, got)
+		}
+	}
+}
+
+func TestClassifyBlocker_HumanRequired_TakesPriorityOverAIResolvable(t *testing.T) {
+	// A message that mentions both a credential AND ambiguity — human-required wins.
+	text := "ambiguous: I need an api key and it's not clear which endpoint to use"
+	if got := ClassifyBlocker(text); got != BlockerHumanRequired {
+		t.Errorf("expected BlockerHumanRequired to take priority, got %v", got)
+	}
+}
+
 func TestNextAutonomousStep_Branches(t *testing.T) {
 	if step := nextAutonomousStep("failing checks detected; revision required", "none"); !strings.Contains(step, "diagnose") {
 		t.Errorf("expected failure branch step, got %q", step)
+	}
+	if step := nextAutonomousStep("pending verification", "ai-resolvable blocker detected; pick safe default and continue without stopping"); !strings.Contains(step, "Assumption:") {
+		t.Errorf("expected ai-resolvable branch step, got %q", step)
 	}
 	if step := nextAutonomousStep("pending verification", "approval-gated action blocked autonomous progress"); !strings.Contains(step, "approval") {
 		t.Errorf("expected approval branch step, got %q", step)

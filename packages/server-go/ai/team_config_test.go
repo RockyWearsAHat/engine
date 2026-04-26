@@ -327,6 +327,20 @@ func TestParseAutonomousPolicy_CommentLines(t *testing.T) {
 	}
 }
 
+func TestParseAutonomousPolicy_AssumptionTolerance(t *testing.T) {
+	yaml := "autonomous:\n  auto_commit: true\n  assumption_tolerance: aggressive\n"
+	p := parseAutonomousPolicy(yaml)
+	if p.AssumptionTolerance != "aggressive" {
+		t.Fatalf("expected AssumptionTolerance=aggressive, got %q", p.AssumptionTolerance)
+	}
+
+	defaultYaml := "autonomous:\n  auto_commit: true\n"
+	d := parseAutonomousPolicy(defaultYaml)
+	if d.AssumptionTolerance != "" {
+		t.Fatalf("expected empty AssumptionTolerance when not set, got %q", d.AssumptionTolerance)
+	}
+}
+
 func TestResolveAutonomousPolicy_MissingConfig(t *testing.T) {
 	p := ResolveAutonomousPolicy(t.TempDir())
 	if p.AutoCommit || p.AutoPush || p.Branch != "" {

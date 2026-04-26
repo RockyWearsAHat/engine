@@ -139,6 +139,14 @@ type AutonomousPolicy struct {
 	AutoPush bool
 	// Branch: branch to work on; empty means use the current branch.
 	Branch string
+	// AssumptionTolerance controls how aggressively the agent resolves ambiguity
+	// autonomously vs escalating to the user.
+	//   "conservative" — ask the user on any meaningful ambiguity.
+	//   "standard"     — resolve design ambiguity autonomously; escalate only for
+	//                    credentials and destructive actions. (default when empty)
+	//   "aggressive"   — resolve almost everything autonomously; escalate only for
+	//                    credentials and irreversible actions with no safe default.
+	AssumptionTolerance string
 }
 
 // ResolveAutonomousPolicy reads the autonomous: section from .engine/config.yaml.
@@ -182,6 +190,8 @@ func parseAutonomousPolicy(yaml string) AutonomousPolicy {
 			p.AutoPush = strings.TrimSpace(strings.TrimPrefix(trimmedLeft, "auto_push:")) == "true"
 		case strings.HasPrefix(trimmedLeft, "branch:"):
 			p.Branch = parseYAMLValue(trimmedLeft, "branch:")
+		case strings.HasPrefix(trimmedLeft, "assumption_tolerance:"):
+			p.AssumptionTolerance = parseYAMLValue(trimmedLeft, "assumption_tolerance:")
 		}
 	}
 	return p
