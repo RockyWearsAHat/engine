@@ -18,6 +18,72 @@ const (
 
 var whitespacePattern = regexp.MustCompile(`\s+`)
 
+// ── Blocker Classification ────────────────────────────────────────────────────
+
+// BlockerKind classifies what is preventing autonomous progress.
+type BlockerKind int
+
+const (
+	// BlockerNone means no blocker detected — continue autonomously.
+	BlockerNone BlockerKind = iota
+
+	// BlockerAIResolvable means the agent can unblock itself: make a safe
+	// assumption, pick a reasonable default, or try a different approach.
+	// The agent should NOT ask the user — it should document the assumption
+	// and continue.
+	BlockerAIResolvable
+
+	// BlockerHumanRequired means the agent genuinely cannot proceed without
+	// human input. Only three things qualify:
+	//   1. Missing credentials or secrets not available via keychain/env.
+	//   2. An irreversible destructive action needing explicit approval.
+	//   3. A product decision where user preference materially changes the
+	//      outcome and no safe default exists.
+	BlockerHumanRequired
+)
+
+// humanRequiredSignals are phrases that indicate a genuine human-required blocker.
+var humanRequiredSignals = []string{
+	"api key", "api token", "private key", "secret key",
+	"password", "credential",
+	"cannot be undone", "irreversible", "permanent deletion",
+	"delete all", "drop the database", "wipe clean",
+	"no safe default exists", "requires your decision",
+}
+
+// aiResolvableSignals are phrases that indicate an AI-resolvable blocker —
+// ambiguity, missing context, or tool errors the agent should handle autonomously.
+var aiResolvableSignals = []string{
+	"not sure which", "either option", "could be either",
+	"ambiguous", "unsure", "which approach",
+	"not specified", "unclear",
+	"could not find", "file not found", "no such file", "does not exist",
+	"tool error", "failed to run", "command not found",
+	"need more context", "missing information", "more info", "need more info",
+	"cannot proceed",
+}
+
+// ClassifyBlocker returns the BlockerKind for the given agent response text.
+//
+// Use this to decide whether to escalate to the user or continue autonomously:
+//   - BlockerHumanRequired → report to user, wait for input
+//   - BlockerAIResolvable  → pick the safe default, document the assumption, continue
+//   - BlockerNone          → no blocker, continue normally
+func ClassifyBlocker(assistantText string) BlockerKind {
+	lower := strings.ToLower(assistantText)
+	for _, sig := range humanRequiredSignals {
+		if strings.Contains(lower, sig) {
+			return BlockerHumanRequired
+		}
+	}
+	for _, sig := range aiResolvableSignals {
+		if strings.Contains(lower, sig) {
+			return BlockerAIResolvable
+		}
+	}
+	return BlockerNone
+}
+
 func containsAnyKeyword(text string, keywords []string) bool {
 	if strings.TrimSpace(text) == "" {
 		return false
@@ -82,7 +148,11 @@ func weakPointsSummary(userMessage, assistantText string, toolCalls []ToolCall) 
 		add("approval-gated action blocked autonomous progress")
 	}
 	if containsAnyKeyword(assistantText, []string{"blocked", "cannot proceed", "need more info", "missing requirement"}) {
-		add("missing information or constraint is blocking completion")
+		if ClassifyBlocker(assistantText) == BlockerAIResolvable {
+			add("ai-resolvable blocker detected; pick safe default and continue without stopping")
+		} else {
+			add("missing information or constraint is blocking completion")
+		}
 	}
 	if hasToolErrors(toolCalls) {
 		add("recent tool or test failures require targeted replan")
@@ -103,6 +173,9 @@ func weakPointsSummary(userMessage, assistantText string, toolCalls []ToolCall) 
 func nextAutonomousStep(validation, weakPoints string) string {
 	if strings.Contains(validation, "failing checks") {
 		return "diagnose first failing check, patch root cause, and rerun focused validation"
+	}
+	if strings.Contains(weakPoints, "ai-resolvable blocker") {
+		return "ai-resolvable blocker: do not ask the user — pick the safest option, prefix with 'Assumption:', and continue"
 	}
 	if strings.Contains(weakPoints, "approval-gated") {
 		return "request required approval context, then resume from blocked step"

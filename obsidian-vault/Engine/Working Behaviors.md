@@ -1,6 +1,6 @@
 ---
 source: ../.github/WORKING_BEHAVIORS.md
-generatedAt: 2026-04-26T18:49:57.052Z
+generatedAt: 2026-04-26T20:57:56.093Z
 sectionCount: 21
 ---
 
@@ -114,7 +114,7 @@ Past AI sessions are stored and searchable. The AI automatically incorporates re
 
 Each AI session starts with an explicit autonomous working baseline in the session summary. As work progresses, Engine continuously cycles through planning, execution, validation, and revision until the request is complete. Session summaries are kept current with the active focus, validation status, weak points, and the next autonomous step so users can understand what Engine is doing and what it will do next.
 
-When direction is sufficient, Engine continues forward autonomously. When genuinely blocked by missing requirements, credentials, or approval-gated actions, Engine reports the blocker clearly and asks only for the missing input needed to continue.
+When direction is sufficient, Engine continues forward autonomously. Before stopping to ask the user anything, Engine classifies the blocker: human-required (missing credentials/secrets, irreversible destructive actions, or product decisions where user preference materially changes the outcome) vs. AI-resolvable (everything else — design choices, naming, ambiguity, missing context, tool errors). For AI-resolvable blockers, Engine picks the safest reasonable option, prefixes the message with "Assumption:", and continues without stopping. Only human-required blockers cause Engine to pause and ask.
 
 ---
 

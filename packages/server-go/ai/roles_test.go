@@ -53,6 +53,16 @@ func TestBuildRoleSystemPrompt_Interactive_EmptyContextNotLiteral(t *testing.T) 
 	}
 }
 
+func TestBuildRoleSystemPrompt_Interactive_ContainsAutonomousBlockerRule(t *testing.T) {
+	p := buildRoleSystemPrompt(RoleInteractive, "/proj", "main", "")
+	if !strings.Contains(p, "Assumption:") {
+		t.Errorf("expected autonomous assumption-prefix rule in interactive prompt, got %q", p)
+	}
+	if !strings.Contains(p, "Human-required") {
+		t.Errorf("expected human-required blocker classification in interactive prompt, got %q", p)
+	}
+}
+
 func TestBuildRoleSystemPrompt_Planner_NoBranchPlaceholderLeft(t *testing.T) {
 	p := buildRoleSystemPrompt(RolePlanner, "/proj", "feature/x", "")
 	if strings.Contains(p, "{{") {
