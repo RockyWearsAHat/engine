@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/engine/server/ai"
 	"github.com/engine/server/db"
 	"github.com/engine/server/discord"
 	gh "github.com/engine/server/github"
@@ -67,6 +68,7 @@ func (f *fakeDiscordService) RecentHistory(projectPath, threadID, since string, 
 
 func withRunDepsReset(t *testing.T) {
 	t.Helper()
+	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
 	origRun := runFn
 	origLogFatal := logFatalFn
 	origDBInit := dbInitFn
@@ -85,6 +87,7 @@ func withRunDepsReset(t *testing.T) {
 	origNewRemoteServer := newRemoteServerFn
 	origSetPairing := setPairingManagerFn
 	origRemoteListen := remoteListenTLSFn
+	origAIChat := aiChatFn
 	origHandleFunc := httpHandleFuncFn
 	origHandle := httpHandleFn
 	origListen := httpListenAndServeFn
@@ -113,6 +116,7 @@ func withRunDepsReset(t *testing.T) {
 		newRemoteServerFn = origNewRemoteServer
 		setPairingManagerFn = origSetPairing
 		remoteListenTLSFn = origRemoteListen
+		aiChatFn = origAIChat
 		httpHandleFuncFn = origHandleFunc
 		httpHandleFn = origHandle
 		httpListenAndServeFn = origListen
@@ -126,6 +130,7 @@ func withRunDepsReset(t *testing.T) {
 
 func setupTestDB(t *testing.T, projectPath string) {
 	t.Helper()
+	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
 	if err := db.Init(projectPath); err != nil {
 		t.Fatalf("db.Init: %v", err)
 	}
@@ -918,6 +923,23 @@ func TestTriggerSessions_DBCreateAndSaveErrorsCovered(t *testing.T) {
 	createSessionFn = func(id, projectPath, branchName string) error { return errors.New("create fail") }
 	saveMessageFn = func(id, sessionId, role, content string, toolCalls interface{}) error {
 		return errors.New("save fail")
+	}
+
+	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`))
+	triggerCIAnalysisSession(projectPath, json.RawMessage(`{"workflow_run":{"name":"CI","html_url":"https://example.com","conclusion":"failure"},"repository":{"full_name":"owner/repo"}}`))
+	triggerIssueSession(projectPath, json.RawMessage(`{"action":"created","comment":{"body":"please fix","user":{"login":"bob"}},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`))
+	triggerIssueOpenedSession(projectPath, json.RawMessage(`{"action":"opened","issue":{"number":43,"title":"Feature","body":"Please add X"},"repository":{"full_name":"owner/repo"},"sender":{"login":"alice"}}`))
+}
+
+func TestTriggerSessions_SaveMessageErrorBranchesCovered(t *testing.T) {
+	projectPath := t.TempDir()
+	withRunDepsReset(t)
+	createSessionFn = func(id, projectPath, branchName string) error { return nil }
+	saveMessageFn = func(id, sessionId, role, content string, toolCalls interface{}) error {
+		return errors.New("save fail")
+	}
+	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+		ctx.OnChunk("", true)
 	}
 
 	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`))

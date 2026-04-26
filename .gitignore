@@ -65,6 +65,13 @@ coverage.out
 # Rust build artifacts
 /target/
 packages/desktop-tauri/src-tauri/target/
+
+# Go build artifacts
+packages/server-go/engine-server
+packages/server-go/myeditor-server
+packages/server-go/server
+packages/server-go/*.test
+
 coverage-summary.json
 packages/server-go/coverage.out
 engine-45mb-test.ts

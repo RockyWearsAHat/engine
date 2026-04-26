@@ -21,6 +21,7 @@ func writeTestFile(t *testing.T, dir, name, content string) {
 
 func initSessionSummaryTestDB(t *testing.T, projectPath string) {
 	t.Helper()
+	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
 	if err := db.Init(projectPath); err != nil {
 		t.Fatalf("db.Init: %v", err)
 	}

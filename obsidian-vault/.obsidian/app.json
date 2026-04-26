@@ -1,0 +1,8 @@
+{
+  "showInlineTitle": true,
+  "attachmentFolderPath": "Engine/attachments",
+  "alwaysUpdateLinks": true,
+  "newLinkFormat": "relative",
+  "newFileLocation": "folder",
+  "newFileFolderPath": "Engine"
+}

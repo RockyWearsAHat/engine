@@ -151,6 +151,40 @@ describe('UsageDashboard', () => {
     });
   });
 
+  it('shows user-scope project toggle and switches between top and all rows', async () => {
+    const manyProjects = Array.from({ length: 10 }).map((_, index) => ({
+      projectPath: `/var/folders/test/workspace-${index}/session-${index}`,
+      requests: index + 1,
+      inputTokens: 100 + index,
+      outputTokens: 50 + index,
+      totalTokens: 150 + index,
+      costUsd: 0.01 * (index + 1),
+      aiComputeMs: 1000 + index,
+      activeDevelopmentMs: 2000 + index,
+      averagePricePerToken: 0.0001,
+    }));
+
+    render(<UsageDashboard projectPath="/workspace/project-a" />);
+    emitMessage({
+      type: 'usage.dashboard',
+      dashboard: makeDashboard({ projects: manyProjects }),
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'User' }));
+    emitMessage({
+      type: 'usage.dashboard',
+      dashboard: makeDashboard({
+        scope: 'user',
+        projectPath: undefined,
+        projects: manyProjects,
+      }),
+    });
+
+    expect(await screen.findByRole('button', { name: 'Show All' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Show All' }));
+    expect(await screen.findByRole('button', { name: 'Show Top 8' })).toBeTruthy();
+  });
+
   it('filters by model and includes model in subsequent request', async () => {
     render(<UsageDashboard projectPath="/workspace/project-a" />);
     emitMessage({ type: 'usage.dashboard', dashboard: makeDashboard() });
@@ -219,6 +253,28 @@ describe('UsageDashboard', () => {
             activeDevelopmentMs: 0,
             averagePricePerToken: 0,
           },
+          {
+            projectPath: '/',
+            requests: 1,
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            costUsd: 0,
+            aiComputeMs: 0,
+            activeDevelopmentMs: 0,
+            averagePricePerToken: 0,
+          },
+          {
+            projectPath: '/root/with-a-very-long-subpath-name-that-keeps-going/with-even-more-characters-to-force-truncation',
+            requests: 1,
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            costUsd: 0,
+            aiComputeMs: 0,
+            activeDevelopmentMs: 0,
+            averagePricePerToken: 0,
+          },
         ],
         models: [
           {
@@ -236,7 +292,7 @@ describe('UsageDashboard', () => {
       }),
     });
 
-    expect(await screen.findByText('unknown')).toBeTruthy();
+    expect((await screen.findAllByText('unknown')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('offline-local').length).toBeGreaterThan(0);
   });
 
@@ -265,6 +321,20 @@ describe('UsageDashboard', () => {
 
     expect(await screen.findByText(/No project usage yet\./i)).toBeTruthy();
     expect(screen.getAllByText(/claude-sonnet-4.6/i).length).toBeGreaterThan(0);
+  });
+
+  it('shows model spend chart fallback when no model data exists', async () => {
+    render(<UsageDashboard projectPath="/workspace/project-a" />);
+
+    emitMessage({
+      type: 'usage.dashboard',
+      dashboard: makeDashboard({
+        models: [],
+      }),
+    });
+
+    expect(await screen.findByText('No model spend data yet.')).toBeTruthy();
+    expect(screen.getByText(/No model usage yet\./i)).toBeTruthy();
   });
 
   it('ignores unrelated WS messages and handles missing dashboard payload', async () => {
@@ -338,5 +408,107 @@ describe('UsageDashboard', () => {
     emitMessage({ type: 'usage.dashboard', error: 'dashboard unavailable' });
 
     expect(await screen.findByText('dashboard unavailable')).toBeTruthy();
+  });
+
+  it('drills into project from user scope when row clicked', async () => {
+    const projects = [
+      {
+        projectPath: '/workspace/project-a',
+        requests: 5,
+        inputTokens: 1000,
+        outputTokens: 500,
+        totalTokens: 1500,
+        costUsd: 0.8,
+        aiComputeMs: 10000,
+        activeDevelopmentMs: 20000,
+        averagePricePerToken: 0.0005,
+      },
+      {
+        projectPath: '/workspace/project-b',
+        requests: 3,
+        inputTokens: 600,
+        outputTokens: 300,
+        totalTokens: 900,
+        costUsd: 0.4,
+        aiComputeMs: 6000,
+        activeDevelopmentMs: 12000,
+        averagePricePerToken: 0.0004,
+      },
+    ];
+
+    render(<UsageDashboard projectPath="/workspace/project-a" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'User' }));
+    emitMessage({
+      type: 'usage.dashboard',
+      dashboard: makeDashboard({ scope: 'user', projectPath: undefined, projects }),
+    });
+
+    const rows = await screen.findAllByTitle(/View breakdown for/i);
+    expect(rows.length).toBeGreaterThan(0);
+    sendMock.mockReset();
+
+    fireEvent.click(rows[1]);
+
+    await waitFor(() => {
+      expect(sendMock).toHaveBeenCalledWith({
+        type: 'usage.dashboard.get',
+        scope: 'project',
+        projectPath: '/workspace/project-b',
+        model: undefined,
+      });
+    });
+
+    emitMessage({
+      type: 'usage.dashboard',
+      dashboard: makeDashboard({ scope: 'project', projectPath: '/workspace/project-b' }),
+    });
+
+    expect(await screen.findByRole('button', { name: /Back/i })).toBeTruthy();
+  });
+
+  it('back button from drilled project restores user scope', async () => {
+    const projects = [
+      {
+        projectPath: '/workspace/project-a',
+        requests: 5,
+        inputTokens: 1000,
+        outputTokens: 500,
+        totalTokens: 1500,
+        costUsd: 0.8,
+        aiComputeMs: 10000,
+        activeDevelopmentMs: 20000,
+        averagePricePerToken: 0.0005,
+      },
+    ];
+
+    render(<UsageDashboard projectPath="/workspace/project-a" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'User' }));
+    emitMessage({
+      type: 'usage.dashboard',
+      dashboard: makeDashboard({ scope: 'user', projectPath: undefined, projects }),
+    });
+
+    const rows = await screen.findAllByTitle(/View breakdown for/i);
+    fireEvent.click(rows[0]);
+
+    emitMessage({
+      type: 'usage.dashboard',
+      dashboard: makeDashboard({ scope: 'project', projectPath: '/workspace/project-a' }),
+    });
+
+    const backBtn = await screen.findByRole('button', { name: /Back/i });
+    sendMock.mockReset();
+    fireEvent.click(backBtn);
+
+    await waitFor(() => {
+      expect(sendMock).toHaveBeenCalledWith({
+        type: 'usage.dashboard.get',
+        scope: 'user',
+        projectPath: undefined,
+        model: undefined,
+      });
+    });
   });
 });

@@ -1,0 +1,74 @@
+{
+  "AI Chat Panel": [
+    "packages/client/src/test/ai-chat.test.tsx",
+    "packages/client/src/test/store-chat.test.ts"
+  ],
+  "Command Palette": [
+    "packages/client/src/test/commandpalette.test.tsx"
+  ],
+  "Agent Panel": [
+    "packages/client/src/test/agentpanel.test.tsx",
+    "packages/client/src/test/agentpanel-branches.test.tsx"
+  ],
+  "AI Tools (what the AI can do autonomously)": [
+    "packages/server-go/ws/handler_test.go",
+    "packages/server-go/main_test.go"
+  ],
+  "AI Provider Support": [
+    "packages/server-go/ai/provider_test.go",
+    "packages/server-go/ai/ollama_chat_test.go"
+  ],
+  "AI Safety": [
+    "packages/server-go/ai/safety_test.go",
+    "packages/server-go/ai/secret_scan_test.go"
+  ],
+  "AI Session History": [
+    "packages/server-go/db/db_test.go",
+    "packages/server-go/ai/history_context_test.go"
+  ],
+  "Autonomous Development Loop": [
+    "packages/server-go/ai/test_loop_test.go",
+    "packages/server-go/ai/test_orchestrator_test.go"
+  ],
+  "File Tree": [
+    "packages/client/src/test/filetree.test.tsx",
+    "packages/client/src/test/integration.test.ts"
+  ],
+  "Preferences Panel": [
+    "packages/client/src/test/preferences.test.tsx"
+  ],
+  "Status Bar": [
+    "packages/client/src/test/statusbar.test.tsx",
+    "packages/client/src/test/statusbar-branches.test.tsx"
+  ],
+  "Terminal Panel": [
+    "packages/client/src/test/terminal.test.tsx"
+  ],
+  "Markdown Preview": [
+    "packages/client/src/test/markdown-previews.test.tsx",
+    "packages/client/src/test/editor.test.tsx"
+  ],
+  "Discord Control Plane": [
+    "packages/server-go/discord/service_test.go",
+    "packages/server-go/discord/service_bridge_test.go"
+  ],
+  "Repository Registry": [
+    "packages/server-go/workspace/registry_test.go"
+  ],
+  "Autonomous Work Trigger": [
+    "packages/server-go/github/github_test.go",
+    "packages/server-go/main_test.go"
+  ],
+  "Configurable Autonomous Commit and Push": [
+    "packages/server-go/ai/team_config_test.go",
+    "packages/server-go/main_test.go"
+  ],
+  "End-to-End Autonomous Build": [
+    "packages/server-go/main_test.go",
+    "packages/server-go/ai/harness_test.go"
+  ],
+  "App Shell": [
+    "packages/client/src/test/commandpalette.test.tsx",
+    "packages/client/src/test/preferences.test.tsx"
+  ]
+}

@@ -31,11 +31,26 @@ Engine is an AI-native code editor. AI is not bolted onto a text editor — it i
 7. **Universal access** — The editor runs remotely and works from any device including mobile.
 
 ## Architecture Direction
-- Tech stack: TBD (likely TypeScript/Electron or web-based)
+- **Client:** React + TypeScript, Vite, Tailwind CSS (`packages/client`)
+- **Server:** Go WebSocket server (`packages/server-go`) — AI routing, git, file system, terminal, Discord, GitHub, DB
+- **Desktop:** Tauri (Rust) shell wrapping the client build (`packages/desktop-tauri`)
+- **Shared types:** TypeScript (`packages/shared`)
+- **Database:** SQLite embedded in Go server — sessions, usage, project direction
 - The editor wraps AI capabilities as first-class primitives, not extensions
 - Session history and project direction are stored persistently, not just in-memory
 - Agent orchestration is a core subsystem, not a plugin
-- Go server now includes a Discord control-plane module for private remote commands with project-local config in `.engine/discord.json` (see `.github/DISCORD_CONTROL_PLANE.md`)
+- Go server includes a Discord control-plane module for private remote commands with project-local config in `.engine/discord.json` (see `.github/DISCORD_CONTROL_PLANE.md`)
+- Full architecture reference: `obsidian-vault/Engine/Architecture.md`
+
+## Obsidian Memory Usage
+The vault at `obsidian-vault/` is the project's living knowledge base. Use it actively — not just as a sync target.
+
+- **Before structural changes:** Read `obsidian-vault/Engine/Architecture.md` and `obsidian-vault/Engine/Knowledge.md` for existing decisions and constraints.
+- **After significant decisions:** Add a `## Decision: <topic>` section to `obsidian-vault/Engine/Knowledge.md` with: what was decided, why, alternatives rejected, tradeoffs.
+- **After behavior changes:** Update `.github/WORKING_BEHAVIORS.md` + `.github/working-behaviors-test-map.json`, then run `pnpm sync:obsidian`.
+- **After any session-memory or behavior changes:** Run `pnpm sync:obsidian` to keep Obsidian current.
+- Session events auto-export to `obsidian-vault/Engine/Session Memory.md` via the sync script.
+- The Progress Log at `obsidian-vault/Engine/Progress Log.md` is for capturing *why* — use the template for each milestone.
 
 ## What AI Should Do
 - Always reference project direction and prior conversation context before acting
@@ -64,6 +79,8 @@ Engine is an AI-native code editor. AI is not bolted onto a text editor — it i
   - If observed behavior differs from `.github/WORKING_BEHAVIORS.md`, update that file in the same session.
   - Every write/update to `.github/WORKING_BEHAVIORS.md` must be explicitly reported to the user in the response.
   - WORKING_BEHAVIORS.md is a product feature list, not a test log. Write it as a user would describe what the app does — no internal wiring, no null-safety caveats, no websocket message names.
+	- Keep `.github/working-behaviors-test-map.json` in sync with all non-`(IN PROGRESS)` section headings.
+	- Run `pnpm sync:obsidian` after behavior contract or session-memory changes so `obsidian-vault/Engine/Working Behaviors.md` and `obsidian-vault/Engine/Session Memory.md` stay current.
 - (Detailed strategy TBD once codebase exists)
 
 ## Mandatory Completion Gate (Hard Stop)

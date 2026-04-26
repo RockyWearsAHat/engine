@@ -3,12 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const bridgeMocks = vi.hoisted(() => ({
   getLocalServerToken: vi.fn().mockResolvedValue('desktop-token'),
   restartLocalServer: vi.fn().mockResolvedValue(true),
+  localServerHealthy: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('../bridge.js', () => ({
   bridge: {
     getLocalServerToken: bridgeMocks.getLocalServerToken,
     restartLocalServer: bridgeMocks.restartLocalServer,
+    localServerHealthy: bridgeMocks.localServerHealthy,
   },
 }));
 
@@ -50,8 +52,10 @@ describe('WSClient desktop startup behavior', () => {
     globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
     bridgeMocks.getLocalServerToken.mockReset();
     bridgeMocks.restartLocalServer.mockReset();
+    bridgeMocks.localServerHealthy.mockReset();
     bridgeMocks.getLocalServerToken.mockResolvedValue('desktop-token');
     bridgeMocks.restartLocalServer.mockResolvedValue(true);
+    bridgeMocks.localServerHealthy.mockResolvedValue(true);
     Object.defineProperty(window, '__TAURI__', {
       configurable: true,
       value: {},
@@ -66,24 +70,12 @@ describe('WSClient desktop startup behavior', () => {
   });
 
   it('DesktopStartup_HealthCheckAwaited', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: vi.fn().mockResolvedValue({ status: 'ok' }),
-    });
-    globalThis.fetch = fetchMock as typeof fetch;
-
     const client = new WSClient();
     client.connect();
 
     await vi.advanceTimersByTimeAsync(500);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:24444/health',
-      expect.objectContaining({
-        method: 'GET',
-        cache: 'no-store',
-      }),
-    );
+    expect(bridgeMocks.localServerHealthy).toHaveBeenCalled();
     expect(bridgeMocks.restartLocalServer).toHaveBeenCalledTimes(1);
     expect(bridgeMocks.getLocalServerToken).toHaveBeenCalledTimes(1);
     expect(MockWebSocket.instances).toHaveLength(1);
@@ -91,12 +83,6 @@ describe('WSClient desktop startup behavior', () => {
   });
 
   it('SocketNotYetOpen_OutboundMessagesQueued', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: vi.fn().mockResolvedValue({ status: 'ok' }),
-    });
-    globalThis.fetch = fetchMock as typeof fetch;
-
     const client = new WSClient();
     client.connect();
 
@@ -116,12 +102,6 @@ describe('WSClient desktop startup behavior', () => {
   });
 
   it('ImmediateReconnect_PendingDisconnectCancelled', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: vi.fn().mockResolvedValue({ status: 'ok' }),
-    });
-    globalThis.fetch = fetchMock as typeof fetch;
-
     const client = new WSClient();
     client.connect();
 
