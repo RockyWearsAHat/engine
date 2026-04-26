@@ -17,57 +17,17 @@ function isDesktopShell(): boolean {
 }
 
 /* istanbul ignore start */
-function isHttpDevOrigin(): boolean {
-  if (typeof window === 'undefined') {
-    return false;
-  }
-  return window.location.protocol === 'http:' || window.location.protocol === 'https:';
-}
-
-function desktopDevProxyHost(): string | null {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-  const host = window.location.host;
-  if (!host) {
-    return null;
-  }
-  if (host.includes(':5173')) {
-    return host;
-  }
-  return null;
-}
-
 function localDesktopSocketURL(token: string | null): string {
-  const proxyHost = desktopDevProxyHost();
-  if (proxyHost) {
-    const base = `ws://${proxyHost}/ws`;
-    return token ? `${base}?token=${encodeURIComponent(token)}` : base;
-  }
-  if (isHttpDevOrigin()) {
-    const base = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
-    return token ? `${base}?token=${encodeURIComponent(token)}` : base;
-  }
   if (!token) {
-    return 'ws://localhost:3000/ws';
+    return 'ws://localhost:24444/ws';
   }
-  return `ws://localhost:3000/ws?token=${encodeURIComponent(token)}`;
+  return `ws://localhost:24444/ws?token=${encodeURIComponent(token)}`;
 }
 
 function localDesktopHealthURL(): string {
-  if (desktopDevProxyHost()) {
-    return '/health';
-  }
-  if (isHttpDevOrigin()) {
-    return '/health';
-  }
-  // In Tauri/Electron the webview talks directly to the local server (no proxy,
-  // no CORS restriction). In the Vite dev server the request goes through the
-  // /health proxy entry so we use a same-origin relative path to avoid CORS.
-  if (isDesktopShell()) {
-    return 'http://localhost:3000/health';
-  }
-  return '/health';
+  // In Tauri/Electron the webview can call the local sidecar directly, which
+  // avoids dev-proxy churn and keeps reconnect diagnostics clean.
+  return 'http://localhost:24444/health';
 }
 /* istanbul ignore stop */
 

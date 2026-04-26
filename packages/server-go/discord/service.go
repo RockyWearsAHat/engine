@@ -24,6 +24,9 @@ const (
 	defaultConfigFileName  = "discord.json"
 	defaultStateFileName   = "discord-state.json"
 	maxDiscordMessageChars = 1800
+	// Use Administrator to avoid setup failures caused by missing granular perms
+	// or role hierarchy mismatches during initial bootstrap.
+	requiredInvitePerms    = discordgo.PermissionAdministrator
 )
 
 // Config controls Discord bot behavior.
@@ -64,6 +67,12 @@ type persistedState struct {
 // chatFunc is the AI chat provider invoked by handleAskCommand.
 // Tests replace it with a stub to exercise callback coverage without a live LLM.
 var chatFunc = ai.Chat
+
+// guildLeaveFn is injectable for tests covering LeaveGuild without making
+// outbound Discord API calls.
+var guildLeaveFn = func(dg *discordgo.Session, guildID string) error {
+	return dg.GuildLeave(guildID)
+}
 
 // Service hosts the Discord control plane.
 type Service struct {
@@ -250,6 +259,22 @@ func (s *Service) Close() error {
 		return nil
 	}
 	return s.dg.Close()
+}
+
+// LeaveGuild forces the bot to leave a guild. If guildID is empty it falls
+// back to the configured guild.
+func (s *Service) LeaveGuild(guildID string) error {
+	target := strings.TrimSpace(guildID)
+	if target == "" {
+		target = strings.TrimSpace(s.cfg.GuildID)
+	}
+	if target == "" {
+		return fmt.Errorf("guild id is required")
+	}
+	if s.dg == nil {
+		return fmt.Errorf("discord session not active")
+	}
+	return guildLeaveFn(s.dg, target)
 }
 
 func (s *Service) onReady(_ *discordgo.Session, _ *discordgo.Ready) {
@@ -1223,8 +1248,21 @@ type ValidationResult struct {
 	Enabled   bool     `json:"enabled"`
 	GuildName string   `json:"guildName,omitempty"`
 	BotTag    string   `json:"botTag,omitempty"`
+	InviteURL string   `json:"inviteUrl,omitempty"`
 	Errors    []string `json:"errors"`
 	Warnings  []string `json:"warnings"`
+}
+
+func buildInviteURL(clientID string) string {
+	cleanID := strings.TrimSpace(clientID)
+	if cleanID == "" {
+		return ""
+	}
+	return fmt.Sprintf(
+		"https://discord.com/api/oauth2/authorize?client_id=%s&permissions=%d&scope=bot%%20applications.commands",
+		cleanID,
+		requiredInvitePerms,
+	)
 }
 
 // Validate runs a non-destructive preflight against the given configuration.
@@ -1255,6 +1293,11 @@ func Validate(cfg Config) ValidationResult {
 	}
 
 	dg, _ := discordgo.New("Bot " + cfg.BotToken)
+	// Use the same privileged intents as Start() so that a missing
+	// "Message Content Intent" in the Developer Portal surfaces here
+	// (as a 4014 error) rather than silently passing validate while
+	// Start() later fails and leaves the bot offline.
+	dg.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentMessageContent
 	if err := dg.Open(); err != nil {
 		result.Errors = append(result.Errors, "Cannot open gateway: "+err.Error())
 		return result
@@ -1263,6 +1306,7 @@ func Validate(cfg Config) ValidationResult {
 
 	if self, err := dg.User("@me"); err == nil {
 		result.BotTag = self.Username
+		result.InviteURL = buildInviteURL(self.ID)
 	}
 
 	guild, err := dg.Guild(cfg.GuildID)

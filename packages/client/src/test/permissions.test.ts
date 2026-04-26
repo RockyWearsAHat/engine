@@ -80,8 +80,15 @@ describe('Tauri Capabilities Configuration', () => {
 
       it('AllPermissions_FollowCoreCommandActionFormat', () => {
       const validFormat = capability.permissions.every((perm: string) => {
-        // Permission format: plugin:command:action or core:command:action
-        return /^(core|plugin):[a-z0-9-]+:allow-[a-z0-9-]+$/.test(perm);
+        // Permission format can be:
+        // - namespace:command:allow-action (e.g., core:event:allow-listen, opener:allow-open-url)
+        // - namespace:allow-action (e.g., opener:allow-open-url)
+        // - plugin:default (plugin-level preset)
+        return (
+          /^[a-z0-9-]+:[a-z0-9-]+:allow-[a-z0-9-]+$/.test(perm) ||
+          /^[a-z0-9-]+:allow-[a-z0-9-]+$/.test(perm) ||
+          /^[a-z0-9-]+:default$/.test(perm)
+        );
       });
       expect(validFormat).toBe(true);
     });

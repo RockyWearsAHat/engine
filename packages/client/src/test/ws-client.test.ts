@@ -78,7 +78,7 @@ describe('WSClient desktop startup behavior', () => {
     await vi.advanceTimersByTimeAsync(500);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      '/health',
+      'http://localhost:24444/health',
       expect.objectContaining({
         method: 'GET',
         cache: 'no-store',
@@ -87,7 +87,7 @@ describe('WSClient desktop startup behavior', () => {
     expect(bridgeMocks.restartLocalServer).toHaveBeenCalledTimes(1);
     expect(bridgeMocks.getLocalServerToken).toHaveBeenCalledTimes(1);
     expect(MockWebSocket.instances).toHaveLength(1);
-    expect(MockWebSocket.instances[0]?.url).toBe('ws://localhost:3000/ws?token=desktop-token');
+    expect(MockWebSocket.instances[0]?.url).toBe('ws://localhost:24444/ws?token=desktop-token');
   });
 
   it('SocketNotYetOpen_OutboundMessagesQueued', async () => {
