@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
   Check,
@@ -109,6 +109,10 @@ export default function PreferencesPanel() {
   const [discordValidating, setDiscordValidating] = useState(false);
   const [discordActive, setDiscordActive] = useState(false);
   const [discordSaveWarning, setDiscordSaveWarning] = useState('');
+  const [discordInviteUrl, setDiscordInviteUrl] = useState('');
+  const [discordInviteWatchActive, setDiscordInviteWatchActive] = useState(false);
+  // Stable ref so the stale onMessage closure can call the latest saveDiscordConfig.
+  const saveDiscordConfigRef = useRef<() => void>(/* istanbul ignore next */ () => {});
   const [activeSection, setActiveSection] = useState('desktop-services');
 
   const sections = [
@@ -140,6 +144,10 @@ export default function PreferencesPanel() {
         setDiscordAllowedInput((m.config.allowedUserIds || []).join(', '));
         setDiscordActive(Boolean(m.active));
         setDiscordSaveWarning('');
+        if (m.config.enabled && m.config.hasToken && !m.active) {
+          setDiscordValidating(true);
+          wsClient.send({ type: 'discord.validate' } as never);
+        }
       } else if (m.type === 'discord.config.saved' && m.config) {
         setDiscordForm(m.config);
         setDiscordAllowedInput((m.config.allowedUserIds || []).join(', '));
@@ -147,9 +155,27 @@ export default function PreferencesPanel() {
         setDiscordActive(Boolean(m.active));
         setDiscordSaveWarning(typeof m.warning === 'string' ? m.warning : '');
         markSaved('discord');
+        // Only auto-validate when the save actually brought the service up.
+        // If active=false the service failed (e.g. 4014 intents) — don't let
+        // a separate validate call silently override the failure with an OK.
+        if (m.config.enabled && m.active) {
+          setDiscordValidating(true);
+          wsClient.send({ type: 'discord.validate' } as never);
+        }
       } else if (m.type === 'discord.validate.result' && m.result) {
         setDiscordValidation(m.result);
+        setDiscordInviteUrl(typeof m.result.inviteUrl === 'string' ? m.result.inviteUrl : '');
+        // Do NOT set discordActive from validate results — only discord.config and
+        // discord.config.saved (which reflect actual service state) should drive that.
+        // If we flipped active here, the invite button would disappear before the
+        // service is running, locking the user out of the invite/leave controls.
         setDiscordValidating(false);
+        if (m.result.ok && !discordActive) {
+          setDiscordInviteWatchActive(false);
+          // Bot is confirmed in the guild — trigger a real config save so the
+          // service starts and discord.config.saved comes back with active:true.
+          saveDiscordConfigRef.current();
+        }
       }
     });
     // Ask for current discord config once the WS is usable.
@@ -286,12 +312,50 @@ export default function PreferencesPanel() {
   const saveDiscordConfig = () => {
     wsClient.send({ type: 'discord.config.set', config: buildDiscordPayload() } as never);
   };
+  saveDiscordConfigRef.current = saveDiscordConfig;
 
   const validateDiscordConfig = () => {
     setDiscordValidating(true);
     setDiscordValidation(null);
     wsClient.send({ type: 'discord.validate', config: buildDiscordPayload() } as never);
   };
+
+  const showDiscordInviteAction = !discordActive && Boolean(discordInviteUrl);
+  const discordNeedsIntentToggle = Boolean(
+    discordValidation?.errors?.some((err) => /disallowed intent|4014/i.test(err)),
+  );
+
+  useEffect(() => {
+    if (!discordInviteWatchActive) {
+      return;
+    }
+
+    let attempts = 0;
+    const maxAttempts = 12;
+    const intervalMs = 2000;
+
+    const validateNow = () => {
+      attempts += 1;
+      setDiscordValidating(true);
+      wsClient.send({ type: 'discord.validate', config: buildDiscordPayload() } as never);
+      if (attempts >= maxAttempts) {
+        setDiscordInviteWatchActive(false);
+      }
+    };
+
+    const onFocus = () => {
+      validateNow();
+    };
+
+    const pollId = window.setInterval(validateNow, intervalMs);
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      window.clearInterval(pollId);
+      window.removeEventListener('focus', onFocus);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [discordInviteWatchActive]);
 
   const inputStyle: React.CSSProperties = {
     width: '100%',
@@ -839,6 +903,18 @@ export default function PreferencesPanel() {
               per chat. Searchable history, never auto-fed to the model.
             </div>
 
+            <div className="preferences-message" style={{ borderColor: 'rgba(123, 188, 255, 0.34)' }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Quick setup (2 mins)</div>
+              <div className="preferences-muted">1. Click <strong>Invite bot to server</strong> and approve.</div>
+              <div className="preferences-muted">2. In Discord Developer Portal, open your bot and turn on <strong>Message Content Intent</strong> in Bot settings.</div>
+              <div className="preferences-muted">3. Click <strong>Save Discord config</strong>, then <strong>Test connection</strong>.</div>
+              {discordNeedsIntentToggle && (
+                <div style={{ marginTop: 6, color: '#ffb4a9' }}>
+                  We detected a Discord 4014 intent error. This almost always means Message Content Intent is still off.
+                </div>
+              )}
+            </div>
+
             <label className="preferences-field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <input
                 type="checkbox"
@@ -908,8 +984,31 @@ export default function PreferencesPanel() {
               <button className="btn-primary" onClick={saveDiscordConfig}>
                 {saved === 'discord' ? <><Check size={12} /> Saved</> : <><MessageSquare size={12} /> Save Discord config</>}
               </button>
+              {showDiscordInviteAction && (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    void bridge.openExternal(discordInviteUrl);
+                    setDiscordInviteWatchActive(true);
+                  }}
+                >
+                  Invite bot to server
+                </button>
+              )}
               <button className="btn-secondary" onClick={validateDiscordConfig} disabled={discordValidating}>
                 {discordValidating ? 'Testing…' : 'Test connection'}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  wsClient.send({ type: 'discord.unlink' } as never);
+                  setDiscordValidation(null);
+                  setDiscordInviteWatchActive(false);
+                }}
+              >
+                Leave current server
               </button>
             </div>
 

@@ -92,13 +92,13 @@ func run() error {
 	} else if cfg.Enabled {
 		discordService, err := newDiscordServiceFn(cfg, projectPath)
 		if err != nil {
-			return fmt.Errorf("failed to initialize discord service: %w", err)
+			log.Printf("[engine-discord] disabled due to init error: %v", err)
+		} else if err := discordService.Start(); err != nil {
+			log.Printf("[engine-discord] disabled due to start error: %v", err)
+		} else {
+			setDiscordBridgeFn(discordService)
+			defer discordService.Close() //nolint:errcheck
 		}
-		if err := discordService.Start(); err != nil {
-			return fmt.Errorf("failed to start discord service: %w", err)
-		}
-		setDiscordBridgeFn(discordService)
-		defer discordService.Close() //nolint:errcheck
 	} else {
 		// Even when disabled, allow the UI to save/validate config via WS by
 		// wiring a stub that proxies only the bridge methods relying on the
@@ -147,7 +147,7 @@ func run() error {
 	// Local mode: plain HTTP, no authentication needed
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "3000"
+		port = "24444"
 	}
 	httpHandleFuncFn("/ws", hub.ServeWS)
 	httpHandleFuncFn("/health", func(w http.ResponseWriter, r *http.Request) {

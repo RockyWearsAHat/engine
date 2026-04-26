@@ -1,22 +1,22 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const scriptDir = fileURLToPath(new URL('.', import.meta.url));
 const repoRoot = resolve(scriptDir, '..');
-const desktopBinary = resolve(
-  repoRoot,
-  'packages',
-  'desktop-tauri',
-  'src-tauri',
-  'target',
-  'debug',
-  process.platform === 'win32' ? 'engine.exe' : 'engine',
-);
+const desktopBinaryName = process.platform === 'win32' ? 'engine.exe' : 'engine';
+const desktopBinaryCandidates = [
+  // Cargo workspace default target directory for this repository.
+  resolve(repoRoot, 'target', 'debug', desktopBinaryName),
+  // Fallback if target is scoped to the tauri crate directory.
+  resolve(repoRoot, 'packages', 'desktop-tauri', 'src-tauri', 'target', 'debug', desktopBinaryName),
+];
+const desktopBinary = desktopBinaryCandidates.find(candidate => existsSync(candidate))
+  ?? desktopBinaryCandidates[0];
 
 function assert(condition, message) {
   if (!condition) {
@@ -104,7 +104,7 @@ function runCommand(command, args, options = {}) {
 }
 
 async function fetchHealth() {
-  const response = await fetch('http://127.0.0.1:3000/health');
+  const response = await fetch('http://127.0.0.1:24444/health');
   if (!response.ok) {
     throw new Error(`Health check returned ${response.status}`);
   }
@@ -187,18 +187,27 @@ async function validateServiceCli() {
 }
 
 async function validateWebSocketFlows(repositoryOverride, token) {
+  const localServerToken = readLocalServerToken();
+  const wsUrl = localServerToken
+    ? `ws://127.0.0.1:24444/ws?token=${encodeURIComponent(localServerToken)}`
+    : 'ws://127.0.0.1:24444/ws';
+  const enableGitHubValidation = process.env.ENGINE_SMOKE_VALIDATE_GITHUB === '1';
+
   await new Promise((resolveWs, rejectWs) => {
-    const ws = new WebSocket('ws://127.0.0.1:3000/ws');
-    const shouldValidateIssues = repositoryOverride !== null || hasGitHubRemote();
+    const ws = new WebSocket(wsUrl);
+    const shouldValidateIssues = enableGitHubValidation && Boolean(token) && (repositoryOverride !== null || hasGitHubRemote());
+    const observedTypes = [];
+    let opened = false;
     const state = {
       terminalId: null,
       terminalMarkerSeen: false,
       issuesValidated: !shouldValidateIssues,
       terminalClosed: false,
+      closeRequested: false,
     };
     const timeout = setTimeout(() => {
       ws.close();
-      rejectWs(new Error('Timed out waiting for websocket smoke-test responses.'));
+      rejectWs(new Error(`Timed out waiting for websocket smoke-test responses. opened=${opened} state=${JSON.stringify(state)} observedTypes=${observedTypes.join(',')}`));
     }, 20000);
 
     const finishIfReady = () => {
@@ -210,6 +219,7 @@ async function validateWebSocketFlows(repositoryOverride, token) {
     };
 
     ws.addEventListener('open', () => {
+      opened = true;
       ws.send(JSON.stringify({
         type: 'config.sync',
         config: {
@@ -230,6 +240,9 @@ async function validateWebSocketFlows(repositoryOverride, token) {
 
     ws.addEventListener('message', event => {
       const message = JSON.parse(event.data);
+      if (typeof message?.type === 'string') {
+        observedTypes.push(message.type);
+      }
 
       if (message.type === 'error') {
         clearTimeout(timeout);
@@ -251,6 +264,13 @@ async function validateWebSocketFlows(repositoryOverride, token) {
       if (message.type === 'terminal.output' && typeof message.data === 'string') {
         if (message.data.includes('ENGINE_TERMINAL_SMOKE')) {
           state.terminalMarkerSeen = true;
+          if (state.terminalId && !state.closeRequested) {
+            state.closeRequested = true;
+            ws.send(JSON.stringify({
+              type: 'terminal.close',
+              terminalId: state.terminalId,
+            }));
+          }
           finishIfReady();
         }
         return;
@@ -277,9 +297,43 @@ async function validateWebSocketFlows(repositoryOverride, token) {
     ws.addEventListener('error', event => {
       clearTimeout(timeout);
       ws.close();
-      rejectWs(new Error(`WebSocket error: ${String(event.type)}`));
+      rejectWs(new Error(`WebSocket error: ${String(event.type)} opened=${opened} state=${JSON.stringify(state)} observedTypes=${observedTypes.join(',')}`));
     });
   });
+}
+
+function configDir() {
+  if (process.platform === 'win32') {
+    return process.env.APPDATA || '';
+  }
+  if (process.platform === 'darwin') {
+    return process.env.HOME ? join(process.env.HOME, 'Library', 'Application Support') : '';
+  }
+  if (process.env.XDG_CONFIG_HOME?.trim()) {
+    return process.env.XDG_CONFIG_HOME.trim();
+  }
+  return process.env.HOME ? join(process.env.HOME, '.config') : '';
+}
+
+function readLocalServerToken() {
+  const base = configDir();
+  if (!base) {
+    return '';
+  }
+  try {
+    const cfgPath = join(base, 'Engine', 'config.json');
+    const raw = readFileSync(cfgPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.local_server_token === 'string') {
+      return parsed.local_server_token.trim();
+    }
+    if (typeof parsed?.localServerToken === 'string') {
+      return parsed.localServerToken.trim();
+    }
+    return '';
+  } catch {
+    return '';
+  }
 }
 
 async function main() {
@@ -293,7 +347,7 @@ async function main() {
     env: {
       ...process.env,
       PROJECT_PATH: repoRoot,
-      PORT: '3000',
+      PORT: '24444',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: process.platform !== 'win32',

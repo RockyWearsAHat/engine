@@ -68,6 +68,12 @@ if (process.env.ENGINE_AGENT_GATE_BYPASS === '1') {
 
 requireSuccess('lint', runCommand('pnpm', ['lint']));
 requireSuccess('typecheck', runCommand('pnpm', ['typecheck']));
+requireSuccess('desktop debug build for smoke test', runCommand('pnpm', ['build:desktop-debug']));
+
+requireSuccess(
+  'system smoke test (functionality/integration)',
+  runCommand('pnpm', ['smoke:system']),
+);
 
 requireSuccess(
   'client coverage at configured thresholds',

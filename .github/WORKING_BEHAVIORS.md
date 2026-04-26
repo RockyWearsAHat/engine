@@ -116,6 +116,8 @@ Renders headings h1–h6, ordered and unordered lists, fenced code blocks with s
 
 Connect Engine to a Discord bot for remote control. Once configured, send commands to your running Engine instance from any Discord channel your bot is in.
 
+From Preferences → Discord, testing or saving a Discord config can return a one-click bot invite link with the required scopes/permissions so the bot can be added to the target server quickly. When Discord is enabled but not yet connected to a server, the action row surfaces the invite button directly so the user can link the bot immediately.
+
 Available commands: `help`, `status` (server health), `sessions` (list AI sessions), `lastcommit` (most recent git commit), `pause`/`resume` (halt or resume AI activity), `ask` (send a message to the AI), `search` (search session history), `history` (view recent session history), `project add/list/remove` (manage which projects the bot monitors — accepts a local path or a GitHub/git URL which Engine clones automatically), `projects` (list all monitored projects).
 
 Configuration lives in `.engine/discord.json` in the project root. Environment variables override file config. The bot only responds to authorized users and channels as configured. When Engine is genuinely blocked and cannot proceed autonomously, it posts a help request in the relevant Discord project thread describing what it tried, what failed, and what information it needs — rather than silently stopping.

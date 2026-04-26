@@ -27,7 +27,7 @@ use tauri::{
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
-const DEFAULT_PORT: u16 = 3000;
+const DEFAULT_PORT: u16 = 24444;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 const STARTUP_ENTRY_PATH_ENV: &str = "ENGINE_STARTUP_ENTRY_PATH";
 #[cfg(target_os = "windows")]

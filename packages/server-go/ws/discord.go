@@ -76,6 +76,37 @@ func fromPayload(p discordConfigPayload, existing discord.Config) discord.Config
 	return out
 }
 
+func sameStringSet(a map[string]bool, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key := range a {
+		if !b[key] {
+			return false
+		}
+	}
+	return true
+}
+
+func sameDiscordRuntimeConfig(a discord.Config, b discord.Config) bool {
+	if a.Enabled != b.Enabled {
+		return false
+	}
+	if strings.TrimSpace(a.BotToken) != strings.TrimSpace(b.BotToken) {
+		return false
+	}
+	if strings.TrimSpace(a.GuildID) != strings.TrimSpace(b.GuildID) {
+		return false
+	}
+	if strings.TrimSpace(a.CommandPrefix) != strings.TrimSpace(b.CommandPrefix) {
+		return false
+	}
+	if strings.TrimSpace(a.ControlChannelName) != strings.TrimSpace(b.ControlChannelName) {
+		return false
+	}
+	return sameStringSet(a.AllowedUsers, b.AllowedUsers)
+}
+
 func (c *conn) handleDiscordConfigGet() {
 	if discordBridge == nil {
 		// Still return the on-disk config so the UI can show values even if
@@ -98,6 +129,7 @@ func (c *conn) handleDiscordConfigGet() {
 
 func (c *conn) handleDiscordConfigSet(payload discordConfigPayload) {
 	var existing discord.Config
+	hadBridge := discordBridge != nil
 	if discordBridge != nil {
 		existing = discordBridge.CurrentConfig()
 	} else {
@@ -111,6 +143,16 @@ func (c *conn) handleDiscordConfigSet(payload discordConfigPayload) {
 	}
 
 	active := false
+	if hadBridge && sameDiscordRuntimeConfig(existing, cfg) {
+		active = discordBridge.CurrentConfig().Enabled
+		c.send(map[string]interface{}{
+			"type":   "discord.config.saved",
+			"config": toPayload(cfg),
+			"active": active,
+		})
+		return
+	}
+
 	if discordBridge != nil {
 		if err := discordBridge.Reload(cfg); err != nil {
 			c.send(map[string]interface{}{
@@ -150,6 +192,53 @@ func (c *conn) handleDiscordConfigSet(payload discordConfigPayload) {
 		"config": toPayload(cfg),
 		"active": active,
 	})
+}
+
+func (c *conn) handleDiscordUnlink(leaveGuild bool) {
+	var cfg discord.Config
+	if discordBridge != nil {
+		cfg = discordBridge.CurrentConfig()
+	} else {
+		cfg, _ = discord.LoadConfig(c.projectPath)
+	}
+
+	warning := ""
+	if leaveGuild && discordBridge != nil {
+		if leaver, ok := discordBridge.(interface{ LeaveGuild(string) error }); ok {
+			if err := leaver.LeaveGuild(cfg.GuildID); err != nil {
+				warning = "Unlinked, but guild leave failed: " + err.Error()
+			}
+		}
+	}
+
+	cfg.Enabled = false
+	cfg.GuildID = ""
+
+	if err := discord.WriteConfig(c.projectPath, cfg); err != nil {
+		c.sendErr("Write config failed: "+err.Error(), "DISCORD_WRITE")
+		return
+	}
+
+	active := false
+	if discordBridge != nil {
+		if err := discordBridge.Reload(cfg); err != nil {
+			if warning == "" {
+				warning = "Unlinked, but reload failed: " + err.Error()
+			}
+		} else {
+			active = discordBridge.CurrentConfig().Enabled
+		}
+	}
+
+	out := map[string]interface{}{
+		"type":   "discord.config.saved",
+		"config": toPayload(cfg),
+		"active": active,
+	}
+	if warning != "" {
+		out["warning"] = warning
+	}
+	c.send(out)
 }
 
 func (c *conn) handleDiscordValidate(override *discordConfigPayload) {

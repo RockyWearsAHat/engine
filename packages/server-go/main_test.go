@@ -472,13 +472,15 @@ func (f *fakeDiscordServiceStartErr) RecentHistory(pp, tid, since string, limit 
 	return nil, nil
 }
 
-func TestRun_DiscordEnabled_StartError(t *testing.T) {
+func TestRun_DiscordEnabled_StartError_NonFatal(t *testing.T) {
 	withRunDepsReset(t)
 	projectPath := t.TempDir()
 	t.Setenv("PROJECT_PATH", projectPath)
 	t.Setenv("ENGINE_VPN", "")
 	t.Setenv("ENGINE_REMOTE", "")
 
+	bridgeSet := false
+	listenErr := errors.New("test stop")
 	dbInitFn = func(path string) error { return db.Init(path) }
 	newHubFn = func(path string) *ws.Hub { return ws.NewHub(path) }
 	loadDiscordConfigFn = func(path string) (discord.Config, error) {
@@ -487,20 +489,29 @@ func TestRun_DiscordEnabled_StartError(t *testing.T) {
 	newDiscordServiceFn = func(cfg discord.Config, path string) (discordRuntime, error) {
 		return &fakeDiscordServiceStartErr{err: errors.New("discord open: fake gateway error")}, nil
 	}
+	setDiscordBridgeFn = func(s ws.DiscordBridge) { bridgeSet = true }
+	httpHandleFuncFn = func(pattern string, handler func(http.ResponseWriter, *http.Request)) {}
+	httpHandleFn = func(pattern string, handler http.Handler) {}
+	httpListenAndServeFn = func(addr string, handler http.Handler) error { return listenErr }
 
 	err := run()
-	if err == nil {
-		t.Fatal("expected error from discord Start failure")
+	if !errors.Is(err, listenErr) {
+		t.Fatalf("expected listen error after non-fatal discord start failure, got %v", err)
+	}
+	if bridgeSet {
+		t.Fatal("expected discord bridge to remain unset when Start fails")
 	}
 }
 
-func TestRun_DiscordEnabled_ServiceInitError(t *testing.T) {
+func TestRun_DiscordEnabled_ServiceInitError_NonFatal(t *testing.T) {
 	withRunDepsReset(t)
 	projectPath := t.TempDir()
 	t.Setenv("PROJECT_PATH", projectPath)
 	t.Setenv("ENGINE_VPN", "")
 	t.Setenv("ENGINE_REMOTE", "")
 
+	bridgeSet := false
+	listenErr := errors.New("test stop")
 	dbInitFn = func(path string) error { return db.Init(path) }
 	newHubFn = func(path string) *ws.Hub { return ws.NewHub(path) }
 	loadDiscordConfigFn = func(path string) (discord.Config, error) {
@@ -509,10 +520,17 @@ func TestRun_DiscordEnabled_ServiceInitError(t *testing.T) {
 	newDiscordServiceFn = func(cfg discord.Config, path string) (discordRuntime, error) {
 		return nil, errors.New("init failed")
 	}
+	setDiscordBridgeFn = func(s ws.DiscordBridge) { bridgeSet = true }
+	httpHandleFuncFn = func(pattern string, handler func(http.ResponseWriter, *http.Request)) {}
+	httpHandleFn = func(pattern string, handler http.Handler) {}
+	httpListenAndServeFn = func(addr string, handler http.Handler) error { return listenErr }
 
 	err := run()
-	if err == nil {
-		t.Fatal("expected error from discord service init failure")
+	if !errors.Is(err, listenErr) {
+		t.Fatalf("expected listen error after non-fatal discord init failure, got %v", err)
+	}
+	if bridgeSet {
+		t.Fatal("expected discord bridge to remain unset when init fails")
 	}
 }
 

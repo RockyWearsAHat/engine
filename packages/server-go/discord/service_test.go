@@ -2,6 +2,7 @@ package discord
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -333,6 +334,22 @@ func TestValidate_Disabled(t *testing.T) {
 	}
 	if len(result.Warnings) == 0 {
 		t.Fatal("expected warning for disabled config")
+	}
+}
+
+func TestBuildInviteURL_EmptyClientID_ReturnsEmpty(t *testing.T) {
+	if got := buildInviteURL(""); got != "" {
+		t.Errorf("buildInviteURL(\"\") = %q, want \"\"", got)
+	}
+}
+
+func TestBuildInviteURL_NonEmptyClientID_ReturnsURL(t *testing.T) {
+	got := buildInviteURL("12345")
+	if got == "" {
+		t.Error("buildInviteURL with non-empty ID should return a non-empty URL")
+	}
+	if !strings.Contains(got, "12345") {
+		t.Errorf("invite URL should contain client id, got %q", got)
 	}
 }
 
@@ -1050,4 +1067,87 @@ func TestSendTagged_NoSession_NoError(t *testing.T) {
 
 	// Verify this doesn't panic (no dg means it will fail silently)
 	svc.sendTagged("ch1", "test message", "agent", "session1")
+}
+
+// ─── LeaveGuild ───────────────────────────────────────────────────────────────
+
+func TestLeaveGuild_NilSession_ReturnsError(t *testing.T) {
+	svc := &Service{
+		cfg: Config{GuildID: "guild123"},
+		// dg is nil — gateway not started
+	}
+	err := svc.LeaveGuild("guild123")
+	if err == nil {
+		t.Error("expected error when discord session is nil")
+	}
+}
+
+func TestLeaveGuild_EmptyGuildIDFallsBackToCfg(t *testing.T) {
+	// Replace the package-level guildLeaveFn with a stub that records the call.
+	var calledWith string
+	original := guildLeaveFn
+	guildLeaveFn = func(_ *discordgo.Session, id string) error {
+		calledWith = id
+		return nil
+	}
+	t.Cleanup(func() { guildLeaveFn = original })
+
+	svc := &Service{
+		cfg: Config{GuildID: "cfg-guild"},
+		dg:  &discordgo.Session{}, // non-nil so the nil guard passes
+	}
+	if err := svc.LeaveGuild(""); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calledWith != "cfg-guild" {
+		t.Errorf("expected cfg guild id %q, got %q", "cfg-guild", calledWith)
+	}
+}
+
+func TestLeaveGuild_ExplicitGuildID_UsedDirectly(t *testing.T) {
+	var calledWith string
+	original := guildLeaveFn
+	guildLeaveFn = func(_ *discordgo.Session, id string) error {
+		calledWith = id
+		return nil
+	}
+	t.Cleanup(func() { guildLeaveFn = original })
+
+	svc := &Service{
+		cfg: Config{GuildID: "cfg-guild"},
+		dg:  &discordgo.Session{},
+	}
+	if err := svc.LeaveGuild("explicit-guild"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calledWith != "explicit-guild" {
+		t.Errorf("expected explicit guild id %q, got %q", "explicit-guild", calledWith)
+	}
+}
+
+func TestLeaveGuild_BothIDsEmpty_ReturnsError(t *testing.T) {
+	svc := &Service{
+		cfg: Config{GuildID: ""},
+		dg:  &discordgo.Session{},
+	}
+	if err := svc.LeaveGuild(""); err == nil {
+		t.Error("expected error when both guildID and cfg.GuildID are empty")
+	}
+}
+
+func TestLeaveGuild_LeaveFnError_PropagatesError(t *testing.T) {
+	original := guildLeaveFn
+	guildLeaveFn = func(_ *discordgo.Session, _ string) error {
+		return fmt.Errorf("api error")
+	}
+	t.Cleanup(func() { guildLeaveFn = original })
+
+	svc := &Service{
+		cfg: Config{GuildID: "guild123"},
+		dg:  &discordgo.Session{},
+	}
+	err := svc.LeaveGuild("guild123")
+	if err == nil || err.Error() != "api error" {
+		t.Errorf("expected api error, got %v", err)
+	}
 }

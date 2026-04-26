@@ -776,6 +776,9 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		_ = json.Unmarshal(raw, &msg)
 		c.handleDiscordValidate(msg.Config)
 
+	case "discord.unlink":
+		c.handleDiscordUnlink(true)
+
 	case "discord.history.search":
 		var msg struct {
 			ProjectPath string `json:"projectPath"`

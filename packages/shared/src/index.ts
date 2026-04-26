@@ -94,6 +94,7 @@ export interface DiscordValidationResult {
   enabled: boolean;
   guildName?: string;
   botTag?: string;
+  inviteUrl?: string;
   errors: string[];
   warnings: string[];
 }
@@ -180,6 +181,7 @@ export type ClientMessage =
   | { type: 'editor.tabs.sync'; tabs: TabInfo[] }
   | { type: 'engine.config.get' }
   | { type: 'engine.team.set'; team: string; provider: string; model: string }
+  | { type: 'discord.unlink'; leaveGuild?: boolean }
   | { type: 'remote.pair.code.generate' };
 // WebSocket protocol — Server → Client
 export type ServerMessage =

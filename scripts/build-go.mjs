@@ -76,7 +76,7 @@ const child = spawn(serverBinary, [], {
   env: {
     ...process.env,
     PROJECT_PATH: process.env.PROJECT_PATH ?? repoRoot,
-    PORT: process.env.PORT ?? '3000',
+    PORT: process.env.PORT ?? '24444',
   },
 });
 

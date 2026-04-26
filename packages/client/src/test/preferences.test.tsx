@@ -277,6 +277,157 @@ describe('PreferencesPanel — discord WS messages (discord.config)', () => {
     expect(screen.getByText(/missing channel/i)).toBeTruthy();
   });
 
+  it('DiscordValidateResultWithInvite_InviteLinkRendered', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^discord/i));
+    vi.mocked(bridge.openExternal).mockClear();
+    vi.mocked(wsClient.send).mockClear();
+    sendWsMessage({
+      type: 'discord.validate.result',
+      result: {
+        ok: false,
+        guildName: '',
+        botTag: 'engine-bot',
+        inviteUrl: 'https://discord.com/api/oauth2/authorize?client_id=123&permissions=8&scope=bot%20applications.commands',
+        errors: ['guild not found'],
+        warnings: [],
+      },
+    });
+    const inviteBtn = screen.getByRole('button', { name: /invite bot to server/i });
+    expect(inviteBtn).toBeTruthy();
+    expect(screen.getByRole('button', { name: /test connection/i })).toBeTruthy();
+    fireEvent.click(inviteBtn);
+    expect(vi.mocked(bridge.openExternal)).toHaveBeenCalledWith(expect.stringContaining('discord.com/api/oauth2/authorize'));
+    // No immediate validate is sent on invite click — polling watch handles that.
+    expect(vi.mocked(wsClient.send)).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'discord.validate' }));
+  });
+
+  it('DiscordValidateResultOk_TriggersAutoSaveNotDirectActiveSet', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^discord/i));
+    vi.mocked(wsClient.send).mockClear();
+    // Bot joins guild — validate returns ok with guildName.
+    sendWsMessage({
+      type: 'discord.validate.result',
+      result: {
+        ok: true,
+        guildName: 'My Server',
+        botTag: 'engine-bot#0000',
+        inviteUrl: '',
+        errors: [],
+        warnings: [],
+      },
+    });
+    // A discord.config.set should have been triggered to actually start the service.
+    expect(vi.mocked(wsClient.send)).toHaveBeenCalledWith(expect.objectContaining({ type: 'discord.config.set' }));
+    // The invite button is NOT hidden just because validate says ok — only config.saved with active:true should do that.
+    // (Here discordInviteUrl is empty so invite button was never visible — but active was not force-set.)
+    expect(screen.queryByRole('button', { name: /invite bot to server/i })).toBeNull();
+  });
+
+
+  it('DiscordInviteClicked_WindowFocusTriggersValidation', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^discord/i));
+    vi.mocked(wsClient.send).mockClear();
+    sendWsMessage({
+      type: 'discord.validate.result',
+      result: {
+        ok: false,
+        guildName: '',
+        botTag: 'engine-bot',
+        inviteUrl: 'https://discord.com/api/oauth2/authorize?client_id=123&permissions=8&scope=bot%20applications.commands',
+        errors: ['guild not found'],
+        warnings: [],
+      },
+    });
+    const inviteBtn = screen.getByRole('button', { name: /invite bot to server/i });
+    fireEvent.click(inviteBtn);
+    vi.mocked(wsClient.send).mockClear();
+
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+
+    expect(vi.mocked(wsClient.send)).toHaveBeenCalledWith(expect.objectContaining({ type: 'discord.validate' }));
+  });
+
+  it('DiscordInviteWatch_MaxAttemptsStopsPolling', () => {
+    vi.useFakeTimers();
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^discord/i));
+    vi.mocked(wsClient.send).mockClear();
+
+    sendWsMessage({
+      type: 'discord.validate.result',
+      result: {
+        ok: false,
+        guildName: '',
+        botTag: 'engine-bot',
+        inviteUrl: 'https://discord.com/api/oauth2/authorize?client_id=123&permissions=8&scope=bot%20applications.commands',
+        errors: ['guild not found'],
+        warnings: [],
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /invite bot to server/i }));
+    vi.mocked(wsClient.send).mockClear();
+
+    act(() => {
+      vi.advanceTimersByTime(24000);
+    });
+    const countAtStop = vi.mocked(wsClient.send).mock.calls.length;
+
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+    const countAfterExtra = vi.mocked(wsClient.send).mock.calls.length;
+
+    expect(countAtStop).toBeGreaterThan(0);
+    expect(countAfterExtra).toBe(countAtStop);
+    vi.useRealTimers();
+  });
+
+  it('DiscordValidateResultWith4014_ShowsIntentHint', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^discord/i));
+
+    sendWsMessage({
+      type: 'discord.validate.result',
+      result: {
+        ok: false,
+        guildName: '',
+        botTag: 'engine-bot',
+        errors: ['discord open: websocket: close 4014: Disallowed intent(s).'],
+        warnings: [],
+      },
+    });
+
+    expect(screen.getByText(/Message Content Intent is still off/i)).toBeTruthy();
+  });
+
+  it('DiscordConfigNotActiveWithToken_AutoValidateRequestedForInvite', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^discord/i));
+
+    sendWsMessage({
+      type: 'discord.config',
+      config: {
+        enabled: true,
+        botToken: '',
+        botTokenMasked: 'abcd...wxyz',
+        guildId: 'guild-abc',
+        allowedUserIds: ['user-1'],
+        commandPrefix: '!',
+        controlChannelName: 'engine-control',
+        hasToken: true,
+      },
+      active: false,
+    });
+
+    expect(vi.mocked(wsClient.send)).toHaveBeenCalledWith(expect.objectContaining({ type: 'discord.validate' }));
+  });
+
   it('DiscordFormCheckboxAndInputs_UpdateFormState', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/^discord/i));
@@ -340,6 +491,30 @@ describe('PreferencesPanel — discord WS messages (discord.config)', () => {
     });
 
     expect(screen.getByDisplayValue('guild-xyz')).toBeTruthy();
+  });
+
+  it('PreferencesPanel_DiscordConfigSavedHandler_disabledConfigDoesNotAutoValidate', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^discord/i));
+    vi.mocked(wsClient.send).mockClear();
+
+    sendWsMessage({
+      type: 'discord.config.saved',
+      config: {
+        enabled: false,
+        botToken: '',
+        botTokenMasked: '',
+        guildId: 'guild-disabled',
+        allowedUserIds: ['user-1'],
+        commandPrefix: '!',
+        controlChannelName: 'engine-control',
+        hasToken: true,
+      },
+      active: false,
+    });
+
+    expect(screen.getByDisplayValue('guild-disabled')).toBeTruthy();
+    expect(vi.mocked(wsClient.send)).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'discord.validate' }));
   });
 
   it('PreferencesPanel_jumpToSection_scrollsIntoViewWhenElementInDom', () => {
@@ -687,6 +862,19 @@ describe('PreferencesPanel — Discord form interactions', () => {
     fireEvent.click(validateBtn);
     expect(vi.mocked(wsClient.send)).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'discord.validate' }),
+    );
+  });
+
+  it('DiscordLeaveCurrentServerClicked_UnlinkRequested', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/discord/i));
+    vi.mocked(wsClient.send).mockClear();
+
+    const unlinkBtn = screen.getByRole('button', { name: /leave current server/i });
+    fireEvent.click(unlinkBtn);
+
+    expect(vi.mocked(wsClient.send)).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'discord.unlink' }),
     );
   });
 

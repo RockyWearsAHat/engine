@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -262,5 +263,192 @@ func TestHandleDiscordValidate_WithOverride(t *testing.T) {
 	response := readWSMessageOfType(t, conn, "discord.validate.result")
 	if _, ok := response["result"]; !ok {
 		t.Errorf("expected result field, got %+v", response)
+	}
+}
+
+// ─── handleDiscordUnlink ──────────────────────────────────────────────────────
+
+func TestHandleDiscordUnlink_NilBridge_ClearsConfigOnDisk(t *testing.T) {
+	SetDiscordBridge(nil)
+	t.Cleanup(func() { SetDiscordBridge(nil) })
+
+	projectDir := setupWSProject(t)
+
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "project.open",
+		"path": projectDir,
+	})
+	readWSMessageOfType(t, conn, "session.created")
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "discord.unlink",
+	})
+
+	// Expect discord.config.saved with active=false.
+	response := readWSMessageOfType(t, conn, "discord.config.saved")
+	if active, _ := response["active"].(bool); active {
+		t.Error("expected active=false after unlink")
+	}
+	cfgMap, _ := response["config"].(map[string]interface{})
+	if cfgMap == nil {
+		t.Fatal("expected config field in response")
+	}
+	if enabled, _ := cfgMap["enabled"].(bool); enabled {
+		t.Error("expected enabled=false after unlink")
+	}
+}
+
+func TestHandleDiscordUnlink_WriteError_ReturnsErrorCode(t *testing.T) {
+	SetDiscordBridge(nil)
+	t.Cleanup(func() { SetDiscordBridge(nil) })
+
+	projectDir := setupWSProject(t)
+
+	// Block the config file so WriteConfig fails.
+	stateDir := os.Getenv("ENGINE_STATE_DIR")
+	if stateDir == "" {
+		stateDir = filepath.Join(projectDir, ".engine")
+	}
+	badPath := filepath.Join(stateDir, "discord.json")
+	if err := os.MkdirAll(badPath, 0755); err != nil {
+		t.Fatalf("mkdir block: %v", err)
+	}
+
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "project.open",
+		"path": projectDir,
+	})
+	readWSMessageOfType(t, conn, "session.created")
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "discord.unlink",
+	})
+
+	response := readWSMessageOfType(t, conn, "error")
+	if response["code"] != "DISCORD_WRITE" {
+		t.Errorf("expected DISCORD_WRITE error, got %+v", response)
+	}
+}
+
+// stubLeavingBridge wraps stubDiscordBridge and also satisfies the
+// LeaveGuild interface so that handleDiscordUnlink exercises the leave path.
+type stubLeavingBridge struct {
+	stubDiscordBridge
+	leaveErr error
+	leftID   string
+}
+
+func (s *stubLeavingBridge) LeaveGuild(guildID string) error {
+	s.leftID = guildID
+	return s.leaveErr
+}
+
+func TestHandleDiscordUnlink_WithBridge_LeaveSuccess(t *testing.T) {
+	stub := &stubLeavingBridge{
+		stubDiscordBridge: stubDiscordBridge{
+			cfg: discord.Config{
+				Enabled:      true,
+				BotToken:     "tok",
+				GuildID:      "guild-abc",
+				AllowedUsers: map[string]bool{"u1": true},
+			},
+		},
+	}
+	SetDiscordBridge(stub)
+	t.Cleanup(func() { SetDiscordBridge(nil) })
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "project.open",
+		"path": projectDir,
+	})
+	readWSMessageOfType(t, conn, "session.created")
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "discord.unlink"})
+
+	response := readWSMessageOfType(t, conn, "discord.config.saved")
+	if w, ok := response["warning"].(string); ok && w != "" {
+		t.Errorf("unexpected warning: %s", w)
+	}
+	if stub.leftID != "guild-abc" {
+		t.Errorf("LeaveGuild called with %q, want %q", stub.leftID, "guild-abc")
+	}
+}
+
+func TestHandleDiscordUnlink_WithBridge_LeaveError_WarningReturned(t *testing.T) {
+	stub := &stubLeavingBridge{
+		stubDiscordBridge: stubDiscordBridge{
+			cfg: discord.Config{
+				Enabled:      true,
+				BotToken:     "tok",
+				GuildID:      "guild-xyz",
+				AllowedUsers: map[string]bool{"u1": true},
+			},
+		},
+		leaveErr: fmt.Errorf("api error"),
+	}
+	SetDiscordBridge(stub)
+	t.Cleanup(func() { SetDiscordBridge(nil) })
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "project.open",
+		"path": projectDir,
+	})
+	readWSMessageOfType(t, conn, "session.created")
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "discord.unlink"})
+
+	response := readWSMessageOfType(t, conn, "discord.config.saved")
+	warning, _ := response["warning"].(string)
+	if warning == "" {
+		t.Error("expected warning when LeaveGuild returns an error")
+	}
+}
+
+func TestHandleDiscordUnlink_WithBridge_ReloadError_WarningReturned(t *testing.T) {
+	// Leave succeeds, but Reload fails → warning should mention reload failure.
+	stub := &stubLeavingBridge{
+		stubDiscordBridge: stubDiscordBridge{
+			cfg: discord.Config{
+				Enabled:      true,
+				BotToken:     "tok",
+				GuildID:      "guild-reload-err",
+				AllowedUsers: map[string]bool{"u1": true},
+			},
+			reloadErr: fmt.Errorf("reload failed"),
+		},
+	}
+	SetDiscordBridge(stub)
+	t.Cleanup(func() { SetDiscordBridge(nil) })
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "project.open",
+		"path": projectDir,
+	})
+	readWSMessageOfType(t, conn, "session.created")
+
+	writeWSMessage(t, conn, map[string]interface{}{"type": "discord.unlink"})
+
+	response := readWSMessageOfType(t, conn, "discord.config.saved")
+	warning, _ := response["warning"].(string)
+	if warning == "" {
+		t.Error("expected warning when Reload returns an error after unlink")
 	}
 }
