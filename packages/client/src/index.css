@@ -602,6 +602,210 @@ html, body, #root {
 
 .sidebar-body { flex: 1; overflow-y: auto; overflow-x: hidden; }
 
+/* Usage dashboard */
+.usage-dashboard {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--tx-2);
+}
+
+.usage-dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.usage-dashboard-kicker {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+}
+
+.usage-dashboard-title {
+  margin-top: 6px;
+  color: var(--tx);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.usage-dashboard-refresh {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border-2);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--tx-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.usage-dashboard-refresh:hover {
+  border-color: var(--accent);
+  color: var(--tx);
+}
+
+.usage-dashboard-refresh:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.usage-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.usage-scope-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border-2);
+  background: var(--surface-2);
+  width: fit-content;
+}
+
+.usage-scope-btn {
+  border: none;
+  background: transparent;
+  color: var(--tx-3);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.usage-scope-btn.active {
+  background: rgba(124,140,255,0.17);
+  color: var(--tx);
+}
+
+.usage-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.usage-filter-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--tx-3);
+}
+
+.usage-filter-select {
+  height: 30px;
+  border: 1px solid var(--border-2);
+  background: var(--surface-2);
+  color: var(--tx);
+  border-radius: 4px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.usage-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.usage-metric-card {
+  border: 1px solid var(--border);
+  background: linear-gradient(160deg, rgba(124, 140, 255, 0.08), rgba(17, 21, 27, 0.92));
+  padding: 10px;
+}
+
+.usage-metric-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--tx-3);
+}
+
+.usage-metric-value {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tx);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--tx-3);
+}
+
+.usage-table-block {
+  border: 1px solid var(--border);
+  background: rgba(11, 15, 20, 0.88);
+}
+
+.usage-table-title {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--tx-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+
+.usage-table-wrap {
+  overflow-x: auto;
+}
+
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.usage-table th,
+.usage-table td {
+  text-align: left;
+  padding: 7px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  white-space: nowrap;
+}
+
+.usage-table th {
+  color: var(--tx-3);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.usage-table td {
+  color: var(--tx-2);
+}
+
+.usage-table tr:last-child td {
+  border-bottom: none;
+}
+
+.usage-state {
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.02);
+  color: var(--tx-2);
+  font-size: 11px;
+  padding: 10px;
+}
+
+.usage-state.error {
+  border-color: rgba(244, 63, 94, 0.35);
+  color: #fecdd3;
+}
+
 /* Explorer collapsible sections (e.g., Open Editors) */
 .explorer-section-header {
   display: flex;

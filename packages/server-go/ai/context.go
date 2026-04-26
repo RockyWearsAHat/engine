@@ -258,6 +258,9 @@ type ChatContext struct {
 	// last n messages in the active history as vital checkpoints so they survive context windowing.
 	// Nil outside of an active loop.
 	MarkVital func(n int)
+		// AutonomousPolicy, when non-nil, controls headless session behaviour:
+		// auto-approving commits and/or pushes without prompting the user.
+		AutonomousPolicy *AutonomousPolicy
 	// ProjectTools holds project-defined tools discovered from <projectRoot>/.engine/tools/.
 	// Loaded once per Chat() call; nil when the directory is absent or empty.
 	ProjectTools []projectToolDef
@@ -835,6 +838,14 @@ func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) 
 				return report, true
 			}
 		}
+		// Autonomous sessions with auto_commit bypass user approval.
+		if ctx.AutonomousPolicy != nil && ctx.AutonomousPolicy.AutoCommit {
+			hash, commitErr := gogit.Commit(ctx.ProjectPath, str("message"))
+			if commitErr != nil {
+				return commitErr.Error(), true
+			}
+			return "Committed: " + hash, false
+		}
 		if ctx.RequestApproval == nil {
 			return "Git commits require explicit approval, but no approval handler is available.", true
 		}
@@ -1045,14 +1056,22 @@ func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) 
 		return fmt.Sprintf("Comment added: %s", comment.HTMLURL), false
 
 	case "git_push":
-		if ctx.RequestApproval == nil {
-			return "git_push requires approval, but no approval handler is available.", true
-		}
-		branch, _ := gogit.GetCurrentBranch(ctx.ProjectPath)
 		remote := str("remote")
 		if remote == "" {
 			remote = "origin"
 		}
+		// Autonomous sessions with auto_push bypass user approval.
+		if ctx.AutonomousPolicy != nil && ctx.AutonomousPolicy.AutoCommit && ctx.AutonomousPolicy.AutoPush {
+			out, pushErr := gogit.Push(ctx.ProjectPath, remote)
+			if pushErr != nil {
+				return pushErr.Error(), true
+			}
+			return out, false
+		}
+		if ctx.RequestApproval == nil {
+			return "git_push requires approval, but no approval handler is available.", true
+		}
+		branch, _ := gogit.GetCurrentBranch(ctx.ProjectPath)
 		allowed, err := ctx.RequestApproval(
 			"git_push",
 			"Approve git push",
@@ -1469,8 +1488,24 @@ func runAnthropicLoop(
 				case <-time.After(wait):
 				}
 			}
-			responseBlocks, stopReason, lastErr = streamRequest(apiKey, req, ctx, finalText)
+			var usage usageSnapshot
+			var apiDurationMs int64
+			responseBlocks, stopReason, usage, apiDurationMs, lastErr = streamRequest(apiKey, req, ctx, finalText)
 			if lastErr == nil {
+				totalTokens := usage.InputTokens + usage.OutputTokens
+				costUSD := EstimateCost(model, usage.InputTokens, usage.OutputTokens)
+				db.LogUsageEvent( //nolint:errcheck
+					newID(),
+					ctx.SessionID,
+					ctx.ProjectPath,
+					"anthropic",
+					model,
+					usage.InputTokens,
+					usage.OutputTokens,
+					totalTokens,
+					costUSD,
+					apiDurationMs,
+				)
 				break
 			}
 			// Only retry transient errors - check if error message contains status code
@@ -1561,13 +1596,36 @@ func runAnthropicLoop(
 }
 
 // streamRequest sends one Anthropic streaming request and returns all content blocks.
+type usageSnapshot struct {
+	InputTokens  int
+	OutputTokens int
+}
+
+func tokenCountFromUsage(usage map[string]interface{}, key string) int {
+	v, ok := usage[key]
+	if !ok || v == nil {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	case int64:
+		return int(n)
+	default:
+		return 0
+	}
+}
+
 func streamRequest(
 	apiKey string,
 	req anthropicRequest,
 	ctx *ChatContext,
 	finalText *strings.Builder,
-) ([]contentBlock, string, error) {
+) ([]contentBlock, string, usageSnapshot, int64, error) {
 	body, _ := json.Marshal(req)
+	requestStart := time.Now()
 
 	httpReq, _ := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(body))
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -1576,14 +1634,14 @@ func streamRequest(
 
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
-		return nil, "", fmt.Errorf("anthropic request: %w", err)
+		return nil, "", usageSnapshot{}, 0, fmt.Errorf("anthropic request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		var errBody map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&errBody) //nolint:errcheck
-		return nil, "", fmt.Errorf("anthropic error %d: %v", resp.StatusCode, errBody)
+		return nil, "", usageSnapshot{}, 0, fmt.Errorf("anthropic error %d: %v", resp.StatusCode, errBody)
 	}
 
 	var (
@@ -1591,6 +1649,7 @@ func streamRequest(
 		stopReason string
 		curText    strings.Builder
 		curTool    *contentBlock
+		usage      usageSnapshot
 	)
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -1664,17 +1723,21 @@ func streamRequest(
 		case "message_start":
 			msg, _ := event["message"].(map[string]interface{})
 			if msg != nil {
-				usage, _ := msg["usage"].(map[string]interface{})
-				if usage != nil && ctx.Usage != nil {
-					in := int(func() float64 { v, _ := usage["input_tokens"].(float64); return v }())
-					out := int(func() float64 { v, _ := usage["output_tokens"].(float64); return v }())
-					ctx.Usage.Add(req.Model, in, out)
+				usageMap, _ := msg["usage"].(map[string]interface{})
+				if usageMap != nil {
+					usage.InputTokens = tokenCountFromUsage(usageMap, "input_tokens")
+					usage.OutputTokens = tokenCountFromUsage(usageMap, "output_tokens")
 				}
 			}
 
 		case "message_delta":
 			md, _ := event["delta"].(map[string]interface{})
 			if md != nil {
+				if deltaUsage, ok := md["usage"].(map[string]interface{}); ok {
+					if out := tokenCountFromUsage(deltaUsage, "output_tokens"); out > 0 {
+						usage.OutputTokens = out
+					}
+				}
 				if sr, ok := md["stop_reason"].(string); ok {
 					stopReason = sr
 				}
@@ -1682,7 +1745,11 @@ func streamRequest(
 		}
 	}
 
-	return blocks, stopReason, scanner.Err()
+	if ctx.Usage != nil && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
+		ctx.Usage.Add(req.Model, usage.InputTokens, usage.OutputTokens)
+	}
+
+	return blocks, stopReason, usage, time.Since(requestStart).Milliseconds(), scanner.Err()
 }
 
 // newID generates a simple unique ID using time + random.
@@ -1809,6 +1876,8 @@ func runOpenAICompatibleLoop(
 			return
 		}
 
+		requestStart := time.Now()
+
 		// Parse SSE stream
 		type toolCallDelta struct {
 			index int
@@ -1819,6 +1888,8 @@ func runOpenAICompatibleLoop(
 		toolCallMap := map[int]*toolCallDelta{}
 		var textBuf strings.Builder
 		finishReason := ""
+		promptTokens := 0
+		completionTokens := 0
 
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -1834,6 +1905,14 @@ func runOpenAICompatibleLoop(
 			var event map[string]interface{}
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
 				continue
+			}
+			if usageMap, ok := event["usage"].(map[string]interface{}); ok {
+				if in := tokenCountFromUsage(usageMap, "prompt_tokens"); in > 0 {
+					promptTokens = in
+				}
+				if out := tokenCountFromUsage(usageMap, "completion_tokens"); out > 0 {
+					completionTokens = out
+				}
 			}
 			choices, _ := event["choices"].([]interface{})
 			if len(choices) == 0 {
@@ -1881,6 +1960,23 @@ func runOpenAICompatibleLoop(
 			ctx.OnError(providerName + " stream: " + err.Error())
 			return
 		}
+
+		if ctx.Usage != nil && (promptTokens > 0 || completionTokens > 0) {
+			ctx.Usage.Add(model, promptTokens, completionTokens)
+		}
+
+		db.LogUsageEvent( //nolint:errcheck
+			newID(),
+			ctx.SessionID,
+			ctx.ProjectPath,
+			providerName,
+			model,
+			promptTokens,
+			completionTokens,
+			promptTokens+completionTokens,
+			EstimateCost(model, promptTokens, completionTokens),
+			time.Since(requestStart).Milliseconds(),
+		)
 
 		// Build assistant message with tool_calls if any
 		if len(toolCallMap) > 0 {

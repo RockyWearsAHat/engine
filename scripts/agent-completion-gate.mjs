@@ -23,7 +23,8 @@ function emitResult(continueRun, message, details = []) {
 }
 
 function fail(message, details = []) {
-  emitResult(false, message, details);
+  // On failure, force continuation
+  emitResult(true, message, details);
   process.exit(2);
 }
 
@@ -62,6 +63,7 @@ function requireSuccess(stepName, result) {
 }
 
 if (process.env.ENGINE_AGENT_GATE_BYPASS === '1') {
+  // If gate bypassed force continuation but report success, since the bypass is an explicit override of the gate's purpose
   emitResult(true, 'Completion gate bypassed via ENGINE_AGENT_GATE_BYPASS=1');
   process.exit(0);
 }
@@ -147,4 +149,5 @@ if (ageMinutes > 60) {
   fail('Completion gate failed: report.generatedAt is stale. Refresh report before finishing.', [`Report age: ${ageMinutes.toFixed(1)} minutes`]);
 }
 
-emitResult(true, 'Completion gate passed.');
+// All checks passed, indicate no continuation is necessary and report success
+emitResult(false, 'Completion gate passed. This [section of the] workflow has been successfully completed and verified.');

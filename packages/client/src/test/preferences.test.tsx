@@ -68,7 +68,8 @@ const { wsClient } = await import('../ws/client.js');
 const { bridge } = await import('../bridge.js');
 
 function getTab(label: RegExp) {
-  return screen.getByRole('tab', { name: label });
+  const matches = screen.getAllByRole('tab', { name: label });
+  return matches[0];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -112,7 +113,7 @@ describe('PreferencesPanel — mount', () => {
 
   it('Nav_SidebarWithSectionItemsRendered', () => {
     render(<PreferencesPanel />);
-    expect(screen.getAllByRole('tab')).toHaveLength(7);
+    expect(screen.getAllByRole('tab')).toHaveLength(8);
   });
 });
 
@@ -988,5 +989,168 @@ describe('PreferencesPanel — Editor Appearance additional controls', () => {
     expect(vi.mocked(bridge.setEditorPreferences)).toHaveBeenCalledWith(
       expect.objectContaining({ tabSize: 4 }),
     );
+  });
+});
+
+// ── Repository Registry ───────────────────────────────────────────────────────
+
+describe('PreferencesPanel — repo registry navigation', () => {
+  beforeEach(setupStore);
+
+  it('ReposTab_Renders', () => {
+    render(<PreferencesPanel />);
+    const tab = getTab(/repos/i);
+    expect(tab).toBeTruthy();
+  });
+
+  it('ReposTab_Click_SetsActiveSection', () => {
+    render(<PreferencesPanel />);
+    const tab = getTab(/repos/i);
+    fireEvent.click(tab);
+    expect(tab.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('ReposList_Empty_ShowsEmptyMessage', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/repos/i));
+    expect(screen.getByText(/no repositories registered yet/i)).toBeTruthy();
+  });
+});
+
+describe('PreferencesPanel — repo registry WS messages', () => {
+  beforeEach(setupStore);
+
+  it('RepoList_Message_PopulatesEntries', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/repos/i));
+    sendWsMessage({
+      type: 'repo.list',
+      entries: [
+        { name: 'myrepo', localPath: '/home/user/myrepo', url: '' },
+      ],
+    });
+    expect(screen.getByText('myrepo')).toBeTruthy();
+    expect(screen.getByText('/home/user/myrepo')).toBeTruthy();
+  });
+
+  it('RepoAdded_Message_AppendsEntry', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/repos/i));
+    sendWsMessage({ type: 'repo.list', entries: [] });
+    sendWsMessage({
+      type: 'repo.added',
+      entry: { name: 'newrepo', localPath: '/tmp/newrepo', url: '' },
+    });
+    expect(screen.getByText('newrepo')).toBeTruthy();
+  });
+
+  it('RepoAdded_Duplicate_DoesNotDuplicate', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/repos/i));
+    sendWsMessage({
+      type: 'repo.list',
+      entries: [{ name: 'dup', localPath: '/tmp/dup', url: '' }],
+    });
+    sendWsMessage({
+      type: 'repo.added',
+      entry: { name: 'dup', localPath: '/tmp/dup', url: '' },
+    });
+    expect(screen.getAllByText('dup')).toHaveLength(1);
+  });
+
+  it('RepoRemoved_Message_RemovesEntry', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/repos/i));
+    sendWsMessage({
+      type: 'repo.list',
+      entries: [{ name: 'todelete', localPath: '/tmp/todelete', url: '' }],
+    });
+    expect(screen.getByText('todelete')).toBeTruthy();
+    sendWsMessage({ type: 'repo.removed', name: 'todelete' });
+    expect(screen.queryByText('todelete')).toBeNull();
+  });
+
+  it('RepoRemoved_Message_ClearsRepoLoadingAndError', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/repos/i));
+
+    const input = screen.getByPlaceholderText(/path or git url/i);
+    fireEvent.change(input, { target: { value: '/tmp/new' } });
+    fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
+
+    sendWsMessage({ type: 'error', code: 'REPO_ADD_ERROR', message: 'temporary failure' });
+    expect(screen.getByText('temporary failure')).toBeTruthy();
+
+    sendWsMessage({ type: 'repo.removed', name: 'missing' });
+    expect(screen.queryByText('temporary failure')).toBeNull();
+  });
+
+  it('RepoError_REPO_ADD_ERROR_ShowsMessage', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/repos/i));
+    sendWsMessage({ type: 'error', code: 'REPO_ADD_ERROR', message: 'clone failed' });
+    expect(screen.getByText('clone failed')).toBeTruthy();
+  });
+
+  it('RepoError_REPO_REMOVE_ERROR_ShowsMessage', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/repos/i));
+    sendWsMessage({ type: 'error', code: 'REPO_REMOVE_ERROR', message: 'not found' });
+    expect(screen.getByText('not found')).toBeTruthy();
+  });
+
+  it('RepoError_REPO_LIST_ERROR_ShowsMessage', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/repos/i));
+    sendWsMessage({ type: 'error', code: 'REPO_LIST_ERROR', message: 'disk error' });
+    expect(screen.getByText('disk error')).toBeTruthy();
+  });
+
+  it('RepoError_WithoutRepoErrorCode_DoesNotShowError', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/repos/i));
+    sendWsMessage({ type: 'error' });
+    expect(screen.queryByText('Unknown error')).toBeNull();
+  });
+});
+
+describe('PreferencesPanel — repo registry interactions', () => {
+  beforeEach(setupStore);
+
+  it('AddButton_Disabled_WhenInputEmpty', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/repos/i));
+    const btn = screen.getByRole('button', { name: /^add$/i });
+    expect((btn as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('AddButton_SendsRepoAdd_WhenInputFilled', () => {
+    vi.mocked(wsClient.send).mockClear();
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/repos/i));
+    const input = screen.getByPlaceholderText(/path or git url/i);
+    fireEvent.change(input, { target: { value: '/some/path' } });
+    const btn = screen.getByRole('button', { name: /^add$/i });
+    fireEvent.click(btn);
+    expect(vi.mocked(wsClient.send)).toHaveBeenCalledWith({ type: 'repo.add', urlOrPath: '/some/path' });
+  });
+
+  it('RemoveButton_SendsRepoRemove', () => {
+    vi.mocked(wsClient.send).mockClear();
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/repos/i));
+    sendWsMessage({
+      type: 'repo.list',
+      entries: [{ name: 'alpha', localPath: '/tmp/alpha', url: '' }],
+    });
+    const removeBtn = screen.getByRole('button', { name: /remove alpha/i });
+    fireEvent.click(removeBtn);
+    expect(vi.mocked(wsClient.send)).toHaveBeenCalledWith({ type: 'repo.remove', name: 'alpha' });
+  });
+
+  it('Mount_SendsRepoList', () => {
+    vi.mocked(wsClient.send).mockClear();
+    render(<PreferencesPanel />);
+    expect(vi.mocked(wsClient.send)).toHaveBeenCalledWith({ type: 'repo.list' });
   });
 });

@@ -16,6 +16,7 @@ import { wsClient } from '../../ws/client.js';
 import type {
   DiscordConfig,
   DiscordValidationResult,
+  RepositoryEntry,
 } from '@engine/shared';
 import {
   DEFAULT_EDITOR_PREFERENCES,
@@ -115,6 +116,12 @@ export default function PreferencesPanel() {
   const saveDiscordConfigRef = useRef<() => void>(/* istanbul ignore next */ () => {});
   const [activeSection, setActiveSection] = useState('desktop-services');
 
+  // Repository registry ──────────────────────────────────────────────────
+  const [repoEntries, setRepoEntries] = useState<RepositoryEntry[]>([]);
+  const [repoInput, setRepoInput] = useState('');
+  const [repoLoading, setRepoLoading] = useState(false);
+  const [repoError, setRepoError] = useState('');
+
   const sections = [
     { id: 'desktop-services', label: 'Desktop', detail: 'Agent service runtime and install state' },
     { id: 'machine-connections', label: 'Machines', detail: 'Remote machine links and pairing' },
@@ -123,6 +130,7 @@ export default function PreferencesPanel() {
     { id: 'model-provider', label: 'Model', detail: 'Provider, model, and API credentials' },
     { id: 'agent-teams', label: 'Teams', detail: 'Role routing profile for orchestrators' },
     { id: 'discord-control', label: 'Discord', detail: 'Control plane bot and access policy' },
+    { id: 'repo-registry', label: 'Repos', detail: 'Repository registry — add, list, and remove' },
   ] as const;
 
   const jumpToSection = useCallback((id: string) => {
@@ -137,7 +145,7 @@ export default function PreferencesPanel() {
 
   useEffect(() => {
     const unsub = wsClient.onMessage((msg: unknown) => {
-      const m = msg as { type?: string; config?: DiscordConfig; active?: boolean; result?: DiscordValidationResult; warning?: string };
+      const m = msg as { type?: string; config?: DiscordConfig; active?: boolean; result?: DiscordValidationResult; warning?: string; entries?: RepositoryEntry[]; entry?: RepositoryEntry; name?: string };
       if (!m || typeof m.type !== 'string') return;
       if (m.type === 'discord.config' && m.config) {
         setDiscordForm(m.config);
@@ -146,7 +154,7 @@ export default function PreferencesPanel() {
         setDiscordSaveWarning('');
         if (m.config.enabled && m.config.hasToken && !m.active) {
           setDiscordValidating(true);
-          wsClient.send({ type: 'discord.validate' } as never);
+          wsClient.send({ type: 'discord.validate' });
         }
       } else if (m.type === 'discord.config.saved' && m.config) {
         setDiscordForm(m.config);
@@ -160,7 +168,7 @@ export default function PreferencesPanel() {
         // a separate validate call silently override the failure with an OK.
         if (m.config.enabled && m.active) {
           setDiscordValidating(true);
-          wsClient.send({ type: 'discord.validate' } as never);
+          wsClient.send({ type: 'discord.validate' });
         }
       } else if (m.type === 'discord.validate.result' && m.result) {
         setDiscordValidation(m.result);
@@ -176,10 +184,34 @@ export default function PreferencesPanel() {
           // service starts and discord.config.saved comes back with active:true.
           saveDiscordConfigRef.current();
         }
+      } else if (m.type === 'repo.list' && Array.isArray(m.entries)) {
+        setRepoEntries(m.entries);
+      } else if (m.type === 'repo.added' && m.entry) {
+        setRepoEntries((prev) => {
+          const exists = prev.some((e) => e.localPath === m.entry!.localPath);
+          return exists ? prev : [...prev, m.entry!];
+        });
+        setRepoInput('');
+        setRepoLoading(false);
+        setRepoError('');
+      } else if (m.type === 'repo.removed' && typeof m.name === 'string') {
+        setRepoEntries((prev) => prev.filter((e) => e.name !== m.name));
+        setRepoLoading(false);
+        setRepoError('');
+      } else if (m.type === 'error') {
+        const errMsg = (m as { message?: string }).message ?? 'Unknown error';
+        const code = (m as { code?: string }).code ?? '';
+        if (code === 'REPO_ADD_ERROR' || code === 'REPO_REMOVE_ERROR' || code === 'REPO_LIST_ERROR') {
+          setRepoError(errMsg);
+          setRepoLoading(false);
+        }
       }
     });
-    // Ask for current discord config once the WS is usable.
-    const requestConfig = () => wsClient.send({ type: 'discord.config.get' } as never);
+    // Ask for current discord config and repo list once the WS is usable.
+    const requestConfig = () => {
+      wsClient.send({ type: 'discord.config.get' });
+      wsClient.send({ type: 'repo.list' });
+    };
     requestConfig();
     const unsubOpen = wsClient.onOpen(requestConfig);
     return () => {
@@ -310,14 +342,14 @@ export default function PreferencesPanel() {
   };
 
   const saveDiscordConfig = () => {
-    wsClient.send({ type: 'discord.config.set', config: buildDiscordPayload() } as never);
+    wsClient.send({ type: 'discord.config.set', config: buildDiscordPayload() });
   };
   saveDiscordConfigRef.current = saveDiscordConfig;
 
   const validateDiscordConfig = () => {
     setDiscordValidating(true);
     setDiscordValidation(null);
-    wsClient.send({ type: 'discord.validate', config: buildDiscordPayload() } as never);
+    wsClient.send({ type: 'discord.validate', config: buildDiscordPayload() });
   };
 
   const showDiscordInviteAction = !discordActive && Boolean(discordInviteUrl);
@@ -337,7 +369,7 @@ export default function PreferencesPanel() {
     const validateNow = () => {
       attempts += 1;
       setDiscordValidating(true);
-      wsClient.send({ type: 'discord.validate', config: buildDiscordPayload() } as never);
+      wsClient.send({ type: 'discord.validate', config: buildDiscordPayload() });
       if (attempts >= maxAttempts) {
         setDiscordInviteWatchActive(false);
       }
@@ -1003,7 +1035,7 @@ export default function PreferencesPanel() {
                 type="button"
                 className="btn-secondary"
                 onClick={() => {
-                  wsClient.send({ type: 'discord.unlink' } as never);
+                  wsClient.send({ type: 'discord.unlink' });
                   setDiscordValidation(null);
                   setDiscordInviteWatchActive(false);
                 }}
@@ -1041,6 +1073,70 @@ export default function PreferencesPanel() {
             {discordSaveWarning && (
               <div className="preferences-message" style={{ borderColor: 'rgba(255, 167, 38, 0.35)' }}>
                 {discordSaveWarning}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section id="repo-registry" className="preferences-card">
+          <div className="preferences-card-header">
+            <div className="preferences-card-title">
+              <FolderGit2 size={15} />
+              Repository registry
+            </div>
+          </div>
+          <div className="preferences-section-copy">
+            Add local paths or remote URLs. Engine clones remote repos into <code>.engine/projects/</code>.
+          </div>
+          <div className="preferences-stack">
+            {repoEntries.length === 0 ? (
+              <div className="preferences-muted">No repositories registered yet.</div>
+            ) : (
+              <ul className="preferences-repo-list">
+                {repoEntries.map((entry) => (
+                  <li key={entry.localPath} className="preferences-repo-item">
+                    <span className="preferences-repo-name">{entry.name}</span>
+                    <span className="preferences-muted preferences-repo-path">{entry.localPath}</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${entry.name}`}
+                      className="btn-secondary"
+                      onClick={() => {
+                        setRepoLoading(true);
+                        setRepoError('');
+                        wsClient.send({ type: 'repo.remove', name: entry.name });
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="preferences-row">
+              <input
+                aria-label="Repository path or URL"
+                style={inputStyle}
+                value={repoInput}
+                onChange={(e) => setRepoInput(e.target.value)}
+                placeholder="Path or git URL"
+              />
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={repoLoading || repoInput.trim() === ''}
+                onClick={() => {
+                  setRepoLoading(true);
+                  setRepoError('');
+                  wsClient.send({ type: 'repo.add', urlOrPath: repoInput.trim() });
+                }}
+              >
+                Add
+              </button>
+            </div>
+            {repoError && (
+              <div className="preferences-message" style={{ borderColor: 'rgba(239, 68, 68, 0.4)' }}>
+                {repoError}
               </div>
             )}
           </div>

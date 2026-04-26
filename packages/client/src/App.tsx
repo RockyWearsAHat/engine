@@ -25,11 +25,11 @@ import {
 } from './editorEvents.js';
 import {
   FolderOpen, GitBranch, AlertCircle, Settings2, Activity,
-  Search, ServerCog,
+  Search, ServerCog, ChartColumn,
   Minus, Square, X, FileText, Hammer, Play, Terminal as TerminalIcon, Menu, FileStack, RotateCcw,
 } from 'lucide-react';
 
-type ActivityTab = 'explorer' | 'open-editors' | 'git' | 'search' | 'issues';
+type ActivityTab = 'explorer' | 'open-editors' | 'git' | 'search' | 'issues' | 'usage';
 type RightTab = 'chat' | 'agent';
 type NoticeTone = 'info' | 'error';
 type WindowAction = 'minimize' | 'toggle-maximize' | 'toggle-fullscreen' | 'close';
@@ -854,6 +854,18 @@ export default function App() {
           setShowSidebar(true);
         },
       },
+      {
+        id: 'palette:show-usage',
+        kind: 'command',
+        title: 'Show Usage Dashboard',
+        subtitle: 'View project or user-wide API spend, tokens, and compute time',
+        keywords: 'usage dashboard spend tokens model filter sidebar',
+        badge: 'Sidebar',
+        action: () => {
+          setActivityTab('usage');
+          setShowSidebar(true);
+        },
+      },
     ];
 
     if (desktopShell) {
@@ -1362,6 +1374,10 @@ export default function App() {
             setActivityTab('issues');
             setShowSidebar(true);
             break;
+          case 'show-usage':
+            setActivityTab('usage');
+            setShowSidebar(true);
+            break;
           case 'open-command-palette':
             openCommandPalette('commands');
             break;
@@ -1475,6 +1491,10 @@ export default function App() {
                 setActivityTab('issues');
                 setShowSidebar(true);
               }}
+              onShowUsage={() => {
+                setActivityTab('usage');
+                setShowSidebar(true);
+              }}
               onFocusChat={() => setRightTab('chat')}
               onFocusAgent={() => setRightTab('agent')}
               onBuildWorkspace={() => launchWorkspaceTask(buildTask)}
@@ -1515,6 +1535,7 @@ export default function App() {
               ['git', GitBranch],
               ['search', Search],
               ['issues', AlertCircle],
+              ['usage', ChartColumn],
             ] as [ActivityTab, React.ComponentType<{ size?: number }>][]).map(([id, Icon]) => (
               <button
                 key={id}
@@ -1918,6 +1939,7 @@ function FileMenu({
   onShowSearch,
   onShowGit,
   onShowIssues,
+  onShowUsage,
   onFocusChat,
   onFocusAgent,
   onBuildWorkspace,
@@ -1944,6 +1966,7 @@ function FileMenu({
   onShowSearch: () => void;
   onShowGit: () => void;
   onShowIssues: () => void;
+  onShowUsage: () => void;
   onFocusChat: () => void;
   onFocusAgent: () => void;
   onBuildWorkspace: () => void;
@@ -2016,6 +2039,7 @@ function FileMenu({
             <MenuItem icon={<Search size={13} />} label={`${activityTab === 'search' ? '✓ ' : ''}Search`} onClick={() => { setOpen(false); onShowSearch(); }} />
             <MenuItem icon={<GitBranch size={13} />} label={`${activityTab === 'git' ? '✓ ' : ''}Source Control`} onClick={() => { setOpen(false); onShowGit(); }} />
             <MenuItem icon={<AlertCircle size={13} />} label={`${activityTab === 'issues' ? '✓ ' : ''}Issues`} onClick={() => { setOpen(false); onShowIssues(); }} />
+            <MenuItem icon={<ChartColumn size={13} />} label={`${activityTab === 'usage' ? '✓ ' : ''}Usage Dashboard`} onClick={() => { setOpen(false); onShowUsage(); }} />
 
             <div className="shell-menu-divider" />
             <div className="shell-menu-group-label">Panels</div>

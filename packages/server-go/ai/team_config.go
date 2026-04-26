@@ -129,3 +129,60 @@ func splitProviderModel(model string) (provider string, modelName string) {
 	}
 	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 }
+
+// AutonomousPolicy holds per-project configuration for headless autonomous sessions.
+// Read from the autonomous: section of .engine/config.yaml.
+type AutonomousPolicy struct {
+	// AutoCommit: stage and commit without prompting for user approval.
+	AutoCommit bool
+	// AutoPush: push to remote without approval (only takes effect when AutoCommit is true).
+	AutoPush bool
+	// Branch: branch to work on; empty means use the current branch.
+	Branch string
+}
+
+// ResolveAutonomousPolicy reads the autonomous: section from .engine/config.yaml.
+// Returns a zero-value policy (all defaults off) when the file is absent or the
+// section is missing, so callers can safely fall through to RequestApproval.
+func ResolveAutonomousPolicy(projectPath string) AutonomousPolicy {
+	if strings.TrimSpace(projectPath) == "" {
+		return AutonomousPolicy{}
+	}
+	configPath := filepath.Join(projectPath, ".engine", "config.yaml")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		return AutonomousPolicy{}
+	}
+	return parseAutonomousPolicy(string(content))
+}
+
+// parseAutonomousPolicy extracts the autonomous: block from raw YAML text.
+// Only indent-2 keys directly under autonomous: are read; deeper nesting is ignored.
+func parseAutonomousPolicy(yaml string) AutonomousPolicy {
+	var p AutonomousPolicy
+	inAutonomous := false
+	for _, rawLine := range strings.Split(yaml, "\n") {
+		trimmedRight := strings.TrimRight(rawLine, " \t")
+		trimmedLeft := strings.TrimLeft(trimmedRight, " \t")
+		if strings.TrimSpace(trimmedLeft) == "" || strings.HasPrefix(trimmedLeft, "#") {
+			continue
+		}
+		indent := len(trimmedRight) - len(trimmedLeft)
+		if indent == 0 {
+			inAutonomous = trimmedLeft == "autonomous:"
+			continue
+		}
+		if !inAutonomous || indent != 2 {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(trimmedLeft, "auto_commit:"):
+			p.AutoCommit = strings.TrimSpace(strings.TrimPrefix(trimmedLeft, "auto_commit:")) == "true"
+		case strings.HasPrefix(trimmedLeft, "auto_push:"):
+			p.AutoPush = strings.TrimSpace(strings.TrimPrefix(trimmedLeft, "auto_push:")) == "true"
+		case strings.HasPrefix(trimmedLeft, "branch:"):
+			p.Branch = parseYAMLValue(trimmedLeft, "branch:")
+		}
+	}
+	return p
+}

@@ -10,7 +10,7 @@ import type { FileNode, GitHubIssue, SearchResult } from '@engine/shared';
 import {
   FolderOpen, Folder, RefreshCw, GitBranch,
   AlertCircle, FileText, ChevronRight, ChevronDown, Circle,
-  Loader2, Search, X,
+  Loader2, Search, X, ChartColumn,
 } from 'lucide-react';
 import {
   countFolders,
@@ -24,8 +24,9 @@ import {
   hasDirectChildDirCollapsed,
   hasDirectChildDirExpanded,
 } from './folderUtils';
+import UsageDashboard from '../Usage/UsageDashboard.js';
 
-type ActivityTab = 'explorer' | 'open-editors' | 'git' | 'search' | 'issues';
+type ActivityTab = 'explorer' | 'open-editors' | 'git' | 'search' | 'issues' | 'usage';
 
 type GitFileStatus = 'modified' | 'staged' | 'untracked' | 'ignored' | null;
 
@@ -625,6 +626,18 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
               error={githubIssuesError}
               onLoad={loadIssues}
             />
+          </div>
+        </>
+      )}
+
+      {activityTab === 'usage' && (
+        <>
+          <div className="sidebar-header">
+            <ChartColumn size={13} style={{ color: 'var(--accent-2)' }} />
+            <span className="sidebar-title">Usage Dashboard</span>
+          </div>
+          <div className="sidebar-body">
+            <UsageDashboard projectPath={activeSession?.projectPath ?? null} />
           </div>
         </>
       )}

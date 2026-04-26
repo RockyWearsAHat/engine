@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/engine/server/db"
 	"github.com/engine/server/discord"
@@ -958,5 +959,18 @@ func TestRun_RepoMonitorCallbacks_InvokeTriggerClosures(t *testing.T) {
 	monitor.OnCIFailure(json.RawMessage(`{"workflow_run":{"name":"ci","html_url":"u","conclusion":"failure"},"repository":{"full_name":"o/r"}}`))
 	monitor.OnIssueComment(json.RawMessage(`{"action":"created","comment":{"body":"x","user":{"login":"u"}},"issue":{"number":1,"title":"t"},"repository":{"full_name":"o/r"}}`))
 	monitor.OnIssueOpened(json.RawMessage(`{"action":"opened","issue":{"number":2,"title":"t","body":"b"},"repository":{"full_name":"o/r"},"sender":{"login":"u"}}`))
+}
+
+func TestRunAsyncFn_DefaultImplementationRuns(t *testing.T) {
+	done := make(chan struct{}, 1)
+	runAsyncFn(func() {
+		done <- struct{}{}
+	})
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected default runAsyncFn implementation to execute callback")
+	}
 }
 

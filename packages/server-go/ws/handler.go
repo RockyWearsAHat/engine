@@ -40,6 +40,13 @@ var (
 	aiCleanupSessionWorktreeDB = ai.CleanupSessionWorktree
 )
 
+// Overridable repo registry calls for testing.
+var (
+	repoRegistryLoadFn   = workspace.LoadRegistry
+	repoRegistryAddFn    = workspace.AddToRegistry
+	repoRegistryRemoveFn = workspace.RemoveFromRegistry
+)
+
 // approvalTimeout is the duration to wait for user approval; exposed for testing.
 var approvalTimeout = 5 * time.Minute
 
@@ -821,6 +828,35 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		}
 		go c.handleGitHubIssues(pp)
 
+	// ── Usage Dashboard ───────────────────────────────────────────────────────
+
+	case "usage.dashboard.get":
+		var msg struct {
+			Scope       string `json:"scope"`
+			ProjectPath string `json:"projectPath"`
+			Model       string `json:"model"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.send(map[string]interface{}{"type": "usage.dashboard", "error": "Bad payload"})
+			return
+		}
+
+		scope := strings.TrimSpace(msg.Scope)
+		if scope == "" {
+			scope = "project"
+		}
+		targetProjectPath := strings.TrimSpace(msg.ProjectPath)
+		if targetProjectPath == "" {
+			targetProjectPath = projectPath
+		}
+
+		dashboard, err := db.GetUsageDashboard(scope, targetProjectPath, strings.TrimSpace(msg.Model))
+		if err != nil {
+			c.send(map[string]interface{}{"type": "usage.dashboard", "error": err.Error()})
+			return
+		}
+		c.send(map[string]interface{}{"type": "usage.dashboard", "dashboard": dashboard})
+
 	// ── Terminals ─────────────────────────────────────────────────────────────
 
 	case "terminal.create":
@@ -1002,9 +1038,71 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			"summary":   summary,
 		})
 
+	// ── Repository Registry ───────────────────────────────────────────────────
+
+	case "repo.list":
+		c.handleRepoList()
+
+	case "repo.add":
+		var msg struct {
+			URLOrPath string `json:"urlOrPath"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.sendErr("Bad payload", "BAD_PAYLOAD")
+			return
+		}
+		c.handleRepoAdd(msg.URLOrPath)
+
+	case "repo.remove":
+		var msg struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.sendErr("Bad payload", "BAD_PAYLOAD")
+			return
+		}
+		c.handleRepoRemove(msg.Name)
+
 	default:
 		c.sendErr(fmt.Sprintf("Unknown message type: %s", msgType), "UNKNOWN_TYPE")
 	}
+}
+
+// ── Repository Registry ────────────────────────────────────────────────────────
+
+func (c *conn) handleRepoList() {
+	entries, err := repoRegistryLoadFn(c.projectPath)
+	if err != nil {
+		c.sendErr("Failed to load repository registry: "+err.Error(), "REPO_LIST_ERROR")
+		return
+	}
+	c.send(map[string]interface{}{
+		"type":    "repo.list",
+		"entries": entries,
+	})
+}
+
+func (c *conn) handleRepoAdd(urlOrPath string) {
+	entry, err := repoRegistryAddFn(c.projectPath, urlOrPath)
+	if err != nil {
+		c.sendErr("Failed to add repository: "+err.Error(), "REPO_ADD_ERROR")
+		return
+	}
+	c.send(map[string]interface{}{
+		"type":  "repo.added",
+		"entry": entry,
+	})
+}
+
+func (c *conn) handleRepoRemove(name string) {
+	if err := repoRegistryRemoveFn(c.projectPath, name); err != nil {
+		c.sendErr("Failed to remove repository: "+err.Error(), "REPO_REMOVE_ERROR")
+		return
+	}
+	c.send(map[string]interface{}{
+		"type": "repo.removed",
+		"name": name,
+	})
 }
 
 // handleRemotePairCodeGenerate generates a one-time pairing code and sends it back.

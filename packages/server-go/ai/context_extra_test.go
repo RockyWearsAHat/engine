@@ -1258,7 +1258,7 @@ func TestStreamRequest_ToolUseBlock(t *testing.T) {
 		Usage:        &SessionUsage{},
 	}
 	var text strings.Builder
-	blocks, stopReason, err := streamRequest("fake-key", anthropicRequest{
+	blocks, stopReason, _, _, err := streamRequest("fake-key", anthropicRequest{
 		Model:    "claude-3-5-sonnet-20241022",
 		Messages: []anthropicMessage{{Role: "user", Content: "hello"}},
 	}, ctx, &text)
@@ -2468,7 +2468,7 @@ func TestStreamRequest_SkipsMalformedAndNilEvents(t *testing.T) {
 
 	ctx := &ChatContext{OnChunk: func(string, bool) {}}
 	var finalText strings.Builder
-	blocks, stopReason, err := streamRequest("key", anthropicRequest{Model: "claude", Stream: true}, ctx, &finalText)
+	blocks, stopReason, _, _, err := streamRequest("key", anthropicRequest{Model: "claude", Stream: true}, ctx, &finalText)
 	if err != nil {
 		t.Fatalf("unexpected streamRequest error: %v", err)
 	}
@@ -2915,7 +2915,7 @@ func TestStreamRequest_HTTPDoError(t *testing.T) {
 		OnError: func(string) {},
 	}
 	var text strings.Builder
-	_, _, err := streamRequest("key", anthropicRequest{Model: "m", MaxTokens: 1}, ctx, &text)
+	_, _, _, _, err := streamRequest("key", anthropicRequest{Model: "m", MaxTokens: 1}, ctx, &text)
 	if err == nil {
 		t.Fatal("expected error from failing transport")
 	}
@@ -3946,3 +3946,179 @@ dev_loop:
 }
 
 // ── discord/service.go: addProject without ENGINE_CLONES_DIR uses default ~~~~
+
+// ── AutonomousPolicy: git_commit bypass without RequestApproval ─────────────
+
+func TestExecuteToolForTest_GitCommit_AutonomousPolicy_AutoCommit(t *testing.T) {
+	ctx := makeChatCtx(t)
+	initGitRepoForContextTests(t, ctx.ProjectPath)
+	testFile := filepath.Join(ctx.ProjectPath, "auto-commit.txt")
+	if err := os.WriteFile(testFile, []byte("autonomous"), 0644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	policy := AutonomousPolicy{AutoCommit: true}
+	ctx.AutonomousPolicy = &policy
+	result, isErr := ExecuteToolForTest("git_commit", map[string]interface{}{
+		"message": "autonomous commit",
+	}, ctx)
+	if isErr {
+		t.Fatalf("expected no error from auto-commit bypass, got: %s", result)
+	}
+	if !strings.Contains(result, "Committed") {
+		t.Fatalf("expected 'Committed' in result, got: %s", result)
+	}
+}
+
+func TestExecuteToolForTest_GitCommit_AutonomousPolicy_CommitError(t *testing.T) {
+	ctx := makeChatCtx(t)
+	policy := AutonomousPolicy{AutoCommit: true}
+	ctx.AutonomousPolicy = &policy
+	result, isErr := ExecuteToolForTest("git_commit", map[string]interface{}{
+		"message": "will fail no repo",
+	}, ctx)
+	if !isErr {
+		t.Fatalf("expected error when repo missing, got: %s", result)
+	}
+}
+
+func TestExecuteToolForTest_GitPush_AutonomousPolicy_AutoPush(t *testing.T) {
+	ctx := makeChatCtx(t)
+	initGitRepoForContextTests(t, ctx.ProjectPath)
+	policy := AutonomousPolicy{AutoCommit: true, AutoPush: true}
+	ctx.AutonomousPolicy = &policy
+	result, _ := ExecuteToolForTest("git_push", map[string]interface{}{
+		"remote": "origin",
+	}, ctx)
+	_ = result
+}
+
+func TestResolveAutonomousPolicy_EmptyProjectPath(t *testing.T) {
+	p := ResolveAutonomousPolicy("")
+	if p.AutoCommit || p.AutoPush || p.Branch != "" {
+		t.Fatalf("expected zero policy for empty project path, got %+v", p)
+	}
+}
+
+func TestExecuteToolForTest_GitPush_AutonomousPolicy_Success(t *testing.T) {
+	ctx := makeChatCtx(t)
+	initGitRepoForContextTests(t, ctx.ProjectPath)
+	remoteDir := t.TempDir()
+	runGitCmd(t, remoteDir, "init", "--bare")
+	runGitCmd(t, ctx.ProjectPath, "remote", "add", "origin", remoteDir)
+	policy := AutonomousPolicy{AutoCommit: true, AutoPush: true}
+	ctx.AutonomousPolicy = &policy
+	result, isErr := ExecuteToolForTest("git_push", map[string]interface{}{
+		"remote": "origin",
+	}, ctx)
+	if isErr {
+		t.Fatalf("expected push to succeed with local bare remote, got: %s", result)
+	}
+}
+
+func TestTokenCountFromUsage_AllTypes(t *testing.T) {
+	usage := map[string]interface{}{
+		"float": float64(7),
+		"int":   int(8),
+		"int64": int64(9),
+		"text":  "bad",
+		"nil":   nil,
+	}
+	if got := tokenCountFromUsage(usage, "float"); got != 7 {
+		t.Fatalf("float count = %d, want 7", got)
+	}
+	if got := tokenCountFromUsage(usage, "int"); got != 8 {
+		t.Fatalf("int count = %d, want 8", got)
+	}
+	if got := tokenCountFromUsage(usage, "int64"); got != 9 {
+		t.Fatalf("int64 count = %d, want 9", got)
+	}
+	if got := tokenCountFromUsage(usage, "text"); got != 0 {
+		t.Fatalf("text count = %d, want 0", got)
+	}
+	if got := tokenCountFromUsage(usage, "nil"); got != 0 {
+		t.Fatalf("nil count = %d, want 0", got)
+	}
+	if got := tokenCountFromUsage(usage, "missing"); got != 0 {
+		t.Fatalf("missing count = %d, want 0", got)
+	}
+}
+
+func TestStreamRequest_TracksMessageDeltaUsage(t *testing.T) {
+	sse := "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":0}}}\n\n" +
+		"data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\"}}\n\n" +
+		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"usage\":{\"output_tokens\":5},\"stop_reason\":\"end_turn\"}}\n\n" +
+		"data: {\"type\":\"content_block_stop\"}\n\n" +
+		"data: [DONE]\n\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sse)
+	}))
+	defer srv.Close()
+
+	origTransport := http.DefaultTransport
+	http.DefaultTransport = redirectTransport{target: srv.URL, real: origTransport}
+	defer func() { http.DefaultTransport = origTransport }()
+
+	ctx := &ChatContext{
+		OnChunk:     func(string, bool) {},
+		OnToolCall:  func(string, interface{}) {},
+		OnToolResult: func(string, interface{}, bool) {},
+		OnError:     func(string) {},
+	}
+	var text strings.Builder
+	blocks, stopReason, usage, _, err := streamRequest("key", anthropicRequest{Model: "claude-sonnet-4.6"}, ctx, &text)
+	if err != nil {
+		t.Fatalf("streamRequest: %v", err)
+	}
+	if stopReason != "end_turn" {
+		t.Fatalf("stopReason = %q, want end_turn", stopReason)
+	}
+	if usage.InputTokens != 11 || usage.OutputTokens != 5 {
+		t.Fatalf("usage = %+v, want input=11 output=5", usage)
+	}
+	if len(blocks) == 0 {
+		t.Fatalf("expected at least one block, got %#v", blocks)
+	}
+}
+
+func TestRunOpenAICompatibleLoop_TracksUsageAndAddsSessionUsage(t *testing.T) {
+	projectDir := setupHistoryTestProject(t)
+	sessionID := "sess-usage-openai"
+	if err := db.CreateSession(sessionID, projectDir, "main"); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	sse := "data: {\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":4},\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sse)
+	}))
+	defer srv.Close()
+
+	usage := &SessionUsage{}
+	ctx := &ChatContext{
+		ProjectPath:  projectDir,
+		SessionID:    sessionID,
+		Usage:        usage,
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, interface{}) {},
+		OnToolResult: func(string, interface{}, bool) {},
+		OnError:      func(string) {},
+		ActiveTools:  bootstrapTools(),
+	}
+	var calls []ToolCall
+	var text strings.Builder
+
+	runOpenAICompatibleLoop(ctx, "openai", "gpt-4o", srv.URL+"/v1/chat/completions", "key", true, "system", []anthropicMessage{}, &calls, &text)
+
+	in, out, _ := usage.Totals()
+	if in != 13 || out != 4 {
+		t.Fatalf("session usage totals = in:%d out:%d, want in:13 out:4", in, out)
+	}
+}
