@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/engine/server/db"
 )
 
 // BehavioralGateResult holds the outcome of a UI-level behavioral validation pass.
@@ -43,6 +45,7 @@ var nodeLookPath = exec.LookPath
 func RunBehavioralGate(projectPath string) BehavioralGateResult {
 	start := time.Now()
 	ranAt := start.UTC().Format(time.RFC3339)
+	ensureProjectProfileCacheFromDB(projectPath)
 
 	scriptPath := filepath.Join(projectPath, "scripts", "behavioral-completion-check.mjs")
 	if _, err := os.Stat(scriptPath); err != nil {
@@ -114,6 +117,24 @@ func RunBehavioralGate(projectPath string) BehavioralGateResult {
 		DurationMs: durationMs,
 		RanAt:      ranAt,
 	}
+}
+
+func ensureProjectProfileCacheFromDB(projectPath string) {
+	if strings.TrimSpace(projectPath) == "" {
+		return
+	}
+	raw, err := db.GetProjectProfile(projectPath)
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return
+	}
+	profile, parseErr := ParseProjectProfileJSON(raw)
+	if parseErr != nil || profile == nil {
+		return
+	}
+	if profile.ProjectPath == "" {
+		profile.ProjectPath = projectPath
+	}
+	_ = WriteProjectProfileCache(projectPath, profile)
 }
 
 func firstLine(s string) string {

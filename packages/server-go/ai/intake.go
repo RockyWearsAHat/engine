@@ -172,6 +172,12 @@ func ParseProjectProfileJSON(response string) (*ProjectProfile, error) {
 // can be injected into the system prompt before the main agent loop starts.
 // This gives the model an explicit objective/constraints plan for the turn.
 func BuildPreStartExpansion(userMessage, projectDirection string) string {
+	return BuildPreStartExpansionWithProfile(userMessage, projectDirection, nil)
+}
+
+// BuildPreStartExpansionWithProfile is the profile-aware variant used when a
+// structured ProjectProfile has already been derived from first-turn intake.
+func BuildPreStartExpansionWithProfile(userMessage, projectDirection string, profile *ProjectProfile) string {
 	objective := truncateForPrompt(firstNonEmptyLine(userMessage), 240)
 	if objective == "" {
 		objective = "No explicit objective provided. Infer safest high-impact objective from context."
@@ -187,11 +193,21 @@ func BuildPreStartExpansion(userMessage, projectDirection string) string {
 		assumption = "Style guidance is provided in the request. Follow it exactly unless it conflicts with safety/correctness."
 	}
 
+	projectShape := "Project profile not yet materialized; infer type and verification strategy from request context."
+	verificationPlan := "Use project-appropriate verification and include a live check before completion."
+	if profile != nil {
+		projectShape = fmt.Sprintf("Type=%s, DeployTarget=%s, Behaviors=%d", profile.Type, profile.DeployTarget, len(profile.WorkingBehaviors))
+		v := profile.Verification
+		verificationPlan = fmt.Sprintf("usesPlaywright=%t, startCmd=%q, checkURL=%q, checkCmdCount=%d, liveCheck=%q", v.UsesPlaywright, v.StartCmd, v.CheckURL, len(v.CheckCmds), profile.LiveCheckCmd)
+	}
+
 	parts := []string{
 		"Pre-start expansion:",
 		"- Objective: " + objective,
 		"- Success criteria: " + strings.Join(criteria, " | "),
 		"- Direction context: " + truncateForPrompt(strings.TrimSpace(projectDirection), 260),
+		"- Project shape: " + projectShape,
+		"- Verification plan: " + verificationPlan,
 		"- Style assumption: " + assumption,
 		"- Communication mode: Keep updates minimal and action-focused; avoid verbose status chatter.",
 	}

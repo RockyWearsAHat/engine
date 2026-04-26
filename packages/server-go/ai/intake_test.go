@@ -268,6 +268,40 @@ func TestBuildPreStartExpansion_WithStyleGuidance_UsesStyleAssumption(t *testing
 	}
 }
 
+func TestBuildPreStartExpansionWithProfile_IncludesProjectShapeAndVerification(t *testing.T) {
+	profile := &ProjectProfile{
+		Type:         ProjectTypeRestAPI,
+		DeployTarget: "Docker",
+		LiveCheckCmd: "curl -sf http://localhost:8080/health",
+		WorkingBehaviors: []string{
+			"User can query orders",
+			"User can create checkout sessions",
+		},
+		Verification: VerificationStrategy{
+			UsesPlaywright: false,
+			StartCmd:       "go run .",
+			CheckURL:       "http://localhost:8080/health",
+			CheckCmds:      []string{"curl -sf http://localhost:8080/health"},
+		},
+	}
+
+	expanded := BuildPreStartExpansionWithProfile(
+		"Build checkout API",
+		"Direction says build and publish a stable API",
+		profile,
+	)
+
+	if !strings.Contains(expanded, "Project shape:") {
+		t.Fatalf("expected project shape section, got: %s", expanded)
+	}
+	if !strings.Contains(expanded, "Verification plan:") {
+		t.Fatalf("expected verification plan section, got: %s", expanded)
+	}
+	if !strings.Contains(expanded, "Type=rest-api") {
+		t.Fatalf("expected rest-api type in expansion, got: %s", expanded)
+	}
+}
+
 func TestBuildHeuristicProjectProfile_NoCriteria_DefaultDone(t *testing.T) {
 	profile := BuildHeuristicProjectProfile("/repo", "short", "")
 	if len(profile.DoneDefinition) == 0 {

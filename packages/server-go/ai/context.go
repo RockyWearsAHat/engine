@@ -1541,7 +1541,8 @@ func Chat(ctx *ChatContext, userMessage string) {
 	applyFirstTurnAutonomyContext(ctx, userMessage, projectDirection, isFirstUserMessage)
 	if ctx.Role == RoleInteractive {
 		selectiveContext = BuildSelectiveContext(ctx.ProjectPath, session, userMessage, openTabs, residualProfile)
-		expansion := BuildPreStartExpansion(userMessage, projectDirection)
+		profile := loadProjectProfile(ctx.ProjectPath)
+		expansion := BuildPreStartExpansionWithProfile(userMessage, projectDirection, profile)
 		extraContext = strings.TrimSpace(selectiveContext.Prompt + "\n\n" + expansion)
 	}
 	systemPrompt := buildRoleSystemPrompt(ctx.Role, ctx.ProjectPath, branch, extraContext)
@@ -1649,6 +1650,18 @@ func ensureProjectProfileCache(projectPath, userMessage, projectDirection string
 		db.UpsertProjectProfile(projectPath, string(raw)) //nolint:errcheck
 	}
 	WriteProjectProfileCache(projectPath, &profile) //nolint:errcheck
+}
+
+func loadProjectProfile(projectPath string) *ProjectProfile {
+	raw, err := db.GetProjectProfile(projectPath)
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	profile, parseErr := ParseProjectProfileJSON(raw)
+	if parseErr != nil {
+		return nil
+	}
+	return profile
 }
 
 // runAnthropicLoop executes the Anthropic-native streaming agentic loop.

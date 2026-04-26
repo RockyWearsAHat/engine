@@ -8,6 +8,9 @@ func UpsertProjectProfile(projectPath, profileJSON string) error {
 	if projectPath == "" {
 		return nil
 	}
+	if globalDB == nil {
+		return nil
+	}
 	t := now()
 	_, err := globalDB.Exec(
 		`INSERT INTO project_profiles (project_path, profile_json, created_at, updated_at)
@@ -25,6 +28,9 @@ func UpsertProjectProfile(projectPath, profileJSON string) error {
 // Returns ("", nil) when no profile has been stored yet.
 func GetProjectProfile(projectPath string) (string, error) {
 	if projectPath == "" {
+		return "", nil
+	}
+	if globalDB == nil {
 		return "", nil
 	}
 	row := globalDB.QueryRow(

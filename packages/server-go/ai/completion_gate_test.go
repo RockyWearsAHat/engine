@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/engine/server/db"
 )
 
 // ── RunBehavioralGate ─────────────────────────────────────────────────────────
@@ -45,6 +47,92 @@ func TestRunBehavioralGate_ScriptExits0_NoJSON_Passed(t *testing.T) {
 	}
 	if result.DurationMs < 0 {
 		t.Errorf("expected non-negative DurationMs, got %d", result.DurationMs)
+	}
+}
+
+func TestRunBehavioralGate_HydratesProjectProfileCacheFromDB(t *testing.T) {
+	dir := t.TempDir()
+	scriptDir := filepath.Join(dir, "scripts")
+	if err := os.MkdirAll(scriptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(scriptDir, "behavioral-completion-check.mjs")
+	if err := os.WriteFile(scriptPath, []byte("process.exit(0);\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
+	if err := db.Init(dir); err != nil {
+		t.Fatalf("db.Init: %v", err)
+	}
+
+	profileJSON := `{"projectPath":"` + dir + `","type":"rest-api","doneDefinition":["health endpoint works"],"deployTarget":"Docker","verification":{"usesPlaywright":false,"startCmd":"go run .","checkURL":"http://localhost:8080/health","port":8080,"checkCmds":["curl -sf http://localhost:8080/health"]},"liveCheckCmd":"curl -sf http://localhost:8080/health","workingBehaviors":["User can call health endpoint"]}`
+	if err := db.UpsertProjectProfile(dir, profileJSON); err != nil {
+		t.Fatalf("db.UpsertProjectProfile: %v", err)
+	}
+
+	_ = RunBehavioralGate(dir)
+
+	cachePath := filepath.Join(dir, ".cache", "project-profile.json")
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("expected hydrated project-profile cache, got %v", err)
+	}
+
+	var parsed ProjectProfile
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("invalid hydrated JSON: %v", err)
+	}
+	if parsed.Type != ProjectTypeRestAPI {
+		t.Fatalf("profile type = %q, want rest-api", parsed.Type)
+	}
+}
+
+func TestEnsureProjectProfileCacheFromDB_EmptyPath_NoWrite(t *testing.T) {
+	ensureProjectProfileCacheFromDB("")
+}
+
+func TestEnsureProjectProfileCacheFromDB_InvalidJSON_NoWrite(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
+	if err := db.Init(dir); err != nil {
+		t.Fatalf("db.Init: %v", err)
+	}
+	if err := db.UpsertProjectProfile(dir, "not-json"); err != nil {
+		t.Fatalf("UpsertProjectProfile: %v", err)
+	}
+
+	ensureProjectProfileCacheFromDB(dir)
+
+	if _, err := os.Stat(filepath.Join(dir, ".cache", "project-profile.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected no cache file on invalid JSON, got err=%v", err)
+	}
+}
+
+func TestEnsureProjectProfileCacheFromDB_SetsMissingProjectPath(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
+	if err := db.Init(dir); err != nil {
+		t.Fatalf("db.Init: %v", err)
+	}
+	raw := `{"projectPath":"","type":"cli","doneDefinition":[],"deployTarget":"local","verification":{"usesPlaywright":false,"startCmd":"","checkURL":"","port":0,"checkCmds":["echo ok"]},"liveCheckCmd":"echo ok","workingBehaviors":[]}`
+	if err := db.UpsertProjectProfile(dir, raw); err != nil {
+		t.Fatalf("UpsertProjectProfile: %v", err)
+	}
+
+	ensureProjectProfileCacheFromDB(dir)
+
+	cachePath := filepath.Join(dir, ".cache", "project-profile.json")
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("expected cache file, got %v", err)
+	}
+	var parsed ProjectProfile
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("invalid cache JSON: %v", err)
+	}
+	if parsed.ProjectPath != dir {
+		t.Fatalf("expected projectPath to be backfilled as %q, got %q", dir, parsed.ProjectPath)
 	}
 }
 
