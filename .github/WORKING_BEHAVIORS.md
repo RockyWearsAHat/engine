@@ -72,6 +72,14 @@ Past AI sessions are stored and searchable. The AI automatically incorporates re
 
 ---
 
+## Autonomous Development Loop
+
+Each AI session starts with an explicit autonomous working baseline in the session summary. As work progresses, Engine continuously cycles through planning, execution, validation, and revision until the request is complete. Session summaries are kept current with the active focus, validation status, weak points, and the next autonomous step so users can understand what Engine is doing and what it will do next.
+
+When direction is sufficient, Engine continues forward autonomously. When genuinely blocked by missing requirements, credentials, or approval-gated actions, Engine reports the blocker clearly and asks only for the missing input needed to continue.
+
+---
+
 ## File Tree
 
 Five tabs: Explorer, Git, Search, Issues, Open Editors.

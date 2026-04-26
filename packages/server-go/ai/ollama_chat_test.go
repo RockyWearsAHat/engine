@@ -93,3 +93,54 @@ func TestChat_OllamaProvider_UsesRunningModelAndPersistsMessages(t *testing.T) {
 		t.Fatalf("expected assistant response to persist, got %+v", messages[1])
 	}
 }
+
+func TestChat_RolePlanner_SeedsPreGrantedTools(t *testing.T) {
+	projectDir := setupHistoryTestProject(t)
+	if err := db.CreateSession("session-planner", projectDir, "main"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/ps":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":[{"name":"llama3.2"}]}`))
+		case "/v1/chat/completions":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"plan ready\"},\"finish_reason\":null}]}\n\n"))
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ollamaServer.Close()
+
+	t.Setenv("ENGINE_MODEL_PROVIDER", "ollama")
+	t.Setenv("ENGINE_MODEL", "")
+	t.Setenv("OLLAMA_BASE_URL", ollamaServer.URL)
+
+	var got strings.Builder
+	ctx := &ChatContext{
+		ProjectPath: projectDir,
+		SessionID:   "session-planner",
+		Role:        RolePlanner,
+		OnSessionUpdated: func(_ *db.Session) {},
+		OnChunk: func(content string, done bool) {
+			if !done {
+				got.WriteString(content)
+			}
+		},
+		OnToolCall:   func(string, interface{}) {},
+		OnToolResult: func(string, interface{}, bool) {},
+		OnError: func(err string) {
+			t.Fatalf("unexpected chat error: %s", err)
+		},
+	}
+
+	Chat(ctx, "draft a plan")
+
+	if !strings.Contains(got.String(), "plan ready") {
+		t.Fatalf("expected planner response, got %q", got.String())
+	}
+}

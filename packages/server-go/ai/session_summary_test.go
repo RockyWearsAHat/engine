@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/engine/server/db"
 )
 
 func writeTestFile(t *testing.T, dir, name, content string) {
@@ -17,12 +19,34 @@ func writeTestFile(t *testing.T, dir, name, content string) {
 	}
 }
 
+func initSessionSummaryTestDB(t *testing.T, projectPath string) {
+	t.Helper()
+	if err := db.Init(projectPath); err != nil {
+		t.Fatalf("db.Init: %v", err)
+	}
+}
+
 // ── BuildInitialSessionSummary ────────────────────────────────────────────────
 
-func TestBuildInitialSessionSummary_ReturnsEmpty(t *testing.T) {
-	result := BuildInitialSessionSummary("/any/path")
+func TestBuildInitialSessionSummary_WithGoalFile_ContainsProjectContext(t *testing.T) {
+	dir := t.TempDir()
+	initSessionSummaryTestDB(t, dir)
+	writeTestFile(t, dir, "PROJECT_GOAL.md", "Build an AI-native editor.")
+	result := BuildInitialSessionSummary(dir)
+	if result == "" {
+		t.Fatal("expected non-empty summary when PROJECT_GOAL.md exists")
+	}
+	if !strings.Contains(result, "Project context") {
+		t.Errorf("expected 'Project context' prefix, got %q", result)
+	}
+}
+
+func TestBuildInitialSessionSummary_NoGoalFile_ReturnsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	initSessionSummaryTestDB(t, dir)
+	result := BuildInitialSessionSummary(dir)
 	if result != "" {
-		t.Errorf("expected empty string, got %q", result)
+		t.Errorf("expected empty when no project files, got %q", result)
 	}
 }
 
@@ -154,15 +178,124 @@ func TestBuildUpdatedSessionSummary_BuildsFromParts(t *testing.T) {
 	if result == "" {
 		t.Error("expected non-empty summary")
 	}
-	if !strings.Contains(result, "Current focus") {
-		t.Errorf("expected 'Current focus' section, got %q", result)
+	// New format: factual sections without prescriptive loop instructions.
+	if !strings.Contains(result, "Focus") {
+		t.Errorf("expected 'Focus' section, got %q", result)
+	}
+	if !strings.Contains(result, "Outcome") {
+		t.Errorf("expected 'Outcome' section, got %q", result)
+	}
+	if !strings.Contains(result, "Tools used") {
+		t.Errorf("expected 'Tools used' section, got %q", result)
+	}
+	if !strings.Contains(result, "Validation") {
+		t.Errorf("expected 'Validation' section, got %q", result)
 	}
 }
 
 func TestBuildUpdatedSessionSummary_UsePreviousWhenUserMessageEmpty(t *testing.T) {
 	result := BuildUpdatedSessionSummary("carrying context", "", "assistant response", nil)
 	if !strings.Contains(result, "carrying context") {
-		t.Errorf("expected previous summary carried over, got %q", result)
+		t.Errorf("expected previous summary carried in Focus, got %q", result)
+	}
+}
+
+func TestBuildUpdatedSessionSummary_DetectsFailingValidation(t *testing.T) {
+	result := BuildUpdatedSessionSummary(
+		"previous",
+		"",
+		"tests failed with runtime error",
+		[]ToolCall{{Name: "shell", IsError: true, Result: "go test failed"}},
+	)
+	if !strings.Contains(result, "failing checks detected") {
+		t.Errorf("expected failing validation marker, got %q", result)
+	}
+	if !strings.Contains(result, "revision required") {
+		t.Errorf("expected revision-required guidance, got %q", result)
+	}
+}
+
+func TestValidationStatus_PassingAndPending(t *testing.T) {
+	passing := validationStatus("all tests passed and verified", []ToolCall{{Name: "shell", Result: "ok"}})
+	if !strings.Contains(passing, "passing") {
+		t.Errorf("expected passing validation status, got %q", passing)
+	}
+
+	pending := validationStatus("implemented change", nil)
+	if !strings.Contains(pending, "pending") {
+		t.Errorf("expected pending validation status, got %q", pending)
+	}
+
+	executed := validationStatus("ran checks", []ToolCall{{Name: "test.run", Result: "done"}})
+	if !strings.Contains(executed, "awaiting") {
+		t.Errorf("expected awaiting validation status, got %q", executed)
+	}
+}
+
+func TestContainsAnyKeyword_EmptyInput(t *testing.T) {
+	if containsAnyKeyword("", []string{"fail"}) {
+		t.Error("expected false for empty text")
+	}
+}
+
+func TestHasToolErrors_KeywordResult(t *testing.T) {
+	if !hasToolErrors([]ToolCall{{Name: "shell", Result: "panic: something broke"}}) {
+		t.Error("expected keyword-based tool error detection")
+	}
+	if hasToolErrors([]ToolCall{{Name: "shell", Result: "all good"}}) {
+		t.Error("expected no tool errors for clean result")
+	}
+}
+
+func TestWeakPointsSummary_DefaultAndAmbiguous(t *testing.T) {
+	defaultWeak := weakPointsSummary("clear request", "completed successfully", nil)
+	if !strings.Contains(defaultWeak, "none currently detected") {
+		t.Errorf("expected no weak points summary, got %q", defaultWeak)
+	}
+
+	ambiguous := weakPointsSummary("maybe do either option", "", []ToolCall{{Name: "read_file"}})
+	if !strings.Contains(ambiguous, "ambiguous user direction") {
+		t.Errorf("expected ambiguous-direction weak point, got %q", ambiguous)
+	}
+	if !strings.Contains(ambiguous, "validation command not observed") {
+		t.Errorf("expected validation-gap weak point, got %q", ambiguous)
+	}
+}
+
+func TestWeakPointsSummary_ApprovalAndBlockedKeywords(t *testing.T) {
+	approval := weakPointsSummary("do it", "waiting for approval from the team", nil)
+	if !strings.Contains(approval, "approval-gated") {
+		t.Errorf("expected approval-gated weak point, got %q", approval)
+	}
+
+	blocked := weakPointsSummary("do it", "cannot proceed without more info", nil)
+	if !strings.Contains(blocked, "missing information") {
+		t.Errorf("expected missing-information weak point, got %q", blocked)
+	}
+}
+
+func TestWeakPointsSummary_ToolErrors(t *testing.T) {
+	erring := weakPointsSummary("do it", "all good", []ToolCall{{Name: "shell", IsError: true}})
+	if !strings.Contains(erring, "recent tool or test failures") {
+		t.Errorf("expected tool-failure weak point, got %q", erring)
+	}
+}
+
+func TestNextAutonomousStep_Branches(t *testing.T) {
+	if step := nextAutonomousStep("failing checks detected; revision required", "none"); !strings.Contains(step, "diagnose") {
+		t.Errorf("expected failure branch step, got %q", step)
+	}
+	if step := nextAutonomousStep("pending verification", "approval-gated action blocked autonomous progress"); !strings.Contains(step, "approval") {
+		t.Errorf("expected approval branch step, got %q", step)
+	}
+	if step := nextAutonomousStep("pending verification", "missing information or constraint is blocking completion"); !strings.Contains(step, "best safe assumption") {
+		t.Errorf("expected missing-info branch step, got %q", step)
+	}
+	if step := nextAutonomousStep("pending verification", "none currently detected"); !strings.Contains(step, "build/test") {
+		t.Errorf("expected pending-validation branch step, got %q", step)
+	}
+	if step := nextAutonomousStep("latest checks passing", "none currently detected"); !strings.Contains(step, "continue implementation") {
+		t.Errorf("expected default branch step, got %q", step)
 	}
 }
 

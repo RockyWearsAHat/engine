@@ -251,6 +251,16 @@ type ChatContext struct {
 	// OnBlocked is called when a tool is quarantined after repeated failures,
 	// signalling that the agent cannot make progress without human intervention.
 	OnBlocked func(reason string)
+	// Role determines the lean system prompt and pre-granted tool set.
+	// Defaults to RoleInteractive when zero-valued.
+	Role AgentRole
+	// MarkVital is set by the agentic loop before iterating. Calling MarkVital(n) marks the
+	// last n messages in the active history as vital checkpoints so they survive context windowing.
+	// Nil outside of an active loop.
+	MarkVital func(n int)
+	// ProjectTools holds project-defined tools discovered from <projectRoot>/.engine/tools/.
+	// Loaded once per Chat() call; nil when the directory is absent or empty.
+	ProjectTools []projectToolDef
 }
 
 // isCancelled returns true if the context's cancel channel has been closed.
@@ -293,6 +303,10 @@ type anthropicTool struct {
 type anthropicMessage struct {
 	Role    string      `json:"role"`
 	Content interface{} `json:"content"` // string | []contentBlock
+	// Vital marks this message as a key checkpoint. Vital messages are always kept during
+	// context windowing; only non-vital messages are pruned when context grows too large.
+	// Never serialised to the API.
+	Vital bool `json:"-"`
 }
 
 type contentBlock struct {
@@ -400,10 +414,10 @@ var toolRegistry = []anthropicTool{
 	},
 	{
 		Name:        "search_history",
-		Description: "Search Engine's stored workspace history across prior sessions, summaries, learnings, and validation evidence.",
+		Description: "Search Engine's stored history for the current project across prior sessions, summaries, learnings, and validation evidence. Results are scoped to this project only.",
 		InputSchema: objSchema([]string{"query"}, map[string]interface{}{
 			"query": strProp("Keywords or question to search for in prior Engine history"),
-			"scope": strProp("Optional scope: project or current-session"),
+			"scope": strProp("Optional scope: current-session (only this session) or project (all sessions for this project, default)"),
 			"limit": map[string]interface{}{
 				"type":        "number",
 				"description": "Optional max results to return (default 5, max 10)",
@@ -567,6 +581,18 @@ var toolRegistry = []anthropicTool{
 			"path": strProp("Local destination path (optional; defaults to ~/engine-workspace/<repo-name>)"),
 		}),
 	},
+	// ── Context management ───────────────────────────────────────────────────
+	{
+		Name: "mark_vital",
+		Description: "Mark the last n messages in the active history as vital checkpoints. " +
+			"Vital messages are ALWAYS kept during context windowing — they survive even aggressive compaction. " +
+			"Call this at the end of a completed phase or section to checkpoint important findings, " +
+			"decisions, or deliverables. Non-vital messages will be pruned once they fall outside the " +
+			"recent window. This keeps context lean without losing key milestones.",
+		InputSchema: objSchema(nil, map[string]interface{}{
+			"n": map[string]interface{}{"type": "number", "description": "Number of recent messages to mark vital (default 1)"},
+		}),
+	},
 }
 
 // toolRegistryIndex is a flat name→tool map for O(1) lookup.
@@ -580,7 +606,7 @@ var toolRegistryIndex = func() map[string]anthropicTool {
 
 // bootstrapTools is the minimal set sent to the model at the start of every request.
 // Only navigation + tool discovery. Everything else must be discovered via search_tools.
-var bootstrapToolNames = []string{"search_tools", "read_file", "list_directory"}
+var bootstrapToolNames = []string{"search_tools", "read_file", "list_directory", "mark_vital"}
 
 func bootstrapTools() []anthropicTool {
 	out := make([]anthropicTool, 0, len(bootstrapToolNames))
@@ -607,6 +633,19 @@ func executeSearchTools(query string, ctx *ChatContext) string {
 	// Score each tool by how many query words appear in its name+description.
 	var matches []scored
 	for _, t := range toolRegistry {
+		haystack := strings.ToLower(t.Name + " " + t.Description)
+		score := 0
+		for _, w := range words {
+			if strings.Contains(haystack, w) {
+				score++
+			}
+		}
+		if score > 0 {
+			matches = append(matches, scored{t, score})
+		}
+	}
+	for _, def := range ctx.ProjectTools {
+		t := def.schema
 		haystack := strings.ToLower(t.Name + " " + t.Description)
 		score := 0
 		for _, w := range words {
@@ -1182,11 +1221,24 @@ func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) 
 		}
 		return "Cloned to: " + dest, false
 
+	case "mark_vital":
+		if ctx.MarkVital == nil {
+			return "mark_vital: not available outside an active loop", true
+		}
+		n := int(numVal("n"))
+		if n <= 0 {
+			n = 1
+		}
+		ctx.MarkVital(n)
+		return fmt.Sprintf("Marked last %d message(s) as vital checkpoints.", n), false
+
 	default:
+		if result, isError, found := executeProjectTool(name, input, ctx); found {
+			return result, isError
+		}
 		return "Unknown tool: " + name, true
 	}
 }
-
 // getSystemInfo returns a formatted string with current memory, CPU, and disk usage.
 func getSystemInfo(projectPath string) string {
 	var sb strings.Builder
@@ -1272,6 +1324,7 @@ func Chat(ctx *ChatContext, userMessage string) {
 	// Initialise the active tool set to the bootstrap minimum.
 	// The model discovers additional tools by calling search_tools.
 	ctx.ActiveTools = bootstrapTools()
+	ctx.ProjectTools = LoadProjectTools(ctx.ProjectPath)
 
 	if ctx.Usage == nil {
 		ctx.Usage = &SessionUsage{}
@@ -1282,40 +1335,26 @@ func Chat(ctx *ChatContext, userMessage string) {
 
 	// Build system prompt
 	branch, _ := gogit.GetCurrentBranch(ctx.ProjectPath)
-	systemLines := []string{
-		"You are the AI assistant for Engine — an AI-native code editor.",
-		"You ARE the editor. You have full control over the project.",
-		"",
-		fmt.Sprintf("Project: %s", ctx.ProjectPath),
-		fmt.Sprintf("Branch: %s", branch),
+	// Build system prompt: lean, role-focused.
+	var selectiveContext selectiveContextResult
+	extraContext := ""
+	if ctx.Role == RoleInteractive {
+		selectiveContext = BuildSelectiveContext(ctx.ProjectPath, session, userMessage, openTabs, residualProfile)
+		extraContext = selectiveContext.Prompt
 	}
-	selectiveContext := BuildSelectiveContext(ctx.ProjectPath, session, userMessage, openTabs, residualProfile)
-	if selectiveContext.Prompt != "" {
-		systemLines = append(systemLines, selectiveContext.Prompt)
-	}
-	systemLines = append(systemLines,
-		"",
-		"## Tool discovery",
-		"You start each request with only three tools: search_tools, read_file, list_directory.",
-		"Before executing any task, call search_tools with a description of what you need to do.",
-		"search_tools injects the matching schemas into your active tool set immediately — no extra round-trip needed.",
-		"Examples:",
-		"  search_tools(\"write files to disk\")      → unlocks write_file",
-		"  search_tools(\"run shell commands build\")  → unlocks shell, test.run",
-		"  search_tools(\"git commit push status\")    → unlocks git_status, git_diff, git_commit",
-		"  search_tools(\"github issues\")             → unlocks github_* tools",
-		"Plan first, discover the tools you need, then execute. Do not call tools you haven't discovered.",
-		"",
-		"## Principles",
-		"- Always validate changes by running the code, not just checking syntax",
-		"- File operations are confined to the current project root unless the user explicitly elevates them",
-		"- Risky shell commands and git commits require explicit user approval",
-		"- When you open a file, the user sees it in Engine immediately",
-		"- Be decisive: fix problems completely, not just symptoms",
-		"- Use search_history when prior workspace decisions or debugging context may matter",
-	)
+	systemPrompt := buildRoleSystemPrompt(ctx.Role, ctx.ProjectPath, branch, extraContext)
 
-	systemPrompt := strings.Join(systemLines, "\n")
+	// Seed the active tool set from the role's pre-granted tools.
+	// For RoleInteractive (nil tools), bootstrapTools + search_tools discovery is used.
+	if preGranted := roleBootstrapTools(ctx.Role); preGranted != nil {
+		toolSet := make([]anthropicTool, 0, len(preGranted))
+		for _, name := range preGranted {
+			if t, ok := toolRegistryIndex[name]; ok {
+				toolSet = append(toolSet, t)
+			}
+		}
+		ctx.ActiveTools = toolSet
+	}
 
 	var allToolCalls []ToolCall
 	var finalText strings.Builder
@@ -1371,15 +1410,26 @@ func runAnthropicLoop(
 	finalText *strings.Builder,
 ) {
 	messages := history
+
+	historyRef := &messages
+	ctx.MarkVital = func(n int) {
+		msgs := *historyRef
+		start := len(msgs) - n
+		if start < 0 {
+			start = 0
+		}
+		for i := start; i < len(msgs); i++ {
+			msgs[i].Vital = true
+		}
+		*historyRef = msgs
+	}
+
 	for {
 		if ctx.isCancelled() {
 			return
 		}
 
-		windowed := messages
-		if len(windowed) > 50 {
-			windowed = windowed[len(windowed)-50:]
-		}
+		windowed := windowByVitality(messages, 20)
 
 		req := anthropicRequest{
 			Model:     model,
@@ -1687,8 +1737,9 @@ func runOpenAICompatibleLoop(
 		}
 	}
 	// Convert history to OpenAI message format
+	windowedHistory := windowByVitality(history, 20)
 	msgs := []openAIMessage{{Role: "system", Content: systemPrompt}}
-	for _, m := range history {
+	for _, m := range windowedHistory {
 		content, _ := m.Content.(string)
 		msgs = append(msgs, openAIMessage{Role: m.Role, Content: content})
 	}
@@ -1704,8 +1755,8 @@ func runOpenAICompatibleLoop(
 		oaiTools = openAIToolsFrom(ctx.ActiveTools)
 
 		windowed := msgs
-		if len(windowed) > 51 { // 1 system + 50 conversation
-			windowed = append(msgs[:1], msgs[len(msgs)-50:]...)
+		if len(windowed) > 41 { // 1 system + 40 conversation
+			windowed = append(msgs[:1:1], msgs[len(msgs)-40:]...)
 		}
 
 		req := openAIRequest{

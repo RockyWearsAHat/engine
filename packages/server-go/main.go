@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -51,6 +53,10 @@ var (
 	httpHandleFuncFn     = http.HandleFunc
 	httpHandleFn         = http.Handle
 	httpListenAndServeFn = http.ListenAndServe
+	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		cmd := exec.Command(name, args...)
+		return cmd.CombinedOutput()
+	}
 )
 
 // osGetwdFn and osUserHomeDirFn are injectable for tests.
@@ -191,6 +197,73 @@ func run() error {
 	return httpListenAndServeFn(addr, nil)
 }
 
+func buildAutonomousRepoPath(baseProjectPath, owner, repo string) string {
+	clonesDir := strings.TrimSpace(os.Getenv("ENGINE_CLONES_DIR"))
+	if clonesDir == "" {
+		clonesDir = filepath.Join(baseProjectPath, ".engine", "projects")
+	}
+	repoSlug := owner + "-" + repo
+	if strings.TrimSpace(owner) == "" {
+		repoSlug = repo
+	}
+	return filepath.Join(clonesDir, repoSlug)
+}
+
+func ensureAutonomousRepoWorkspace(baseProjectPath, owner, repo string) (string, error) {
+	dest := buildAutonomousRepoPath(baseProjectPath, owner, repo)
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return "", fmt.Errorf("create clone parent directory: %w", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dest, ".git")); err == nil {
+		if out, cmdErr := runCommandCombinedOutputFn("git", "-C", dest, "fetch", "origin", "--prune"); cmdErr != nil {
+			return "", fmt.Errorf("fetch repo update: %v: %s", cmdErr, strings.TrimSpace(string(out)))
+		}
+		if out, cmdErr := runCommandCombinedOutputFn("git", "-C", dest, "pull", "--ff-only", "origin", "HEAD"); cmdErr != nil {
+			return "", fmt.Errorf("pull repo update: %v: %s", cmdErr, strings.TrimSpace(string(out)))
+		}
+		return dest, nil
+	}
+
+	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
+	if out, cmdErr := runCommandCombinedOutputFn("git", "clone", repoURL, dest); cmdErr != nil {
+		return "", fmt.Errorf("clone repo %s: %v: %s", repoURL, cmdErr, strings.TrimSpace(string(out)))
+	}
+	return dest, nil
+}
+
+func buildReadmeAutonomousBuildPrompt(owner, repo, localRepoPath string) string {
+	readmePath := filepath.Join(localRepoPath, "README.md")
+	return fmt.Sprintf(
+		"The GitHub repository %s/%s needs an end-to-end autonomous build from its README.\n\n"+
+			"Execution contract (must complete all phases):\n"+
+			"1. Understand\n"+
+			"- Read local README first: %s\n"+
+			"- If missing/stale, fetch latest README with shell: curl -s https://raw.githubusercontent.com/%s/%s/HEAD/README.md\n"+
+			"- Write a concrete implementation plan to %s\n\n"+
+			"2. Scaffold\n"+
+			"- Create missing project structure and bootstrap files in %s\n\n"+
+			"3. Implement\n"+
+			"- Build the feature set described by the README, not just stubs\n\n"+
+			"4. Validate\n"+
+			"- Run the real build/test commands with shell in %s\n"+
+			"- If no tests exist, add a minimal meaningful test and run it\n"+
+			"- Iterate until checks pass or you are genuinely blocked\n\n"+
+			"5. Deliver\n"+
+			"- Commit all completed work with git_commit\n"+
+			"- Final response must include: files created/changed, commands run, and test/build results\n\n"+
+			"Autonomy rule: continue without asking for input unless blocked by missing credentials/permissions/requirements.",
+		owner,
+		repo,
+		readmePath,
+		owner,
+		repo,
+		filepath.Join(localRepoPath, "PROJECT_GOAL.md"),
+		localRepoPath,
+		localRepoPath,
+	)
+}
+
 // triggerScaffoldSession fires an AI session when a README changes on GitHub.
 // It reads the README content and asks the AI to plan and scaffold the project.
 func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
@@ -209,14 +282,19 @@ func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
 		return
 	}
 	owner, repo := parts[0], parts[1]
+	targetProjectPath, err := ensureAutonomousRepoWorkspace(projectPath, owner, repo)
+	if err != nil {
+		log.Printf("scaffold: clone/sync failed for %s/%s: %v; falling back to default project path", owner, repo, err)
+		targetProjectPath = projectPath
+	}
 
 	sessionID := fmt.Sprintf("scaffold-%s-%d", repo, time.Now().UnixNano())
-	branch, _ := gogit.GetCurrentBranch(projectPath)
-	if err := createSessionFn(sessionID, projectPath, branch); err != nil {
+	branch, _ := gogit.GetCurrentBranch(targetProjectPath)
+	if err := createSessionFn(sessionID, targetProjectPath, branch); err != nil {
 		log.Printf("[scaffold %s/%s] create session: %v", owner, repo, err)
 	}
 	ctx := &ai.ChatContext{
-		ProjectPath: projectPath,
+		ProjectPath: targetProjectPath,
 		SessionID:   sessionID,
 		OnChunk: func(content string, done bool) {
 			if content != "" {
@@ -234,17 +312,7 @@ func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
 		},
 	}
 
-	prompt := fmt.Sprintf(
-		"The GitHub repository %s/%s just had its README updated.\n\n"+
-			"Your job:\n"+
-			"1. Use the shell tool to fetch the README: curl -s https://raw.githubusercontent.com/%s/%s/HEAD/README.md\n"+
-			"2. Understand what this project is trying to build\n"+
-			"3. Create or update PROJECT_GOAL.md in the project root with a clear plan\n"+
-			"4. Scaffold the initial directory structure and key files if they don't exist yet\n"+
-			"5. Commit your scaffold work with git_commit\n"+
-			"Start by fetching the README now.",
-		owner, repo, owner, repo,
-	)
+	prompt := buildReadmeAutonomousBuildPrompt(owner, repo, targetProjectPath)
 	ai.Chat(ctx, prompt)
 }
 

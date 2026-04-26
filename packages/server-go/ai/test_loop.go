@@ -162,9 +162,9 @@ func MakeTestCompleteHandler(tlc *TestLoopController, issue string) OnTestComple
 	}
 }
 
-// InjectLearnings queries prior learnings from the DB and returns context for the system prompt.
-func InjectLearnings(issueText string) string {
-	learnings, err := db.GetRelevantLearnings(issueText, 5)
+// InjectLearnings queries prior learnings for projectPath from the DB and returns context for the system prompt.
+func InjectLearnings(projectPath string, issueText string) string {
+	learnings, err := db.GetRelevantLearnings(projectPath, issueText, 5)
 	if err != nil || len(learnings) == 0 {
 		return ""
 	}

@@ -457,14 +457,16 @@ func SaveLearningEvent(id, sessionId, pattern, outcome string, confidence float6
 	return err
 }
 
-// GetRelevantLearnings queries past learning events matching a pattern keyword.
-func GetRelevantLearnings(keyword string, limit int) ([]LearningEvent, error) {
+// GetRelevantLearnings queries past learning events for a specific project matching a pattern keyword.
+func GetRelevantLearnings(projectPath string, keyword string, limit int) ([]LearningEvent, error) {
 	rows, err := globalDB.Query(
-		`SELECT id, session_id, pattern, outcome, confidence, category, context, created_at
-		 FROM learning_events
-		 WHERE pattern LIKE ? OR category LIKE ? OR context LIKE ?
-		 ORDER BY confidence DESC, created_at DESC LIMIT ?`,
-		"%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%", limit,
+		`SELECT l.id, l.session_id, l.pattern, l.outcome, l.confidence, l.category, l.context, l.created_at
+		 FROM learning_events l
+		 JOIN sessions s ON s.id = l.session_id
+		 WHERE s.project_path = ?
+		   AND (l.pattern LIKE ? OR l.category LIKE ? OR l.context LIKE ?)
+		 ORDER BY l.confidence DESC, l.created_at DESC LIMIT ?`,
+		projectPath, "%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%", limit,
 	)
 	if err != nil {
 		return nil, err
@@ -484,12 +486,15 @@ func GetRelevantLearnings(keyword string, limit int) ([]LearningEvent, error) {
 	return events, nil
 }
 
-// GetLearningsByCategory returns all learnings for a specific category.
-func GetLearningsByCategory(category string) ([]LearningEvent, error) {
+// GetLearningsByCategory returns all learnings for a specific project and category.
+func GetLearningsByCategory(projectPath string, category string) ([]LearningEvent, error) {
 	rows, err := globalDB.Query(
-		`SELECT id, session_id, pattern, outcome, confidence, category, context, created_at
-		 FROM learning_events WHERE category=? ORDER BY confidence DESC, created_at DESC`,
-		category,
+		`SELECT l.id, l.session_id, l.pattern, l.outcome, l.confidence, l.category, l.context, l.created_at
+		 FROM learning_events l
+		 JOIN sessions s ON s.id = l.session_id
+		 WHERE s.project_path = ? AND l.category = ?
+		 ORDER BY l.confidence DESC, l.created_at DESC`,
+		projectPath, category,
 	)
 	if err != nil {
 		return nil, err

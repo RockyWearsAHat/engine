@@ -166,12 +166,14 @@ func TestValidationAndLearning_ErrorPaths(t *testing.T) {
 		t.Fatal("expected scan error for NULL validation id")
 	}
 
+	mustExec(t, raw, `CREATE TABLE sessions (id TEXT, project_path TEXT, branch_name TEXT, summary TEXT, created_at TEXT, updated_at TEXT)`)
+	mustExec(t, raw, `INSERT INTO sessions (id, project_path, branch_name, summary, created_at, updated_at) VALUES ('s1', '/p', 'main', '', 't', 't')`)
 	mustExec(t, raw, `CREATE TABLE learning_events (id TEXT, session_id TEXT, pattern TEXT, outcome TEXT, confidence REAL, category TEXT, context TEXT, created_at TEXT)`)
 	mustExec(t, raw, `INSERT INTO learning_events (id, session_id, pattern, outcome, confidence, category, context, created_at) VALUES (NULL, 's1', 'p', 'o', 0.9, 'cat', 'ctx', 't')`)
-	if _, err := GetRelevantLearnings("p", 10); err == nil {
+	if _, err := GetRelevantLearnings("/p", "p", 10); err == nil {
 		t.Fatal("expected scan error for NULL learning id")
 	}
-	if _, err := GetLearningsByCategory("cat"); err == nil {
+	if _, err := GetLearningsByCategory("/p", "cat"); err == nil {
 		t.Fatal("expected scan error for NULL learning id by category")
 	}
 
@@ -179,10 +181,10 @@ func TestValidationAndLearning_ErrorPaths(t *testing.T) {
 	if _, err := GetValidationResults("s1"); err == nil {
 		t.Fatal("expected query error for validations on closed db")
 	}
-	if _, err := GetRelevantLearnings("p", 10); err == nil {
+	if _, err := GetRelevantLearnings("/p", "p", 10); err == nil {
 		t.Fatal("expected query error for relevant learnings on closed db")
 	}
-	if _, err := GetLearningsByCategory("cat"); err == nil {
+	if _, err := GetLearningsByCategory("/p", "cat"); err == nil {
 		t.Fatal("expected query error for category learnings on closed db")
 	}
 }
@@ -312,7 +314,7 @@ func TestAttentionResiduals_ErrorPaths(t *testing.T) {
 
 func TestGetRelevantLearnings_EmptySlice(t *testing.T) {
 	initTestDB(t)
-	out, err := GetRelevantLearnings("no-match", 10)
+	out, err := GetRelevantLearnings("/p", "no-match", 10)
 	if err != nil {
 		t.Fatalf("GetRelevantLearnings: %v", err)
 	}

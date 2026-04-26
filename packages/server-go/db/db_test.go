@@ -329,7 +329,7 @@ func TestLearningEvents(t *testing.T) {
 		t.Fatalf("SaveLearningEvent second: %v", err)
 	}
 
-	learnings, err := GetRelevantLearnings("refactor", 10)
+	learnings, err := GetRelevantLearnings("/p", "refactor", 10)
 	if err != nil {
 		t.Fatalf("GetRelevantLearnings: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestLearningEvents(t *testing.T) {
 		t.Error("expected at least one learning for 'refactor'")
 	}
 
-	byCategory, err := GetLearningsByCategory("testing")
+	byCategory, err := GetLearningsByCategory("/p", "testing")
 	if err != nil {
 		t.Fatalf("GetLearningsByCategory: %v", err)
 	}
@@ -349,7 +349,7 @@ func TestLearningEvents(t *testing.T) {
 func TestGetLearningsByCategory_Empty(t *testing.T) {
 	initTestDB(t)
 
-	learnings, err := GetLearningsByCategory("nonexistent-category")
+	learnings, err := GetLearningsByCategory("/p", "nonexistent-category")
 	if err != nil {
 		t.Fatalf("GetLearningsByCategory: %v", err)
 	}

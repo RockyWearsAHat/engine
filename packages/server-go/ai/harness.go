@@ -232,27 +232,115 @@ func EstimateMessagesAnthropicFormat(messages []anthropicMessage) int {
 	return total
 }
 
-// TrimToTokenBudgetAnthropicFormat removes the oldest non-system messages from messages until the
-// estimated token count is within budget. System messages (role=="system") are
-// always preserved. Returns the trimmed slice and the estimated token count after trimming.
+// extractMessageText returns the text content of an anthropicMessage for compaction summaries.
+func extractMessageText(content interface{}) string {
+	switch v := content.(type) {
+	case string:
+		return v
+	case []contentBlock:
+		var sb strings.Builder
+		for _, b := range v {
+			if b.Type == "text" && b.Text != "" {
+				sb.WriteString(b.Text)
+			}
+		}
+		return sb.String()
+	default:
+		return "(tool interaction)"
+	}
+}
+
+// compactCharsPerMsg is the maximum characters kept per message in a compacted summary block.
+const compactCharsPerMsg = 300
+
+// compactOldMessages builds a dense synthetic summary of msgs and returns it as a single
+// "user" role anthropicMessage. Content is preserved in compact form — nothing is discarded.
+func compactOldMessages(msgs []anthropicMessage) anthropicMessage {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("[Earlier conversation — %d messages compacted]\n", len(msgs)))
+	for _, m := range msgs {
+		text := extractMessageText(m.Content)
+		if strings.TrimSpace(text) == "" {
+			text = "(tool interaction)"
+		}
+		if len(text) > compactCharsPerMsg {
+			text = text[:compactCharsPerMsg] + "…"
+		}
+		sb.WriteString(m.Role)
+		sb.WriteString(": ")
+		sb.WriteString(strings.ReplaceAll(text, "\n", " "))
+		sb.WriteString("\n")
+	}
+	return anthropicMessage{Role: "user", Content: sb.String()}
+}
+
+// TrimToTokenBudgetAnthropicFormat compacts the oldest non-system messages into dense summary
+// blocks until the estimated token count is within budget. System messages are always preserved.
+// Unlike the previous implementation, no content is discarded — it is compressed into summaries.
 func TrimToTokenBudgetAnthropicFormat(messages []anthropicMessage, budget int) ([]anthropicMessage, int) {
+	const batchSize = 4
 	for {
 		estimated := EstimateMessagesAnthropicFormat(messages)
 		if estimated <= budget {
 			return messages, estimated
 		}
-		// Find the oldest non-system message and remove it.
-		removed := false
+		// Find the oldest non-system message index.
+		start := -1
 		for i, m := range messages {
 			if m.Role != "system" {
-				messages = append(messages[:i], messages[i+1:]...)
-				removed = true
+				start = i
 				break
 			}
 		}
-		if !removed {
-			// Only system messages remain — can't trim further.
-			return messages, EstimateMessagesAnthropicFormat(messages)
+		if start < 0 {
+			// Only system messages remain — cannot compact further.
+			return messages, estimated
+		}
+		end := start + batchSize
+		if end > len(messages) {
+			end = len(messages)
+		}
+		compact := compactOldMessages(messages[start:end])
+		newMsgs := make([]anthropicMessage, 0, len(messages)-end+start+1)
+		newMsgs = append(newMsgs, messages[:start]...)
+		newMsgs = append(newMsgs, compact)
+		newMsgs = append(newMsgs, messages[end:]...)
+		newEstimated := EstimateMessagesAnthropicFormat(newMsgs)
+		if newEstimated >= estimated {
+			// Compaction did not reduce token count — cannot shrink further.
+			return newMsgs, newEstimated
+		}
+		messages = newMsgs
+
+	}
+}
+
+// windowByVitality returns messages filtered to: all system messages, all vital messages,
+// and the last recentWindow non-vital messages — in original order.
+// System and vital messages are always included; non-vital messages beyond recentWindow are dropped.
+func windowByVitality(messages []anthropicMessage, recentWindow int) []anthropicMessage {
+	nonVitalCount := 0
+	for _, m := range messages {
+		if m.Role != "system" && !m.Vital {
+			nonVitalCount++
 		}
 	}
+	skipCount := 0
+	if nonVitalCount > recentWindow {
+		skipCount = nonVitalCount - recentWindow
+	}
+	result := make([]anthropicMessage, 0, len(messages))
+	skipped := 0
+	for _, m := range messages {
+		if m.Role == "system" || m.Vital {
+			result = append(result, m)
+		} else {
+			if skipped < skipCount {
+				skipped++
+				continue
+			}
+			result = append(result, m)
+		}
+	}
+	return result
 }
