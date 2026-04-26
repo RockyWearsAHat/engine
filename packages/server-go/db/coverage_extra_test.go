@@ -396,3 +396,44 @@ func TestProjectHistory_EmptySlices(t *testing.T) {
 		t.Fatalf("expected empty non-nil validations, got %#v", validations)
 	}
 }
+
+// ── WorkingState persistence ──────────────────────────────────────────────────
+
+func TestSaveWorkingState_AndLoad_RoundTrip(t *testing.T) {
+	initTestDB(t)
+	err := SaveWorkingState("session1", `{"CurrentTask":"fix bug"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadWorkingState("session1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != `{"CurrentTask":"fix bug"}` {
+		t.Errorf("expected round-trip, got %q", got)
+	}
+}
+
+func TestSaveWorkingState_Upsert(t *testing.T) {
+	initTestDB(t)
+	_ = SaveWorkingState("s-upsert", `{"CurrentTask":"v1"}`)
+	_ = SaveWorkingState("s-upsert", `{"CurrentTask":"v2"}`)
+	got, err := LoadWorkingState("s-upsert")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != `{"CurrentTask":"v2"}` {
+		t.Errorf("expected upsert to write v2, got %q", got)
+	}
+}
+
+func TestLoadWorkingState_NotFound_ReturnsError(t *testing.T) {
+	initTestDB(t)
+	got, err := LoadWorkingState("nonexistent-session")
+	if err == nil {
+		t.Error("expected error for missing session")
+	}
+	if got != "" {
+		t.Errorf("expected empty string, got %q", got)
+	}
+}

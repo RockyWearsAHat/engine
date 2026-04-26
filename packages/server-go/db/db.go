@@ -203,6 +203,11 @@ func migrate() error {
 			ON discord_session_threads(thread_id);
 		CREATE INDEX IF NOT EXISTS idx_discord_session_threads_project
 			ON discord_session_threads(project_path, created_at DESC);
+		CREATE TABLE IF NOT EXISTS working_state (
+			session_id TEXT PRIMARY KEY,
+			state      TEXT NOT NULL DEFAULT '{}',
+			updated_at TEXT NOT NULL
+		);
 	`)
 	return err
 }
@@ -507,6 +512,27 @@ func GetRelevantLearnings(projectPath string, keyword string, limit int) ([]Lear
 }
 
 // GetLearningsByCategory returns all learnings for a specific project and category.
+// SaveWorkingState upserts the JSON-encoded working state for a session.
+func SaveWorkingState(sessionID, stateJSON string) error {
+	_, err := globalDB.Exec(
+		`INSERT INTO working_state (session_id, state, updated_at) VALUES (?,?,?)
+		 ON CONFLICT(session_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
+		sessionID, stateJSON, now(),
+	)
+	return err
+}
+
+// LoadWorkingState retrieves the JSON-encoded working state for a session.
+// Returns "", nil when no state has been stored yet.
+func LoadWorkingState(sessionID string) (string, error) {
+	var state string
+	err := globalDB.QueryRow(`SELECT state FROM working_state WHERE session_id=?`, sessionID).Scan(&state)
+	if err != nil {
+		return "", err
+	}
+	return state, nil
+}
+
 func GetLearningsByCategory(projectPath string, category string) ([]LearningEvent, error) {
 	rows, err := globalDB.Query(
 		`SELECT l.id, l.session_id, l.pattern, l.outcome, l.confidence, l.category, l.context, l.created_at

@@ -60,6 +60,11 @@
         ]
     },
 
+    // ── File Associations ────────────────────────────────────────────────
+    "files.associations": {
+        ".github/*.html": "plaintext"
+    },
+
     // ── Watcher ──────────────────────────────────────────────────────────
     "files.watcherExclude": {
         "**/target/**": true,
@@ -81,11 +86,4 @@
     "coverage-gutters.showLineCoverage": true,
     "coverage-gutters.showRulerCoverage": true,
     "coverage-gutters.coverageReductionThreshold": 0,
-
-    // ── Language Associations ────────────────────────────────────────────
-    // Treat exported HTML files in .github/ as plaintext to suppress
-    // false CSS validation errors from SVG-embedded <style> blocks.
-    "files.associations": {
-        ".github/*.html": "plaintext"
-    }
 }

@@ -109,6 +109,21 @@ if (fs.existsSync(goCoverPath)) {
   fs.unlinkSync(goCoverPath);
 }
 
+// ── Behavioral completion check ───────────────────────────────────────────────
+// Run the Playwright behavioral gate. If Playwright is not installed the script
+// exits 0 with a "skipped" JSON payload — that counts as passed here.
+const behavioralResult = runCommand('node', ['./scripts/behavioral-completion-check.mjs']);
+if (behavioralResult.status !== 0) {
+  // Non-zero exit that is NOT a skip → real failure.
+  let parsed = null;
+  try { parsed = JSON.parse(behavioralResult.stdout.trim().split('\n').at(-1)); } catch { /* ignore */ }
+  if (!parsed?.skipped) {
+    fail('Completion gate failed: behavioral completion check detected failures.', [
+      behavioralResult.stdout.trim().split('\n').slice(-8).join('\n') || behavioralResult.stderr.trim(),
+    ]);
+  }
+}
+
 if (!fs.existsSync(reportPath)) {
   fail('Completion gate failed: completion report file is missing.', [reportPath]);
 }
@@ -126,6 +141,7 @@ const requiredFields = [
   'cs3500PrinciplesVerified',
   'diagnosticsClean',
   'coverage100',
+  'behavioralGatePassed',
 ];
 
 const failedFields = requiredFields.filter((field) => report[field] !== true);
