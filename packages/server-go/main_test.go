@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/engine/server/db"
@@ -130,6 +133,103 @@ func TestDefaultProjectPath_NonEmpty(t *testing.T) {
 	path := defaultProjectPath()
 	if path == "" {
 		t.Error("defaultProjectPath() should never return empty string")
+	}
+}
+
+func TestBuildAutonomousRepoPath_Default(t *testing.T) {
+	base := "/tmp/engine-root"
+	t.Setenv("ENGINE_CLONES_DIR", "")
+	got := buildAutonomousRepoPath(base, "octo", "demo")
+	want := filepath.Join(base, ".engine", "projects", "octo-demo")
+	if got != want {
+		t.Fatalf("unexpected path: got %q want %q", got, want)
+	}
+}
+
+func TestBuildReadmeAutonomousBuildPrompt_ContainsFullPhases(t *testing.T) {
+	prompt := buildReadmeAutonomousBuildPrompt("octo", "demo", "/tmp/demo")
+	required := []string{
+		"Execution contract (must complete all phases)",
+		"1. Understand",
+		"2. Scaffold",
+		"3. Implement",
+		"4. Validate",
+		"5. Deliver",
+		"Run the real build/test commands",
+		"Commit all completed work with git_commit",
+	}
+	for _, fragment := range required {
+		if !strings.Contains(prompt, fragment) {
+			t.Fatalf("prompt missing required fragment %q", fragment)
+		}
+	}
+}
+
+func TestEnsureAutonomousRepoWorkspace_CloneFlow(t *testing.T) {
+	base := t.TempDir()
+	clonesDir := filepath.Join(base, "clones")
+	t.Setenv("ENGINE_CLONES_DIR", clonesDir)
+
+	orig := runCommandCombinedOutputFn
+	defer func() { runCommandCombinedOutputFn = orig }()
+
+	var calls [][]string
+	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string{name}, args...))
+		return []byte("ok"), nil
+	}
+
+	dest, err := ensureAutonomousRepoWorkspace(base, "octo", "demo")
+	if err != nil {
+		t.Fatalf("ensureAutonomousRepoWorkspace returned error: %v", err)
+	}
+	wantDest := filepath.Join(clonesDir, "octo-demo")
+	if dest != wantDest {
+		t.Fatalf("unexpected destination: got %q want %q", dest, wantDest)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 git command, got %d", len(calls))
+	}
+	if !strings.Contains(strings.Join(calls[0], " "), "git clone https://github.com/octo/demo.git") {
+		t.Fatalf("expected clone command, got %v", calls[0])
+	}
+}
+
+func TestEnsureAutonomousRepoWorkspace_UpdateFlow(t *testing.T) {
+	base := t.TempDir()
+	clonesDir := filepath.Join(base, "clones")
+	t.Setenv("ENGINE_CLONES_DIR", clonesDir)
+	dest := filepath.Join(clonesDir, "octo-demo")
+	if err := os.MkdirAll(filepath.Join(dest, ".git"), 0o755); err != nil {
+		t.Fatalf("create git dir: %v", err)
+	}
+
+	orig := runCommandCombinedOutputFn
+	defer func() { runCommandCombinedOutputFn = orig }()
+
+	var calls [][]string
+	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string{name}, args...))
+		return []byte("ok"), nil
+	}
+
+	gotDest, err := ensureAutonomousRepoWorkspace(base, "octo", "demo")
+	if err != nil {
+		t.Fatalf("ensureAutonomousRepoWorkspace returned error: %v", err)
+	}
+	if gotDest != dest {
+		t.Fatalf("unexpected destination: got %q want %q", gotDest, dest)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("expected fetch+pull commands, got %d", len(calls))
+	}
+	fetchCmd := strings.Join(calls[0], " ")
+	pullCmd := strings.Join(calls[1], " ")
+	if !strings.Contains(fetchCmd, "git -C "+dest+" fetch origin --prune") {
+		t.Fatalf("unexpected fetch command: %s", fetchCmd)
+	}
+	if !strings.Contains(pullCmd, "git -C "+dest+" pull --ff-only origin HEAD") {
+		t.Fatalf("unexpected pull command: %s", pullCmd)
 	}
 }
 

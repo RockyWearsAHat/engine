@@ -316,3 +316,68 @@ func TestTrimToTokenBudgetAnthropicFormat_PreservesSystemMessages(t *testing.T) 
 
 // Ensure time package is used (import kept alive).
 var _ = time.Now
+
+// ── windowByVitality ─────────────────────────────────────────────────────────
+
+func TestWindowByVitality_AllFit(t *testing.T) {
+	msgs := []anthropicMessage{
+		{Role: "user", Content: "a"},
+		{Role: "assistant", Content: "b"},
+	}
+	got := windowByVitality(msgs, 10)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(got))
+	}
+}
+
+func TestWindowByVitality_TrimsNonVital(t *testing.T) {
+	msgs := make([]anthropicMessage, 5)
+	for i := range msgs {
+		msgs[i] = anthropicMessage{Role: "user", Content: "msg"}
+	}
+	got := windowByVitality(msgs, 2)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 non-vital messages kept, got %d", len(got))
+	}
+}
+
+func TestWindowByVitality_PreservesVital(t *testing.T) {
+	msgs := []anthropicMessage{
+		{Role: "user", Content: "old1"},
+		{Role: "user", Content: "vital", Vital: true},
+		{Role: "user", Content: "new1"},
+		{Role: "user", Content: "new2"},
+		{Role: "user", Content: "new3"},
+	}
+	// recentWindow=2 — should keep vital + last 2 non-vital
+	got := windowByVitality(msgs, 2)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 messages (1 vital + 2 non-vital), got %d", len(got))
+	}
+	if !got[0].Vital {
+		t.Error("first retained message should be vital")
+	}
+}
+
+func TestWindowByVitality_SystemAlwaysKept(t *testing.T) {
+	msgs := []anthropicMessage{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "old"},
+		{Role: "user", Content: "recent"},
+	}
+	got := windowByVitality(msgs, 1)
+	// system + 1 recent non-vital
+	if len(got) != 2 {
+		t.Fatalf("expected 2 (system + 1 non-vital), got %d", len(got))
+	}
+	if got[0].Role != "system" {
+		t.Error("system message must be first")
+	}
+}
+
+func TestWindowByVitality_Empty(t *testing.T) {
+	got := windowByVitality(nil, 10)
+	if len(got) != 0 {
+		t.Error("expected empty result for nil input")
+	}
+}

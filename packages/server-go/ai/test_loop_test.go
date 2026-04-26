@@ -186,7 +186,7 @@ func TestMakeTestCompleteHandler_NilSendToClient_NoOp(t *testing.T) {
 func TestInjectLearnings_EmptyDB_ReturnsEmpty(t *testing.T) {
 	projectDir := setupHistoryTestProject(t)
 	_ = projectDir
-	result := InjectLearnings("some issue text")
+	result := InjectLearnings(projectDir, "some issue text")
 	if result != "" {
 		t.Fatalf("expected empty learnings result, got %q", result)
 	}
@@ -210,7 +210,7 @@ func TestInjectLearnings_WithMatchingLearnings(t *testing.T) {
 		t.Fatalf("save learning event: %v", err)
 	}
 
-	result := InjectLearnings("issue text")
+	result := InjectLearnings(projectDir, "issue text")
 	if !strings.Contains(result, "Prior learnings relevant to this issue") {
 		t.Fatalf("expected learnings header, got %q", result)
 	}

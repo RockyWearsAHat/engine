@@ -158,6 +158,59 @@ func TestFromPayload_SkipsBlankAllowedUserIDs(t *testing.T) {
 	}
 }
 
+func TestSameStringSet(t *testing.T) {
+	if !sameStringSet(map[string]bool{"a": true}, map[string]bool{"a": true}) {
+		t.Error("expected equal maps to match")
+	}
+	if sameStringSet(map[string]bool{"a": true}, map[string]bool{"a": true, "b": true}) {
+		t.Error("expected mismatched lengths to fail")
+	}
+	if sameStringSet(map[string]bool{"a": true}, map[string]bool{"b": true}) {
+		t.Error("expected missing key to fail")
+	}
+}
+
+func TestSameDiscordRuntimeConfig(t *testing.T) {
+	base := discord.Config{
+		Enabled:            true,
+		BotToken:           "token",
+		GuildID:            "guild",
+		CommandPrefix:      "!",
+		ControlChannelName: "engine-control",
+		AllowedUsers:       map[string]bool{"u1": true},
+	}
+
+	if !sameDiscordRuntimeConfig(base, base) {
+		t.Error("expected identical config to match")
+	}
+	if sameDiscordRuntimeConfig(base, discord.Config{Enabled: false, BotToken: "token", GuildID: "guild", CommandPrefix: "!", ControlChannelName: "engine-control", AllowedUsers: map[string]bool{"u1": true}}) {
+		t.Error("expected enabled mismatch to fail")
+	}
+	if sameDiscordRuntimeConfig(base, discord.Config{Enabled: true, BotToken: "different", GuildID: "guild", CommandPrefix: "!", ControlChannelName: "engine-control", AllowedUsers: map[string]bool{"u1": true}}) {
+		t.Error("expected token mismatch to fail")
+	}
+	if sameDiscordRuntimeConfig(base, discord.Config{Enabled: true, BotToken: "token", GuildID: "other", CommandPrefix: "!", ControlChannelName: "engine-control", AllowedUsers: map[string]bool{"u1": true}}) {
+		t.Error("expected guild mismatch to fail")
+	}
+	if sameDiscordRuntimeConfig(base, discord.Config{Enabled: true, BotToken: "token", GuildID: "guild", CommandPrefix: "#", ControlChannelName: "engine-control", AllowedUsers: map[string]bool{"u1": true}}) {
+		t.Error("expected prefix mismatch to fail")
+	}
+	if sameDiscordRuntimeConfig(base, discord.Config{Enabled: true, BotToken: "token", GuildID: "guild", CommandPrefix: "!", ControlChannelName: "different", AllowedUsers: map[string]bool{"u1": true}}) {
+		t.Error("expected channel mismatch to fail")
+	}
+	if sameDiscordRuntimeConfig(base, discord.Config{Enabled: true, BotToken: "token", GuildID: "guild", CommandPrefix: "!", ControlChannelName: "engine-control", AllowedUsers: map[string]bool{"u2": true}}) {
+		t.Error("expected allowed-user mismatch to fail")
+	}
+
+	trimA := base
+	trimB := base
+	trimA.BotToken = " token "
+	trimB.BotToken = "token"
+	if !sameDiscordRuntimeConfig(trimA, trimB) {
+		t.Error("expected trimmed tokens to be treated as equal")
+	}
+}
+
 // ─── handleDiscordConfigGet (nil bridge) ─────────────────────────────────────
 
 func TestHandleDiscordConfigGet_NilBridge_ReturnsOnDiskConfig(t *testing.T) {
@@ -450,5 +503,45 @@ func TestHandleDiscordUnlink_WithBridge_ReloadError_WarningReturned(t *testing.T
 	warning, _ := response["warning"].(string)
 	if warning == "" {
 		t.Error("expected warning when Reload returns an error after unlink")
+	}
+}
+
+func TestHandleDiscordConfigSet_WithBridge_ReloadSuccess(t *testing.T) {
+	// hadBridge=true, config differs (sameDiscordRuntimeConfig=false), Reload succeeds.
+	// This covers the `active = discordBridge.CurrentConfig().Enabled` line.
+	stub := &stubDiscordBridge{
+		cfg: discord.Config{
+			BotToken: "tok",
+			GuildID:  "guild-1",
+			Enabled:  false,
+		},
+	}
+	SetDiscordBridge(stub)
+	t.Cleanup(func() { SetDiscordBridge(nil) })
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "project.open",
+		"path": projectDir,
+	})
+	readWSMessageOfType(t, conn, "session.created")
+
+	// Send a config with Enabled=true — differs from stub (Enabled=false), so
+	// sameDiscordRuntimeConfig returns false and Reload is called.
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "discord.config.set",
+		"config": map[string]interface{}{
+			"token":   "tok",
+			"guildId": "guild-1",
+			"enabled": true,
+		},
+	})
+
+	response := readWSMessageOfType(t, conn, "discord.config.saved")
+	if _, ok := response["config"]; !ok {
+		t.Errorf("expected config field in discord.config.saved response, got %+v", response)
 	}
 }
