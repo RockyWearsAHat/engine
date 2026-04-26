@@ -92,6 +92,8 @@ The vault at `obsidian-vault/` is the project's living knowledge base. Use it ac
 	- typecheck clean
 	- explicit CS 3500 verification attestation
 	- explicit request and chat-history completion attestation
+	- behavioral gate passed (or skipped if Playwright not installed) — `behavioralGatePassed: true` in report
 - Enforced by Stop hook: `.github/hooks/mandatory-completion-gate.json`
 - Gate implementation: `scripts/agent-completion-gate.mjs`
+- Behavioral check: `scripts/behavioral-completion-check.mjs` (Playwright; skips gracefully if not installed)
 	- Internal-only completion report artifact: `.github/session-memory/agent-completion-report.json` (agent/hook telemetry, not user-facing output)

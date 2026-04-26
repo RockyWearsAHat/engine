@@ -815,9 +815,11 @@ func formatHistoryHits(hits []historySearchHit, currentSessionID string, maxChar
 
 func extractSearchTerms(inputs ...string) []string {
 	seen := map[string]struct{}{}
-	terms := make([]string, 0, 24)
+	terms := make([]string, 0, 32)
 
+	var unigrams []string
 	for _, input := range inputs {
+		var inputUnigrams []string
 		for _, raw := range strings.FieldsFunc(strings.ToLower(input), func(r rune) bool {
 			return !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '.' && r != '_' && r != '-'
 		}) {
@@ -831,11 +833,21 @@ func extractSearchTerms(inputs ...string) []string {
 			if len(term) < 3 && !strings.ContainsAny(term, "0123456789") {
 				continue
 			}
-			if _, ok := seen[term]; ok {
-				continue
+			if _, ok := seen[term]; !ok {
+				seen[term] = struct{}{}
+				terms = append(terms, term)
 			}
-			seen[term] = struct{}{}
-			terms = append(terms, term)
+			inputUnigrams = append(inputUnigrams, term)
+		}
+		unigrams = append(unigrams, inputUnigrams...)
+	}
+
+	// Add bigrams from adjacent content terms for richer phrase matching.
+	for i := 0; i+1 < len(unigrams); i++ {
+		bigram := unigrams[i] + " " + unigrams[i+1]
+		if _, ok := seen[bigram]; !ok {
+			seen[bigram] = struct{}{}
+			terms = append(terms, bigram)
 		}
 	}
 
@@ -851,10 +863,23 @@ func scoreHistoryCandidate(text string, query string, queryTerms []string, openT
 		score += 2.8
 	}
 
+	// TF-weighted unigram scoring: reward repeated occurrences with diminishing returns.
+	// Bigram terms (space-containing) are used for phrase recall but excluded from
+	// per-term scoring to avoid double-counting adjacent unigrams.
 	for _, term := range queryTerms {
-		if strings.Contains(lowerText, term) {
-			score += 1.0 + math.Min(float64(len(term))/10.0, 0.7)
+		if strings.Contains(term, " ") {
+			// Bigrams improve recall; scoring is handled by the exact-phrase check above.
+			continue
 		}
+		if !strings.Contains(lowerText, term) {
+			continue
+		}
+		tf := countOccurrences(lowerText, term)
+		// Length bonus: longer terms are more specific and worth more.
+		lengthBonus := math.Min(float64(len(term))/10.0, 0.7)
+		// tf=1 gives base=1.0 (backward-compatible); higher tf adds log-scaled bonus.
+		base := 1.0 + math.Log1p(float64(tf-1))
+		score += base * (1.0 + lengthBonus)
 	}
 
 	for _, tab := range openTabs {
@@ -872,6 +897,23 @@ func scoreHistoryCandidate(text string, query string, queryTerms []string, openT
 	}
 
 	return score
+}
+
+// countOccurrences returns the number of non-overlapping occurrences of substr in s.
+func countOccurrences(s, substr string) int {
+	if substr == "" {
+		return 0
+	}
+	count := 0
+	for i := 0; i <= len(s)-len(substr); {
+		j := strings.Index(s[i:], substr)
+		if j < 0 {
+			break
+		}
+		count++
+		i += j + len(substr)
+	}
+	return count
 }
 
 func scoreTermCoverage(text string, terms []string) float64 {

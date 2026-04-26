@@ -1058,6 +1058,45 @@ func TestFormatSelectiveContextPrompt_EntryExceedsRemaining(t *testing.T) {
 	}
 }
 
+// ── countOccurrences ─────────────────────────────────────────────────────────
+
+func TestCountOccurrences_Empty_NoMatch(t *testing.T) {
+	if got := countOccurrences("hello world", "xyz"); got != 0 {
+		t.Errorf("expected 0, got %d", got)
+	}
+}
+
+func TestCountOccurrences_EmptySubstr_ReturnsZero(t *testing.T) {
+	if got := countOccurrences("hello", ""); got != 0 {
+		t.Errorf("expected 0 for empty substr, got %d", got)
+	}
+}
+
+func TestCountOccurrences_Single(t *testing.T) {
+	if got := countOccurrences("hello world", "hello"); got != 1 {
+		t.Errorf("expected 1, got %d", got)
+	}
+}
+
+func TestCountOccurrences_Multiple(t *testing.T) {
+	if got := countOccurrences("aaa", "a"); got != 3 {
+		t.Errorf("expected 3, got %d", got)
+	}
+}
+
+func TestCountOccurrences_SubstrLongerThanString(t *testing.T) {
+	if got := countOccurrences("hi", "hello"); got != 0 {
+		t.Errorf("expected 0, got %d", got)
+	}
+}
+
+func TestCountOccurrences_AppearsOnceThenNotAgain(t *testing.T) {
+	// "ab" at position 0; remaining "c" has no "ab" → j<0 → break.
+	if got := countOccurrences("abc", "ab"); got != 1 {
+		t.Errorf("expected 1, got %d", got)
+	}
+}
+
 // TestSearchHistoryWithResiduals_ScopeFiltersOtherSessions inserts summaries,
 // learnings, and validations in session-A, then searches with scope="session"
 // from session-B. The scope filter must `continue` (skip) those records.

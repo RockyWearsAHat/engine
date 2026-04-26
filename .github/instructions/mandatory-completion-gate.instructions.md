@@ -30,6 +30,7 @@ Required booleans:
 - `cs3500PrinciplesVerified`
 - `diagnosticsClean`
 - `coverage100`
+- `behavioralGatePassed` — set to `true` if the behavioral check passed or was skipped (Playwright not installed); set to `false` only if the script ran and detected real failures.
 
 ## Required validation sequence
 
@@ -37,9 +38,10 @@ Required booleans:
 2. Run typecheck and fix all failures.
 3. Run client coverage with 100% thresholds.
 4. Run Go coverage and confirm total is 100.0%.
-5. Verify CS 3500 principles were followed in the implementation.
-6. Review the full request and relevant chat history for completeness.
-7. Update the completion report file with accurate attestation and timestamp.
+5. Run behavioral completion check (`node scripts/behavioral-completion-check.mjs`). If Playwright is not installed the check is skipped and still counts as passed.
+6. Verify CS 3500 principles were followed in the implementation.
+7. Review the full request and relevant chat history for completeness.
+8. Update the completion report file with accurate attestation and timestamp.
 
 If any step fails, keep working. Do not return completion claims.
 
