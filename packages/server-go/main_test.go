@@ -146,6 +146,80 @@ func TestBuildAutonomousRepoPath_Default(t *testing.T) {
 	}
 }
 
+func TestBuildAutonomousRepoPath_EmptyOwner(t *testing.T) {
+	base := "/tmp/engine-root"
+	t.Setenv("ENGINE_CLONES_DIR", "")
+	got := buildAutonomousRepoPath(base, "", "demo")
+	want := filepath.Join(base, ".engine", "projects", "demo")
+	if got != want {
+		t.Fatalf("unexpected path: got %q want %q", got, want)
+	}
+}
+
+func TestEnsureAutonomousRepoWorkspace_MkdirError(t *testing.T) {
+	base := t.TempDir()
+	// Place a file where ENGINE_CLONES_DIR would need to create a subdirectory.
+	blocker := filepath.Join(base, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	// dest = blocker/octo-demo; filepath.Dir(dest) = blocker (a file) → MkdirAll fails.
+	t.Setenv("ENGINE_CLONES_DIR", blocker)
+	_, err := ensureAutonomousRepoWorkspace(base, "octo", "demo")
+	if err == nil {
+		t.Fatal("expected MkdirAll error, got nil")
+	}
+}
+
+func TestEnsureAutonomousRepoWorkspace_FetchError(t *testing.T) {
+	base := t.TempDir()
+	clonesDir := filepath.Join(base, "clones")
+	t.Setenv("ENGINE_CLONES_DIR", clonesDir)
+	dest := filepath.Join(clonesDir, "octo-demo")
+	if err := os.MkdirAll(filepath.Join(dest, ".git"), 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	orig := runCommandCombinedOutputFn
+	defer func() { runCommandCombinedOutputFn = orig }()
+	runCommandCombinedOutputFn = func(_ string, _ ...string) ([]byte, error) {
+		return []byte("fetch failed"), fmt.Errorf("fetch error")
+	}
+	_, err := ensureAutonomousRepoWorkspace(base, "octo", "demo")
+	if err == nil {
+		t.Fatal("expected fetch error, got nil")
+	}
+	if !strings.Contains(err.Error(), "fetch repo update") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestEnsureAutonomousRepoWorkspace_PullError(t *testing.T) {
+	base := t.TempDir()
+	clonesDir := filepath.Join(base, "clones")
+	t.Setenv("ENGINE_CLONES_DIR", clonesDir)
+	dest := filepath.Join(clonesDir, "octo-demo")
+	if err := os.MkdirAll(filepath.Join(dest, ".git"), 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	orig := runCommandCombinedOutputFn
+	defer func() { runCommandCombinedOutputFn = orig }()
+	call := 0
+	runCommandCombinedOutputFn = func(_ string, _ ...string) ([]byte, error) {
+		call++
+		if call == 1 {
+			return []byte("ok"), nil // fetch succeeds
+		}
+		return []byte("pull failed"), fmt.Errorf("pull error")
+	}
+	_, err := ensureAutonomousRepoWorkspace(base, "octo", "demo")
+	if err == nil {
+		t.Fatal("expected pull error, got nil")
+	}
+	if !strings.Contains(err.Error(), "pull repo update") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
 func TestBuildReadmeAutonomousBuildPrompt_ContainsFullPhases(t *testing.T) {
 	prompt := buildReadmeAutonomousBuildPrompt("octo", "demo", "/tmp/demo")
 	required := []string{
