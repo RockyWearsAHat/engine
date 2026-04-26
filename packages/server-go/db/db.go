@@ -208,6 +208,12 @@ func migrate() error {
 			state      TEXT NOT NULL DEFAULT '{}',
 			updated_at TEXT NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS project_profiles (
+			project_path TEXT PRIMARY KEY,
+			profile_json TEXT NOT NULL DEFAULT '{}',
+			created_at   TEXT NOT NULL,
+			updated_at   TEXT NOT NULL
+		);
 	`)
 	return err
 }
