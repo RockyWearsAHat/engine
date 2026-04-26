@@ -12,7 +12,14 @@ import (
 	"time"
 )
 
-const apiBase = "https://api.github.com"
+const defaultAPIBase = "https://api.github.com"
+
+func apiBase() string {
+	if v := os.Getenv("GITHUB_API_BASE"); v != "" {
+		return v
+	}
+	return defaultAPIBase
+}
 
 // Client wraps HTTP calls to the GitHub REST API.
 type Client struct {
@@ -76,7 +83,7 @@ func NewClientWithToken(owner, repo, token string) *Client {
 // ListIssues returns open issues for the repository.
 func (c *Client) ListIssues(state string, labels []string) ([]Issue, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/issues?state=%s&per_page=30",
-		apiBase, c.owner, c.repo, state)
+		apiBase(), c.owner, c.repo, state)
 	if len(labels) > 0 {
 		url += "&labels=" + strings.Join(labels, ",")
 	}
@@ -95,7 +102,7 @@ func (c *Client) ListIssues(state string, labels []string) ([]Issue, error) {
 
 // GetIssue returns a single issue by number.
 func (c *Client) GetIssue(number int) (*Issue, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/issues/%d", apiBase, c.owner, c.repo, number)
+	url := fmt.Sprintf("%s/repos/%s/%s/issues/%d", apiBase(), c.owner, c.repo, number)
 	body, err := c.doGet(url)
 	if err != nil {
 		return nil, fmt.Errorf("get issue #%d: %w", number, err)
@@ -119,7 +126,7 @@ func (c *Client) CreateIssue(title, body string, labels []string) (*Issue, error
 	}
 
 	respBody, err := c.doPost(
-		fmt.Sprintf("%s/repos/%s/%s/issues", apiBase, c.owner, c.repo),
+		fmt.Sprintf("%s/repos/%s/%s/issues", apiBase(), c.owner, c.repo),
 		payload,
 	)
 	if err != nil {
@@ -137,7 +144,7 @@ func (c *Client) CreateIssue(title, body string, labels []string) (*Issue, error
 func (c *Client) AddComment(number int, body string) (*Comment, error) {
 	payload := map[string]string{"body": body}
 	respBody, err := c.doPost(
-		fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments", apiBase, c.owner, c.repo, number),
+		fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments", apiBase(), c.owner, c.repo, number),
 		payload,
 	)
 	if err != nil {
@@ -161,7 +168,7 @@ func (c *Client) CloseIssue(number int, comment string) error {
 
 	payload := map[string]string{"state": "closed"}
 	_, err := c.doPatch(
-		fmt.Sprintf("%s/repos/%s/%s/issues/%d", apiBase, c.owner, c.repo, number),
+		fmt.Sprintf("%s/repos/%s/%s/issues/%d", apiBase(), c.owner, c.repo, number),
 		payload,
 	)
 	if err != nil {
@@ -173,7 +180,7 @@ func (c *Client) CloseIssue(number int, comment string) error {
 // UpdateIssue updates an issue's title, body, and/or state.
 func (c *Client) UpdateIssue(number int, updates map[string]interface{}) (*Issue, error) {
 	respBody, err := c.doPatch(
-		fmt.Sprintf("%s/repos/%s/%s/issues/%d", apiBase, c.owner, c.repo, number),
+		fmt.Sprintf("%s/repos/%s/%s/issues/%d", apiBase(), c.owner, c.repo, number),
 		updates,
 	)
 	if err != nil {

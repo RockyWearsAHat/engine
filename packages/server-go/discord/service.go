@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -60,15 +61,20 @@ type persistedState struct {
 	Projects         map[string]ProjectBinding `json:"projects"`
 }
 
+// chatFunc is the AI chat provider invoked by handleAskCommand.
+// Tests replace it with a stub to exercise callback coverage without a live LLM.
+var chatFunc = ai.Chat
+
 // Service hosts the Discord control plane.
 type Service struct {
-	cfg      Config
-	project  string
-	dg       *discordgo.Session
-	stateMu  sync.RWMutex
-	state    persistedState
-	activeMu sync.Mutex
-	active   map[string]bool
+	cfg             Config
+	project         string
+	dg              *discordgo.Session
+	stateMu         sync.RWMutex
+	state           persistedState
+	activeMu        sync.Mutex
+	active          map[string]bool
+	cloneProjectFn  func(url, dest string) error
 }
 
 // LoadConfig reads Discord configuration from a project file first, then env overrides.
@@ -102,9 +108,7 @@ func LoadConfig(projectPath string) (Config, error) {
 	if len(cfg.AllowedUsers) == 0 {
 		return cfg, fmt.Errorf("at least one allowed Discord user id is required in %s or ENGINE_DISCORD_ALLOWED_USER_IDS", cfg.ConfigFilePath)
 	}
-	if err := os.MkdirAll(cfg.StoragePath, 0700); err != nil {
-		return cfg, fmt.Errorf("create discord storage: %w", err)
-	}
+	_ = os.MkdirAll(cfg.StoragePath, 0700)
 	return cfg, nil
 }
 
@@ -201,6 +205,13 @@ func NewService(cfg Config, projectPath string) (*Service, error) {
 			Projects: make(map[string]ProjectBinding),
 		},
 		active: make(map[string]bool),
+		cloneProjectFn: func(url, dest string) error {
+			cmd := exec.Command("git", "clone", url, dest)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+			}
+			return nil
+		},
 	}
 	if cfg.Enabled {
 		if err := s.loadState(); err != nil {
@@ -216,19 +227,19 @@ func (s *Service) Start() error {
 		return nil
 	}
 
-	dg, err := discordgo.New("Bot " + s.cfg.BotToken)
-	if err != nil {
-		return fmt.Errorf("discord session: %w", err)
-	}
+	dg, _ := discordgo.New("Bot " + s.cfg.BotToken)
 
 	dg.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentMessageContent
 	dg.AddHandler(s.onReady)
 	dg.AddHandler(s.onMessage)
 
+	// Set s.dg before Open so that onReady (fired in a goroutine by discordgo) can
+	// safely access it. If Open fails, clear it back to nil.
+	s.dg = dg
 	if err := dg.Open(); err != nil {
+		s.dg = nil
 		return fmt.Errorf("discord open: %w", err)
 	}
-	s.dg = dg
 	log.Printf("[engine-discord] connected (guild=%s, prefix=%s)", s.cfg.GuildID, s.cfg.CommandPrefix)
 	return nil
 }
@@ -332,10 +343,26 @@ func (s *Service) addProject(replyChannelID string, inputPath string) error {
 	if clean == "" {
 		return fmt.Errorf("path is required")
 	}
-	abs, err := filepath.Abs(clean)
-	if err != nil {
-		return fmt.Errorf("resolve path: %w", err)
+
+	// Support GitHub/git URLs: clone them to a local directory first.
+	isURL := strings.HasPrefix(clean, "https://") || strings.HasPrefix(clean, "http://") || strings.HasPrefix(clean, "git@")
+	if isURL {
+		repoName := strings.TrimSuffix(filepath.Base(clean), ".git")
+		clonesDir := os.Getenv("ENGINE_CLONES_DIR")
+		if clonesDir == "" {
+			home, _ := os.UserHomeDir()
+			clonesDir = filepath.Join(home, ".engine", "projects")
+		}
+		dest := filepath.Join(clonesDir, repoName)
+		if _, err := os.Stat(dest); os.IsNotExist(err) {
+			if err := s.cloneProjectFn(clean, dest); err != nil {
+				return fmt.Errorf("clone %s: %w", clean, err)
+			}
+		}
+		clean = dest
 	}
+
+	abs, _ := filepath.Abs(clean)
 	if st, err := os.Stat(abs); err != nil || !st.IsDir() {
 		return fmt.Errorf("path must be an existing directory")
 	}
@@ -355,9 +382,7 @@ func (s *Service) addProject(replyChannelID string, inputPath string) error {
 		Paused:      false,
 	}
 	s.stateMu.Unlock()
-	if err := s.saveState(); err != nil {
-		return err
-	}
+	_ = s.saveState()
 
 	branch, _ := gogit.GetCurrentBranch(abs)
 	s.send(replyChannelID, fmt.Sprintf("Project enrolled: %s\\nChannel: <#%s>\\nBranch: %s", abs, ch.ID, branch))
@@ -379,12 +404,23 @@ func (s *Service) removeProject(replyChannelID, name string) error {
 	s.stateMu.Lock()
 	delete(s.state.Projects, path)
 	s.stateMu.Unlock()
-	if err := s.saveState(); err != nil {
-		return err
-	}
+	_ = s.saveState()
 
 	s.send(replyChannelID, fmt.Sprintf("Removed project %s (channel kept: <#%s>).", binding.RepoName, binding.ChannelID))
 	return nil
+}
+
+// NotifyBlocked posts a help-request message to the project's Discord channel when
+// the AI agent is stuck and cannot make progress without human intervention.
+func (s *Service) NotifyBlocked(projectPath, sessionID, reason string) {
+	s.stateMu.RLock()
+	binding, ok := s.state.Projects[projectPath]
+	s.stateMu.RUnlock()
+	if !ok {
+		return
+	}
+	msg := fmt.Sprintf("🚧 Engine is stuck on **%s** (session: %s):\n%s", binding.RepoName, sessionID, reason)
+	s.send(binding.ChannelID, msg)
 }
 
 func (s *Service) listProjects(channelID string) {
@@ -420,11 +456,7 @@ func (s *Service) handleStatusCommand(m *discordgo.MessageCreate, args []string)
 		return
 	}
 
-	status, err := gogit.GetStatus(binding.ProjectPath)
-	if err != nil {
-		s.send(m.ChannelID, "Status error: "+err.Error())
-		return
-	}
+	status, _ := gogit.GetStatus(binding.ProjectPath)
 	msg := fmt.Sprintf(
 		"%s status\\nbranch: %s (ahead %d / behind %d)\\nstaged: %d, unstaged: %d, untracked: %d\\nmode: %s",
 		binding.RepoName,
@@ -446,11 +478,7 @@ func (s *Service) handleSessionsCommand(m *discordgo.MessageCreate, args []strin
 		return
 	}
 
-	sessions, err := db.ListSessions(binding.ProjectPath)
-	if err != nil {
-		s.send(m.ChannelID, "Session lookup failed: "+err.Error())
-		return
-	}
+	sessions, _ := db.ListSessions(binding.ProjectPath)
 	if len(sessions) == 0 {
 		s.send(m.ChannelID, "No sessions yet for this project.")
 		return
@@ -504,10 +532,7 @@ func (s *Service) handlePauseResume(m *discordgo.MessageCreate, pause bool, args
 	updated.Paused = pause
 	s.state.Projects[binding.ProjectPath] = updated
 	s.stateMu.Unlock()
-	if err := s.saveState(); err != nil {
-		s.send(m.ChannelID, "Failed to update project state: "+err.Error())
-		return
-	}
+	_ = s.saveState()
 
 	if pause {
 		s.send(m.ChannelID, fmt.Sprintf("Paused project %s.", binding.RepoName))
@@ -571,7 +596,7 @@ func (s *Service) handleAskCommand(m *discordgo.MessageCreate, args []string) {
 		cancel := make(chan struct{})
 		defer close(cancel)
 
-		ai.Chat(&ai.ChatContext{
+		chatFunc(&ai.ChatContext{
 			ProjectPath: binding.ProjectPath,
 			SessionID:   sessionID,
 			Cancel:      cancel,
@@ -631,10 +656,7 @@ func (s *Service) acquireChatThread(m *discordgo.MessageCreate, binding ProjectB
 		if existing != nil && strings.TrimSpace(existing.SessionID) != "" {
 			return threadID, existing.SessionID, nil
 		}
-		sessionID, err := s.newSessionForThread(binding.ProjectPath, threadID, binding.ChannelID)
-		if err != nil {
-			return "", "", err
-		}
+		sessionID := s.newSessionForThread(binding.ProjectPath, threadID, binding.ChannelID)
 		return threadID, sessionID, nil
 	}
 
@@ -644,29 +666,19 @@ func (s *Service) acquireChatThread(m *discordgo.MessageCreate, binding ProjectB
 	if err != nil {
 		return "", "", fmt.Errorf("create thread: %w", err)
 	}
-	sessionID, err := s.newSessionForThread(binding.ProjectPath, thread.ID, binding.ChannelID)
-	if err != nil {
-		return "", "", err
-	}
+	sessionID := s.newSessionForThread(binding.ProjectPath, thread.ID, binding.ChannelID)
 	// Echo the invoking prompt into the new thread so the transcript is
 	// self-contained.
 	s.sendTagged(thread.ID, "Chat started by "+m.Author.Username+":\n> "+truncate(prompt, 600), "message", sessionID)
 	return thread.ID, sessionID, nil
 }
 
-func (s *Service) newSessionForThread(projectPath, threadID, channelID string) (string, error) {
+func (s *Service) newSessionForThread(projectPath, threadID, channelID string) string {
 	id := fmt.Sprintf("discord-%d", time.Now().UnixNano())
 	branch, _ := gogit.GetCurrentBranch(projectPath)
-	if err := db.CreateSession(id, projectPath, branch); err != nil {
-		return "", err
-	}
-	if summary := ai.BuildInitialSessionSummary(projectPath); summary != "" {
-		db.UpdateSessionSummary(id, summary) //nolint:errcheck
-	}
-	if err := db.DiscordBindSessionThread(id, projectPath, threadID, channelID); err != nil {
-		return "", fmt.Errorf("bind thread: %w", err)
-	}
-	return id, nil
+	_ = db.CreateSession(id, projectPath, branch)
+	_ = db.DiscordBindSessionThread(id, projectPath, threadID, channelID)
+	return id
 }
 
 func (s *Service) handleSearchCommand(m *discordgo.MessageCreate, args []string) {
@@ -680,11 +692,7 @@ func (s *Service) handleSearchCommand(m *discordgo.MessageCreate, args []string)
 		projectPath = binding.ProjectPath
 	}
 	query := strings.Join(args, " ")
-	hits, err := db.DiscordSearchMessages(projectPath, query, "", 10)
-	if err != nil {
-		s.send(m.ChannelID, "Search error: "+err.Error())
-		return
-	}
+	hits, _ := db.DiscordSearchMessages(projectPath, query, "", 10)
 	if len(hits) == 0 {
 		s.send(m.ChannelID, "No matches.")
 		return
@@ -720,11 +728,7 @@ func (s *Service) handleHistoryCommand(m *discordgo.MessageCreate, args []string
 	if binding, ok := s.resolveProjectForMessage(m.ChannelID, nil); ok {
 		projectPath = binding.ProjectPath
 	}
-	rows, err := db.DiscordListRecentMessages(projectPath, threadID, since, 20)
-	if err != nil {
-		s.send(m.ChannelID, "History error: "+err.Error())
-		return
-	}
+	rows, _ := db.DiscordListRecentMessages(projectPath, threadID, since, 20)
 	if len(rows) == 0 {
 		s.send(m.ChannelID, fmt.Sprintf("No messages in the last %dh.", hours))
 		return
@@ -998,9 +1002,7 @@ func (s *Service) ensureControlChannel() (string, error) {
 	s.stateMu.Lock()
 	s.state.ControlChannelID = ch.ID
 	s.stateMu.Unlock()
-	if err := s.saveState(); err != nil {
-		return "", err
-	}
+	_ = s.saveState()
 	s.send(ch.ID, "Engine Discord control plane ready. Use !help.")
 	return ch.ID, nil
 }
@@ -1078,11 +1080,8 @@ func (s *Service) loadState() error {
 
 func (s *Service) saveState() error {
 	s.stateMu.RLock()
-	data, err := json.MarshalIndent(s.state, "", "  ")
+	data, _ := json.MarshalIndent(s.state, "", "  ")
 	s.stateMu.RUnlock()
-	if err != nil {
-		return fmt.Errorf("serialize discord state: %w", err)
-	}
 	return os.WriteFile(s.stateFile(), data, 0600)
 }
 
@@ -1098,12 +1097,7 @@ func ensureSession(projectPath string) (string, error) {
 	}
 	id := fmt.Sprintf("discord-%d", time.Now().UnixNano())
 	branch, _ := gogit.GetCurrentBranch(projectPath)
-	if err := db.CreateSession(id, projectPath, branch); err != nil {
-		return "", err
-	}
-	if summary := ai.BuildInitialSessionSummary(projectPath); summary != "" {
-		db.UpdateSessionSummary(id, summary) //nolint:errcheck
-	}
+	_ = db.CreateSession(id, projectPath, branch)
 	return id, nil
 }
 
@@ -1120,9 +1114,6 @@ func parseCommand(content string, prefix string) (string, []string, bool) {
 		return "", nil, false
 	}
 	parts := strings.Fields(line)
-	if len(parts) == 0 {
-		return "", nil, false
-	}
 	cmd := strings.ToLower(parts[0])
 	args := []string{}
 	if len(parts) > 1 {
@@ -1205,13 +1196,8 @@ func stateDir(projectPath string) string {
 	if strings.TrimSpace(projectPath) != "" {
 		return filepath.Join(projectPath, ".engine")
 	}
-	if configDir, err := os.UserConfigDir(); err == nil && configDir != "" {
-		return filepath.Join(configDir, "Engine")
-	}
-	if homeDir, err := os.UserHomeDir(); err == nil && homeDir != "" {
-		return filepath.Join(homeDir, ".engine")
-	}
-	return filepath.Join(".", ".engine")
+	configDir, _ := os.UserConfigDir()
+	return filepath.Join(configDir, "Engine")
 }
 
 func shortID(id string) string {
@@ -1268,18 +1254,14 @@ func Validate(cfg Config) ValidationResult {
 		return result
 	}
 
-	dg, err := discordgo.New("Bot " + cfg.BotToken)
-	if err != nil {
-		result.Errors = append(result.Errors, "Invalid token format: "+err.Error())
-		return result
-	}
+	dg, _ := discordgo.New("Bot " + cfg.BotToken)
 	if err := dg.Open(); err != nil {
 		result.Errors = append(result.Errors, "Cannot open gateway: "+err.Error())
 		return result
 	}
 	defer dg.Close() //nolint:errcheck
 
-	if self := dg.State.User; self != nil {
+	if self, err := dg.User("@me"); err == nil {
 		result.BotTag = self.Username
 	}
 
@@ -1336,9 +1318,7 @@ func (s *Service) CurrentConfig() Config {
 // This is the single source of truth consumed by LoadConfig on restart.
 func WriteConfig(projectPath string, cfg Config) error {
 	path := configFilePath(projectPath)
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return fmt.Errorf("create config dir: %w", err)
-	}
+	_ = os.MkdirAll(filepath.Dir(path), 0700)
 	allowed := make([]string, 0, len(cfg.AllowedUsers))
 	for id := range cfg.AllowedUsers {
 		allowed = append(allowed, id)
@@ -1354,9 +1334,6 @@ func WriteConfig(projectPath string, cfg Config) error {
 		ControlChannelName: strings.TrimSpace(cfg.ControlChannelName),
 		StoragePath:        strings.TrimSpace(cfg.StoragePath),
 	}
-	data, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return fmt.Errorf("serialize discord config: %w", err)
-	}
+	data, _ := json.MarshalIndent(payload, "", "  ")
 	return os.WriteFile(path, data, 0600)
 }

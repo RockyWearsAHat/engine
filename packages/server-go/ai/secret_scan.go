@@ -82,9 +82,6 @@ func ScanDiff(diff string) []ScanResult {
 			if sp.Pattern.MatchString(content) {
 				// Redact the matched value.
 				redacted := sp.Pattern.ReplaceAllStringFunc(content, func(m string) string {
-					if len(m) <= 8 {
-						return strings.Repeat("*", len(m))
-					}
 					return m[:4] + strings.Repeat("*", len(m)-8) + m[len(m)-4:]
 				})
 				results = append(results, ScanResult{

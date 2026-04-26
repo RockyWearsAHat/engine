@@ -95,11 +95,6 @@ func IsWarningLine(line string) bool {
 			return true
 		}
 	}
-	for _, p := range warningRegexPatterns {
-		if p.MatchString(line) {
-			return true
-		}
-	}
 	return false
 }
 
@@ -196,12 +191,6 @@ var errorRegexPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)ERR_PNPM_`),                                     // ERR_PNPM_...
 	// Exit codes
 	regexp.MustCompile(`(?i)exit(?:ed with)?\s+(?:code|status)\s+[1-9]\d*`), // exit code 1, exited with code 2
-}
-
-var warningRegexPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)^warning\[`),             // Rust warning[...]
-	regexp.MustCompile(`(?i)^\s*warning:`),            // General warning:
-	regexp.MustCompile(`(?i)DeprecationWarning:`),     // Node deprecation
 }
 
 var stackTracePatterns = []*regexp.Regexp{

@@ -947,3 +947,11 @@ func TestWebhookServeHTTP_BodyReadError(t *testing.T) {
 type errReader struct{}
 
 func (errReader) Read(p []byte) (int, error) { return 0, errors.New("read error") }
+
+func TestAPIBase_EnvOverride(t *testing.T) {
+	t.Setenv("GITHUB_API_BASE", "http://custom.example.com")
+	got := apiBase()
+	if got != "http://custom.example.com" {
+		t.Errorf("apiBase() = %q, want custom URL", got)
+	}
+}

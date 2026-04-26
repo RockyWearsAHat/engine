@@ -1,0 +1,1403 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>discord: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/engine/server/discord/service.go (96.7%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">no coverage</span>
+				<span class="cov1">low coverage</span>
+				<span class="cov2">*</span>
+				<span class="cov3">*</span>
+				<span class="cov4">*</span>
+				<span class="cov5">*</span>
+				<span class="cov6">*</span>
+				<span class="cov7">*</span>
+				<span class="cov8">*</span>
+				<span class="cov9">*</span>
+				<span class="cov10">high coverage</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package discord
+
+import (
+        "encoding/json"
+        "fmt"
+        "log"
+        "os"
+        "path/filepath"
+        "sort"
+        "strings"
+        "sync"
+        "time"
+
+        "github.com/bwmarrin/discordgo"
+        "github.com/engine/server/ai"
+        "github.com/engine/server/db"
+        gogit "github.com/engine/server/git"
+)
+
+const (
+        defaultCommandPrefix   = "!"
+        defaultControlChanName = "engine-control"
+        defaultConfigFileName  = "discord.json"
+        defaultStateFileName   = "discord-state.json"
+        maxDiscordMessageChars = 1800
+)
+
+// Config controls Discord bot behavior.
+type Config struct {
+        Enabled            bool
+        BotToken           string
+        GuildID            string
+        AllowedUsers       map[string]bool
+        CommandPrefix      string
+        ControlChannelName string
+        StoragePath        string
+        ConfigFilePath     string
+}
+
+type fileConfig struct {
+        Enabled            *bool    `json:"enabled"`
+        BotToken           string   `json:"botToken"`
+        GuildID            string   `json:"guildId"`
+        AllowedUserIDs     []string `json:"allowedUserIds"`
+        CommandPrefix      string   `json:"commandPrefix"`
+        ControlChannelName string   `json:"controlChannelName"`
+        StoragePath        string   `json:"storagePath"`
+}
+
+// ProjectBinding keeps channel/project mapping and runtime controls.
+type ProjectBinding struct {
+        ProjectPath string `json:"projectPath"`
+        RepoName    string `json:"repoName"`
+        ChannelID   string `json:"channelId"`
+        Paused      bool   `json:"paused"`
+}
+
+type persistedState struct {
+        ControlChannelID string                    `json:"controlChannelId"`
+        Projects         map[string]ProjectBinding `json:"projects"`
+}
+
+// Service hosts the Discord control plane.
+type Service struct {
+        cfg      Config
+        project  string
+        dg       *discordgo.Session
+        stateMu  sync.RWMutex
+        state    persistedState
+        activeMu sync.Mutex
+        active   map[string]bool
+}
+
+// LoadConfig reads Discord configuration from a project file first, then env overrides.
+func LoadConfig(projectPath string) (Config, error) <span class="cov5" title="10">{
+        cfg := Config{
+                AllowedUsers:       map[string]bool{},
+                CommandPrefix:      defaultCommandPrefix,
+                ControlChannelName: defaultControlChanName,
+                StoragePath:        stateDir(projectPath),
+                ConfigFilePath:     configFilePath(projectPath),
+        }
+
+        projectCfg, exists, err := loadProjectConfig(projectPath)
+        if err != nil </span><span class="cov2" title="2">{
+                return cfg, err
+        }</span>
+        <span class="cov5" title="8">if exists </span><span class="cov3" title="3">{
+                applyFileConfig(&amp;cfg, projectCfg)
+        }</span>
+        <span class="cov5" title="8">applyEnvOverrides(&amp;cfg)
+
+        if !cfg.Enabled </span><span class="cov3" title="3">{
+                return cfg, nil
+        }</span>
+        <span class="cov4" title="5">if cfg.BotToken == "" </span><span class="cov1" title="1">{
+                return cfg, fmt.Errorf("discord bot token is required in %s or ENGINE_DISCORD_BOT_TOKEN", cfg.ConfigFilePath)
+        }</span>
+        <span class="cov3" title="4">if cfg.GuildID == "" </span><span class="cov1" title="1">{
+                return cfg, fmt.Errorf("discord guild id is required in %s or ENGINE_DISCORD_GUILD_ID", cfg.ConfigFilePath)
+        }</span>
+        <span class="cov3" title="3">if len(cfg.AllowedUsers) == 0 </span><span class="cov1" title="1">{
+                return cfg, fmt.Errorf("at least one allowed Discord user id is required in %s or ENGINE_DISCORD_ALLOWED_USER_IDS", cfg.ConfigFilePath)
+        }</span>
+        <span class="cov2" title="2">_ = os.MkdirAll(cfg.StoragePath, 0700)
+        return cfg, nil</span>
+}
+
+func loadProjectConfig(projectPath string) (fileConfig, bool, error) <span class="cov5" title="10">{
+        path := configFilePath(projectPath)
+        data, err := os.ReadFile(path)
+        if err != nil </span><span class="cov4" title="6">{
+                if os.IsNotExist(err) </span><span class="cov4" title="5">{
+                        return fileConfig{}, false, nil
+                }</span>
+                <span class="cov1" title="1">return fileConfig{}, false, fmt.Errorf("read discord config: %w", err)</span>
+        }
+
+        <span class="cov3" title="4">var cfg fileConfig
+        if err := json.Unmarshal(data, &amp;cfg); err != nil </span><span class="cov1" title="1">{
+                return fileConfig{}, false, fmt.Errorf("parse discord config %s: %w", path, err)
+        }</span>
+        <span class="cov3" title="3">return cfg, true, nil</span>
+}
+
+func applyFileConfig(cfg *Config, input fileConfig) <span class="cov3" title="3">{
+        if input.Enabled != nil </span><span class="cov2" title="2">{
+                cfg.Enabled = *input.Enabled
+        }</span>
+        <span class="cov3" title="3">if value := strings.TrimSpace(input.BotToken); value != "" </span><span class="cov2" title="2">{
+                cfg.BotToken = value
+        }</span>
+        <span class="cov3" title="3">if value := strings.TrimSpace(input.GuildID); value != "" </span><span class="cov2" title="2">{
+                cfg.GuildID = value
+        }</span>
+        <span class="cov3" title="3">if len(input.AllowedUserIDs) &gt; 0 </span><span class="cov2" title="2">{
+                cfg.AllowedUsers = parseSliceSet(input.AllowedUserIDs)
+        }</span>
+        <span class="cov3" title="3">if value := strings.TrimSpace(input.CommandPrefix); value != "" </span><span class="cov1" title="1">{
+                cfg.CommandPrefix = value
+        }</span>
+        <span class="cov3" title="3">if value := strings.TrimSpace(input.ControlChannelName); value != "" </span><span class="cov1" title="1">{
+                cfg.ControlChannelName = value
+        }</span>
+        <span class="cov3" title="3">if value := strings.TrimSpace(input.StoragePath); value != "" </span><span class="cov1" title="1">{
+                cfg.StoragePath = value
+        }</span>
+}
+
+func applyEnvOverrides(cfg *Config) <span class="cov5" title="9">{
+        if value, ok := parseOptionalBool(os.Getenv("ENGINE_DISCORD")); ok </span><span class="cov4" title="5">{
+                cfg.Enabled = value
+        }</span>
+        <span class="cov5" title="9">if value := strings.TrimSpace(os.Getenv("ENGINE_DISCORD_BOT_TOKEN")); value != "" </span><span class="cov3" title="4">{
+                cfg.BotToken = value
+        }</span>
+        <span class="cov5" title="9">if value := strings.TrimSpace(os.Getenv("ENGINE_DISCORD_GUILD_ID")); value != "" </span><span class="cov3" title="3">{
+                cfg.GuildID = value
+        }</span>
+        <span class="cov5" title="9">if value := strings.TrimSpace(os.Getenv("ENGINE_DISCORD_ALLOWED_USER_IDS")); value != "" </span><span class="cov2" title="2">{
+                cfg.AllowedUsers = parseCSVSet(value)
+        }</span>
+        <span class="cov5" title="9">if value := strings.TrimSpace(os.Getenv("ENGINE_DISCORD_PREFIX")); value != "" </span><span class="cov2" title="2">{
+                cfg.CommandPrefix = value
+        }</span>
+        <span class="cov5" title="9">if value := strings.TrimSpace(os.Getenv("ENGINE_DISCORD_CONTROL_CHANNEL")); value != "" </span><span class="cov1" title="1">{
+                cfg.ControlChannelName = value
+        }</span>
+        <span class="cov5" title="9">if value := strings.TrimSpace(os.Getenv("ENGINE_STATE_DIR")); value != "" </span><span class="cov1" title="1">{
+                cfg.StoragePath = value
+        }</span>
+}
+
+func parseOptionalBool(raw string) (bool, bool) <span class="cov7" title="31">{
+        value := strings.TrimSpace(strings.ToLower(raw))
+        if value == "" </span><span class="cov4" title="6">{
+                return false, false
+        }</span>
+        <span class="cov7" title="25">switch value </span>{
+        case "1", "true", "yes", "on":<span class="cov6" title="15">
+                return true, true</span>
+        case "0", "false", "no", "off":<span class="cov5" title="8">
+                return false, true</span>
+        default:<span class="cov2" title="2">
+                return false, false</span>
+        }
+}
+
+func configFilePath(projectPath string) string <span class="cov7" title="25">{
+        return filepath.Join(stateDir(projectPath), defaultConfigFileName)
+}</span>
+
+// NewService creates a Discord service.
+func NewService(cfg Config, projectPath string) (*Service, error) <span class="cov9" title="78">{
+        s := &amp;Service{
+                cfg:     cfg,
+                project: projectPath,
+                state: persistedState{
+                        Projects: make(map[string]ProjectBinding),
+                },
+                active: make(map[string]bool),
+        }
+        if cfg.Enabled </span><span class="cov4" title="7">{
+                if err := s.loadState(); err != nil </span><span class="cov1" title="1">{
+                        return nil, err
+                }</span>
+        }
+        <span class="cov9" title="77">return s, nil</span>
+}
+
+// Start opens the Discord gateway and registers handlers.
+func (s *Service) Start() error <span class="cov3" title="4">{
+        if !s.cfg.Enabled </span><span class="cov1" title="1">{
+                return nil
+        }</span>
+
+        <span class="cov3" title="3">dg, _ := discordgo.New("Bot " + s.cfg.BotToken)
+
+        dg.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentMessageContent
+        dg.AddHandler(s.onReady)
+        dg.AddHandler(s.onMessage)
+
+        if err := dg.Open(); err != nil </span><span class="cov3" title="3">{
+                return fmt.Errorf("discord open: %w", err)
+        }</span>
+        <span class="cov0" title="0">s.dg = dg
+        log.Printf("[engine-discord] connected (guild=%s, prefix=%s)", s.cfg.GuildID, s.cfg.CommandPrefix)
+        return nil</span>
+}
+
+// Close shuts down the Discord session.
+func (s *Service) Close() error <span class="cov4" title="6">{
+        if s.dg == nil </span><span class="cov4" title="5">{
+                return nil
+        }</span>
+        <span class="cov1" title="1">return s.dg.Close()</span>
+}
+
+func (s *Service) onReady(_ *discordgo.Session, _ *discordgo.Ready) <span class="cov2" title="2">{
+        if _, err := s.ensureControlChannel(); err != nil </span><span class="cov1" title="1">{
+                log.Printf("[engine-discord] control channel setup error: %v", err)
+        }</span>
+}
+
+func (s *Service) onMessage(_ *discordgo.Session, m *discordgo.MessageCreate) <span class="cov6" title="17">{
+        if m == nil || m.Author == nil || m.Author.Bot </span><span class="cov2" title="2">{
+                return
+        }</span>
+        <span class="cov6" title="15">if strings.TrimSpace(m.GuildID) != s.cfg.GuildID </span><span class="cov1" title="1">{
+                return
+        }</span>
+        <span class="cov6" title="14">if !s.isAllowedUser(m.Author.ID) </span><span class="cov1" title="1">{
+                return
+        }</span>
+
+        // Archive every allowed inbound message, regardless of whether it parses as
+        // a command. This gives agents a comprehensive searchable history of what
+        // has been said in the server — without ever feeding it back wholesale.
+        <span class="cov6" title="13">s.recordInbound(m)
+
+        cmd, args, ok := parseCommand(m.Content, s.cfg.CommandPrefix)
+        if !ok </span><span class="cov1" title="1">{
+                return
+        }</span>
+
+        <span class="cov5" title="12">switch cmd </span>{
+        case "help":<span class="cov1" title="1">
+                s.sendHelp(m.ChannelID)</span>
+        case "project":<span class="cov1" title="1">
+                s.handleProjectCommand(m, args)</span>
+        case "projects":<span class="cov1" title="1">
+                s.listProjects(m.ChannelID)</span>
+        case "status":<span class="cov1" title="1">
+                s.handleStatusCommand(m, args)</span>
+        case "sessions":<span class="cov1" title="1">
+                s.handleSessionsCommand(m, args)</span>
+        case "lastcommit":<span class="cov1" title="1">
+                s.handleLastCommitCommand(m, args)</span>
+        case "pause":<span class="cov1" title="1">
+                s.handlePauseResume(m, true, args)</span>
+        case "resume":<span class="cov1" title="1">
+                s.handlePauseResume(m, false, args)</span>
+        case "ask":<span class="cov1" title="1">
+                s.handleAskCommand(m, args)</span>
+        case "search":<span class="cov1" title="1">
+                s.handleSearchCommand(m, args)</span>
+        case "history":<span class="cov1" title="1">
+                s.handleHistoryCommand(m, args)</span>
+        default:<span class="cov1" title="1">
+                s.send(m.ChannelID, "Unknown command. Use !help.")</span>
+        }
+}
+
+func (s *Service) handleProjectCommand(m *discordgo.MessageCreate, args []string) <span class="cov5" title="8">{
+        if len(args) == 0 </span><span class="cov2" title="2">{
+                s.send(m.ChannelID, "Usage: !project add &lt;path&gt; | !project list | !project remove &lt;name&gt;")
+                return
+        }</span>
+
+        <span class="cov4" title="6">sub := strings.ToLower(args[0])
+        switch sub </span>{
+        case "add":<span class="cov2" title="2">
+                if len(args) &lt; 2 </span><span class="cov1" title="1">{
+                        s.send(m.ChannelID, "Usage: !project add &lt;path&gt;")
+                        return
+                }</span>
+                <span class="cov1" title="1">if err := s.addProject(m.ChannelID, strings.Join(args[1:], " ")); err != nil </span><span class="cov1" title="1">{
+                        s.send(m.ChannelID, "Project add failed: "+err.Error())
+                }</span>
+        case "list":<span class="cov1" title="1">
+                s.listProjects(m.ChannelID)</span>
+        case "remove":<span class="cov2" title="2">
+                if len(args) &lt; 2 </span><span class="cov1" title="1">{
+                        s.send(m.ChannelID, "Usage: !project remove &lt;name&gt;")
+                        return
+                }</span>
+                <span class="cov1" title="1">if err := s.removeProject(m.ChannelID, args[1]); err != nil </span><span class="cov1" title="1">{
+                        s.send(m.ChannelID, "Project remove failed: "+err.Error())
+                }</span>
+        default:<span class="cov1" title="1">
+                s.send(m.ChannelID, "Unknown project command. Use: add, list, remove")</span>
+        }
+}
+
+func (s *Service) addProject(replyChannelID string, inputPath string) error <span class="cov4" title="6">{
+        clean := strings.TrimSpace(inputPath)
+        if clean == "" </span><span class="cov2" title="2">{
+                return fmt.Errorf("path is required")
+        }</span>
+        <span class="cov3" title="4">abs, _ := filepath.Abs(clean)
+        if st, err := os.Stat(abs); err != nil || !st.IsDir() </span><span class="cov2" title="2">{
+                return fmt.Errorf("path must be an existing directory")
+        }</span>
+
+        <span class="cov2" title="2">repo := filepath.Base(abs)
+        channelName := "proj-" + slug(repo)
+        ch, err := s.ensureProjectChannel(channelName)
+        if err != nil </span><span class="cov1" title="1">{
+                return err
+        }</span>
+
+        <span class="cov1" title="1">s.stateMu.Lock()
+        s.state.Projects[abs] = ProjectBinding{
+                ProjectPath: abs,
+                RepoName:    repo,
+                ChannelID:   ch.ID,
+                Paused:      false,
+        }
+        s.stateMu.Unlock()
+        _ = s.saveState()
+
+        branch, _ := gogit.GetCurrentBranch(abs)
+        s.send(replyChannelID, fmt.Sprintf("Project enrolled: %s\\nChannel: &lt;#%s&gt;\\nBranch: %s", abs, ch.ID, branch))
+        s.send(ch.ID, "Engine linked to this project channel. Commands: !status !sessions !lastcommit !pause !resume !ask &lt;prompt&gt;")
+        return nil</span>
+}
+
+func (s *Service) removeProject(replyChannelID, name string) error <span class="cov4" title="5">{
+        ref := strings.TrimSpace(name)
+        if ref == "" </span><span class="cov1" title="1">{
+                return fmt.Errorf("project name is required")
+        }</span>
+
+        <span class="cov3" title="4">path, binding, ok := s.resolveProjectByRef(ref)
+        if !ok </span><span class="cov3" title="3">{
+                return fmt.Errorf("project not found: %s", ref)
+        }</span>
+
+        <span class="cov1" title="1">s.stateMu.Lock()
+        delete(s.state.Projects, path)
+        s.stateMu.Unlock()
+        _ = s.saveState()
+
+        s.send(replyChannelID, fmt.Sprintf("Removed project %s (channel kept: &lt;#%s&gt;).", binding.RepoName, binding.ChannelID))
+        return nil</span>
+}
+
+func (s *Service) listProjects(channelID string) <span class="cov3" title="4">{
+        s.stateMu.RLock()
+        projects := make([]ProjectBinding, 0, len(s.state.Projects))
+        for _, p := range s.state.Projects </span><span class="cov2" title="2">{
+                projects = append(projects, p)
+        }</span>
+        <span class="cov3" title="4">s.stateMu.RUnlock()
+
+        if len(projects) == 0 </span><span class="cov3" title="3">{
+                s.send(channelID, "No projects enrolled. Use !project add &lt;path&gt;.")
+                return
+        }</span>
+
+        <span class="cov1" title="1">sort.Slice(projects, func(i, j int) bool </span><span class="cov1" title="1">{ return projects[i].RepoName &lt; projects[j].RepoName }</span>)
+        <span class="cov1" title="1">var b strings.Builder
+        b.WriteString("Enrolled projects:\n")
+        for _, p := range projects </span><span class="cov2" title="2">{
+                state := "active"
+                if p.Paused </span><span class="cov1" title="1">{
+                        state = "paused"
+                }</span>
+                <span class="cov2" title="2">b.WriteString(fmt.Sprintf("- %s (%s) in &lt;#%s&gt;\n", p.RepoName, state, p.ChannelID))</span>
+        }
+        <span class="cov1" title="1">s.send(channelID, b.String())</span>
+}
+
+func (s *Service) handleStatusCommand(m *discordgo.MessageCreate, args []string) <span class="cov3" title="3">{
+        binding, ok := s.resolveProjectForMessage(m.ChannelID, args)
+        if !ok </span><span class="cov2" title="2">{
+                s.send(m.ChannelID, "Project not found. Use this command in a project channel or pass a project name.")
+                return
+        }</span>
+
+        <span class="cov1" title="1">status, _ := gogit.GetStatus(binding.ProjectPath)
+        msg := fmt.Sprintf(
+                "%s status\\nbranch: %s (ahead %d / behind %d)\\nstaged: %d, unstaged: %d, untracked: %d\\nmode: %s",
+                binding.RepoName,
+                status.Branch,
+                status.Ahead,
+                status.Behind,
+                len(status.Staged),
+                len(status.Unstaged),
+                len(status.Untracked),
+                ternary(binding.Paused, "paused", "active"),
+        )
+        s.send(m.ChannelID, msg)</span>
+}
+
+func (s *Service) handleSessionsCommand(m *discordgo.MessageCreate, args []string) <span class="cov4" title="7">{
+        binding, ok := s.resolveProjectForMessage(m.ChannelID, args)
+        if !ok </span><span class="cov3" title="3">{
+                s.send(m.ChannelID, "Project not found.")
+                return
+        }</span>
+
+        <span class="cov3" title="4">sessions, _ := db.ListSessions(binding.ProjectPath)
+        if len(sessions) == 0 </span><span class="cov1" title="1">{
+                s.send(m.ChannelID, "No sessions yet for this project.")
+                return
+        }</span>
+
+        <span class="cov3" title="3">limit := len(sessions)
+        if limit &gt; 5 </span><span class="cov1" title="1">{
+                limit = 5
+        }</span>
+        <span class="cov3" title="3">var b strings.Builder
+        b.WriteString("Recent sessions:\n")
+        for i := 0; i &lt; limit; i++ </span><span class="cov4" title="7">{
+                sess := sessions[i]
+                summary := strings.TrimSpace(sess.Summary)
+                if summary == "" </span><span class="cov4" title="6">{
+                        summary = "(no summary yet)"
+                }</span>
+                <span class="cov4" title="7">if len(summary) &gt; 120 </span><span class="cov1" title="1">{
+                        summary = summary[:117] + "..."
+                }</span>
+                <span class="cov4" title="7">b.WriteString(fmt.Sprintf("- %s | msgs=%d | %s\\n", shortID(sess.ID), sess.MessageCount, summary))</span>
+        }
+        <span class="cov3" title="3">s.send(m.ChannelID, b.String())</span>
+}
+
+func (s *Service) handleLastCommitCommand(m *discordgo.MessageCreate, args []string) <span class="cov4" title="5">{
+        binding, ok := s.resolveProjectForMessage(m.ChannelID, args)
+        if !ok </span><span class="cov3" title="3">{
+                s.send(m.ChannelID, "Project not found.")
+                return
+        }</span>
+
+        <span class="cov2" title="2">commits, err := gogit.GetLog(binding.ProjectPath, 1)
+        if err != nil || len(commits) == 0 </span><span class="cov1" title="1">{
+                s.send(m.ChannelID, "No commit information available.")
+                return
+        }</span>
+        <span class="cov1" title="1">commit := commits[0]
+        s.send(m.ChannelID, fmt.Sprintf("last commit %s by %s\\n%s", commit.Hash, commit.Author, commit.Message))</span>
+}
+
+func (s *Service) handlePauseResume(m *discordgo.MessageCreate, pause bool, args []string) <span class="cov4" title="6">{
+        binding, ok := s.resolveProjectForMessage(m.ChannelID, args)
+        if !ok </span><span class="cov3" title="4">{
+                s.send(m.ChannelID, "Project not found.")
+                return
+        }</span>
+
+        <span class="cov2" title="2">s.stateMu.Lock()
+        updated := s.state.Projects[binding.ProjectPath]
+        updated.Paused = pause
+        s.state.Projects[binding.ProjectPath] = updated
+        s.stateMu.Unlock()
+        _ = s.saveState()
+
+        if pause </span><span class="cov1" title="1">{
+                s.send(m.ChannelID, fmt.Sprintf("Paused project %s.", binding.RepoName))
+        }</span> else<span class="cov1" title="1"> {
+                s.send(m.ChannelID, fmt.Sprintf("Resumed project %s.", binding.RepoName))
+        }</span>
+}
+
+func (s *Service) handleAskCommand(m *discordgo.MessageCreate, args []string) <span class="cov5" title="10">{
+        if len(args) == 0 </span><span class="cov2" title="2">{
+                s.send(m.ChannelID, "Usage: !ask &lt;prompt&gt; or !ask &lt;project&gt; &lt;prompt&gt; from control channel")
+                return
+        }</span>
+
+        <span class="cov5" title="8">binding, prompt, ok := s.resolveAskTarget(m.ChannelID, args)
+        if !ok </span><span class="cov1" title="1">{
+                s.send(m.ChannelID, "Project not found. Use a project channel or include project name.")
+                return
+        }</span>
+        <span class="cov4" title="7">if strings.TrimSpace(prompt) == "" </span><span class="cov1" title="1">{
+                s.send(m.ChannelID, "Prompt is required.")
+                return
+        }</span>
+        <span class="cov4" title="6">if binding.Paused </span><span class="cov1" title="1">{
+                s.send(m.ChannelID, "Project is paused. Run !resume first.")
+                return
+        }</span>
+
+        // Thread routing: every !ask spawns (or reuses) a dedicated thread under
+        // the project channel, giving each chat session its own searchable
+        // transcript. If the user is already inside a thread, reuse it so
+        // follow-up messages stay in the same session.
+        <span class="cov4" title="5">threadID, sessionID, err := s.acquireChatThread(m, binding, prompt)
+        if err != nil </span><span class="cov1" title="1">{
+                s.send(m.ChannelID, "Could not start chat thread: "+err.Error())
+                return
+        }</span>
+        <span class="cov3" title="4">replyChannelID := threadID
+
+        s.activeMu.Lock()
+        if s.active[sessionID] </span><span class="cov1" title="1">{
+                s.activeMu.Unlock()
+                s.send(replyChannelID, "A task is already running for this session. Wait for it to finish.")
+                return
+        }</span>
+        <span class="cov3" title="3">s.active[sessionID] = true
+        s.activeMu.Unlock()
+
+        s.send(replyChannelID, "Running agent request...")
+        go func() </span><span class="cov3" title="3">{
+                defer func() </span><span class="cov3" title="3">{
+                        s.activeMu.Lock()
+                        delete(s.active, sessionID)
+                        s.activeMu.Unlock()
+                }</span>()
+
+                <span class="cov3" title="3">var outMu sync.Mutex
+                var output strings.Builder
+                var lastErr string
+
+                cancel := make(chan struct{})
+                defer close(cancel)
+
+                ai.Chat(&amp;ai.ChatContext{
+                        ProjectPath: binding.ProjectPath,
+                        SessionID:   sessionID,
+                        Cancel:      cancel,
+                        OnChunk: func(content string, done bool) </span><span class="cov3" title="3">{
+                                if done || strings.TrimSpace(content) == "" </span><span class="cov2" title="2">{
+                                        return
+                                }</span>
+                                <span class="cov1" title="1">outMu.Lock()
+                                output.WriteString(content)
+                                outMu.Unlock()</span>
+                        },
+                        OnToolCall:       func(_ string, _ interface{}) {<span class="cov0" title="0">}</span>,
+                        OnToolResult:     func(_ string, _ interface{}, _ bool) {<span class="cov0" title="0">}</span>,
+                        OnError:          func(err string) <span class="cov1" title="1">{ lastErr = strings.TrimSpace(err) }</span>,
+                        OnSessionUpdated: func(_ *db.Session) {<span class="cov3" title="4">}</span>,
+                        RequestApproval: func(kind, title, message, command string) (bool, error) <span class="cov0" title="0">{
+                                _ = kind
+                                _ = title
+                                _ = message
+                                _ = command
+                                return false, fmt.Errorf("approval required but unavailable in discord command mode")
+                        }</span>,
+                }, prompt)
+
+                <span class="cov3" title="3">if strings.TrimSpace(lastErr) != "" </span><span class="cov1" title="1">{
+                        s.send(replyChannelID, "Agent error: "+lastErr)
+                        return
+                }</span>
+
+                <span class="cov2" title="2">outMu.Lock()
+                answer := strings.TrimSpace(output.String())
+                outMu.Unlock()
+                if answer == "" </span><span class="cov1" title="1">{
+                        answer = "(No response text returned.)"
+                }</span>
+
+                <span class="cov2" title="2">for _, part := range splitForDiscord(answer, maxDiscordMessageChars) </span><span class="cov2" title="2">{
+                        s.sendTagged(replyChannelID, part, "agent", sessionID)
+                }</span>
+        }()
+}
+
+// acquireChatThread returns the thread ID the chat should post to and the
+// session ID tied to it. If the caller is already inside a thread, reuse it;
+// otherwise create a new thread under the project channel and bind it to a
+// fresh session.
+func (s *Service) acquireChatThread(m *discordgo.MessageCreate, binding ProjectBinding, prompt string) (string, string, error) <span class="cov5" title="9">{
+        if s.dg == nil </span><span class="cov1" title="1">{
+                return "", "", fmt.Errorf("discord session not open")
+        }</span>
+
+        // If the invoking message is already inside a thread, reuse its session.
+        <span class="cov5" title="8">ch, err := s.dg.Channel(m.ChannelID)
+        if err == nil &amp;&amp; ch != nil &amp;&amp; isThread(ch) </span><span class="cov4" title="6">{
+                threadID := ch.ID
+                existing, _ := db.DiscordGetSessionByThread(threadID) //nolint:errcheck
+                if existing != nil &amp;&amp; strings.TrimSpace(existing.SessionID) != "" </span><span class="cov4" title="5">{
+                        return threadID, existing.SessionID, nil
+                }</span>
+                <span class="cov1" title="1">sessionID := s.newSessionForThread(binding.ProjectPath, threadID, binding.ChannelID)
+                return threadID, sessionID, nil</span>
+        }
+
+        // Otherwise, create a new thread under the project channel.
+        <span class="cov2" title="2">threadName := buildThreadName(prompt)
+        thread, err := s.dg.ThreadStart(binding.ChannelID, threadName, discordgo.ChannelTypeGuildPublicThread, 60*24)
+        if err != nil </span><span class="cov1" title="1">{
+                return "", "", fmt.Errorf("create thread: %w", err)
+        }</span>
+        <span class="cov1" title="1">sessionID := s.newSessionForThread(binding.ProjectPath, thread.ID, binding.ChannelID)
+        // Echo the invoking prompt into the new thread so the transcript is
+        // self-contained.
+        s.sendTagged(thread.ID, "Chat started by "+m.Author.Username+":\n&gt; "+truncate(prompt, 600), "message", sessionID)
+        return thread.ID, sessionID, nil</span>
+}
+
+func (s *Service) newSessionForThread(projectPath, threadID, channelID string) string <span class="cov2" title="2">{
+        id := fmt.Sprintf("discord-%d", time.Now().UnixNano())
+        branch, _ := gogit.GetCurrentBranch(projectPath)
+        _ = db.CreateSession(id, projectPath, branch)
+        _ = db.DiscordBindSessionThread(id, projectPath, threadID, channelID)
+        return id
+}</span>
+
+func (s *Service) handleSearchCommand(m *discordgo.MessageCreate, args []string) <span class="cov4" title="5">{
+        if len(args) == 0 </span><span class="cov2" title="2">{
+                s.send(m.ChannelID, "Usage: !search &lt;query&gt;")
+                return
+        }</span>
+        <span class="cov3" title="3">binding, ok := s.resolveProjectForMessage(m.ChannelID, nil)
+        projectPath := ""
+        if ok </span><span class="cov1" title="1">{
+                projectPath = binding.ProjectPath
+        }</span>
+        <span class="cov3" title="3">query := strings.Join(args, " ")
+        hits, _ := db.DiscordSearchMessages(projectPath, query, "", 10)
+        if len(hits) == 0 </span><span class="cov2" title="2">{
+                s.send(m.ChannelID, "No matches.")
+                return
+        }</span>
+        <span class="cov1" title="1">var b strings.Builder
+        fmt.Fprintf(&amp;b, "Top %d matches for `%s`:\n", len(hits), truncate(query, 60))
+        for _, h := range hits </span><span class="cov1" title="1">{
+                fmt.Fprintf(&amp;b, "- [%s] %s (%s): %s\n",
+                        shortTime(h.CreatedAt),
+                        displayName(h.AuthorName, h.Direction),
+                        h.Kind,
+                        truncate(h.Snippet, 200),
+                )
+        }</span>
+        <span class="cov1" title="1">s.send(m.ChannelID, truncate(b.String(), maxDiscordMessageChars))</span>
+}
+
+func (s *Service) handleHistoryCommand(m *discordgo.MessageCreate, args []string) <span class="cov4" title="6">{
+        hours := 24
+        if len(args) &gt;= 1 </span><span class="cov3" title="3">{
+                if parsed, err := parsePositiveInt(args[0]); err == nil </span><span class="cov2" title="2">{
+                        hours = parsed
+                }</span>
+        }
+        <span class="cov4" title="6">since := time.Now().Add(-time.Duration(hours) * time.Hour).UTC().Format(time.RFC3339)
+        threadID := ""
+        projectPath := ""
+        if s.dg != nil </span><span class="cov1" title="1">{
+                if ch, err := s.dg.Channel(m.ChannelID); err == nil &amp;&amp; ch != nil &amp;&amp; isThread(ch) </span><span class="cov1" title="1">{
+                        threadID = ch.ID
+                }</span>
+        }
+        <span class="cov4" title="6">if binding, ok := s.resolveProjectForMessage(m.ChannelID, nil); ok </span><span class="cov2" title="2">{
+                projectPath = binding.ProjectPath
+        }</span>
+        <span class="cov4" title="6">rows, _ := db.DiscordListRecentMessages(projectPath, threadID, since, 20)
+        if len(rows) == 0 </span><span class="cov4" title="5">{
+                s.send(m.ChannelID, fmt.Sprintf("No messages in the last %dh.", hours))
+                return
+        }</span>
+        <span class="cov1" title="1">var b strings.Builder
+        fmt.Fprintf(&amp;b, "Last %d messages (since %dh ago):\n", len(rows), hours)
+        for i := len(rows) - 1; i &gt;= 0; i-- </span><span class="cov1" title="1">{
+                r := rows[i]
+                fmt.Fprintf(&amp;b, "- [%s] %s: %s\n",
+                        shortTime(r.CreatedAt),
+                        displayName(r.AuthorName, r.Direction),
+                        truncate(r.Content, 160),
+                )
+        }</span>
+        <span class="cov1" title="1">s.send(m.ChannelID, truncate(b.String(), maxDiscordMessageChars))</span>
+}
+
+// ── Archival helpers ──────────────────────────────────────────────────────
+
+func (s *Service) recordInbound(m *discordgo.MessageCreate) <span class="cov6" title="15">{
+        channelID, threadID := s.splitChannelThread(m.ChannelID)
+        projectPath, sessionID := s.resolveContext(channelID, threadID)
+        authorName := ""
+        authorID := ""
+        if m.Author != nil </span><span class="cov6" title="15">{
+                authorName = m.Author.Username
+                authorID = m.Author.ID
+        }</span>
+        <span class="cov6" title="15">kind := "message"
+        if strings.HasPrefix(strings.TrimSpace(m.Content), s.cfg.CommandPrefix) </span><span class="cov6" title="14">{
+                kind = "command"
+        }</span>
+        <span class="cov6" title="15">_ = db.DiscordRecordMessage(db.DiscordMessage{
+                ID:          "dm-in-" + m.ID,
+                ProjectPath: projectPath,
+                ChannelID:   channelID,
+                ThreadID:    threadID,
+                SessionID:   sessionID,
+                AuthorID:    authorID,
+                AuthorName:  authorName,
+                Direction:   "in",
+                Kind:        kind,
+                Content:     m.Content,
+        })</span>
+}
+
+func (s *Service) recordOutbound(channelID, content, kind, sessionIDHint string) <span class="cov6" title="18">{
+        srcChannel, threadID := s.splitChannelThread(channelID)
+        projectPath := ""
+        sessionID := strings.TrimSpace(sessionIDHint)
+        pp, resolvedSession := s.resolveContext(srcChannel, threadID)
+        projectPath = pp
+        if sessionID == "" </span><span class="cov6" title="13">{
+                sessionID = resolvedSession
+        }</span>
+        <span class="cov6" title="18">_ = db.DiscordRecordMessage(db.DiscordMessage{
+                ProjectPath: projectPath,
+                ChannelID:   srcChannel,
+                ThreadID:    threadID,
+                SessionID:   sessionID,
+                AuthorName:  "engine",
+                Direction:   "out",
+                Kind:        kind,
+                Content:     content,
+        })</span>
+}
+
+// sendTagged is like send but records the outbound with an explicit kind and
+// session hint. Used for agent-authored answers so archive queries can
+// distinguish them.
+func (s *Service) sendTagged(channelID, msg, kind, sessionID string) <span class="cov6" title="14">{
+        if s.dg == nil || strings.TrimSpace(channelID) == "" </span><span class="cov4" title="7">{
+                return
+        }</span>
+        <span class="cov4" title="7">if strings.TrimSpace(msg) == "" </span><span class="cov2" title="2">{
+                return
+        }</span>
+        <span class="cov4" title="5">if _, err := s.dg.ChannelMessageSend(channelID, msg); err != nil </span><span class="cov1" title="1">{
+                log.Printf("[engine-discord] send error: %v", err)
+                return
+        }</span>
+        <span class="cov3" title="4">s.recordOutbound(channelID, msg, kind, sessionID)</span>
+}
+
+// splitChannelThread turns a possibly-thread channel ID into (parent, thread).
+// Returns (channelID, "") if the channel is not a thread.
+func (s *Service) splitChannelThread(channelID string) (string, string) <span class="cov8" title="38">{
+        if s.dg == nil || strings.TrimSpace(channelID) == "" </span><span class="cov6" title="20">{
+                return channelID, ""
+        }</span>
+        <span class="cov6" title="18">ch, err := s.dg.Channel(channelID)
+        if err != nil || ch == nil </span><span class="cov3" title="4">{
+                return channelID, ""
+        }</span>
+        <span class="cov6" title="14">if isThread(ch) </span><span class="cov5" title="10">{
+                return ch.ParentID, ch.ID
+        }</span>
+        <span class="cov3" title="4">return ch.ID, ""</span>
+}
+
+func (s *Service) resolveContext(channelID, threadID string) (projectPath, sessionID string) <span class="cov8" title="36">{
+        if strings.TrimSpace(threadID) != "" </span><span class="cov5" title="9">{
+                if mapping, _ := db.DiscordGetSessionByThread(threadID); mapping != nil </span><span class="cov5" title="8">{
+                        return mapping.ProjectPath, mapping.SessionID
+                }</span>
+        }
+        // Fall back to channel-based project lookup.
+        <span class="cov7" title="28">if strings.TrimSpace(channelID) != "" </span><span class="cov7" title="26">{
+                s.stateMu.RLock()
+                defer s.stateMu.RUnlock()
+                for _, p := range s.state.Projects </span><span class="cov4" title="5">{
+                        if p.ChannelID == channelID </span><span class="cov3" title="3">{
+                                return p.ProjectPath, ""
+                        }</span>
+                }
+        }
+        <span class="cov7" title="25">return "", ""</span>
+}
+
+func isThread(ch *discordgo.Channel) bool <span class="cov7" title="31">{
+        return ch.Type == discordgo.ChannelTypeGuildPublicThread ||
+                ch.Type == discordgo.ChannelTypeGuildPrivateThread ||
+                ch.Type == discordgo.ChannelTypeGuildNewsThread
+}</span>
+
+func buildThreadName(prompt string) string <span class="cov5" title="9">{
+        cleaned := strings.TrimSpace(prompt)
+        cleaned = strings.ReplaceAll(cleaned, "\n", " ")
+        if len(cleaned) &gt; 60 </span><span class="cov2" title="2">{
+                cleaned = cleaned[:57] + "..."
+        }</span>
+        <span class="cov5" title="9">if cleaned == "" </span><span class="cov2" title="2">{
+                cleaned = "chat"
+        }</span>
+        <span class="cov5" title="9">return fmt.Sprintf("chat-%s", cleaned)</span>
+}
+
+func parsePositiveInt(raw string) (int, error) <span class="cov5" title="11">{
+        v := 0
+        for _, r := range strings.TrimSpace(raw) </span><span class="cov6" title="15">{
+                if r &lt; '0' || r &gt; '9' </span><span class="cov3" title="3">{
+                        return 0, fmt.Errorf("not a positive integer")
+                }</span>
+                <span class="cov5" title="12">v = v*10 + int(r-'0')</span>
+        }
+        <span class="cov5" title="8">if v == 0 </span><span class="cov3" title="4">{
+                return 0, fmt.Errorf("must be &gt; 0")
+        }</span>
+        <span class="cov3" title="4">return v, nil</span>
+}
+
+func shortTime(ts string) string <span class="cov4" title="7">{
+        t, err := time.Parse(time.RFC3339, ts)
+        if err != nil </span><span class="cov2" title="2">{
+                return ts
+        }</span>
+        <span class="cov4" title="5">return t.Format("01-02 15:04")</span>
+}
+
+func displayName(name, direction string) string <span class="cov5" title="9">{
+        if strings.TrimSpace(name) == "" </span><span class="cov4" title="5">{
+                if direction == "out" </span><span class="cov3" title="3">{
+                        return "engine"
+                }</span>
+                <span class="cov2" title="2">return "user"</span>
+        }
+        <span class="cov3" title="4">return name</span>
+}
+
+func truncate(s string, max int) string <span class="cov6" title="13">{
+        if max &lt;= 0 || len(s) &lt;= max </span><span class="cov5" title="11">{
+                return s
+        }</span>
+        <span class="cov2" title="2">return s[:max-1] + "\u2026"</span>
+}
+
+func (s *Service) resolveProjectForMessage(channelID string, args []string) (ProjectBinding, bool) <span class="cov7" title="34">{
+        if p, ok := s.resolveProjectByChannel(channelID); ok </span><span class="cov6" title="13">{
+                return p, true
+        }</span>
+        <span class="cov6" title="21">if len(args) == 0 </span><span class="cov6" title="20">{
+                return ProjectBinding{}, false
+        }</span>
+        <span class="cov1" title="1">_, p, ok := s.resolveProjectByRef(args[0])
+        return p, ok</span>
+}
+
+func (s *Service) resolveAskTarget(channelID string, args []string) (ProjectBinding, string, bool) <span class="cov5" title="12">{
+        if p, ok := s.resolveProjectByChannel(channelID); ok </span><span class="cov5" title="8">{
+                return p, strings.Join(args, " "), true
+        }</span>
+        <span class="cov3" title="4">if len(args) &lt; 2 </span><span class="cov2" title="2">{
+                return ProjectBinding{}, "", false
+        }</span>
+        <span class="cov2" title="2">_, p, ok := s.resolveProjectByRef(args[0])
+        if !ok </span><span class="cov1" title="1">{
+                return ProjectBinding{}, "", false
+        }</span>
+        <span class="cov1" title="1">return p, strings.Join(args[1:], " "), true</span>
+}
+
+func (s *Service) resolveProjectByChannel(channelID string) (ProjectBinding, bool) <span class="cov8" title="55">{
+        if strings.TrimSpace(channelID) == "" </span><span class="cov2" title="2">{
+                return ProjectBinding{}, false
+        }</span>
+
+        <span class="cov8" title="53">s.stateMu.RLock()
+        defer s.stateMu.RUnlock()
+        for _, p := range s.state.Projects </span><span class="cov7" title="30">{
+                if p.ChannelID == channelID </span><span class="cov6" title="18">{
+                        return p, true
+                }</span>
+        }
+
+        <span class="cov7" title="35">if s.dg == nil </span><span class="cov7" title="27">{
+                return ProjectBinding{}, false
+        }</span>
+
+        <span class="cov5" title="8">ch, err := s.dg.Channel(channelID)
+        if err != nil || ch == nil || strings.TrimSpace(ch.ParentID) == "" </span><span class="cov1" title="1">{
+                return ProjectBinding{}, false
+        }</span>
+        <span class="cov4" title="7">for _, p := range s.state.Projects </span><span class="cov4" title="6">{
+                if p.ChannelID == ch.ParentID </span><span class="cov4" title="6">{
+                        return p, true
+                }</span>
+        }
+        <span class="cov1" title="1">return ProjectBinding{}, false</span>
+}
+
+func (s *Service) resolveProjectByRef(ref string) (string, ProjectBinding, bool) <span class="cov6" title="13">{
+        needle := strings.TrimSpace(strings.ToLower(ref))
+        s.stateMu.RLock()
+        defer s.stateMu.RUnlock()
+        for path, p := range s.state.Projects </span><span class="cov5" title="8">{
+                if strings.EqualFold(path, ref) || strings.EqualFold(p.RepoName, ref) || strings.EqualFold(slug(p.RepoName), needle) </span><span class="cov4" title="7">{
+                        return path, p, true
+                }</span>
+        }
+        <span class="cov4" title="6">return "", ProjectBinding{}, false</span>
+}
+
+func (s *Service) ensureControlChannel() (string, error) <span class="cov5" title="8">{
+        s.stateMu.RLock()
+        existingID := s.state.ControlChannelID
+        s.stateMu.RUnlock()
+        if existingID != "" </span><span class="cov2" title="2">{
+                if _, err := s.dg.Channel(existingID); err == nil </span><span class="cov1" title="1">{
+                        return existingID, nil
+                }</span>
+        }
+
+        <span class="cov4" title="7">channels, err := s.dg.GuildChannels(s.cfg.GuildID)
+        if err != nil </span><span class="cov2" title="2">{
+                return "", err
+        }</span>
+        <span class="cov4" title="5">for _, ch := range channels </span><span class="cov1" title="1">{
+                if ch.Type == discordgo.ChannelTypeGuildText &amp;&amp; ch.Name == s.cfg.ControlChannelName </span><span class="cov1" title="1">{
+                        s.stateMu.Lock()
+                        s.state.ControlChannelID = ch.ID
+                        s.stateMu.Unlock()
+                        _ = s.saveState()
+                        return ch.ID, nil
+                }</span>
+        }
+
+        <span class="cov3" title="4">ch, err := s.dg.GuildChannelCreate(s.cfg.GuildID, s.cfg.ControlChannelName, discordgo.ChannelTypeGuildText)
+        if err != nil </span><span class="cov1" title="1">{
+                return "", err
+        }</span>
+        <span class="cov3" title="3">s.stateMu.Lock()
+        s.state.ControlChannelID = ch.ID
+        s.stateMu.Unlock()
+        _ = s.saveState()
+        s.send(ch.ID, "Engine Discord control plane ready. Use !help.")
+        return ch.ID, nil</span>
+}
+
+func (s *Service) ensureProjectChannel(name string) (*discordgo.Channel, error) <span class="cov4" title="7">{
+        channels, err := s.dg.GuildChannels(s.cfg.GuildID)
+        if err != nil </span><span class="cov1" title="1">{
+                return nil, err
+        }</span>
+        <span class="cov4" title="6">for _, ch := range channels </span><span class="cov3" title="3">{
+                if ch.Type == discordgo.ChannelTypeGuildText &amp;&amp; ch.Name == name </span><span class="cov2" title="2">{
+                        return ch, nil
+                }</span>
+        }
+        <span class="cov3" title="4">return s.dg.GuildChannelCreate(s.cfg.GuildID, name, discordgo.ChannelTypeGuildText)</span>
+}
+
+func (s *Service) send(channelID, msg string) <span class="cov9" title="69">{
+        if s.dg == nil || strings.TrimSpace(channelID) == "" </span><span class="cov8" title="54">{
+                return
+        }</span>
+        <span class="cov6" title="15">if strings.TrimSpace(msg) == "" </span><span class="cov2" title="2">{
+                return
+        }</span>
+        <span class="cov6" title="13">if _, err := s.dg.ChannelMessageSend(channelID, msg); err != nil </span><span class="cov1" title="1">{
+                log.Printf("[engine-discord] send error: %v", err)
+                return
+        }</span>
+        <span class="cov5" title="12">s.recordOutbound(channelID, msg, "message", "")</span>
+}
+
+func (s *Service) sendHelp(channelID string) <span class="cov1" title="1">{
+        help := strings.Join([]string{
+                "Engine Discord commands:",
+                "- !help",
+                "- !project add &lt;path&gt;",
+                "- !project list",
+                "- !project remove &lt;name&gt;",
+                "- !status [project]",
+                "- !sessions [project]",
+                "- !lastcommit [project]",
+                "- !pause [project]",
+                "- !resume [project]",
+                "- !ask &lt;prompt&gt; (opens a new chat thread inside the project channel)",
+                "- !ask &lt;project&gt; &lt;prompt&gt; (from control channel)",
+                "- !search &lt;query&gt; — full-text search across this project's history",
+                "- !history [hours] — recent messages in this thread (default 24h)",
+        }, "\n")
+        s.send(channelID, help)
+}</span>
+
+func (s *Service) stateFile() string <span class="cov7" title="26">{
+        return filepath.Join(s.cfg.StoragePath, defaultStateFileName)
+}</span>
+
+func (s *Service) loadState() error <span class="cov6" title="15">{
+        path := s.stateFile()
+        data, err := os.ReadFile(path)
+        if err != nil </span><span class="cov5" title="9">{
+                if os.IsNotExist(err) </span><span class="cov5" title="8">{
+                        return nil
+                }</span>
+                <span class="cov1" title="1">return fmt.Errorf("read discord state: %w", err)</span>
+        }
+        <span class="cov4" title="6">var st persistedState
+        if err := json.Unmarshal(data, &amp;st); err != nil </span><span class="cov3" title="4">{
+                return fmt.Errorf("parse discord state: %w", err)
+        }</span>
+        <span class="cov2" title="2">if st.Projects == nil </span><span class="cov1" title="1">{
+                st.Projects = make(map[string]ProjectBinding)
+        }</span>
+        <span class="cov2" title="2">s.state = st
+        return nil</span>
+}
+
+func (s *Service) saveState() error <span class="cov5" title="10">{
+        s.stateMu.RLock()
+        data, _ := json.MarshalIndent(s.state, "", "  ")
+        s.stateMu.RUnlock()
+        return os.WriteFile(s.stateFile(), data, 0600)
+}</span>
+
+func (s *Service) isAllowedUser(userID string) bool <span class="cov6" title="18">{
+        _, ok := s.cfg.AllowedUsers[userID]
+        return ok
+}</span>
+
+func ensureSession(projectPath string) (string, error) <span class="cov2" title="2">{
+        sessions, err := db.ListSessions(projectPath)
+        if err == nil &amp;&amp; len(sessions) &gt; 0 </span><span class="cov1" title="1">{
+                return sessions[0].ID, nil
+        }</span>
+        <span class="cov1" title="1">id := fmt.Sprintf("discord-%d", time.Now().UnixNano())
+        branch, _ := gogit.GetCurrentBranch(projectPath)
+        _ = db.CreateSession(id, projectPath, branch)
+        return id, nil</span>
+}
+
+func parseCommand(content string, prefix string) (string, []string, bool) <span class="cov6" title="21">{
+        line := strings.TrimSpace(content)
+        if line == "" </span><span class="cov2" title="2">{
+                return "", nil, false
+        }</span>
+        <span class="cov6" title="19">if !strings.HasPrefix(line, prefix) </span><span class="cov3" title="3">{
+                return "", nil, false
+        }</span>
+        <span class="cov6" title="16">line = strings.TrimSpace(strings.TrimPrefix(line, prefix))
+        if line == "" </span><span class="cov1" title="1">{
+                return "", nil, false
+        }</span>
+        <span class="cov6" title="15">parts := strings.Fields(line)
+        cmd := strings.ToLower(parts[0])
+        args := []string{}
+        if len(parts) &gt; 1 </span><span class="cov3" title="4">{
+                args = parts[1:]
+        }</span>
+        <span class="cov6" title="15">return cmd, args, true</span>
+}
+
+func slug(name string) string <span class="cov6" title="13">{
+        value := strings.TrimSpace(strings.ToLower(name))
+        if value == "" </span><span class="cov2" title="2">{
+                return "project"
+        }</span>
+        <span class="cov5" title="11">var out strings.Builder
+        lastDash := false
+        for _, r := range value </span><span class="cov10" title="99">{
+                isAlpha := r &gt;= 'a' &amp;&amp; r &lt;= 'z'
+                isNum := r &gt;= '0' &amp;&amp; r &lt;= '9'
+                if isAlpha || isNum </span><span class="cov9" title="81">{
+                        out.WriteRune(r)
+                        lastDash = false
+                        continue</span>
+                }
+                <span class="cov6" title="18">if !lastDash </span><span class="cov5" title="8">{
+                        out.WriteByte('-')
+                        lastDash = true
+                }</span>
+        }
+        <span class="cov5" title="11">result := strings.Trim(out.String(), "-")
+        if result == "" </span><span class="cov1" title="1">{
+                return "project"
+        }</span>
+        <span class="cov5" title="10">return result</span>
+}
+
+func splitForDiscord(text string, max int) []string <span class="cov4" title="5">{
+        trimmed := strings.TrimSpace(text)
+        if trimmed == "" </span><span class="cov1" title="1">{
+                return []string{"(empty response)"}
+        }</span>
+        <span class="cov3" title="4">if len(trimmed) &lt;= max </span><span class="cov2" title="2">{
+                return []string{trimmed}
+        }</span>
+
+        <span class="cov2" title="2">parts := make([]string, 0)
+        rest := trimmed
+        for len(rest) &gt; max </span><span class="cov3" title="3">{
+                cut := strings.LastIndex(rest[:max], "\n")
+                if cut &lt; max/4 </span><span class="cov1" title="1">{
+                        cut = max
+                }</span>
+                <span class="cov3" title="3">parts = append(parts, strings.TrimSpace(rest[:cut]))
+                rest = strings.TrimSpace(rest[cut:])</span>
+        }
+        <span class="cov2" title="2">if rest != "" </span><span class="cov2" title="2">{
+                parts = append(parts, rest)
+        }</span>
+        <span class="cov2" title="2">return parts</span>
+}
+
+func parseCSVSet(raw string) map[string]bool <span class="cov3" title="3">{
+        return parseSliceSet(strings.Split(raw, ","))
+}</span>
+
+func parseSliceSet(values []string) map[string]bool <span class="cov4" title="6">{
+        result := make(map[string]bool)
+        for _, part := range values </span><span class="cov6" title="13">{
+                v := strings.TrimSpace(part)
+                if v != "" </span><span class="cov6" title="13">{
+                        result[v] = true
+                }</span>
+        }
+        <span class="cov4" title="6">return result</span>
+}
+
+func stateDir(projectPath string) string <span class="cov8" title="41">{
+        if override := strings.TrimSpace(os.Getenv("ENGINE_STATE_DIR")); override != "" </span><span class="cov4" title="7">{
+                return override
+        }</span>
+        <span class="cov7" title="34">if strings.TrimSpace(projectPath) != "" </span><span class="cov7" title="33">{
+                return filepath.Join(projectPath, ".engine")
+        }</span>
+        <span class="cov1" title="1">configDir, _ := os.UserConfigDir()
+        return filepath.Join(configDir, "Engine")</span>
+}
+
+func shortID(id string) string <span class="cov5" title="11">{
+        value := strings.TrimSpace(id)
+        if len(value) &lt;= 12 </span><span class="cov5" title="9">{
+                return value
+        }</span>
+        <span class="cov2" title="2">return value[:12]</span>
+}
+
+func ternary[T any](condition bool, a T, b T) T <span class="cov4" title="5">{
+        if condition </span><span class="cov2" title="2">{
+                return a
+        }</span>
+        <span class="cov3" title="3">return b</span>
+}
+
+// ── Public API for WS / UI ────────────────────────────────────────────────
+
+// ValidationResult summarizes a Discord configuration preflight check.
+type ValidationResult struct {
+        OK        bool     `json:"ok"`
+        Enabled   bool     `json:"enabled"`
+        GuildName string   `json:"guildName,omitempty"`
+        BotTag    string   `json:"botTag,omitempty"`
+        Errors    []string `json:"errors"`
+        Warnings  []string `json:"warnings"`
+}
+
+// Validate runs a non-destructive preflight against the given configuration.
+// It opens a short-lived session (if needed), verifies the token, guild
+// access, and resolves allowed users. Nothing is persisted.
+func Validate(cfg Config) ValidationResult <span class="cov5" title="8">{
+        result := ValidationResult{
+                Enabled:  cfg.Enabled,
+                Errors:   []string{},
+                Warnings: []string{},
+        }
+        if !cfg.Enabled </span><span class="cov2" title="2">{
+                result.OK = true
+                result.Warnings = append(result.Warnings, "Discord is disabled in config.")
+                return result
+        }</span>
+        <span class="cov4" title="6">if strings.TrimSpace(cfg.BotToken) == "" </span><span class="cov1" title="1">{
+                result.Errors = append(result.Errors, "Bot token is empty.")
+        }</span>
+        <span class="cov4" title="6">if strings.TrimSpace(cfg.GuildID) == "" </span><span class="cov1" title="1">{
+                result.Errors = append(result.Errors, "Guild ID is empty.")
+        }</span>
+        <span class="cov4" title="6">if len(cfg.AllowedUsers) == 0 </span><span class="cov1" title="1">{
+                result.Errors = append(result.Errors, "At least one allowed user ID is required.")
+        }</span>
+        <span class="cov4" title="6">if len(result.Errors) &gt; 0 </span><span class="cov1" title="1">{
+                return result
+        }</span>
+
+        <span class="cov4" title="5">dg, _ := discordgo.New("Bot " + cfg.BotToken)
+        if err := dg.Open(); err != nil </span><span class="cov4" title="5">{
+                result.Errors = append(result.Errors, "Cannot open gateway: "+err.Error())
+                return result
+        }</span>
+        <span class="cov0" title="0">defer dg.Close() //nolint:errcheck
+
+        if self := dg.State.User; self != nil </span><span class="cov0" title="0">{
+                result.BotTag = self.Username
+        }</span>
+
+        <span class="cov0" title="0">guild, err := dg.Guild(cfg.GuildID)
+        if err != nil </span><span class="cov0" title="0">{
+                result.Errors = append(result.Errors, "Cannot access guild "+cfg.GuildID+": "+err.Error())
+                return result
+        }</span>
+        <span class="cov0" title="0">result.GuildName = guild.Name
+
+        // Resolve each allowed user against the guild.
+        for userID := range cfg.AllowedUsers </span><span class="cov0" title="0">{
+                if _, err := dg.GuildMember(cfg.GuildID, userID); err != nil </span><span class="cov0" title="0">{
+                        result.Warnings = append(result.Warnings, "Allowed user not in guild: "+userID)
+                }</span>
+        }
+
+        <span class="cov0" title="0">result.OK = len(result.Errors) == 0
+        return result</span>
+}
+
+// Reload swaps in a new configuration and reopens the gateway if needed.
+// Callers must hold no references to the prior session.
+func (s *Service) Reload(cfg Config) error <span class="cov3" title="3">{
+        _ = s.Close()
+        s.cfg = cfg
+        if cfg.Enabled </span><span class="cov2" title="2">{
+                if err := s.loadState(); err != nil </span><span class="cov1" title="1">{
+                        return err
+                }</span>
+                <span class="cov1" title="1">return s.Start()</span>
+        }
+        <span class="cov1" title="1">return nil</span>
+}
+
+// SearchHistory is the public entry for WS/agent callers. It enforces bounded
+// output so the full archive is never dumped into an LLM context.
+func (s *Service) SearchHistory(projectPath, query, since string, limit int) ([]db.DiscordSearchHit, error) <span class="cov1" title="1">{
+        return db.DiscordSearchMessages(projectPath, query, since, limit)
+}</span>
+
+// RecentHistory returns recent archived messages scoped to a project and/or
+// thread. Bounded and paginated by caller.
+func (s *Service) RecentHistory(projectPath, threadID, since string, limit int) ([]db.DiscordMessage, error) <span class="cov1" title="1">{
+        return db.DiscordListRecentMessages(projectPath, threadID, since, limit)
+}</span>
+
+// CurrentConfig returns a copy of the active configuration with secrets masked.
+func (s *Service) CurrentConfig() Config <span class="cov1" title="1">{
+        return s.cfg
+}</span>
+
+// WriteConfig persists a configuration to the project-local config file.
+// This is the single source of truth consumed by LoadConfig on restart.
+func WriteConfig(projectPath string, cfg Config) error <span class="cov3" title="4">{
+        path := configFilePath(projectPath)
+        _ = os.MkdirAll(filepath.Dir(path), 0700)
+        allowed := make([]string, 0, len(cfg.AllowedUsers))
+        for id := range cfg.AllowedUsers </span><span class="cov1" title="1">{
+                allowed = append(allowed, id)
+        }</span>
+        <span class="cov3" title="4">sort.Strings(allowed)
+        enabled := cfg.Enabled
+        payload := fileConfig{
+                Enabled:            &amp;enabled,
+                BotToken:           strings.TrimSpace(cfg.BotToken),
+                GuildID:            strings.TrimSpace(cfg.GuildID),
+                AllowedUserIDs:     allowed,
+                CommandPrefix:      strings.TrimSpace(cfg.CommandPrefix),
+                ControlChannelName: strings.TrimSpace(cfg.ControlChannelName),
+                StoragePath:        strings.TrimSpace(cfg.StoragePath),
+        }
+        data, _ := json.MarshalIndent(payload, "", "  ")
+        return os.WriteFile(path, data, 0600)</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>

@@ -10,8 +10,16 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
+mod config;
+
+use config::{
+    apply_editor_preferences, editor_preferences_from_config, project_path_for_server, AppConfig,
+    EditorPreferences,
+};
+#[cfg(test)]
+use config::{default_editor_font_family, normalize_editor_preferences};
 use rand::RngCore;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{
     menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     AppHandle, Emitter, Manager,
@@ -53,16 +61,6 @@ struct ServiceStatus {
     startup_target: String,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct EditorPreferences {
-    font_family: String,
-    font_size: u16,
-    line_height: f32,
-    tab_size: u8,
-    word_wrap: bool,
-}
-
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PathInspection {
@@ -72,60 +70,11 @@ struct PathInspection {
     parent_path: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(default)]
-struct AppConfig {
-    github_token: Option<String>,
-    github_owner: Option<String>,
-    github_repo: Option<String>,
-    anthropic_api_key: Option<String>,
-    openai_api_key: Option<String>,
-    model_provider: Option<String>,
-    ollama_base_url: Option<String>,
-    model: Option<String>,
-    last_project_path: Option<String>,
-    local_server_token: Option<String>,
-    editor_font_family: String,
-    editor_font_size: u16,
-    editor_line_height: f32,
-    editor_tab_size: u8,
-    editor_word_wrap: bool,
-    #[serde(default)]
-    active_team: Option<String>,
-}
-
 enum CliAction {
     Background,
     InstallService,
     UninstallService,
     ServiceStatus,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            github_token: None,
-            github_owner: None,
-            github_repo: None,
-            anthropic_api_key: None,
-            openai_api_key: None,
-            model_provider: Some("ollama".to_string()),
-            ollama_base_url: None,
-            model: None,
-            last_project_path: None,
-            local_server_token: None,
-            editor_font_family: default_editor_font_family(),
-            editor_font_size: 13,
-            editor_line_height: 1.6,
-            editor_tab_size: 2,
-            editor_word_wrap: false,
-            active_team: None,
-        }
-    }
-}
-
-fn default_editor_font_family() -> String {
-    "\"JetBrains Mono\", \"IBM Plex Mono\", Menlo, Monaco, monospace".to_string()
 }
 
 fn config_root() -> PathBuf {
@@ -157,67 +106,6 @@ fn write_config(cfg: &AppConfig) -> bool {
     } else {
         false
     }
-}
-
-fn normalize_editor_preferences(settings: EditorPreferences) -> EditorPreferences {
-    let font_family = match settings.font_family.as_str() {
-        "\"JetBrains Mono\", \"IBM Plex Mono\", Menlo, Monaco, monospace"
-        | "\"IBM Plex Mono\", \"JetBrains Mono\", Menlo, Monaco, monospace"
-        | "\"Fira Code\", \"JetBrains Mono\", Menlo, Monaco, monospace"
-        | "Menlo, Monaco, \"JetBrains Mono\", monospace" => settings.font_family,
-        _ => default_editor_font_family(),
-    };
-
-    let line_height = settings.line_height.clamp(1.35, 2.05);
-    let tab_size = match settings.tab_size {
-        4 | 8 => settings.tab_size,
-        _ => 2,
-    };
-
-    EditorPreferences {
-        font_family,
-        font_size: settings.font_size.clamp(11, 20),
-        line_height: (line_height * 100.0).round() / 100.0,
-        tab_size,
-        word_wrap: settings.word_wrap,
-    }
-}
-
-fn editor_preferences_from_config(cfg: &AppConfig) -> EditorPreferences {
-    normalize_editor_preferences(EditorPreferences {
-        font_family: cfg.editor_font_family.clone(),
-        font_size: cfg.editor_font_size,
-        line_height: cfg.editor_line_height,
-        tab_size: cfg.editor_tab_size,
-        word_wrap: cfg.editor_word_wrap,
-    })
-}
-
-fn apply_editor_preferences(cfg: &mut AppConfig, settings: EditorPreferences) {
-    let normalized = normalize_editor_preferences(settings);
-    cfg.editor_font_family = normalized.font_family;
-    cfg.editor_font_size = normalized.font_size;
-    cfg.editor_line_height = normalized.line_height;
-    cfg.editor_tab_size = normalized.tab_size;
-    cfg.editor_word_wrap = normalized.word_wrap;
-}
-
-fn default_project_path() -> String {
-    if let Some(home) = dirs::home_dir() {
-        return home.to_string_lossy().to_string();
-    }
-    env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .to_string_lossy()
-        .to_string()
-}
-
-fn project_path_for_server(cfg: &AppConfig) -> String {
-    env::var("PROJECT_PATH")
-        .ok()
-        .filter(|path| !path.trim().is_empty())
-        .or_else(|| cfg.last_project_path.clone())
-        .unwrap_or_else(default_project_path)
 }
 
 #[cfg(target_os = "macos")]

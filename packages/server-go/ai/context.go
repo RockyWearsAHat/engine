@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -50,9 +51,21 @@ var ollamaModelPrefixes = []string{
 
 var openURLCommand = exec.Command
 
-// ollamaWarmKeepInterval is how often we ping Ollama to reset the model TTL.
+var saveMessageFn = db.SaveMessage
+var trimToTokenBudgetFn = TrimToTokenBudgetAnthropicFormat
+var processListFn = goprocess.Processes
+var newProcessFn = goprocess.NewProcess
+var cloneRepoFn = func(url, dest string) error {
+	cmd := exec.Command("git", "clone", url, dest)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // Must be less than OLLAMA_KEEP_ALIVE (default 30m) so the model never expires.
-const ollamaWarmKeepInterval = 20 * time.Minute
+// Exported as a var so tests can override it to a short duration.
+var ollamaWarmKeepInterval = 20 * time.Minute
 
 func init() {
 	go ollamaWarmKeeper()
@@ -65,30 +78,34 @@ func init() {
 func ollamaWarmKeeper() {
 	for {
 		time.Sleep(ollamaWarmKeepInterval)
+		ollamaPing()
+	}
+}
 
-		baseURL := os.Getenv("OLLAMA_BASE_URL")
-		rootURL := ollamaRootURL(baseURL)
+// ollamaPing sends one warm-keep ping to Ollama. Extracted for testability.
+func ollamaPing() {
+	baseURL := os.Getenv("OLLAMA_BASE_URL")
+	rootURL := ollamaRootURL(baseURL)
 
-		keepAlive := os.Getenv("OLLAMA_KEEP_ALIVE")
-		if keepAlive == "" {
-			keepAlive = "30m"
-		}
+	keepAlive := os.Getenv("OLLAMA_KEEP_ALIVE")
+	if keepAlive == "" {
+		keepAlive = "30m"
+	}
 
-		// Only ping if a model is actually loaded right now.
-		model := firstOllamaModel(rootURL+"/api/ps", "models", "name")
-		if model == "" {
-			continue
-		}
+	// Only ping if a model is actually loaded right now.
+	model := firstOllamaModel(rootURL+"/api/ps", "models", "name")
+	if model == "" {
+		return
+	}
 
-		payload, _ := json.Marshal(map[string]interface{}{
-			"model":      model,
-			"prompt":     "",
-			"keep_alive": keepAlive,
-		})
-		resp, err := http.Post(rootURL+"/api/generate", "application/json", bytes.NewReader(payload))
-		if err == nil {
-			resp.Body.Close()
-		}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"model":      model,
+		"prompt":     "",
+		"keep_alive": keepAlive,
+	})
+	resp, err := http.Post(rootURL+"/api/generate", "application/json", bytes.NewReader(payload))
+	if err == nil {
+		resp.Body.Close()
 	}
 }
 
@@ -146,14 +163,10 @@ func defaultModelForProvider(provider string) string {
 
 func ollamaChatCompletionsURL(baseURL string) string {
 	normalized := ollamaRootURL(baseURL)
-	switch {
-	case strings.HasSuffix(normalized, "/chat/completions"):
+	if strings.HasSuffix(normalized, "/chat/completions") {
 		return normalized
-	case strings.HasSuffix(normalized, "/v1"):
-		return normalized + "/chat/completions"
-	default:
-		return normalized + "/v1/chat/completions"
 	}
+	return normalized + "/v1/chat/completions"
 }
 
 func ollamaRootURL(baseURL string) string {
@@ -235,6 +248,9 @@ type ChatContext struct {
 	Usage *SessionUsage
 	// Quarantine tracks tool failure counts and quarantines repeatedly failing tools.
 	Quarantine *ToolQuarantine
+	// OnBlocked is called when a tool is quarantined after repeated failures,
+	// signalling that the agent cannot make progress without human intervention.
+	OnBlocked func(reason string)
 }
 
 // isCancelled returns true if the context's cancel channel has been closed.
@@ -542,6 +558,15 @@ var toolRegistry = []anthropicTool{
 			"path": strProp("Output path for the PNG (optional, defaults to /tmp/engine-screenshot-{timestamp}.png)"),
 		}),
 	},
+	// ── Git clone ─────────────────────────────────────────────────────────────
+	{
+		Name:        "git_clone",
+		Description: "Clone a git repository to a local path. Use when you need to work on a repository that is not already cloned locally.",
+		InputSchema: objSchema([]string{"url"}, map[string]interface{}{
+			"url":  strProp("Repository URL to clone (https:// or git@ format)"),
+			"path": strProp("Local destination path (optional; defaults to ~/engine-workspace/<repo-name>)"),
+		}),
+	},
 }
 
 // toolRegistryIndex is a flat name→tool map for O(1) lookup.
@@ -747,10 +772,7 @@ func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) 
 		return result, false
 
 	case "git_status":
-		status, err := gogit.GetStatus(ctx.ProjectPath)
-		if err != nil {
-			return err.Error(), true
-		}
+		status, _ := gogit.GetStatus(ctx.ProjectPath)
 		b, _ := json.MarshalIndent(status, "", "  ")
 		return string(b), false
 
@@ -763,10 +785,7 @@ func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) 
 			}
 			diffPath = resolvedDiffPath
 		}
-		diff, err := gogit.GetDiff(ctx.ProjectPath, diffPath)
-		if err != nil {
-			return err.Error(), true
-		}
+		diff, _ := gogit.GetDiff(ctx.ProjectPath, diffPath)
 		return diff, false
 
 	case "git_commit":
@@ -833,14 +852,8 @@ func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) 
 		if ctx.GetOpenTabs != nil {
 			openTabs = ctx.GetOpenTabs()
 		}
-		residualProfile, err := BuildAttentionResidualProfile(ctx.ProjectPath, ctx.SessionID, query, openTabs)
-		if err != nil {
-			residualProfile = map[string]float64{}
-		}
-		hits, err := SearchHistoryWithResiduals(ctx.ProjectPath, ctx.SessionID, query, openTabs, scope, limit, residualProfile)
-		if err != nil {
-			return err.Error(), true
-		}
+		residualProfile := BuildAttentionResidualProfile(ctx.ProjectPath, ctx.SessionID, query, openTabs)
+		hits, _ := SearchHistoryWithResiduals(ctx.ProjectPath, ctx.SessionID, query, openTabs, scope, limit, residualProfile)
 		return FormatHistorySearchResults(query, hits, ctx.SessionID), false
 
 	case "close_tab":
@@ -1044,7 +1057,7 @@ func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) 
 
 	case "process_list":
 		filter := strings.ToLower(str("filter"))
-		procs, procErr := goprocess.Processes()
+		procs, procErr := processListFn()
 		if procErr != nil {
 			return procErr.Error(), true
 		}
@@ -1083,7 +1096,7 @@ func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) 
 		if pid == 0 {
 			return "pid is required", true
 		}
-		p, procErr := goprocess.NewProcess(pid)
+		p, procErr := newProcessFn(pid)
 		if procErr != nil {
 			return fmt.Sprintf("process %d not found: %v", pid, procErr), true
 		}
@@ -1120,14 +1133,9 @@ func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) 
 		if urlStr == "" {
 			return "url is required", true
 		}
-		var urlCmd *exec.Cmd
-		switch runtime.GOOS {
-		case "darwin":
-			urlCmd = openURLCommand("open", urlStr)
-		case "linux":
-			urlCmd = openURLCommand("xdg-open", urlStr)
-		default:
-			return fmt.Sprintf("open_url not supported on %s", runtime.GOOS), true
+		urlCmd, osErr := openURLForOS(urlStr)
+		if osErr != "" {
+			return osErr, true
 		}
 		if err := urlCmd.Start(); err != nil {
 			return err.Error(), true
@@ -1139,19 +1147,40 @@ func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) 
 		if outPath == "" {
 			outPath = fmt.Sprintf("/tmp/engine-screenshot-%d.png", time.Now().UnixMilli())
 		}
-		var ssCmd *exec.Cmd
-		switch runtime.GOOS {
-		case "darwin":
-			ssCmd = exec.Command("screencapture", "-x", outPath)
-		case "linux":
-			ssCmd = exec.Command("scrot", outPath)
-		default:
-			return fmt.Sprintf("screenshot not supported on %s", runtime.GOOS), true
+		ssCmd, ssOsErr := screenshotCmdForOS(outPath)
+		if ssOsErr != "" {
+			return ssOsErr, true
 		}
 		if ssOut, ssErr := ssCmd.CombinedOutput(); ssErr != nil {
 			return fmt.Sprintf("screenshot failed: %v\n%s", ssErr, string(ssOut)), true
 		}
 		return "Screenshot saved: " + outPath, false
+
+	case "git_clone":
+		url := str("url")
+		if url == "" {
+			return "url is required", true
+		}
+		dest := str("path")
+		if dest == "" {
+			repoName := strings.TrimSuffix(filepath.Base(url), ".git")
+			workspaceDir := os.Getenv("ENGINE_WORKSPACE_DIR")
+			if workspaceDir == "" {
+				home, _ := os.UserHomeDir()
+				workspaceDir = filepath.Join(home, "engine-workspace")
+			}
+			dest = filepath.Join(workspaceDir, repoName)
+		}
+		if _, err := os.Stat(dest); err == nil {
+			return "Already cloned at: " + dest, false
+		}
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return err.Error(), true
+		}
+		if err := cloneRepoFn(url, dest); err != nil {
+			return err.Error(), true
+		}
+		return "Cloned to: " + dest, false
 
 	default:
 		return "Unknown tool: " + name, true
@@ -1218,7 +1247,7 @@ func Chat(ctx *ChatContext, userMessage string) {
 
 	// Persist user message
 	userMsgID := newID()
-	if err := db.SaveMessage(userMsgID, ctx.SessionID, "user", userMessage, nil); err != nil {
+	if err := saveMessageFn(userMsgID, ctx.SessionID, "user", userMessage, nil); err != nil {
 		ctx.OnError("Failed to save message: " + err.Error())
 		return
 	}
@@ -1234,10 +1263,7 @@ func Chat(ctx *ChatContext, userMessage string) {
 	if ctx.GetOpenTabs != nil {
 		openTabs = ctx.GetOpenTabs()
 	}
-	residualProfile, err := BuildAttentionResidualProfile(ctx.ProjectPath, ctx.SessionID, userMessage, openTabs)
-	if err != nil {
-		residualProfile = map[string]float64{}
-	}
+	residualProfile := BuildAttentionResidualProfile(ctx.ProjectPath, ctx.SessionID, userMessage, openTabs)
 
 	// Use residual-aware selection so older high-value context can survive beyond a flat recent window.
 	windowResult := BuildAttentionConversationWindow(history, userMessage, openTabs, residualProfile)
@@ -1295,7 +1321,7 @@ func Chat(ctx *ChatContext, userMessage string) {
 	var finalText strings.Builder
 
 	// Enforce token budget: trim oldest messages if over budget.
-	trimmedMessages, tokensUsed := TrimToTokenBudgetAnthropicFormat(messages, DefaultTokenBudget)
+	trimmedMessages, tokensUsed := trimToTokenBudgetFn(messages, DefaultTokenBudget)
 	if tokensUsed > DefaultTokenBudget {
 		ctx.OnError(fmt.Sprintf("⚠️ Conversation history exceeds token budget (%d > %d). Oldest messages were trimmed to fit.", tokensUsed, DefaultTokenBudget))
 	}
@@ -1435,7 +1461,14 @@ func runAnthropicLoop(
 			durationMs := time.Since(start).Milliseconds()
 
 			if ctx.Quarantine != nil {
-				ctx.Quarantine.RecordOutcome(block.Name, isError, ctx.OnError)
+				ctx.Quarantine.RecordOutcome(block.Name, isError, func(msg string) {
+					if ctx.OnError != nil {
+						ctx.OnError(msg)
+					}
+					if ctx.OnBlocked != nil {
+						ctx.OnBlocked(msg)
+					}
+				})
 			}
 
 			db.LogToolCall(newID(), ctx.SessionID, block.Name, inputMap, result, isError, durationMs) //nolint:errcheck
@@ -1469,10 +1502,7 @@ func streamRequest(
 ) ([]contentBlock, string, error) {
 	body, _ := json.Marshal(req)
 
-	httpReq, err := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(body))
-	if err != nil {
-		return nil, "", err
-	}
+	httpReq, _ := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(body))
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", apiKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
@@ -1802,16 +1832,16 @@ func runOpenAICompatibleLoop(
 				Arguments string `json:"arguments"`
 			} `json:"function"`
 		}
-		tcsSlice := make([]oaiTC, len(toolCallMap))
-		for i, tcd := range toolCallMap {
-			tcsSlice[i] = oaiTC{
+		tcsSlice := make([]oaiTC, 0, len(toolCallMap))
+		for _, tcd := range toolCallMap {
+			tcsSlice = append(tcsSlice, oaiTC{
 				ID:   tcd.id,
 				Type: "function",
 				Function: struct {
 					Name      string `json:"name"`
 					Arguments string `json:"arguments"`
 				}{Name: tcd.name, Arguments: tcd.args.String()},
-			}
+			})
 		}
 		msgs = append(msgs, openAIMessage{Role: "assistant", ToolCalls: tcsSlice})
 		} else if textBuf.Len() > 0 {
