@@ -24,6 +24,7 @@
     "coverage:all": "node ./scripts/coverage-all.mjs",
     "test:all": "pnpm test:client && pnpm test:go && pnpm test:rust",
     "lint": "node -e \"console.log('Lint disabled in npm scripts. Use gsh strict lint.')\"",
+    "sync:obsidian": "node ./scripts/sync-obsidian-memory.mjs",
     "verify:agent-completion": "node ./scripts/agent-completion-gate.mjs",
     "install:all": "pnpm install"
   },

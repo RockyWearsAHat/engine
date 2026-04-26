@@ -25,15 +25,9 @@ function localDesktopSocketURL(token: string | null): string {
 }
 
 function localDesktopHealthURL(): string {
-  // In Tauri/Electron the webview can call the local sidecar directly, which
-  // avoids dev-proxy churn and keeps reconnect diagnostics clean.
   return 'http://localhost:24444/health';
 }
 /* istanbul ignore stop */
-
-interface LocalDesktopHealth {
-  status?: string;
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -129,6 +123,13 @@ export class WSClient {
 
   /* istanbul ignore start */
   private async probeLocalDesktopServer(): Promise<boolean> {
+    if (typeof window !== 'undefined' && '__TAURI__' in window) {
+      try {
+        return await bridge.localServerHealthy();
+      } catch {
+        return false;
+      }
+    }
     if (typeof fetch !== 'function') {
       return false;
     }
@@ -143,7 +144,7 @@ export class WSClient {
       if (!response.ok) {
         return false;
       }
-      const payload = (await response.json()) as LocalDesktopHealth;
+      const payload = (await response.json()) as { status?: string };
       return payload.status === 'ok';
     } catch {
       return false;

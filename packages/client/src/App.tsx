@@ -12,6 +12,7 @@ import AgentPanel from './components/AgentPanel/AgentPanel.js';
 import StatusBar from './components/StatusBar/StatusBar.js';
 import PreferencesPanel from './components/Preferences/PreferencesPanel.js';
 import MachineConnectionsPanel from './components/Connections/MachineConnectionsPanel.js';
+import UsageDashboard from './components/Usage/UsageDashboard.js';
 import CommandPalette, {
   type CommandPaletteItem,
   type CommandPaletteMode,
@@ -859,11 +860,11 @@ export default function App() {
         kind: 'command',
         title: 'Show Usage Dashboard',
         subtitle: 'View project or user-wide API spend, tokens, and compute time',
-        keywords: 'usage dashboard spend tokens model filter sidebar',
-        badge: 'Sidebar',
+        keywords: 'usage dashboard spend tokens model filter analytics charts',
+        badge: 'Workspace',
         action: () => {
           setActivityTab('usage');
-          setShowSidebar(true);
+          setShowSidebar(false);
         },
       },
     ];
@@ -1376,7 +1377,7 @@ export default function App() {
             break;
           case 'show-usage':
             setActivityTab('usage');
-            setShowSidebar(true);
+            setShowSidebar(false);
             break;
           case 'open-command-palette':
             openCommandPalette('commands');
@@ -1416,6 +1417,11 @@ export default function App() {
 
   const hasProject = !!fileTree;
   const toggleActivity = (tab: ActivityTab) => {
+    if (tab === 'usage') {
+      setActivityTab('usage');
+      setShowSidebar(false);
+      return;
+    }
     if (activityTab === tab && showSidebar) { setShowSidebar(false); }
     else { setActivityTab(tab); setShowSidebar(true); }
   };
@@ -1493,7 +1499,7 @@ export default function App() {
               }}
               onShowUsage={() => {
                 setActivityTab('usage');
-                setShowSidebar(true);
+                setShowSidebar(false);
               }}
               onFocusChat={() => setRightTab('chat')}
               onFocusAgent={() => setRightTab('agent')}
@@ -1539,7 +1545,7 @@ export default function App() {
             ] as [ActivityTab, React.ComponentType<{ size?: number }>][]).map(([id, Icon]) => (
               <button
                 key={id}
-                className={`activity-btn ${activityTab === id && showSidebar ? 'active' : ''}`}
+                className={`activity-btn ${activityTab === id && (showSidebar || id === 'usage') ? 'active' : ''}`}
                 onClick={() => toggleActivity(id)}
                 title={id.charAt(0).toUpperCase() + id.slice(1)}
               >
@@ -1580,15 +1586,24 @@ export default function App() {
             <div className="editor-area" ref={editorAreaRef}>
               {hasProject ? (
                 <>
-                  <MissionControlStrip
-                    projectName={missionProjectName}
-                    branchName={activeSession?.branchName ?? ''}
-                    projectDirection={activeSession?.projectDirection ?? ''}
-                    summary={activeSession?.summary ?? ''}
-                    onFocusAssistant={() => setRightTab('chat')}
-                    onFocusAgent={() => setRightTab('agent')}
-                  />
-                  <Editor />
+                  {activityTab === 'usage' ? (
+                    <UsageDashboard
+                      projectPath={activeSession?.projectPath ?? null}
+                      mode="workspace"
+                    />
+                  ) : (
+                    <>
+                      <MissionControlStrip
+                        projectName={missionProjectName}
+                        branchName={activeSession?.branchName ?? ''}
+                        projectDirection={activeSession?.projectDirection ?? ''}
+                        summary={activeSession?.summary ?? ''}
+                        onFocusAssistant={() => setRightTab('chat')}
+                        onFocusAgent={() => setRightTab('agent')}
+                      />
+                      <Editor />
+                    </>
+                  )}
                 </>
               ) : (
                 <WelcomeScreen

@@ -843,6 +843,11 @@ fn restart_local_server(
 }
 
 #[tauri::command]
+fn local_server_healthy() -> bool {
+    server_running(DEFAULT_PORT)
+}
+
+#[tauri::command]
 fn get_github_token() -> Option<String> {
     read_config().github_token
 }
@@ -1382,6 +1387,7 @@ pub fn run() {
             get_project_path,
             get_local_server_token,
             restart_local_server,
+            local_server_healthy,
             get_github_token,
             set_github_token,
             get_github_owner,

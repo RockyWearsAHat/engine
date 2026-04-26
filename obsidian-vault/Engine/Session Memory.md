@@ -1,0 +1,94 @@
+---
+source: ../.github/session-memory/session-log.jsonl
+generatedAt: 2026-04-26T17:15:00.033Z
+eventCount: 294
+---
+
+# Session Memory
+
+Auto-export of session events for Obsidian review.
+
+## Recent Events
+
+| Time | Action | Outcome | Surprise |
+| --- | --- | --- | --- |
+| 2026-04-26T16:54:36.202Z | auto tool call: strict_lint | success - Strict Linting — agent-completion-report.json Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T16:53:29.139Z | auto tool call: strict_lint | success - Strict Linting — main_test.go Summary: 0 error(s), 0 warning(s), 3 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/main_test.go hint [an... | 0.82 |
+| 2026-04-26T16:53:27.853Z | auto tool call: strict_lint | success - Strict Linting — main.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T16:49:30.099Z | auto tool call: strict_lint | success - Strict Linting — .gitignore Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T16:47:57.210Z | auto tool call: strict_lint | success - Strict Linting — capabilities.json Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T16:47:57.178Z | auto tool call: strict_lint | success - Strict Linting — default.json Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T16:45:29.826Z | auto tool call: strict_lint | success - Strict Linting — bridge.test.ts Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T16:45:29.826Z | auto tool call: strict_lint | success - Strict Linting — lib.rs Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T16:45:29.825Z | auto tool call: strict_lint | success - Strict Linting — ws-client.test.ts Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T16:45:29.821Z | auto tool call: strict_lint | success - Strict Linting — bridge.ts Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T16:45:29.825Z | auto tool call: strict_lint | success - Strict Linting — client.ts Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T16:05:18.472Z | auto tool call: strict_lint | success - Strict Linting — App.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T16:00:12.241Z | auto tool call: strict_lint | success - Strict Linting — usage-dashboard.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T15:59:24.642Z | auto tool call: strict_lint | success - Strict Linting — index.css Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T15:59:24.642Z | auto tool call: strict_lint | success - Strict Linting — UsageDashboard.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T15:59:24.627Z | auto tool call: strict_lint | success - Strict Linting — App.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T15:55:50.034Z | auto tool call: strict_lint | success - Strict Linting — UsageDashboard.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T15:55:16.210Z | auto tool call: strict_lint | success - Strict Linting — usage-dashboard.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T15:51:55.654Z | auto tool call: strict_lint | success - Strict Linting — index.css Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T15:51:55.654Z | auto tool call: strict_lint | success - Strict Linting — App.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T15:51:55.653Z | auto tool call: strict_lint | success - Strict Linting — UsageDashboard.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T10:18:48.747Z | auto tool call: strict_lint | success - Strict Linting — handler_test.go Summary: 0 error(s), 0 warning(s), 86 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ws/handler_test.g... | 0.82 |
+| 2026-04-26T10:16:58.505Z | auto tool call: strict_lint | success - Strict Linting — handler_test.go Summary: 0 error(s), 0 warning(s), 87 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ws/handler_test.g... | 0.82 |
+| 2026-04-26T10:16:23.867Z | auto tool call: strict_lint | success - Strict Linting — registry_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T10:14:09.297Z | auto tool call: strict_lint | success - Strict Linting — usage_dashboard_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T10:08:47.955Z | auto tool call: strict_lint | success - Strict Linting — usage-dashboard.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T10:06:25.316Z | auto tool call: strict_lint | success - Strict Linting — usage-dashboard.test.tsx Summary: 2 error(s), 0 warning(s), 0 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/client/src/test/usa... | 0.82 |
+| 2026-04-26T10:04:45.576Z | auto tool call: strict_lint | success - Strict Linting — usage-dashboard.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T10:03:04.951Z | auto tool call: strict_lint | success - Strict Linting — usage-dashboard.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T10:01:31.544Z | auto tool call: strict_lint | success - Strict Linting — usage-dashboard.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T10:01:31.543Z | auto tool call: strict_lint | success - Strict Linting — preferences.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T10:01:31.527Z | auto tool call: strict_lint | success - Strict Linting — filetree.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:58:35.977Z | auto tool call: strict_lint | success - Strict Linting — filetree.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:58:16.737Z | auto tool call: strict_lint | success - Strict Linting — filetree.test.tsx Summary: 1 error(s), 0 warning(s), 0 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/client/src/test/filetree.t... | 0.82 |
+| 2026-04-26T09:57:02.272Z | auto tool call: strict_lint | success - Strict Linting — usage-dashboard.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:57:02.270Z | auto tool call: strict_lint | success - Strict Linting — filetree.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:57:02.272Z | auto tool call: strict_lint | success - Strict Linting — preferences.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:53:06.551Z | auto tool call: strict_lint | success - Strict Linting — preferences.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:51:51.042Z | auto tool call: strict_lint | success - Strict Linting — usage-dashboard.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:48:11.993Z | auto tool call: strict_lint | success - Strict Linting — usage-dashboard.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:46:06.018Z | auto tool call: strict_lint | success - Strict Linting — App.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:45:25.965Z | auto tool call: strict_lint | success - Strict Linting — WORKING_BEHAVIORS.md Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:45:02.861Z | auto tool call: strict_lint | success - Strict Linting — UsageDashboard.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:44:58.168Z | auto tool call: strict_lint | success - Strict Linting — index.css Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:44:33.518Z | auto tool call: strict_lint | success - Strict Linting — App.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:44:02.247Z | auto tool call: strict_lint | success - Strict Linting — FileTree.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:43:11.265Z | auto tool call: strict_lint | success - Strict Linting — handler.go Summary: 0 error(s), 0 warning(s), 66 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ws/handler.go hint [an... | 0.82 |
+| 2026-04-26T09:42:51.834Z | auto tool call: strict_lint | success - Strict Linting — index.ts Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:42:21.486Z | auto tool call: strict_lint | success - Strict Linting — context.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:42:21.487Z | auto tool call: strict_lint | success - Strict Linting — usage_dashboard.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T09:40:16.749Z | auto tool call: strict_lint | success - Strict Linting — usage_dashboard.go Summary: 0 error(s), 0 warning(s), 2 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/db/usage_dashbo... | 0.82 |
+| 2026-04-26T09:35:26.505Z | auto tool call: strict_lint | success - Strict Linting — db.go Summary: 0 error(s), 0 warning(s), 4 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/db/db.go hint [any] (228:12)... | 0.82 |
+| 2026-04-26T09:13:08.947Z | auto tool call: checkpoint | success - Committed d292483 on branch 'main' d292483 feat(ai): achieve 100% Go coverage for mark_vital, MarkVital closure, OAI windowing, harness, team_config, and Chat routing .github/WO... | 0.20 |
+| 2026-04-26T08:44:52.342Z | auto tool call: strict_lint | success - Strict Linting — team_config_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T08:44:52.342Z | auto tool call: strict_lint | success - Strict Linting — main_test.go Summary: 0 error(s), 0 warning(s), 2 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/main_test.go hint [an... | 0.82 |
+| 2026-04-26T08:44:52.329Z | auto tool call: strict_lint | success - Strict Linting — main.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T08:42:01.462Z | auto tool call: strict_lint | success - Strict Linting — team_config_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T08:37:50.158Z | auto tool call: strict_lint | success - Strict Linting — team_config_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T08:34:16.158Z | auto tool call: strict_lint | success - Strict Linting — git.go Summary: 0 error(s), 0 warning(s), 5 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/git/git.go hint [stringsseq... | 0.82 |
+| 2026-04-26T08:27:36.638Z | auto tool call: strict_lint | success - Strict Linting — WORKING_BEHAVIORS.md Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T08:26:25.032Z | auto tool call: strict_lint | success - Strict Linting — team_config_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T08:26:25.032Z | auto tool call: strict_lint | success - Strict Linting — context.go Summary: 0 error(s), 0 warning(s), 97 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/context.go hint [an... | 0.82 |
+| 2026-04-26T08:26:25.032Z | auto tool call: strict_lint | success - Strict Linting — handler_extra_test.go Summary: 0 error(s), 0 warning(s), 116 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ws/handler... | 0.82 |
+| 2026-04-26T08:26:25.032Z | auto tool call: strict_lint | success - Strict Linting — handler.go Summary: 0 error(s), 0 warning(s), 63 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ws/handler.go hint [an... | 0.82 |
+| 2026-04-26T08:26:25.013Z | auto tool call: strict_lint | success - Strict Linting — team_config.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T08:24:28.270Z | auto tool call: workspace_context | success - Root: /Users/alexwaldmann/Desktop/MyEditor Branch: main Remote: https://github.com/RockyWearsAHat/engine.git Status: ## main...origin/main M packages/server-go/.agent-cover.out | 0.20 |
+| 2026-04-26T07:59:20.931Z | auto tool call: checkpoint | success - Committed e6ed45a on branch 'main' e6ed45a Add project-local tool discovery: .engine/tools/*.json auto-loaded into AI sessions .github/WORKING_BEHAVIORS.md \| 2 + packages/server... | 0.20 |
+| 2026-04-26T07:56:16.583Z | auto tool call: checkpoint | success - Committed 96e850e on branch 'main' 96e850e Make README webhook flow truly end-to-end: clone/sync target repo, enforce implement+validate+deliver phases in autonomous prompt, and... | 0.20 |
+| 2026-04-26T07:55:10.460Z | auto tool call: strict_lint | success - Strict Linting — main_test.go Summary: 0 error(s), 0 warning(s), 2 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/main_test.go hint [an... | 0.82 |
+| 2026-04-26T07:55:10.459Z | auto tool call: strict_lint | success - Strict Linting — main.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T06:15:26.644Z | auto tool call: strict_lint | success - Strict Linting — session_summary_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T06:14:27.254Z | auto tool call: strict_lint | success - Strict Linting — discord_test.go Summary: 0 error(s), 0 warning(s), 19 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ws/discord_test.g... | 0.82 |
+| 2026-04-26T06:14:07.454Z | auto tool call: strict_lint | success - Strict Linting — session_summary_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T06:10:14.730Z | auto tool call: strict_lint | success - Strict Linting — session_summary_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T06:08:58.168Z | auto tool call: strict_lint | success - Strict Linting — session_summary.go Summary: 0 error(s), 0 warning(s), 1 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/session_summ... | 0.82 |
+| 2026-04-26T06:08:58.169Z | auto tool call: strict_lint | success - Strict Linting — context.go Summary: 0 error(s), 0 warning(s), 94 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/context.go hint [an... | 0.82 |
+| 2026-04-26T06:08:58.170Z | auto tool call: strict_lint | success - Strict Linting — WORKING_BEHAVIORS.md Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T06:08:58.169Z | auto tool call: strict_lint | success - Strict Linting — session_summary_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T05:50:01.136Z | auto tool call: checkpoint | success - Committed 913173f on branch 'main' 913173f Fix Discord presence flapping by skipping no-op reloads .github/WORKING_BEHAVIORS.md \| 2 + .../components/Preferences/PreferencesPanel... | 0.20 |
+| 2026-04-26T05:49:55.041Z | fixed Discord online/offline flapping by preventing redundant discord service reloads on unchanged config and gating client auto-save after validate to inactive state only | success — targeted Go ws Discord tests and client preferences tests pass; diagnostics clean for edited files | 0.30 |

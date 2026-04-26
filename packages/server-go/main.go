@@ -50,6 +50,7 @@ var (
 	newRemoteServerFn    = remote.NewServer
 	setPairingManagerFn  = ws.SetPairingManager
 	remoteListenTLSFn    = (*remote.Server).ListenAndServeTLS
+	aiChatFn             = ai.Chat
 	httpHandleFuncFn     = http.HandleFunc
 	httpHandleFn         = http.Handle
 	httpListenAndServeFn = http.ListenAndServe
@@ -320,7 +321,7 @@ func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
 	}
 
 	prompt := buildReadmeAutonomousBuildPrompt(owner, repo, targetProjectPath)
-	ai.Chat(ctx, prompt)
+	aiChatFn(ctx, prompt)
 }
 
 // triggerCIAnalysisSession fires an AI session when a CI failure is detected.
@@ -381,7 +382,7 @@ func triggerCIAnalysisSession(projectPath string, payload json.RawMessage) {
 		ciEvent.WorkflowRun.Conclusion,
 		ciEvent.WorkflowRun.HTMLURL,
 	)
-	ai.Chat(ctx, prompt)
+	aiChatFn(ctx, prompt)
 }
 
 // triggerIssueSession fires an AI session when a new comment is posted on a GitHub issue.
@@ -436,7 +437,7 @@ func triggerIssueSession(projectPath string, payload json.RawMessage) {
 		parsed.Comment.User.Login,
 		parsed.Comment.Body,
 	)
-	ai.Chat(ctx, prompt)
+	aiChatFn(ctx, prompt)
 }
 
 // triggerIssueOpenedSession fires an AI session when a new GitHub issue is opened.
@@ -492,5 +493,5 @@ func triggerIssueOpenedSession(projectPath string, payload json.RawMessage) {
 		parsed.Issue.Title,
 		parsed.Issue.Body,
 	)
-	ai.Chat(ctx, prompt)
+	aiChatFn(ctx, prompt)
 }

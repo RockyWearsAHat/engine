@@ -128,6 +128,29 @@ describe('bridge.restartLocalServer', () => {
   });
 });
 
+// ─── localServerHealthy ──────────────────────────────────────────────────────
+
+describe('bridge.localServerHealthy', () => {
+  it('Tauri_LocalServerHealthy_InvokeCalled', async () => {
+    const invoke = vi.fn().mockResolvedValue(true);
+    mockTauri(invoke);
+    const result = await bridge.localServerHealthy();
+    expect(invoke).toHaveBeenCalledWith('local_server_healthy');
+    expect(result).toBe(true);
+  });
+
+  it('Electron_LocalServerHealthy_ApiCalled', async () => {
+    const localServerHealthy = vi.fn().mockResolvedValue(true);
+    mockElectron({ localServerHealthy });
+    expect(await bridge.localServerHealthy()).toBe(true);
+    expect(localServerHealthy).toHaveBeenCalledTimes(1);
+  });
+
+  it('Browser_LocalServerHealthy_ReturnsFalse', async () => {
+    expect(await bridge.localServerHealthy()).toBe(false);
+  });
+});
+
 // ─── getGithubToken / setGithubToken ──────────────────────────────────────────
 
 describe('bridge.getGithubToken', () => {

@@ -68,6 +68,7 @@ if (process.env.ENGINE_AGENT_GATE_BYPASS === '1') {
   process.exit(0);
 }
 
+requireSuccess('obsidian memory sync', runCommand('node', ['./scripts/sync-obsidian-memory.mjs']));
 requireSuccess('lint', runCommand('pnpm', ['lint']));
 requireSuccess('typecheck', runCommand('pnpm', ['typecheck']));
 requireSuccess('desktop debug build for smoke test', runCommand('pnpm', ['build:desktop-debug']));
@@ -99,7 +100,8 @@ const goCoverage = Number.parseFloat(totalMatch[1]);
 if (!Number.isFinite(goCoverage) || goCoverage < requiredGoCoverage) {
   fail('Completion gate failed: Go total coverage is below required threshold.', [
     `Detected Go total coverage: ${goCoverage.toFixed(1)}%`,
-    `Required coverage: ${requiredGoCoverage.toFixed(1)}%`,
+    `Required coverage: ${requiredGoCoverage.toFixed(1)}%;`,
+    `Even if you were not directed to by the user directly, fix now.`,
   ]);
 }
 
