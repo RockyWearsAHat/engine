@@ -95,7 +95,7 @@ func TestStartDeviceFlow_EmptyDeviceCode_JSONFallback(t *testing.T) {
 	// Response body is JSON (GitHub Enterprise style).
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
 			"device_code":      "JDEV",
 			"user_code":        "JUSER",
 			"verification_uri": "https://example.com",

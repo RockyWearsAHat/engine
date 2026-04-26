@@ -9,7 +9,7 @@ import (
 
 func TestDetectTasks_PackageJSON(t *testing.T) {
 	dir := t.TempDir()
-	pkg := map[string]interface{}{
+	pkg := map[string]any{
 		"scripts": map[string]string{
 			"dev:desktop": "vite",
 			"build":       "tsc && vite build",
@@ -53,7 +53,7 @@ func TestDetectTasks_PackageJSON(t *testing.T) {
 
 func TestDetectTasks_PackageJSON_PNPM(t *testing.T) {
 	dir := t.TempDir()
-	pkg := map[string]interface{}{
+	pkg := map[string]any{
 		"scripts": map[string]string{"dev": "vite"},
 	}
 	data, _ := json.Marshal(pkg)
@@ -78,7 +78,7 @@ func TestDetectTasks_PackageJSON_PNPM(t *testing.T) {
 
 func TestDetectTasks_PackageJSON_Yarn(t *testing.T) {
 	dir := t.TempDir()
-	pkg := map[string]interface{}{
+	pkg := map[string]any{
 		"scripts": map[string]string{"start": "node server.js"},
 	}
 	data, _ := json.Marshal(pkg)
@@ -99,7 +99,7 @@ func TestDetectTasks_PackageJSON_Yarn(t *testing.T) {
 
 func TestDetectTasks_PackageJSON_Bun(t *testing.T) {
 	dir := t.TempDir()
-	pkg := map[string]interface{}{
+	pkg := map[string]any{
 		"scripts": map[string]string{"dev": "bun run index.ts"},
 	}
 	data, _ := json.Marshal(pkg)
@@ -120,7 +120,7 @@ func TestDetectTasks_PackageJSON_Bun(t *testing.T) {
 
 func TestDetectTasks_PackageJSON_Bun_BunLock(t *testing.T) {
 	dir := t.TempDir()
-	pkg := map[string]interface{}{
+	pkg := map[string]any{
 		"scripts": map[string]string{"preview": "bun preview"},
 	}
 	data, _ := json.Marshal(pkg)
@@ -196,7 +196,7 @@ func TestDetectTasks_InvalidPackageJSON(t *testing.T) {
 
 func TestDetectTasks_EmptyScripts(t *testing.T) {
 	dir := t.TempDir()
-	pkg := map[string]interface{}{
+	pkg := map[string]any{
 		"scripts": map[string]string{},
 	}
 	data, _ := json.Marshal(pkg)
@@ -211,7 +211,7 @@ func TestDetectTasks_EmptyScripts(t *testing.T) {
 
 func TestDetectTasks_AllScriptTypes(t *testing.T) {
 	dir := t.TempDir()
-	pkg := map[string]interface{}{
+	pkg := map[string]any{
 		"scripts": map[string]string{
 			"dev:tauri":            "tauri dev",
 			"build:desktop-debug":  "cargo build",

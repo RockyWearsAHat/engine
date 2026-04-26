@@ -40,7 +40,7 @@ func TestIssueToken_MarshalError(t *testing.T) {
 		t.Fatal(err)
 	}
 	orig := jsonMarshalFn
-	jsonMarshalFn = func(v interface{}) ([]byte, error) { return nil, errors.New("injected marshal error") }
+	jsonMarshalFn = func(v any) ([]byte, error) { return nil, errors.New("injected marshal error") }
 	defer func() { jsonMarshalFn = orig }()
 	_, err = am.IssueToken("dev1", time.Hour)
 	if err == nil {
@@ -181,7 +181,7 @@ func TestLoadStore_JSONError(t *testing.T) {
 		t.Fatal(err)
 	}
 	orig := jsonUnmarshalStoreFn
-	jsonUnmarshalStoreFn = func(data []byte, v interface{}) error { return errors.New("injected unmarshal error") }
+	jsonUnmarshalStoreFn = func(data []byte, v any) error { return errors.New("injected unmarshal error") }
 	defer func() { jsonUnmarshalStoreFn = orig }()
 	_, err := k.loadStore()
 	if err == nil {
@@ -191,7 +191,7 @@ func TestLoadStore_JSONError(t *testing.T) {
 
 func TestSaveStore_JSONMarshalError(t *testing.T) {
 	orig := jsonMarshalStoreFn
-	jsonMarshalStoreFn = func(v interface{}) ([]byte, error) { return nil, errors.New("injected marshal error") }
+	jsonMarshalStoreFn = func(v any) ([]byte, error) { return nil, errors.New("injected marshal error") }
 	defer func() { jsonMarshalStoreFn = orig }()
 	k := &KeychainStore{fallback: filepath.Join(t.TempDir(), "creds.enc")}
 	if err := k.saveStore(map[string]string{"a": "b"}); err == nil {
@@ -276,7 +276,7 @@ func TestLoadOrCreateTLSConfig_SerialError(t *testing.T) {
 
 func TestLoadOrCreateTLSConfig_CreateCertError(t *testing.T) {
 	orig := x509CreateCertFn
-	x509CreateCertFn = func(_ io.Reader, _, _ *x509.Certificate, _ interface{}, _ interface{}) ([]byte, error) {
+	x509CreateCertFn = func(_ io.Reader, _, _ *x509.Certificate, _ any, _ any) ([]byte, error) {
 		return nil, errors.New("injected cert creation error")
 	}
 	defer func() { x509CreateCertFn = orig }()
@@ -374,7 +374,7 @@ func TestHandlePair_IssueTokenError(t *testing.T) {
 	srv := newTestServerCov(t)
 	code, _ := srv.Pairing.GenerateCode()
 	orig := jsonMarshalFn
-	jsonMarshalFn = func(v interface{}) ([]byte, error) { return nil, errors.New("injected marshal error") }
+	jsonMarshalFn = func(v any) ([]byte, error) { return nil, errors.New("injected marshal error") }
 	defer func() { jsonMarshalFn = orig }()
 	req := httptest.NewRequest(http.MethodPost, "/remote/pair",
 		strings.NewReader(`{"code":"`+code+`"}`))
@@ -389,7 +389,7 @@ func TestHandleRefresh_IssueTokenError(t *testing.T) {
 	srv := newTestServerCov(t)
 	token, _ := srv.Auth.IssueToken("dev1", time.Hour)
 	orig := jsonMarshalFn
-	jsonMarshalFn = func(v interface{}) ([]byte, error) { return nil, errors.New("injected marshal error") }
+	jsonMarshalFn = func(v any) ([]byte, error) { return nil, errors.New("injected marshal error") }
 	defer func() { jsonMarshalFn = orig }()
 	req := httptest.NewRequest(http.MethodPost, "/remote/refresh", http.NoBody)
 	req.Header.Set("Authorization", "Bearer "+token)

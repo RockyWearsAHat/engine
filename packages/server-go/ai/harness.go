@@ -233,7 +233,7 @@ func EstimateMessagesAnthropicFormat(messages []anthropicMessage) int {
 }
 
 // extractMessageText returns the text content of an anthropicMessage for compaction summaries.
-func extractMessageText(content interface{}) string {
+func extractMessageText(content any) string {
 	switch v := content.(type) {
 	case string:
 		return v

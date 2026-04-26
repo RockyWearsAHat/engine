@@ -31,7 +31,7 @@ func SendTestCommand(ctx *ChatContext, terminalID string, command string, issue 
 		return
 	}
 	
-	ctx.SendToClient("test.run", map[string]interface{}{
+	ctx.SendToClient("test.run", map[string]any{
 		"terminalId": terminalID,
 		"command":    command,
 		"timeoutMs":  timeoutMs,
@@ -112,7 +112,7 @@ func ReportTestResult(tlc *TestLoopController, issue string) {
 	report := FormatValidationReport(result, issue)
 
 	if tlc.ctx != nil && tlc.ctx.SendToClient != nil {
-		tlc.ctx.SendToClient("test.result", map[string]interface{}{
+		tlc.ctx.SendToClient("test.result", map[string]any{
 			"issue":           issue,
 			"issueResolved":   result.IssueResolved,
 			"testPassed":      result.TestPassed,
@@ -134,7 +134,7 @@ func MakeTestCompleteHandler(tlc *TestLoopController, issue string) OnTestComple
 		report := FormatValidationReport(result, issue)
 		
 		if tlc.ctx != nil && tlc.ctx.SendToClient != nil {
-			tlc.ctx.SendToClient("test.result", map[string]interface{}{
+			tlc.ctx.SendToClient("test.result", map[string]any{
 				"issueResolved": result.IssueResolved,
 				"testPassed":    result.TestPassed,
 				"errorCount":    result.ErrorCount,
@@ -153,7 +153,7 @@ func MakeTestCompleteHandler(tlc *TestLoopController, issue string) OnTestComple
 			)
 			
 			if tlc.ctx.SessionID != "" && tlc.ctx.SendToClient != nil {
-				tlc.ctx.SendToClient("chat.message", map[string]interface{}{
+				tlc.ctx.SendToClient("chat.message", map[string]any{
 					"role":    "system",
 					"content": summary,
 				})
@@ -188,7 +188,7 @@ func IssueToTestPredicate(issueTitle string, issueBody string) func(ctx *ChatCon
 		)
 		
 		if ctx != nil && ctx.SendToClient != nil {
-			ctx.SendToClient("test.recommend", map[string]interface{}{
+			ctx.SendToClient("test.recommend", map[string]any{
 				"issue":  issueTitle,
 				"prompt": msg,
 			})

@@ -2166,7 +2166,7 @@ func TestStart_EnabledSuccess(t *testing.T) {
 	// Create a minimal gateway mock that accepts the connection.
 	gwSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/gateway/bot") {
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"url":    "wss://fake.ws.example.com",
 				"shards": 1,
 				"session_start_limit": map[string]int{
@@ -2261,7 +2261,7 @@ func installDiscordValidateMock(t *testing.T, guildID, guildName string, memberI
 		switch {
 		case strings.HasSuffix(path, "/gateway/bot"),
 			strings.HasSuffix(path, "/gateway"):
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"url":    wsURL,
 				"shards": 1,
 			})
@@ -2316,7 +2316,7 @@ func TestStart_GatewaySuccess(t *testing.T) {
 
 	// Minimal HTTP server just for /gateway/bot.
 	gatewaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"url": wsURL, "shards": 1})
+		_ = json.NewEncoder(w).Encode(map[string]any{"url": wsURL, "shards": 1})
 	}))
 	defer gatewaySrv.Close()
 
@@ -2371,7 +2371,7 @@ func TestValidate_GuildAccessFails(t *testing.T) {
 	defer restSrv.Close()
 
 	gatewaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"url": wsURL, "shards": 1})
+		_ = json.NewEncoder(w).Encode(map[string]any{"url": wsURL, "shards": 1})
 	}))
 	defer gatewaySrv.Close()
 
@@ -2485,8 +2485,8 @@ func TestHandleAskCommand_CallbacksCoverage(t *testing.T) {
 	old := chatFunc
 	chatFunc = func(ctx *ai.ChatContext, prompt string) {
 		defer wg.Done()
-		ctx.OnToolCall("my_tool", map[string]interface{}{"arg": 1})
-		ctx.OnToolResult("my_tool", map[string]interface{}{"result": "ok"}, false)
+		ctx.OnToolCall("my_tool", map[string]any{"arg": 1})
+		ctx.OnToolResult("my_tool", map[string]any{"result": "ok"}, false)
 		_, _ = ctx.RequestApproval("shell", "Run script", "run.sh", "bash run.sh")
 	}
 	t.Cleanup(func() { chatFunc = old })

@@ -225,7 +225,7 @@ type Message struct {
 	SessionID string      `json:"sessionId"`
 	Role      string      `json:"role"`
 	Content   string      `json:"content"`
-	ToolCalls interface{} `json:"toolCalls,omitempty"`
+	ToolCalls any `json:"toolCalls,omitempty"`
 	CreatedAt string      `json:"createdAt"`
 }
 
@@ -304,7 +304,7 @@ func scanSession(s scanner) (*Session, error) {
 	return &sess, nil
 }
 
-func SaveMessage(id, sessionId, role, content string, toolCalls interface{}) error {
+func SaveMessage(id, sessionId, role, content string, toolCalls any) error {
 	var tcJSON *string
 	if toolCalls != nil {
 		b, err := json.Marshal(toolCalls)
@@ -342,7 +342,7 @@ func GetMessages(sessionId string) ([]Message, error) {
 			return nil, err
 		}
 		if tc != nil {
-			var raw interface{}
+			var raw any
 			if err := json.Unmarshal([]byte(*tc), &raw); err == nil {
 				m.ToolCalls = raw
 			}
@@ -355,7 +355,7 @@ func GetMessages(sessionId string) ([]Message, error) {
 	return msgs, nil
 }
 
-func LogToolCall(id, sessionId, name string, input interface{}, result string, isError bool, durationMs int64) error {
+func LogToolCall(id, sessionId, name string, input any, result string, isError bool, durationMs int64) error {
 	inputJSON, _ := json.Marshal(input)
 	errInt := 0
 	if isError {

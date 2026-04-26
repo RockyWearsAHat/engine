@@ -115,7 +115,7 @@ func ollamaPing() {
 		return
 	}
 
-	payload, _ := json.Marshal(map[string]interface{}{
+	payload, _ := json.Marshal(map[string]any{
 		"model":      model,
 		"prompt":     "",
 		"keep_alive": keepAlive,
@@ -223,13 +223,13 @@ func firstOllamaModel(url string, listKey string, nameKey string) string {
 		return ""
 	}
 
-	var payload map[string]interface{}
+	var payload map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return ""
 	}
-	items, _ := payload[listKey].([]interface{})
+	items, _ := payload[listKey].([]any)
 	for _, item := range items {
-		entry, _ := item.(map[string]interface{})
+		entry, _ := item.(map[string]any)
 		if entry == nil {
 			continue
 		}
@@ -245,14 +245,14 @@ type ChatContext struct {
 	ProjectPath      string
 	SessionID        string
 	OnChunk          func(content string, done bool)
-	OnToolCall       func(name string, input interface{})
-	OnToolResult     func(name string, result interface{}, isError bool)
+	OnToolCall       func(name string, input any)
+	OnToolResult     func(name string, result any, isError bool)
 	OnError          func(err string)
 	OnSessionUpdated func(session *db.Session)
 	// GetOpenTabs returns the client's currently open editor tabs.
 	GetOpenTabs func() []TabInfo
 	// SendToClient sends an arbitrary message back to the WS client.
-	SendToClient func(msgType string, payload interface{})
+	SendToClient func(msgType string, payload any)
 	// RequestApproval asks the client to elevate a risky action and blocks until the user responds.
 	RequestApproval func(kind, title, message, command string) (bool, error)
 	// Cancel, when closed, signals the agentic loop to stop at the next safe checkpoint.
@@ -309,8 +309,8 @@ type TabInfo struct {
 type ToolCall struct {
 	ID      string      `json:"id"`
 	Name    string      `json:"name"`
-	Input   interface{} `json:"input"`
-	Result  interface{} `json:"result,omitempty"`
+	Input   any `json:"input"`
+	Result  any `json:"result,omitempty"`
 	IsError bool        `json:"isError,omitempty"`
 }
 
@@ -319,12 +319,12 @@ type ToolCall struct {
 type anthropicTool struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
-	InputSchema interface{} `json:"input_schema"`
+	InputSchema any `json:"input_schema"`
 }
 
 type anthropicMessage struct {
 	Role    string      `json:"role"`
-	Content interface{} `json:"content"` // string | []contentBlock
+	Content any `json:"content"` // string | []contentBlock
 	// Vital marks this message as a key checkpoint. Vital messages are always kept during
 	// context windowing; only non-vital messages are pruned when context grows too large.
 	// Never serialised to the API.
@@ -336,7 +336,7 @@ type contentBlock struct {
 	Text      string      `json:"text,omitempty"`
 	ID        string      `json:"id,omitempty"`
 	Name      string      `json:"name,omitempty"`
-	Input     interface{} `json:"input,omitempty"`
+	Input     any `json:"input,omitempty"`
 	ToolUseID string      `json:"tool_use_id,omitempty"`
 	Content   string      `json:"content,omitempty"`
 }
@@ -351,12 +351,12 @@ type anthropicRequest struct {
 }
 
 // strProp is a helper to build simple {"type":"string","description":"..."} JSON.
-func strProp(desc string) interface{} {
-	return map[string]interface{}{"type": "string", "description": desc}
+func strProp(desc string) any {
+	return map[string]any{"type": "string", "description": desc}
 }
 
-func objSchema(required []string, props map[string]interface{}) interface{} {
-	return map[string]interface{}{
+func objSchema(required []string, props map[string]any) any {
+	return map[string]any{
 		"type":       "object",
 		"properties": props,
 		"required":   required,
@@ -371,7 +371,7 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "search_tools",
 		Description: "Search for available tools by describing what you want to do. Returns matching tool names, descriptions, and full schemas — and makes them available for immediate use. Call this during your planning phase before executing, or whenever you need a capability you don't currently have.",
-		InputSchema: objSchema([]string{"query"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"query"}, map[string]any{
 			"query": strProp("Natural language description of what you want to do, e.g. 'run shell commands', 'commit to git', 'open GitHub issues'"),
 		}),
 	},
@@ -379,14 +379,14 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "read_file",
 		Description: "Read the contents of a file at the given path.",
-		InputSchema: objSchema([]string{"path"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"path"}, map[string]any{
 			"path": strProp("Absolute path to the file"),
 		}),
 	},
 	{
 		Name:        "list_directory",
 		Description: "List files and directories at a path, up to 4 levels deep.",
-		InputSchema: objSchema([]string{"path"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"path"}, map[string]any{
 			"path": strProp("Absolute directory path"),
 		}),
 	},
@@ -394,7 +394,7 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "write_file",
 		Description: "Create or overwrite a file with the given content. Parent directories are created automatically. Use this whenever you need to create a new file or save content to disk.",
-		InputSchema: objSchema([]string{"path", "content"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"path", "content"}, map[string]any{
 			"path":    strProp("Absolute path to write to"),
 			"content": strProp("Content to write"),
 		}),
@@ -402,7 +402,7 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "open_file",
 		Description: "Open an EXISTING file in the editor so the user can view it. This does NOT create files — use write_file to create new files.",
-		InputSchema: objSchema([]string{"path"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"path"}, map[string]any{
 			"path": strProp("Absolute path to the existing file to open"),
 		}),
 	},
@@ -410,7 +410,7 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "shell",
 		Description: "Execute a shell command and return stdout + stderr. Use for running tests, builds, installs, etc.",
-		InputSchema: objSchema([]string{"command"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"command"}, map[string]any{
 			"command": strProp("Shell command to run"),
 			"cwd":     strProp("Working directory (optional, defaults to project root)"),
 		}),
@@ -418,7 +418,7 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "test.run",
 		Description: "Run a test command in the client terminal and observe output for issue resolution.",
-		InputSchema: objSchema([]string{"command"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"command"}, map[string]any{
 			"command":    strProp("Shell command to run"),
 			"terminalId": strProp("Terminal ID to run in (optional)"),
 			"issue":      strProp("Issue description to validate against"),
@@ -428,7 +428,7 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "search_files",
 		Description: "Search for a pattern in files using ripgrep. Returns matching lines with file paths and line numbers.",
-		InputSchema: objSchema([]string{"pattern"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"pattern"}, map[string]any{
 			"pattern":      strProp("Regex pattern to search for"),
 			"directory":    strProp("Directory to search in (optional, defaults to project root)"),
 			"file_pattern": strProp("Glob pattern to filter files (e.g. \"*.go\")"),
@@ -437,10 +437,10 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "search_history",
 		Description: "Search Engine's stored history for the current project across prior sessions, summaries, learnings, and validation evidence. Results are scoped to this project only.",
-		InputSchema: objSchema([]string{"query"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"query"}, map[string]any{
 			"query": strProp("Keywords or question to search for in prior Engine history"),
 			"scope": strProp("Optional scope: current-session (only this session) or project (all sessions for this project, default)"),
-			"limit": map[string]interface{}{
+			"limit": map[string]any{
 				"type":        "number",
 				"description": "Optional max results to return (default 5, max 10)",
 			},
@@ -450,19 +450,19 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "git_status",
 		Description: "Get the current git status: branch, staged/unstaged/untracked files.",
-		InputSchema: objSchema(nil, map[string]interface{}{}),
+		InputSchema: objSchema(nil, map[string]any{}),
 	},
 	{
 		Name:        "git_diff",
 		Description: "Get git diff for current changes (staged + unstaged).",
-		InputSchema: objSchema(nil, map[string]interface{}{
+		InputSchema: objSchema(nil, map[string]any{
 			"path": strProp("Specific file path to diff (optional)"),
 		}),
 	},
 	{
 		Name:        "git_commit",
 		Description: "Stage all changes and create a git commit.",
-		InputSchema: objSchema([]string{"message"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"message"}, map[string]any{
 			"message": strProp("Commit message"),
 		}),
 	},
@@ -470,25 +470,25 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "get_system_info",
 		Description: "Get current system resource usage: memory (used/total/%), CPU %, and disk usage for the project path.",
-		InputSchema: objSchema(nil, map[string]interface{}{}),
+		InputSchema: objSchema(nil, map[string]any{}),
 	},
 	{
 		Name:        "list_open_tabs",
 		Description: "List the files currently open in the editor. Returns path, whether it is the active tab, and whether it has unsaved changes.",
-		InputSchema: objSchema(nil, map[string]interface{}{}),
+		InputSchema: objSchema(nil, map[string]any{}),
 	},
 	{
 		Name:        "close_tab",
 		Description: "Close a specific file tab in the editor. Will not close tabs with unsaved changes unless force is true.",
-		InputSchema: objSchema([]string{"path"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"path"}, map[string]any{
 			"path":  strProp("Absolute path of the tab to close"),
-			"force": map[string]interface{}{"type": "boolean", "description": "Force close even if there are unsaved changes"},
+			"force": map[string]any{"type": "boolean", "description": "Force close even if there are unsaved changes"},
 		}),
 	},
 	{
 		Name:        "focus_tab",
 		Description: "Bring a specific file tab to the foreground in the editor.",
-		InputSchema: objSchema([]string{"path"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"path"}, map[string]any{
 			"path": strProp("Absolute path of the tab to focus"),
 		}),
 	},
@@ -496,7 +496,7 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "github_list_issues",
 		Description: "List GitHub issues for a repository.",
-		InputSchema: objSchema([]string{"owner", "repo"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"owner", "repo"}, map[string]any{
 			"owner": strProp("Repository owner"),
 			"repo":  strProp("Repository name"),
 			"state": strProp("Issue state: open, closed, or all (default: open)"),
@@ -505,26 +505,26 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "github_get_issue",
 		Description: "Get details of a specific GitHub issue.",
-		InputSchema: objSchema([]string{"owner", "repo", "number"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"owner", "repo", "number"}, map[string]any{
 			"owner":  strProp("Repository owner"),
 			"repo":   strProp("Repository name"),
-			"number": map[string]interface{}{"type": "number", "description": "Issue number"},
+			"number": map[string]any{"type": "number", "description": "Issue number"},
 		}),
 	},
 	{
 		Name:        "github_close_issue",
 		Description: "Close a GitHub issue with an optional comment explaining the resolution.",
-		InputSchema: objSchema([]string{"owner", "repo", "number"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"owner", "repo", "number"}, map[string]any{
 			"owner":   strProp("Repository owner"),
 			"repo":    strProp("Repository name"),
-			"number":  map[string]interface{}{"type": "number", "description": "Issue number"},
+			"number":  map[string]any{"type": "number", "description": "Issue number"},
 			"comment": strProp("Closing comment with resolution evidence"),
 		}),
 	},
 	{
 		Name:        "github_create_issue",
 		Description: "Create a new GitHub issue.",
-		InputSchema: objSchema([]string{"owner", "repo", "title"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"owner", "repo", "title"}, map[string]any{
 			"owner": strProp("Repository owner"),
 			"repo":  strProp("Repository name"),
 			"title": strProp("Issue title"),
@@ -534,10 +534,10 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "github_comment",
 		Description: "Add a comment to a GitHub issue.",
-		InputSchema: objSchema([]string{"owner", "repo", "number", "body"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"owner", "repo", "number", "body"}, map[string]any{
 			"owner":  strProp("Repository owner"),
 			"repo":   strProp("Repository name"),
-			"number": map[string]interface{}{"type": "number", "description": "Issue number"},
+			"number": map[string]any{"type": "number", "description": "Issue number"},
 			"body":   strProp("Comment body"),
 		}),
 	},
@@ -545,52 +545,52 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "git_push",
 		Description: "Push the current branch to the remote repository. Requires user approval.",
-		InputSchema: objSchema(nil, map[string]interface{}{
+		InputSchema: objSchema(nil, map[string]any{
 			"remote": strProp("Remote name (optional, defaults to 'origin')"),
 		}),
 	},
 	{
 		Name:        "git_pull",
 		Description: "Pull latest changes from the remote repository for the current branch.",
-		InputSchema: objSchema(nil, map[string]interface{}{
+		InputSchema: objSchema(nil, map[string]any{
 			"remote": strProp("Remote name (optional, defaults to 'origin')"),
 		}),
 	},
 	{
 		Name:        "git_branch",
 		Description: "Create a new branch and switch to it, switch to an existing branch, or list all local branches.",
-		InputSchema: objSchema(nil, map[string]interface{}{
+		InputSchema: objSchema(nil, map[string]any{
 			"name":   strProp("Branch name to create or switch to (optional — omit to list all branches)"),
-			"create": map[string]interface{}{"type": "boolean", "description": "Create the branch if true, otherwise switch to existing"},
+			"create": map[string]any{"type": "boolean", "description": "Create the branch if true, otherwise switch to existing"},
 		}),
 	},
 	// ── System control ────────────────────────────────────────────────────
 	{
 		Name:        "process_list",
 		Description: "List running processes with PID, name, CPU%, and memory usage. Optionally filter by name.",
-		InputSchema: objSchema(nil, map[string]interface{}{
+		InputSchema: objSchema(nil, map[string]any{
 			"filter": strProp("Substring to filter process names (optional)"),
 		}),
 	},
 	{
 		Name:        "process_kill",
 		Description: "Kill a running process by PID. Requires explicit approval. Use TERM for graceful shutdown, KILL to force.",
-		InputSchema: objSchema([]string{"pid"}, map[string]interface{}{
-			"pid":    map[string]interface{}{"type": "number", "description": "Process ID to kill"},
+		InputSchema: objSchema([]string{"pid"}, map[string]any{
+			"pid":    map[string]any{"type": "number", "description": "Process ID to kill"},
 			"signal": strProp("Signal to send: TERM (default, graceful) or KILL (force)"),
 		}),
 	},
 	{
 		Name:        "open_url",
 		Description: "Open a URL in the system default browser.",
-		InputSchema: objSchema([]string{"url"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"url"}, map[string]any{
 			"url": strProp("URL to open"),
 		}),
 	},
 	{
 		Name:        "screenshot",
 		Description: "Capture a screenshot of the current screen. Returns the file path of the saved PNG for further inspection.",
-		InputSchema: objSchema(nil, map[string]interface{}{
+		InputSchema: objSchema(nil, map[string]any{
 			"path": strProp("Output path for the PNG (optional, defaults to /tmp/engine-screenshot-{timestamp}.png)"),
 		}),
 	},
@@ -598,7 +598,7 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "git_clone",
 		Description: "Clone a git repository to a local path. Use when you need to work on a repository that is not already cloned locally.",
-		InputSchema: objSchema([]string{"url"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"url"}, map[string]any{
 			"url":  strProp("Repository URL to clone (https:// or git@ format)"),
 			"path": strProp("Local destination path (optional; defaults to ~/engine-workspace/<repo-name>)"),
 		}),
@@ -611,8 +611,8 @@ var toolRegistry = []anthropicTool{
 			"Call this at the end of a completed phase or section to checkpoint important findings, " +
 			"decisions, or deliverables. Non-vital messages will be pruned once they fall outside the " +
 			"recent window. This keeps context lean without losing key milestones.",
-		InputSchema: objSchema(nil, map[string]interface{}{
-			"n": map[string]interface{}{"type": "number", "description": "Number of recent messages to mark vital (default 1)"},
+		InputSchema: objSchema(nil, map[string]any{
+			"n": map[string]any{"type": "number", "description": "Number of recent messages to mark vital (default 1)"},
 		}),
 	},
 
@@ -620,27 +620,27 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "browser_navigate",
 		Description: "Navigate the system browser (Chrome on macOS) to a URL. Use to research sites, access web apps, or start a login flow.",
-		InputSchema: objSchema([]string{"url"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"url"}, map[string]any{
 			"url": strProp("URL to navigate to"),
 		}),
 	},
 	{
 		Name:        "browser_read_page",
 		Description: "Read the visible text content of the currently active browser tab (up to 8000 chars). Use after browser_navigate to extract page content.",
-		InputSchema: objSchema(nil, map[string]interface{}{}),
+		InputSchema: objSchema(nil, map[string]any{}),
 	},
 	{
 		Name:        "browser_click",
 		Description: "Click at screen coordinates in the browser window. Use after browser_navigate and screenshot to interact with UI elements.",
-		InputSchema: objSchema([]string{"x", "y"}, map[string]interface{}{
-			"x": map[string]interface{}{"type": "number", "description": "Screen X coordinate"},
-			"y": map[string]interface{}{"type": "number", "description": "Screen Y coordinate"},
+		InputSchema: objSchema([]string{"x", "y"}, map[string]any{
+			"x": map[string]any{"type": "number", "description": "Screen X coordinate"},
+			"y": map[string]any{"type": "number", "description": "Screen Y coordinate"},
 		}),
 	},
 	{
 		Name:        "browser_type",
 		Description: "Type text into the focused browser element. Use after browser_click to fill in a form field.",
-		InputSchema: objSchema([]string{"text"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"text"}, map[string]any{
 			"text": strProp("Text to type"),
 		}),
 	},
@@ -648,7 +648,7 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "credential_set",
 		Description: "Store a credential in the machine keychain, scoped to this Engine installation (not per-project). Use to save passwords, tokens, or API keys for reuse across sessions.",
-		InputSchema: objSchema([]string{"key", "value"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"key", "value"}, map[string]any{
 			"key":   strProp("Credential key/name (e.g. 'github_token', 'openai_key')"),
 			"value": strProp("Secret value to store"),
 		}),
@@ -656,14 +656,14 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "credential_get",
 		Description: "Retrieve a previously stored credential from the machine keychain.",
-		InputSchema: objSchema([]string{"key"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"key"}, map[string]any{
 			"key": strProp("Credential key/name to retrieve"),
 		}),
 	},
 	{
 		Name:        "credential_delete",
 		Description: "Delete a stored credential from the machine keychain.",
-		InputSchema: objSchema([]string{"key"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"key"}, map[string]any{
 			"key": strProp("Credential key/name to delete"),
 		}),
 	},
@@ -671,7 +671,7 @@ var toolRegistry = []anthropicTool{
 	{
 		Name:        "discord_dm",
 		Description: "Send a direct message to the project owner via Discord. Use when you need credentials, approval, or human input that cannot be obtained autonomously.",
-		InputSchema: objSchema([]string{"message"}, map[string]interface{}{
+		InputSchema: objSchema([]string{"message"}, map[string]any{
 			"message": strProp("Message to send to the project owner"),
 		}),
 	},
@@ -779,15 +779,15 @@ func executeSearchTools(query string, ctx *ChatContext) string {
 }
 
 // executeTool runs the named tool and returns (result string, isError bool).
-func executeTool(name string, input map[string]interface{}, ctx *ChatContext) (string, bool) {
+func executeTool(name string, input map[string]any, ctx *ChatContext) (string, bool) {
 	return aiExecuteTool(name, input, ctx)
 }
 
-func ExecuteToolForTest(name string, input map[string]interface{}, ctx *ChatContext) (string, bool) {
+func ExecuteToolForTest(name string, input map[string]any, ctx *ChatContext) (string, bool) {
 	return aiExecuteTool(name, input, ctx)
 }
 
-func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) (string, bool) {
+func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string, bool) {
 	str := func(key string) string {
 		v, _ := input[key].(string)
 		return v
@@ -825,7 +825,7 @@ func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) 
 			return err.Error(), true
 		}
 		if ctx.SendToClient != nil {
-			ctx.SendToClient("file.saved", map[string]interface{}{"path": path})
+			ctx.SendToClient("file.saved", map[string]any{"path": path})
 		}
 		return "File written: " + path, false
 
@@ -1025,7 +1025,7 @@ func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) 
 		}
 
 		// Notify client to run the command and observe
-		ctx.SendToClient("test.run", map[string]interface{}{
+		ctx.SendToClient("test.run", map[string]any{
 			"terminalId": terminalID,
 			"command":    command,
 			"issue":      issue,
@@ -1563,7 +1563,7 @@ func Chat(ctx *ChatContext, userMessage string) {
 	newProvider(provider).RunLoop(ctx, model, systemPrompt, messages, &allToolCalls, &finalText)
 
 	// Persist final assistant message
-	var tc interface{}
+	var tc any
 	if len(allToolCalls) > 0 {
 		tc = allToolCalls
 	}
@@ -1694,9 +1694,9 @@ func runAnthropicLoop(
 			if block.Type != "tool_use" {
 				continue
 			}
-			inputMap, _ := block.Input.(map[string]interface{})
+			inputMap, _ := block.Input.(map[string]any)
 			if inputMap == nil {
-				inputMap = map[string]interface{}{}
+				inputMap = map[string]any{}
 			}
 
 			if ctx.Quarantine != nil {
@@ -1763,7 +1763,7 @@ type usageSnapshot struct {
 	OutputTokens int
 }
 
-func tokenCountFromUsage(usage map[string]interface{}, key string) int {
+func tokenCountFromUsage(usage map[string]any, key string) int {
 	v, ok := usage[key]
 	if !ok || v == nil {
 		return 0
@@ -1801,7 +1801,7 @@ func streamRequest(
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		var errBody map[string]interface{}
+		var errBody map[string]any
 		json.NewDecoder(resp.Body).Decode(&errBody) //nolint:errcheck
 		return nil, "", usageSnapshot{}, 0, fmt.Errorf("anthropic error %d: %v", resp.StatusCode, errBody)
 	}
@@ -1826,14 +1826,14 @@ func streamRequest(
 			break
 		}
 
-		var event map[string]interface{}
+		var event map[string]any
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			continue
 		}
 
 		switch event["type"] {
 		case "content_block_start":
-			cb, _ := event["content_block"].(map[string]interface{})
+			cb, _ := event["content_block"].(map[string]any)
 			if cb == nil {
 				continue
 			}
@@ -1847,7 +1847,7 @@ func streamRequest(
 			}
 
 		case "content_block_delta":
-			delta, _ := event["delta"].(map[string]interface{})
+			delta, _ := event["delta"].(map[string]any)
 			if delta == nil {
 				continue
 			}
@@ -1872,7 +1872,7 @@ func streamRequest(
 				if inputStr == "" {
 					inputStr = "{}"
 				}
-				var inputMap map[string]interface{}
+				var inputMap map[string]any
 				json.Unmarshal([]byte(inputStr), &inputMap) //nolint:errcheck
 				curTool.Input = inputMap
 				blocks = append(blocks, *curTool)
@@ -1883,9 +1883,9 @@ func streamRequest(
 			}
 
 		case "message_start":
-			msg, _ := event["message"].(map[string]interface{})
+			msg, _ := event["message"].(map[string]any)
 			if msg != nil {
-				usageMap, _ := msg["usage"].(map[string]interface{})
+				usageMap, _ := msg["usage"].(map[string]any)
 				if usageMap != nil {
 					usage.InputTokens = tokenCountFromUsage(usageMap, "input_tokens")
 					usage.OutputTokens = tokenCountFromUsage(usageMap, "output_tokens")
@@ -1893,9 +1893,9 @@ func streamRequest(
 			}
 
 		case "message_delta":
-			md, _ := event["delta"].(map[string]interface{})
+			md, _ := event["delta"].(map[string]any)
 			if md != nil {
-				if deltaUsage, ok := md["usage"].(map[string]interface{}); ok {
+				if deltaUsage, ok := md["usage"].(map[string]any); ok {
 					if out := tokenCountFromUsage(deltaUsage, "output_tokens"); out > 0 {
 						usage.OutputTokens = out
 					}
@@ -1924,7 +1924,7 @@ func newID() string {
 type openAIFunction struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
-	Parameters  interface{} `json:"parameters"`
+	Parameters  any `json:"parameters"`
 }
 
 type openAITool struct {
@@ -1934,9 +1934,9 @@ type openAITool struct {
 
 type openAIMessage struct {
 	Role       string      `json:"role"`
-	Content    interface{} `json:"content,omitempty"` // string or nil
+	Content    any `json:"content,omitempty"` // string or nil
 	ToolCallID string      `json:"tool_call_id,omitempty"`
-	ToolCalls  interface{} `json:"tool_calls,omitempty"`
+	ToolCalls  any `json:"tool_calls,omitempty"`
 }
 
 type openAIRequest struct {
@@ -2032,7 +2032,7 @@ func runOpenAICompatibleLoop(
 		defer resp.Body.Close()
 
 		if resp.StatusCode != 200 {
-			var errBody map[string]interface{}
+			var errBody map[string]any
 			json.NewDecoder(resp.Body).Decode(&errBody) //nolint:errcheck
 			ctx.OnError(fmt.Sprintf("%s error %d: %v", providerName, resp.StatusCode, errBody))
 			return
@@ -2064,11 +2064,11 @@ func runOpenAICompatibleLoop(
 			if data == "[DONE]" {
 				break
 			}
-			var event map[string]interface{}
+			var event map[string]any
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
 				continue
 			}
-			if usageMap, ok := event["usage"].(map[string]interface{}); ok {
+			if usageMap, ok := event["usage"].(map[string]any); ok {
 				if in := tokenCountFromUsage(usageMap, "prompt_tokens"); in > 0 {
 					promptTokens = in
 				}
@@ -2076,15 +2076,15 @@ func runOpenAICompatibleLoop(
 					completionTokens = out
 				}
 			}
-			choices, _ := event["choices"].([]interface{})
+			choices, _ := event["choices"].([]any)
 			if len(choices) == 0 {
 				continue
 			}
-			choice, _ := choices[0].(map[string]interface{})
+			choice, _ := choices[0].(map[string]any)
 			if fr, ok := choice["finish_reason"].(string); ok && fr != "" {
 				finishReason = fr
 			}
-			delta, _ := choice["delta"].(map[string]interface{})
+			delta, _ := choice["delta"].(map[string]any)
 			if delta == nil {
 				continue
 			}
@@ -2093,9 +2093,9 @@ func runOpenAICompatibleLoop(
 				finalText.WriteString(text)
 				ctx.OnChunk(text, false)
 			}
-			if tcs, ok := delta["tool_calls"].([]interface{}); ok {
+			if tcs, ok := delta["tool_calls"].([]any); ok {
 				for _, tcRaw := range tcs {
-					tc, _ := tcRaw.(map[string]interface{})
+					tc, _ := tcRaw.(map[string]any)
 					if tc == nil {
 						continue
 					}
@@ -2107,7 +2107,7 @@ func runOpenAICompatibleLoop(
 					if id, ok := tc["id"].(string); ok && id != "" {
 						tcd.id = id
 					}
-					if fn, ok := tc["function"].(map[string]interface{}); ok {
+					if fn, ok := tc["function"].(map[string]any); ok {
 						if name, ok := fn["name"].(string); ok && name != "" {
 							tcd.name = name
 						}
@@ -2187,7 +2187,7 @@ func runOpenAICompatibleLoop(
 				continue
 			}
 
-			var inputMap map[string]interface{}
+			var inputMap map[string]any
 			argsStr := tcd.args.String()
 			if argsStr == "" || argsStr == "null" {
 				argsStr = "{}"
@@ -2195,7 +2195,7 @@ func runOpenAICompatibleLoop(
 			if err := json.Unmarshal([]byte(argsStr), &inputMap); err != nil || inputMap == nil {
 				// E1: malformed args — feed compact error back, skip execution
 				errMsg := fmt.Sprintf("E1: invalid JSON arguments for %s. Correct the arguments and retry.", tcd.name)
-				ctx.OnToolCall(tcd.name, map[string]interface{}{"_raw": argsStr})
+				ctx.OnToolCall(tcd.name, map[string]any{"_raw": argsStr})
 				ctx.OnToolResult(tcd.name, errMsg, true)
 				msgs = append(msgs, openAIMessage{Role: "tool", ToolCallID: tcd.id, Content: errMsg})
 				continue

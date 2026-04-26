@@ -82,7 +82,7 @@ func TestLoadProjectTools_WithParams_BuildsSchema(t *testing.T) {
 		t.Fatalf("expected 1 tool, got %d", len(defs))
 	}
 	schema := defs[0].schema
-	s, ok := schema.InputSchema.(map[string]interface{})
+	s, ok := schema.InputSchema.(map[string]any)
 	if !ok {
 		t.Fatalf("InputSchema type: %T", schema.InputSchema)
 	}
@@ -191,11 +191,11 @@ func TestProjectToolToSchema_NoParams_EmptySchema(t *testing.T) {
 	if !strings.Contains(s.Description, "[project tool]") {
 		t.Errorf("description missing prefix: %q", s.Description)
 	}
-	schema, ok := s.InputSchema.(map[string]interface{})
+	schema, ok := s.InputSchema.(map[string]any)
 	if !ok {
 		t.Fatalf("expected map, got %T", s.InputSchema)
 	}
-	props, _ := schema["properties"].(map[string]interface{})
+	props, _ := schema["properties"].(map[string]any)
 	if len(props) != 0 {
 		t.Errorf("expected empty properties, got %v", props)
 	}
@@ -212,12 +212,12 @@ func TestProjectToolToSchema_RequiredAndOptionalParams(t *testing.T) {
 		},
 	}
 	s := projectToolToSchema(def)
-	schema, _ := s.InputSchema.(map[string]interface{})
+	schema, _ := s.InputSchema.(map[string]any)
 	req, _ := schema["required"].([]string)
 	if len(req) != 1 || req[0] != "target" {
 		t.Errorf("required: %v", req)
 	}
-	props, _ := schema["properties"].(map[string]interface{})
+	props, _ := schema["properties"].(map[string]any)
 	if _, ok := props["flags"]; !ok {
 		t.Error("optional param 'flags' should be in properties")
 	}
@@ -295,7 +295,7 @@ func TestExecuteProjectTool_PassesInputsAsEnv(t *testing.T) {
 			}(),
 		},
 	}
-	result, _, found := executeProjectTool("echo_env", map[string]interface{}{"target": "staging"}, ctx)
+	result, _, found := executeProjectTool("echo_env", map[string]any{"target": "staging"}, ctx)
 	if !found {
 		t.Fatal("expected found=true")
 	}
@@ -565,7 +565,7 @@ func TestExecuteProjectTool_NumericInput_FormatsCorrectly(t *testing.T) {
 			}(),
 		},
 	}
-	result, _, found := executeProjectTool("echo_count", map[string]interface{}{"count": float64(42)}, ctx)
+	result, _, found := executeProjectTool("echo_count", map[string]any{"count": float64(42)}, ctx)
 	if !found {
 		t.Fatal("expected found=true")
 	}

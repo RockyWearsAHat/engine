@@ -374,7 +374,7 @@ func TestUpdateIssue(t *testing.T) {
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
-	issue, err := c.UpdateIssue(3, map[string]interface{}{"title": "Updated"})
+	issue, err := c.UpdateIssue(3, map[string]any{"title": "Updated"})
 	if err != nil {
 		t.Fatalf("UpdateIssue: %v", err)
 	}
@@ -685,7 +685,7 @@ func TestUpdateIssue_DoPatchError(t *testing.T) {
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
-	_, err := c.UpdateIssue(1, map[string]interface{}{"title": "x"})
+	_, err := c.UpdateIssue(1, map[string]any{"title": "x"})
 	if err == nil {
 		t.Fatal("expected update issue error")
 	}
@@ -698,7 +698,7 @@ func TestUpdateIssue_ParseError(t *testing.T) {
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
-	_, err := c.UpdateIssue(1, map[string]interface{}{"title": "x"})
+	_, err := c.UpdateIssue(1, map[string]any{"title": "x"})
 	if err == nil {
 		t.Fatal("expected parse error")
 	}
@@ -714,7 +714,7 @@ func TestDoGet_BadURL(t *testing.T) {
 
 func TestDoPost_MarshalError(t *testing.T) {
 	c := newClientWithBase("http://example.com")
-	_, err := c.doPost("http://example.com/x", map[string]interface{}{"bad": make(chan int)})
+	_, err := c.doPost("http://example.com/x", map[string]any{"bad": make(chan int)})
 	if err == nil {
 		t.Fatal("expected marshal error")
 	}
@@ -722,7 +722,7 @@ func TestDoPost_MarshalError(t *testing.T) {
 
 func TestDoPatch_MarshalError(t *testing.T) {
 	c := newClientWithBase("http://example.com")
-	_, err := c.doPatch("http://example.com/x", map[string]interface{}{"bad": make(chan int)})
+	_, err := c.doPatch("http://example.com/x", map[string]any{"bad": make(chan int)})
 	if err == nil {
 		t.Fatal("expected marshal error")
 	}

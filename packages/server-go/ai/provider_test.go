@@ -247,8 +247,8 @@ func TestOllamaProvider_RunLoop_Cancelled(t *testing.T) {
 	ctx := &ChatContext{
 		Cancel:      ch,
 		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(string) {},
 		ActiveTools: bootstrapTools(),
 	}
@@ -273,8 +273,8 @@ func TestOllamaProvider_RunLoop_ServerResponse(t *testing.T) {
 	var chunks []string
 	ctx := &ChatContext{
 		OnChunk:     func(content string, _ bool) { chunks = append(chunks, content) },
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(string) {},
 		ActiveTools: bootstrapTools(),
 	}
@@ -296,8 +296,8 @@ func TestOpenAIProvider_RunLoop_Cancelled(t *testing.T) {
 	ctx := &ChatContext{
 		Cancel:      ch,
 		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(string) {},
 		ActiveTools: bootstrapTools(),
 	}
@@ -316,8 +316,8 @@ func TestAnthropicProvider_RunLoop_Cancelled(t *testing.T) {
 	ctx := &ChatContext{
 		Cancel:      ch,
 		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(string) {},
 		ActiveTools: bootstrapTools(),
 		Usage:       &SessionUsage{},

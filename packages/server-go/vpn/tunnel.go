@@ -91,7 +91,7 @@ func (t *Tunnel) RegisterRoutes(mux *http.ServeMux, wsHandler http.HandlerFunc) 
 	mux.Handle("/ws", t.Auth.AuthMiddleware(http.HandlerFunc(wsHandler)))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "vpn": true}) //nolint:errcheck
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok", "vpn": true}) //nolint:errcheck
 	})
 }
 
@@ -113,7 +113,7 @@ func (t *Tunnel) handleVPNPair(w http.ResponseWriter, r *http.Request) {
 
 	if !t.Pairing.ValidateCode(req.Code) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "invalid or expired pairing code"}) //nolint:errcheck
+		json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "invalid or expired pairing code"}) //nolint:errcheck
 		return
 	}
 
@@ -143,7 +143,7 @@ func (t *Tunnel) handleVPNPair(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[engine-vpn] Device trusted: %s (%s)", deviceName, deviceID[:8])
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
+	json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
 		"ok":                true,
 		"token":             token,
 		"deviceId":          deviceID,
@@ -155,7 +155,7 @@ func (t *Tunnel) handleVPNPair(w http.ResponseWriter, r *http.Request) {
 func (t *Tunnel) handleDevices(w http.ResponseWriter, _ *http.Request) {
 	devices := t.Trust.List()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"devices": devices}) //nolint:errcheck
+	json.NewEncoder(w).Encode(map[string]any{"devices": devices}) //nolint:errcheck
 }
 
 func (t *Tunnel) handleRevoke(w http.ResponseWriter, r *http.Request) {
@@ -181,7 +181,7 @@ func (t *Tunnel) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[engine-vpn] Device revoked: %s", req.DeviceID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true}) //nolint:errcheck
+	json.NewEncoder(w).Encode(map[string]any{"ok": true}) //nolint:errcheck
 }
 
 // ListenAndServeTLS starts the VPN tunnel with TLS and Ed25519 authentication.

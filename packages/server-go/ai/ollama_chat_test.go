@@ -60,8 +60,8 @@ func TestChat_OllamaProvider_UsesRunningModelAndPersistsMessages(t *testing.T) {
 			}
 			chunks = append(chunks, content)
 		},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError: func(err string) {
 			t.Fatalf("unexpected chat error: %s", err)
 		},
@@ -131,8 +131,8 @@ func TestChat_RolePlanner_SeedsPreGrantedTools(t *testing.T) {
 				got.WriteString(content)
 			}
 		},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError: func(err string) {
 			t.Fatalf("unexpected chat error: %s", err)
 		},

@@ -639,7 +639,7 @@ func TestMain_RunFnError_UsesLogFatalFn(t *testing.T) {
 	withRunDepsReset(t)
 	called := false
 	runFn = func() error { return errors.New("boom") }
-	logFatalFn = func(v ...interface{}) { called = true }
+	logFatalFn = func(v ...any) { called = true }
 
 	main()
 	if !called {
@@ -923,7 +923,7 @@ func TestTriggerSessions_DBCreateAndSaveErrorsCovered(t *testing.T) {
 	withRunDepsReset(t)
 	withAIMockServer(t)
 	createSessionFn = func(id, projectPath, branchName string) error { return errors.New("create fail") }
-	saveMessageFn = func(id, sessionId, role, content string, toolCalls interface{}) error {
+	saveMessageFn = func(id, sessionId, role, content string, toolCalls any) error {
 		return errors.New("save fail")
 	}
 
@@ -937,7 +937,7 @@ func TestTriggerSessions_SaveMessageErrorBranchesCovered(t *testing.T) {
 	projectPath := t.TempDir()
 	withRunDepsReset(t)
 	createSessionFn = func(id, projectPath, branchName string) error { return nil }
-	saveMessageFn = func(id, sessionId, role, content string, toolCalls interface{}) error {
+	saveMessageFn = func(id, sessionId, role, content string, toolCalls any) error {
 		return errors.New("save fail")
 	}
 	aiChatFn = func(ctx *ai.ChatContext, prompt string) {

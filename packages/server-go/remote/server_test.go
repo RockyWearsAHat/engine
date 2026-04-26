@@ -68,7 +68,7 @@ func TestRemoteStatus_Handler(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rr.Code)
 	}
-	var resp map[string]interface{}
+	var resp map[string]any
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestHealth_Handler(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rr.Code)
 	}
-	var resp map[string]interface{}
+	var resp map[string]any
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestHandlePair_InvalidCode(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rr.Code)
 	}
-	var resp map[string]interface{}
+	var resp map[string]any
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestHandlePair_ValidCode(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rr.Code)
 	}
-	var resp map[string]interface{}
+	var resp map[string]any
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestHandleRefresh_ValidToken(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rr.Code)
 	}
-	var resp map[string]interface{}
+	var resp map[string]any
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
