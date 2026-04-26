@@ -5,7 +5,7 @@
     // ── Go ──────────────────────────────────────────────────────────────
     "go.testFlags": [
         "-count=1",
-        "-coverprofile=coverage.out",
+        "-coverprofile=.coverage.out",
         "-covermode=atomic"
     ],
     "go.coverMode": "atomic",
@@ -69,6 +69,7 @@
 
     // ── Coverage Gutters ─────────────────────────────────────────────────
     "coverage-gutters.coverageFileNames": [
+        ".coverage.out",
         "coverage.out",
         "cover.out",
         "lcov.info",

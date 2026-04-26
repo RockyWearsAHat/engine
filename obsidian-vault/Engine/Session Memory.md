@@ -1,7 +1,7 @@
 ---
 source: ../.github/session-memory/session-log.jsonl
-generatedAt: 2026-04-26T17:15:00.033Z
-eventCount: 294
+generatedAt: 2026-04-26T18:47:20.144Z
+eventCount: 313
 ---
 
 # Session Memory
@@ -12,6 +12,25 @@ Auto-export of session events for Obsidian review.
 
 | Time | Action | Outcome | Surprise |
 | --- | --- | --- | --- |
+| 2026-04-26T18:47:16.804Z | auto tool call: strict_lint | success - Strict Linting — keychain.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T18:46:48.119Z | auto tool call: strict_lint | success - Strict Linting — keychain.go Summary: 3 error(s), 0 warning(s), 0 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/remote/keychain.go err... | 0.82 |
+| 2026-04-26T18:42:13.435Z | auto tool call: checkpoint | success - Committed f6672a9 on branch 'main' f6672a9 chore: route coverage outputs to cache and remove tracked coverage artifacts .gitignore \| 17 + .myeditor/state.db \| Bin 4096 -> 0 byte... | 0.20 |
+| 2026-04-26T18:36:49.525Z | auto tool call: strict_lint | success - Strict Linting — .gitignore Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T18:33:35.850Z | auto tool call: strict_lint | success - Strict Linting — coverage-all.mjs Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T18:32:15.035Z | auto tool call: strict_lint | success - Strict Linting — package.json Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T18:32:15.035Z | auto tool call: strict_lint | success - Strict Linting — tasks.json Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T18:32:15.034Z | auto tool call: strict_lint | success - Strict Linting — coverage-all.mjs Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T18:32:15.014Z | auto tool call: strict_lint | success - Strict Linting — vitest.config.ts Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T18:30:39.601Z | auto tool call: strict_lint | success - Strict Linting — .gitignore Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T18:26:54.227Z | auto tool call: strict_lint | success - Strict Linting — .gitignore Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T18:05:10.559Z | auto tool call: strict_lint | success - Strict Linting — .gitignore Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T18:01:42.180Z | auto tool call: strict_lint | success - Strict Linting — settings.json Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T18:01:42.180Z | auto tool call: strict_lint | success - Strict Linting — tasks.json Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T18:01:42.180Z | auto tool call: strict_lint | success - Strict Linting — coverage-all.mjs Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T18:01:42.164Z | auto tool call: strict_lint | success - Strict Linting — package.json Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T17:59:06.044Z | auto tool call: strict_lint | success - Strict Linting — .gitignore Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-26T17:56:35.905Z | auto tool call: workspace_context | success - Root: /Users/alexwaldmann/Desktop/MyEditor Branch: main Remote: https://github.com/RockyWearsAHat/engine.git Status: ## main...origin/main [ahead 2] M .github/WORKING_BEHAVIORS.... | 0.20 |
+| 2026-04-26T17:36:48.920Z | auto tool call: transcribe_video | success - { "videoPath": "https://www.youtube.com/watch?v=v2cPHF5oXcI", "durationSec": 765.261, "backend": "transformers.js", "segmentCount": 155, "segments": [ { "start": 0, "end": 4.08,... | 0.20 |
 | 2026-04-26T16:54:36.202Z | auto tool call: strict_lint | success - Strict Linting — agent-completion-report.json Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
 | 2026-04-26T16:53:29.139Z | auto tool call: strict_lint | success - Strict Linting — main_test.go Summary: 0 error(s), 0 warning(s), 3 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/main_test.go hint [an... | 0.82 |
 | 2026-04-26T16:53:27.853Z | auto tool call: strict_lint | success - Strict Linting — main.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
@@ -73,22 +92,3 @@ Auto-export of session events for Obsidian review.
 | 2026-04-26T08:34:16.158Z | auto tool call: strict_lint | success - Strict Linting — git.go Summary: 0 error(s), 0 warning(s), 5 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/git/git.go hint [stringsseq... | 0.82 |
 | 2026-04-26T08:27:36.638Z | auto tool call: strict_lint | success - Strict Linting — WORKING_BEHAVIORS.md Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
 | 2026-04-26T08:26:25.032Z | auto tool call: strict_lint | success - Strict Linting — team_config_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T08:26:25.032Z | auto tool call: strict_lint | success - Strict Linting — context.go Summary: 0 error(s), 0 warning(s), 97 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/context.go hint [an... | 0.82 |
-| 2026-04-26T08:26:25.032Z | auto tool call: strict_lint | success - Strict Linting — handler_extra_test.go Summary: 0 error(s), 0 warning(s), 116 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ws/handler... | 0.82 |
-| 2026-04-26T08:26:25.032Z | auto tool call: strict_lint | success - Strict Linting — handler.go Summary: 0 error(s), 0 warning(s), 63 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ws/handler.go hint [an... | 0.82 |
-| 2026-04-26T08:26:25.013Z | auto tool call: strict_lint | success - Strict Linting — team_config.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T08:24:28.270Z | auto tool call: workspace_context | success - Root: /Users/alexwaldmann/Desktop/MyEditor Branch: main Remote: https://github.com/RockyWearsAHat/engine.git Status: ## main...origin/main M packages/server-go/.agent-cover.out | 0.20 |
-| 2026-04-26T07:59:20.931Z | auto tool call: checkpoint | success - Committed e6ed45a on branch 'main' e6ed45a Add project-local tool discovery: .engine/tools/*.json auto-loaded into AI sessions .github/WORKING_BEHAVIORS.md \| 2 + packages/server... | 0.20 |
-| 2026-04-26T07:56:16.583Z | auto tool call: checkpoint | success - Committed 96e850e on branch 'main' 96e850e Make README webhook flow truly end-to-end: clone/sync target repo, enforce implement+validate+deliver phases in autonomous prompt, and... | 0.20 |
-| 2026-04-26T07:55:10.460Z | auto tool call: strict_lint | success - Strict Linting — main_test.go Summary: 0 error(s), 0 warning(s), 2 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/main_test.go hint [an... | 0.82 |
-| 2026-04-26T07:55:10.459Z | auto tool call: strict_lint | success - Strict Linting — main.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T06:15:26.644Z | auto tool call: strict_lint | success - Strict Linting — session_summary_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T06:14:27.254Z | auto tool call: strict_lint | success - Strict Linting — discord_test.go Summary: 0 error(s), 0 warning(s), 19 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ws/discord_test.g... | 0.82 |
-| 2026-04-26T06:14:07.454Z | auto tool call: strict_lint | success - Strict Linting — session_summary_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T06:10:14.730Z | auto tool call: strict_lint | success - Strict Linting — session_summary_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T06:08:58.168Z | auto tool call: strict_lint | success - Strict Linting — session_summary.go Summary: 0 error(s), 0 warning(s), 1 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/session_summ... | 0.82 |
-| 2026-04-26T06:08:58.169Z | auto tool call: strict_lint | success - Strict Linting — context.go Summary: 0 error(s), 0 warning(s), 94 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/context.go hint [an... | 0.82 |
-| 2026-04-26T06:08:58.170Z | auto tool call: strict_lint | success - Strict Linting — WORKING_BEHAVIORS.md Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T06:08:58.169Z | auto tool call: strict_lint | success - Strict Linting — session_summary_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T05:50:01.136Z | auto tool call: checkpoint | success - Committed 913173f on branch 'main' 913173f Fix Discord presence flapping by skipping no-op reloads .github/WORKING_BEHAVIORS.md \| 2 + .../components/Preferences/PreferencesPanel... | 0.20 |
-| 2026-04-26T05:49:55.041Z | fixed Discord online/offline flapping by preventing redundant discord service reloads on unchanged config and gating client auto-save after validate to inactive state only | success — targeted Go ws Discord tests and client preferences tests pass; diagnostics clean for edited files | 0.30 |

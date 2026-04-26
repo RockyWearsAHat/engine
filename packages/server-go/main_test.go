@@ -65,6 +65,7 @@ func (f *fakeDiscordService) SearchHistory(projectPath, query, since string, lim
 func (f *fakeDiscordService) RecentHistory(projectPath, threadID, since string, limit int) ([]db.DiscordMessage, error) {
 	return []db.DiscordMessage{}, nil
 }
+func (f *fakeDiscordService) SendDMToOwner(_ string) error { return nil }
 
 func withRunDepsReset(t *testing.T) {
 	t.Helper()
@@ -661,6 +662,7 @@ func (f *fakeDiscordServiceStartErr) SearchHistory(pp, q, since string, limit in
 func (f *fakeDiscordServiceStartErr) RecentHistory(pp, tid, since string, limit int) ([]db.DiscordMessage, error) {
 	return nil, nil
 }
+func (f *fakeDiscordServiceStartErr) SendDMToOwner(_ string) error { return nil }
 
 func TestRun_DiscordEnabled_StartError_NonFatal(t *testing.T) {
 	withRunDepsReset(t)

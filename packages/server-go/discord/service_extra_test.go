@@ -1,6 +1,9 @@
 package discord
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -605,6 +608,96 @@ func TestStateDir_WithEnvOverride(t *testing.T) {
 	got := stateDir("/some/project")
 	if got != custom {
 		t.Errorf("expected %q, got %q", custom, got)
+	}
+}
+
+// ── SendDM / SendDMToOwner ────────────────────────────────────────────────────
+
+func TestSendDM_NilSession_ReturnsError(t *testing.T) {
+	svc := &Service{}
+	err := svc.SendDM("user123", "hello")
+	if err == nil || err.Error() != "discord bot not connected" {
+		t.Fatalf("expected 'discord bot not connected', got %v", err)
+	}
+}
+
+func TestSendDMToOwner_NoUsersConfigured_ReturnsError(t *testing.T) {
+	svc := &Service{cfg: Config{AllowedUsers: map[string]bool{}}}
+	err := svc.SendDMToOwner("hello")
+	if err == nil || err.Error() != "no allowed Discord users configured" {
+		t.Fatalf("expected 'no allowed Discord users configured', got %v", err)
+	}
+}
+
+func TestSendDMToOwner_NilSession_ReturnsError(t *testing.T) {
+	svc := &Service{cfg: Config{AllowedUsers: map[string]bool{"u1": true}}}
+	err := svc.SendDMToOwner("hello")
+	if err == nil || err.Error() != "discord bot not connected" {
+		t.Fatalf("expected 'discord bot not connected', got %v", err)
+	}
+}
+
+func TestSendDM_WithSession_HappyPath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/channels"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "dm-ch-1"})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/messages"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "msg-1"})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	oldAPI := discordgo.EndpointAPI
+	oldUsers := discordgo.EndpointUsers
+	oldUserChannels := discordgo.EndpointUserChannels
+	oldChannels := discordgo.EndpointChannels
+	oldChannelMessages := discordgo.EndpointChannelMessages
+	t.Cleanup(func() {
+		discordgo.EndpointAPI = oldAPI
+		discordgo.EndpointUsers = oldUsers
+		discordgo.EndpointUserChannels = oldUserChannels
+		discordgo.EndpointChannels = oldChannels
+		discordgo.EndpointChannelMessages = oldChannelMessages
+	})
+	discordgo.EndpointAPI = server.URL + "/"
+	discordgo.EndpointUsers = discordgo.EndpointAPI + "users/"
+	discordgo.EndpointUserChannels = func(uID string) string { return discordgo.EndpointUsers + uID + "/channels" }
+	discordgo.EndpointChannels = discordgo.EndpointAPI + "channels/"
+	discordgo.EndpointChannelMessages = func(cID string) string { return discordgo.EndpointChannels + cID + "/messages" }
+
+	dg, _ := discordgo.New("Bot fake-token")
+	svc := &Service{dg: dg}
+	if err := svc.SendDM("user123", "hello"); err != nil {
+		t.Fatalf("SendDM unexpected error: %v", err)
+	}
+}
+
+func TestSendDM_UserChannelCreateError_ReturnsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+
+	oldAPI := discordgo.EndpointAPI
+	oldUsers := discordgo.EndpointUsers
+	oldUserChannels := discordgo.EndpointUserChannels
+	t.Cleanup(func() {
+		discordgo.EndpointAPI = oldAPI
+		discordgo.EndpointUsers = oldUsers
+		discordgo.EndpointUserChannels = oldUserChannels
+	})
+	discordgo.EndpointAPI = server.URL + "/"
+	discordgo.EndpointUsers = discordgo.EndpointAPI + "users/"
+	discordgo.EndpointUserChannels = func(uID string) string { return discordgo.EndpointUsers + uID + "/channels" }
+
+	dg, _ := discordgo.New("Bot fake-token")
+	svc := &Service{dg: dg}
+	err := svc.SendDM("user123", "hello")
+	if err == nil {
+		t.Fatal("expected error from UserChannelCreate, got nil")
 	}
 }
 

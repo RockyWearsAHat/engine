@@ -56,6 +56,7 @@ var wsHTTPClient = http.DefaultClient
 // DiscordBridge is the subset of the Discord service the WS handler uses.
 // Kept narrow so tests can stub it.
 type DiscordBridge interface {
+	SendDMToOwner(message string) error
 	CurrentConfig() discord.Config
 	Reload(cfg discord.Config) error
 	SearchHistory(projectPath, query, since string, limit int) ([]db.DiscordSearchHit, error)
@@ -559,6 +560,12 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 						}
 					}
 					c.send(m)
+				},
+				DiscordDM: func(message string) error {
+					if discordBridge == nil {
+						return fmt.Errorf("Discord not configured")
+					}
+					return discordBridge.SendDMToOwner(message)
 				},
 			}, msg.Content)
 		}()

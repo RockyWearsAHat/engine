@@ -448,6 +448,34 @@ func (s *Service) NotifyBlocked(projectPath, sessionID, reason string) {
 	s.send(binding.ChannelID, msg)
 }
 
+// SendDM sends a direct Discord message to a specific user by ID.
+func (s *Service) SendDM(userID, message string) error {
+	if s.dg == nil {
+		return fmt.Errorf("discord bot not connected")
+	}
+	ch, err := s.dg.UserChannelCreate(userID)
+	if err != nil {
+		return fmt.Errorf("create DM channel: %w", err)
+	}
+	_, err = s.dg.ChannelMessageSend(ch.ID, message)
+	return err
+}
+
+// SendDMToOwner sends a DM to the first allowed user in the bot config.
+func (s *Service) SendDMToOwner(message string) error {
+	s.stateMu.RLock()
+	var userID string
+	for uid := range s.cfg.AllowedUsers {
+		userID = uid
+		break
+	}
+	s.stateMu.RUnlock()
+	if userID == "" {
+		return fmt.Errorf("no allowed Discord users configured")
+	}
+	return s.SendDM(userID, message)
+}
+
 func (s *Service) listProjects(channelID string) {
 	s.stateMu.RLock()
 	projects := make([]ProjectBinding, 0, len(s.state.Projects))

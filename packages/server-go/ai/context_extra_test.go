@@ -4122,3 +4122,351 @@ func TestRunOpenAICompatibleLoop_TracksUsageAndAddsSessionUsage(t *testing.T) {
 		t.Fatalf("session usage totals = in:%d out:%d, want in:13 out:4", in, out)
 	}
 }
+
+// ── Browser automation tests ──────────────────────────────────────────────────
+
+func TestExecuteToolForTest_BrowserNavigate_MissingURL(t *testing.T) {
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("browser_navigate", map[string]interface{}{}, ctx)
+	if !isErr {
+		t.Fatal("expected error for missing url")
+	}
+	if result != "browser_navigate: url is required" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_BrowserNavigate_Success(t *testing.T) {
+	orig := browserNavigateFnForOS
+	t.Cleanup(func() { browserNavigateFnForOS = orig })
+	browserNavigateFnForOS = func(url string) (string, error) {
+		return "Navigated to: " + url, nil
+	}
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("browser_navigate", map[string]interface{}{"url": "https://example.com"}, ctx)
+	if isErr {
+		t.Fatalf("unexpected error: %s", result)
+	}
+	if result != "Navigated to: https://example.com" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_BrowserNavigate_Error(t *testing.T) {
+	orig := browserNavigateFnForOS
+	t.Cleanup(func() { browserNavigateFnForOS = orig })
+	browserNavigateFnForOS = func(url string) (string, error) {
+		return "", fmt.Errorf("chrome not found")
+	}
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("browser_navigate", map[string]interface{}{"url": "https://example.com"}, ctx)
+	if !isErr {
+		t.Fatal("expected error")
+	}
+	if result != "chrome not found" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_BrowserReadPage_Success(t *testing.T) {
+	orig := browserReadPageFnForOS
+	t.Cleanup(func() { browserReadPageFnForOS = orig })
+	browserReadPageFnForOS = func() (string, error) {
+		return "page text content", nil
+	}
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("browser_read_page", map[string]interface{}{}, ctx)
+	if isErr {
+		t.Fatalf("unexpected error: %s", result)
+	}
+	if result != "page text content" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_BrowserReadPage_Error(t *testing.T) {
+	orig := browserReadPageFnForOS
+	t.Cleanup(func() { browserReadPageFnForOS = orig })
+	browserReadPageFnForOS = func() (string, error) {
+		return "", fmt.Errorf("no active tab")
+	}
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("browser_read_page", map[string]interface{}{}, ctx)
+	if !isErr {
+		t.Fatal("expected error")
+	}
+	if result != "no active tab" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_BrowserClick_Success(t *testing.T) {
+	orig := browserClickFnForOS
+	t.Cleanup(func() { browserClickFnForOS = orig })
+	browserClickFnForOS = func(x, y int) (string, error) {
+		return fmt.Sprintf("Clicked at (%d, %d)", x, y), nil
+	}
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("browser_click", map[string]interface{}{"x": float64(100), "y": float64(200)}, ctx)
+	if isErr {
+		t.Fatalf("unexpected error: %s", result)
+	}
+	if result != "Clicked at (100, 200)" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_BrowserClick_Error(t *testing.T) {
+	orig := browserClickFnForOS
+	t.Cleanup(func() { browserClickFnForOS = orig })
+	browserClickFnForOS = func(x, y int) (string, error) {
+		return "", fmt.Errorf("click failed")
+	}
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("browser_click", map[string]interface{}{"x": float64(10), "y": float64(20)}, ctx)
+	if !isErr {
+		t.Fatal("expected error")
+	}
+	if result != "click failed" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_BrowserType_MissingText(t *testing.T) {
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("browser_type", map[string]interface{}{}, ctx)
+	if !isErr {
+		t.Fatal("expected error for missing text")
+	}
+	if result != "browser_type: text is required" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_BrowserType_Success(t *testing.T) {
+	orig := browserTypeFnForOS
+	t.Cleanup(func() { browserTypeFnForOS = orig })
+	browserTypeFnForOS = func(text string) (string, error) {
+		return "Typed text in browser", nil
+	}
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("browser_type", map[string]interface{}{"text": "hello"}, ctx)
+	if isErr {
+		t.Fatalf("unexpected error: %s", result)
+	}
+	if result != "Typed text in browser" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_BrowserType_Error(t *testing.T) {
+	orig := browserTypeFnForOS
+	t.Cleanup(func() { browserTypeFnForOS = orig })
+	browserTypeFnForOS = func(text string) (string, error) {
+		return "", fmt.Errorf("type failed")
+	}
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("browser_type", map[string]interface{}{"text": "hello"}, ctx)
+	if !isErr {
+		t.Fatal("expected error")
+	}
+	if result != "type failed" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+// ── Credential storage tests ──────────────────────────────────────────────────
+
+func TestExecuteToolForTest_CredentialSet_MissingKey(t *testing.T) {
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("credential_set", map[string]interface{}{"value": "secret"}, ctx)
+	if !isErr {
+		t.Fatal("expected error for missing key")
+	}
+	if result != "credential_set: key is required" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_CredentialSet_Success(t *testing.T) {
+	orig := credStoreSetFn
+	t.Cleanup(func() { credStoreSetFn = orig })
+	var storedKey, storedVal string
+	credStoreSetFn = func(key, value string) error {
+		storedKey, storedVal = key, value
+		return nil
+	}
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("credential_set", map[string]interface{}{"key": "my_token", "value": "abc123"}, ctx)
+	if isErr {
+		t.Fatalf("unexpected error: %s", result)
+	}
+	if result != "Credential stored: my_token" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+	if storedKey != "my_token" || storedVal != "abc123" {
+		t.Fatalf("stored key=%q val=%q", storedKey, storedVal)
+	}
+}
+
+func TestExecuteToolForTest_CredentialSet_Error(t *testing.T) {
+	orig := credStoreSetFn
+	t.Cleanup(func() { credStoreSetFn = orig })
+	credStoreSetFn = func(key, value string) error { return fmt.Errorf("keychain unavailable") }
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("credential_set", map[string]interface{}{"key": "k", "value": "v"}, ctx)
+	if !isErr {
+		t.Fatal("expected error")
+	}
+	if result != "keychain unavailable" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_CredentialGet_MissingKey(t *testing.T) {
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("credential_get", map[string]interface{}{}, ctx)
+	if !isErr {
+		t.Fatal("expected error for missing key")
+	}
+	if result != "credential_get: key is required" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_CredentialGet_Success(t *testing.T) {
+	orig := credStoreGetFn
+	t.Cleanup(func() { credStoreGetFn = orig })
+	credStoreGetFn = func(key string) (string, error) { return "secret_value", nil }
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("credential_get", map[string]interface{}{"key": "my_token"}, ctx)
+	if isErr {
+		t.Fatalf("unexpected error: %s", result)
+	}
+	if result != "secret_value" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_CredentialGet_Error(t *testing.T) {
+	orig := credStoreGetFn
+	t.Cleanup(func() { credStoreGetFn = orig })
+	credStoreGetFn = func(key string) (string, error) { return "", fmt.Errorf("not found") }
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("credential_get", map[string]interface{}{"key": "missing"}, ctx)
+	if !isErr {
+		t.Fatal("expected error")
+	}
+	if result != "not found" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_CredentialDelete_MissingKey(t *testing.T) {
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("credential_delete", map[string]interface{}{}, ctx)
+	if !isErr {
+		t.Fatal("expected error for missing key")
+	}
+	if result != "credential_delete: key is required" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_CredentialDelete_Success(t *testing.T) {
+	orig := credStoreDelFn
+	t.Cleanup(func() { credStoreDelFn = orig })
+	var deletedKey string
+	credStoreDelFn = func(key string) error { deletedKey = key; return nil }
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("credential_delete", map[string]interface{}{"key": "old_token"}, ctx)
+	if isErr {
+		t.Fatalf("unexpected error: %s", result)
+	}
+	if result != "Credential deleted: old_token" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+	if deletedKey != "old_token" {
+		t.Fatalf("deletedKey = %q", deletedKey)
+	}
+}
+
+func TestExecuteToolForTest_CredentialDelete_Error(t *testing.T) {
+	orig := credStoreDelFn
+	t.Cleanup(func() { credStoreDelFn = orig })
+	credStoreDelFn = func(key string) error { return fmt.Errorf("delete failed") }
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("credential_delete", map[string]interface{}{"key": "k"}, ctx)
+	if !isErr {
+		t.Fatal("expected error")
+	}
+	if result != "delete failed" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+// ── Discord DM tests ──────────────────────────────────────────────────────────
+
+func TestExecuteToolForTest_DiscordDM_MissingMessage(t *testing.T) {
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("discord_dm", map[string]interface{}{}, ctx)
+	if !isErr {
+		t.Fatal("expected error for missing message")
+	}
+	if result != "discord_dm: message is required" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_DiscordDM_NilDiscordDM(t *testing.T) {
+	ctx := makeChatCtx(t)
+	ctx.DiscordDM = nil
+	result, isErr := ExecuteToolForTest("discord_dm", map[string]interface{}{"message": "hello"}, ctx)
+	if !isErr {
+		t.Fatal("expected error when DiscordDM is nil")
+	}
+	if result != "discord_dm: Discord not configured" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_DiscordDM_Success(t *testing.T) {
+	ctx := makeChatCtx(t)
+	var sent string
+	ctx.DiscordDM = func(msg string) error { sent = msg; return nil }
+	result, isErr := ExecuteToolForTest("discord_dm", map[string]interface{}{"message": "need creds"}, ctx)
+	if isErr {
+		t.Fatalf("unexpected error: %s", result)
+	}
+	if result != "DM sent" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+	if sent != "need creds" {
+		t.Fatalf("sent = %q", sent)
+	}
+}
+
+func TestExecuteToolForTest_DiscordDM_Error(t *testing.T) {
+	ctx := makeChatCtx(t)
+	ctx.DiscordDM = func(msg string) error { return fmt.Errorf("discord down") }
+	result, isErr := ExecuteToolForTest("discord_dm", map[string]interface{}{"message": "hi"}, ctx)
+	if !isErr {
+		t.Fatal("expected error")
+	}
+	if result != "discord down" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+// ── getMachineCredStore singleton ─────────────────────────────────────────────
+
+func TestGetMachineCredStore_ReturnsNonNil(t *testing.T) {
+	s1 := getMachineCredStore()
+	s2 := getMachineCredStore()
+	if s1 == nil {
+		t.Fatal("getMachineCredStore returned nil")
+	}
+	if s1 != s2 {
+		t.Fatal("getMachineCredStore returned different instances (singleton broken)")
+	}
+}
