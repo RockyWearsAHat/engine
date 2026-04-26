@@ -55,6 +55,12 @@ coverage.out
 .github/session-memory/
 .engine/discord.json
 .engine/discord-state.json
+.myeditor/state.db
+.myeditor/state.db-shm
+.myeditor/state.db-wal
+**/.myeditor/state.db
+**/.myeditor/state.db-shm
+**/.myeditor/state.db-wal
 
 # Package manager locks (keep one, ignore others)
 # Uncomment the one you DON'T use:
@@ -71,6 +77,17 @@ packages/server-go/engine-server
 packages/server-go/myeditor-server
 packages/server-go/server
 packages/server-go/*.test
+packages/server-go/*.out
+packages/server-go/*.cov
+packages/server-go/*-cov.html
+packages/server-go/coverage*.html
+packages/server-go/*cov*.html
+packages/server-go/.agent-cover-ai.html
+packages/server-go/ai-v2.html
+packages/server-go/**/*.out
+packages/server-go/**/*.cov
+packages/server-go/**/*-cov.html
+packages/server-go/**/coverage*.html
 
 coverage-summary.json
 packages/server-go/coverage.out

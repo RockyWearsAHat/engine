@@ -11,6 +11,7 @@ export default defineConfig({
     coverage: {
       provider: 'istanbul',
       reporter: ['text', 'json', 'html', 'lcov'],
+      reportsDirectory: path.resolve(__dirname, '../../.cache/coverage/client'),
       include: ['src/**/*.{ts,tsx}'],
       exclude: [
         'src/**/*.d.ts',
