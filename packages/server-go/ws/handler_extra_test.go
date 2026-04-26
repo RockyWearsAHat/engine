@@ -1168,6 +1168,43 @@ func TestHandler_EngineTeamSet_Success(t *testing.T) {
 	readWSMessageOfType(t, conn, "engine.team.updated")
 }
 
+func TestHandler_EngineTeamSet_ResolveFromConfigWhenProviderAndModelMissing(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	t.Setenv("ENGINE_MODEL_PROVIDER", "")
+	t.Setenv("ENGINE_MODEL", "")
+
+	engineDir := projectDir + "/.engine"
+	if err := os.MkdirAll(engineDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	configYAML := "teams:\n  fast:\n    orchestrator:\n      model: \"openai:gpt-4o-mini\"\n"
+	if err := os.WriteFile(engineDir+"/config.yaml", []byte(configYAML), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "project.open",
+		"path": projectDir,
+	})
+	readWSMessageOfType(t, conn, "session.created")
+
+	writeWSMessage(t, conn, map[string]interface{}{
+		"type": "engine.team.set",
+		"team": "fast",
+	})
+	readWSMessageOfType(t, conn, "engine.team.updated")
+
+	if got := os.Getenv("ENGINE_MODEL_PROVIDER"); got != "openai" {
+		t.Fatalf("expected ENGINE_MODEL_PROVIDER openai, got %q", got)
+	}
+	if got := os.Getenv("ENGINE_MODEL"); got != "gpt-4o-mini" {
+		t.Fatalf("expected ENGINE_MODEL gpt-4o-mini, got %q", got)
+	}
+}
+
 // ─── editor.tabs.sync ────────────────────────────────────────────────────────
 
 func TestHandler_EditorTabsSync(t *testing.T) {

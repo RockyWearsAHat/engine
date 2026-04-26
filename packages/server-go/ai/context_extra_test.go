@@ -867,6 +867,144 @@ func TestRunOpenAICompatibleLoop_TextResponse(t *testing.T) {
 	}
 }
 
+// ── mark_vital tool (aiExecuteTool coverage) ─────────────────────────────────
+
+func TestExecuteToolForTest_MarkVital_NilHandler(t *testing.T) {
+	ctx := makeChatCtx(t)
+	// MarkVital is nil by default — must return an error.
+	result, isErr := ExecuteToolForTest("mark_vital", map[string]interface{}{}, ctx)
+	if !isErr {
+		t.Error("expected isErr=true when MarkVital is nil")
+	}
+	if !strings.Contains(result, "not available") {
+		t.Errorf("expected 'not available' in result, got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_MarkVital_WithHandler_ZeroN(t *testing.T) {
+	ctx := makeChatCtx(t)
+	var markedN int
+	ctx.MarkVital = func(n int) { markedN = n }
+	// n <= 0 must default to 1.
+	result, isErr := ExecuteToolForTest("mark_vital", map[string]interface{}{"n": float64(0)}, ctx)
+	if isErr {
+		t.Errorf("expected no error, got %q", result)
+	}
+	if markedN != 1 {
+		t.Errorf("expected MarkVital called with 1, got %d", markedN)
+	}
+}
+
+func TestExecuteToolForTest_MarkVital_WithHandler_NormalN(t *testing.T) {
+	ctx := makeChatCtx(t)
+	var markedN int
+	ctx.MarkVital = func(n int) { markedN = n }
+	result, isErr := ExecuteToolForTest("mark_vital", map[string]interface{}{"n": float64(3)}, ctx)
+	if isErr {
+		t.Errorf("expected no error, got %q", result)
+	}
+	if markedN != 3 {
+		t.Errorf("expected MarkVital called with 3, got %d", markedN)
+	}
+	if !strings.Contains(result, "3") {
+		t.Errorf("expected result to mention count, got %q", result)
+	}
+}
+
+// ── runAnthropicLoop: MarkVital closure body via mark_vital tool ──────────────
+
+func TestRunAnthropicLoop_MarkVital_Closure(t *testing.T) {
+	// Server response 1: mark_vital tool_use with n=100 (> len(messages)) to hit start<0 branch.
+	// Server response 2: end_turn to exit the loop.
+	markVitalSSE := "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"mv1\",\"name\":\"mark_vital\"}}\n" +
+		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"n\\\":100}\"}}\n" +
+		"data: {\"type\":\"content_block_stop\"}\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n" +
+		"data: [DONE]\n"
+	endTurnSSE := "data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"text\"}}\n" +
+		"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"done\"}}\n" +
+		"data: {\"type\":\"content_block_stop\"}\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n" +
+		"data: [DONE]\n"
+
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		callCount++
+		if callCount == 1 {
+			fmt.Fprint(w, markVitalSSE)
+		} else {
+			fmt.Fprint(w, endTurnSSE)
+		}
+	}))
+	defer srv.Close()
+
+	old := http.DefaultClient
+	defer func() { http.DefaultClient = old }()
+	http.DefaultClient = &http.Client{Transport: redirectTransport{target: srv.URL}}
+
+	var errs []string
+	ctx := &ChatContext{
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, interface{}) {},
+		OnToolResult: func(string, interface{}, bool) {},
+		OnError:      func(msg string) { errs = append(errs, msg) },
+		ActiveTools:  bootstrapTools(),
+		Usage:        &SessionUsage{},
+		Quarantine:   NewToolQuarantine(),
+	}
+	var calls []ToolCall
+	var text strings.Builder
+	runAnthropicLoop(ctx, "claude-3-5-sonnet-20241022", "fake-key", "system", []anthropicMessage{}, &calls, &text)
+	if len(errs) > 0 {
+		t.Errorf("unexpected errors: %v", errs)
+	}
+}
+
+// ── runOpenAICompatibleLoop: windowing for history > 41 messages ──────────────
+
+func TestRunOpenAICompatibleLoop_WindowsLargeHistory(t *testing.T) {
+	sseResponse := "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sseResponse)
+	}))
+	defer srv.Close()
+
+	// Build 41 history messages: system message + 41 → msgs length = 42 → windowing triggers.
+	// Mark all as vital so windowByVitality does not trim them before they reach the windowing check.
+	history := make([]anthropicMessage, 41)
+	for i := range history {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		history[i] = anthropicMessage{Role: role, Content: "msg", Vital: true}
+	}
+
+	ctx := &ChatContext{
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, interface{}) {},
+		OnToolResult: func(string, interface{}, bool) {},
+		OnError:      func(string) {},
+		ActiveTools:  bootstrapTools(),
+		Usage:        &SessionUsage{},
+		Quarantine:   NewToolQuarantine(),
+	}
+	var calls []ToolCall
+	var text strings.Builder
+	runOpenAICompatibleLoop(ctx, "ollama", "llama3", srv.URL+"/v1/chat/completions", "", false,
+		"system", history, &calls, &text)
+	if !strings.Contains(text.String(), "ok") {
+		t.Errorf("expected output from windowed request, got %q", text.String())
+	}
+}
+
 // ── runAnthropicLoop (via httptest transport override) ────────────────────────
 
 func TestRunAnthropicLoop_Cancelled(t *testing.T) {
@@ -3710,6 +3848,100 @@ func TestCloneRepoFn_Default_SuccessPath(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "cloned")
 	if err := cloneRepoFn(src, dest); err != nil {
 		t.Fatalf("expected success cloning local bare repo: %v", err)
+	}
+}
+
+// ── Chat: team config routing branches ──────────────────────────────────────
+
+// TestChat_TeamRouting_ModelFromTeamConfig exercises the branches where:
+//   - ENGINE_MODEL is empty → model is resolved from team config
+//   - ENGINE_ACTIVE_TEAM is empty → gets set from default_team
+//   - ENGINE_MODEL_PROVIDER is explicit (non-"auto") → not overridden by team
+func TestChat_TeamRouting_ModelFromTeamConfig(t *testing.T) {
+	dir := setupHistoryTestProject(t)
+	if err := db.CreateSession("sess-team-model", dir, "main"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	engineDir := filepath.Join(dir, ".engine")
+	if err := os.MkdirAll(engineDir, 0o755); err != nil {
+		t.Fatalf("mkdir .engine: %v", err)
+	}
+	configYAML := `teams:
+  fast:
+    orchestrator:
+      model: "anthropic:claude-haiku-4.5"
+dev_loop:
+  default_team: fast
+`
+	if err := os.WriteFile(filepath.Join(engineDir, "config.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+
+	t.Setenv("ENGINE_MODEL", "")
+	t.Setenv("ENGINE_MODEL_PROVIDER", "anthropic")
+	t.Setenv("ENGINE_ACTIVE_TEAM", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
+	var gotErr string
+	ctx := &ChatContext{
+		ProjectPath:  dir,
+		SessionID:    "sess-team-model",
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, interface{}) {},
+		OnToolResult: func(string, interface{}, bool) {},
+		OnError:      func(e string) { gotErr = e },
+	}
+	Chat(ctx, "hello")
+	// Expected: ANTHROPIC_API_KEY error (team routing ran, then hit API key check)
+	if !strings.Contains(gotErr, "ANTHROPIC_API_KEY") {
+		t.Errorf("expected ANTHROPIC_API_KEY error after team routing, got %q", gotErr)
+	}
+}
+
+// TestChat_TeamRouting_AutoProviderReplaced exercises the branches where:
+//   - ENGINE_MODEL_PROVIDER is "auto" → overridden by team's provider
+//   - ENGINE_MODEL is non-empty → stays unchanged
+//   - ENGINE_ACTIVE_TEAM is set → Setenv not called again
+func TestChat_TeamRouting_AutoProviderReplaced(t *testing.T) {
+	dir := setupHistoryTestProject(t)
+	if err := db.CreateSession("sess-team-auto", dir, "main"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	engineDir := filepath.Join(dir, ".engine")
+	if err := os.MkdirAll(engineDir, 0o755); err != nil {
+		t.Fatalf("mkdir .engine: %v", err)
+	}
+	configYAML := `teams:
+  fast:
+    orchestrator:
+      model: "anthropic:claude-haiku-4.5"
+dev_loop:
+  default_team: fast
+`
+	if err := os.WriteFile(filepath.Join(engineDir, "config.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+
+	t.Setenv("ENGINE_MODEL", "my-override-model")
+	t.Setenv("ENGINE_MODEL_PROVIDER", "auto")
+	t.Setenv("ENGINE_ACTIVE_TEAM", "fast")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
+	var gotErr string
+	ctx := &ChatContext{
+		ProjectPath:  dir,
+		SessionID:    "sess-team-auto",
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, interface{}) {},
+		OnToolResult: func(string, interface{}, bool) {},
+		OnError:      func(e string) { gotErr = e },
+	}
+	Chat(ctx, "hello")
+	// Expected: ANTHROPIC_API_KEY error (auto provider was replaced by team's anthropic)
+	if !strings.Contains(gotErr, "ANTHROPIC_API_KEY") {
+		t.Errorf("expected ANTHROPIC_API_KEY error after auto provider routing, got %q", gotErr)
 	}
 }
 

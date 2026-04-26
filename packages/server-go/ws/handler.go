@@ -914,6 +914,17 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr("Bad payload", "BAD_PAYLOAD")
 			return
 		}
+		if strings.TrimSpace(msg.Team) != "" && (strings.TrimSpace(msg.Provider) == "" || strings.TrimSpace(msg.Model) == "") {
+			_, resolvedProvider, resolvedModel, ok := ai.ResolveTeamOrchestratorModel(projectPath, msg.Team)
+			if ok {
+				if strings.TrimSpace(msg.Provider) == "" {
+					msg.Provider = resolvedProvider
+				}
+				if strings.TrimSpace(msg.Model) == "" {
+					msg.Model = resolvedModel
+				}
+			}
+		}
 		if strings.TrimSpace(msg.Provider) != "" {
 			os.Setenv("ENGINE_MODEL_PROVIDER", strings.TrimSpace(msg.Provider)) //nolint:errcheck
 		}

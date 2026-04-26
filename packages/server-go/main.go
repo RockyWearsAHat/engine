@@ -53,6 +53,11 @@ var (
 	httpHandleFuncFn     = http.HandleFunc
 	httpHandleFn         = http.Handle
 	httpListenAndServeFn = http.ListenAndServe
+	runAsyncFn           = func(fn func()) { go fn() }
+	triggerScaffoldSessionFn = triggerScaffoldSession
+	triggerCIAnalysisSessionFn = triggerCIAnalysisSession
+	triggerIssueSessionFn = triggerIssueSession
+	triggerIssueOpenedSessionFn = triggerIssueOpenedSession
 	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
 		cmd := exec.Command(name, args...)
 		return cmd.CombinedOutput()
@@ -173,19 +178,19 @@ func run() error {
 	repoMonitor := newRepoMonitorFn()
 	repoMonitor.OnReadmeChange = func(payload json.RawMessage) {
 		log.Printf("README changed: launching AI scaffold session (payload %d bytes)", len(payload))
-		go triggerScaffoldSession(projectPath, payload)
+		runAsyncFn(func() { triggerScaffoldSessionFn(projectPath, payload) })
 	}
 	repoMonitor.OnCIFailure = func(payload json.RawMessage) {
 		log.Printf("CI failure: launching AI analysis session (payload %d bytes)", len(payload))
-		go triggerCIAnalysisSession(projectPath, payload)
+		runAsyncFn(func() { triggerCIAnalysisSessionFn(projectPath, payload) })
 	}
 	repoMonitor.OnIssueComment = func(payload json.RawMessage) {
 		log.Printf("Issue comment received: launching AI issue session (payload %d bytes)", len(payload))
-		go triggerIssueSession(projectPath, payload)
+		runAsyncFn(func() { triggerIssueSessionFn(projectPath, payload) })
 	}
 	repoMonitor.OnIssueOpened = func(payload json.RawMessage) {
 		log.Printf("Issue opened: launching AI issue session (payload %d bytes)", len(payload))
-		go triggerIssueOpenedSession(projectPath, payload)
+		runAsyncFn(func() { triggerIssueOpenedSessionFn(projectPath, payload) })
 	}
 	webhookReceiver.AddHandler(repoMonitor.Enqueue)
 	repoMonitorStartFn(repoMonitor)
