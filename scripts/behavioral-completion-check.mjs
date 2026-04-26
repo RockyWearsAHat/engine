@@ -14,7 +14,7 @@
  * result — it does NOT block the completion gate.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,9 +22,113 @@ import { fileURLToPath } from 'node:url';
 const scriptDir = fileURLToPath(new URL('.', import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..');
 const screenshotDir = path.join(repoRoot, '.cache', 'behavioral-screenshots');
-const clientPort = 5173;
-const clientUrl = `http://localhost:${clientPort}`;
 const startTimeMs = Date.now();
+
+// ── Load ProjectProfile cache ─────────────────────────────────────────────────
+// Written by ai.WriteProjectProfileCache before the gate runs.
+// When absent the script falls back to Engine's own dev server defaults.
+
+let projectProfile = null;
+const profileCachePath = path.join(repoRoot, '.cache', 'project-profile.json');
+try {
+  const raw = fs.readFileSync(profileCachePath, 'utf8');
+  projectProfile = JSON.parse(raw);
+} catch {
+  // No profile — infer a strategy from workspace files.
+}
+
+function readJsonIfExists(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function inferProfileFromWorkspace() {
+  const rootPkg = readJsonIfExists(path.join(repoRoot, 'package.json'));
+  const hasGoMod = fs.existsSync(path.join(repoRoot, 'go.mod'));
+  const hasCargoToml = fs.existsSync(path.join(repoRoot, 'Cargo.toml'));
+  const hasClientDir = fs.existsSync(path.join(repoRoot, 'packages', 'client'));
+  const hasGoServerDir = fs.existsSync(path.join(repoRoot, 'packages', 'server-go'));
+
+  if (hasClientDir || (rootPkg?.scripts && (rootPkg.scripts.dev || rootPkg.scripts.start))) {
+    return {
+      type: 'web-app',
+      verification: {
+        usesPlaywright: true,
+        startCmd: hasClientDir ? 'pnpm --filter @engine/client dev' : (rootPkg?.scripts?.dev ? 'pnpm dev' : 'pnpm start'),
+        checkURL: 'http://localhost:5173',
+        port: 5173,
+        checkCmds: [],
+      },
+    };
+  }
+
+  if (hasGoServerDir || hasGoMod) {
+    return {
+      type: 'rest-api',
+      verification: {
+        usesPlaywright: false,
+        startCmd: hasGoServerDir ? 'cd packages/server-go && go run .' : 'go run .',
+        checkURL: 'http://localhost:8080/health',
+        port: 8080,
+        checkCmds: ['curl -sf http://localhost:8080/health || true', hasGoServerDir ? 'cd packages/server-go && go test ./... -count=1' : 'go test ./... -count=1'],
+      },
+    };
+  }
+
+  if (hasCargoToml) {
+    return {
+      type: 'library',
+      verification: {
+        usesPlaywright: false,
+        startCmd: '',
+        checkURL: '',
+        port: 0,
+        checkCmds: ['cargo test'],
+      },
+    };
+  }
+
+  return {
+    type: 'unknown',
+    verification: {
+      usesPlaywright: false,
+      startCmd: '',
+      checkURL: '',
+      port: 0,
+      checkCmds: ['pnpm test || npm test || go test ./... -count=1 || cargo test'],
+    },
+  };
+}
+
+if (!projectProfile) {
+  projectProfile = inferProfileFromWorkspace();
+}
+
+// Derive client URL and whether Playwright should run from the profile.
+function resolveVerification() {
+  if (!projectProfile) {
+    // Engine-own fallback: port 5173 Vite dev server, Playwright check.
+    return { usesPlaywright: true, clientUrl: `http://localhost:5173`, startFilter: '@engine/client' };
+  }
+  const v = projectProfile.verification ?? {};
+  const port = v.port || 3000;
+  const clientUrl = v.checkURL || (v.usesPlaywright ? `http://localhost:${port}` : '');
+  return {
+    usesPlaywright: v.usesPlaywright ?? false,
+    clientUrl,
+    startFilter: null,
+    startCmd: v.startCmd || null,
+    checkCmds: v.checkCmds || [],
+    projectType: projectProfile.type || 'unknown',
+  };
+}
+
+const verification = resolveVerification();
+const clientUrl = verification.clientUrl;
 
 function now() {
   return new Date().toISOString();
@@ -49,22 +153,7 @@ function pass(screenshots = [], consoleErrors = []) {
   process.exit(0);
 }
 
-// ── Require Playwright ────────────────────────────────────────────────────────
-
-let chromium;
-try {
-  const pw = await import('@playwright/test');
-  chromium = pw.chromium;
-} catch {
-  try {
-    const pw = await import('playwright');
-    chromium = pw.chromium;
-  } catch {
-    skip('Playwright not installed — install @playwright/test or playwright to enable behavioral checks');
-  }
-}
-
-// ── Ensure dev server is running ──────────────────────────────────────────────
+// ── Ensure dev server is running when URL-based verification is needed ───────
 
 async function waitForServer(url, timeoutMs = 8000) {
   const deadline = Date.now() + timeoutMs;
@@ -82,22 +171,82 @@ async function waitForServer(url, timeoutMs = 8000) {
 
 let devServer = null;
 
-const serverReady = await waitForServer(clientUrl, 3000);
-if (!serverReady) {
-  // Try to start the client dev server ourselves.
-  devServer = spawnSync('pnpm', ['--filter', '@engine/client', 'dev'], {
-    cwd: repoRoot,
-    detached: true,
-    stdio: 'ignore',
-  });
+if (clientUrl) {
+  const serverReady = await waitForServer(clientUrl, 3000);
+  if (!serverReady) {
+    // Try to start the project. For Engine's own client we use the known filter;
+    // for other projects we use the profile's startCmd.
+    const startArgs = verification.startFilter
+      ? ['--filter', verification.startFilter, 'dev']
+      : null;
 
-  const started = await waitForServer(clientUrl, 15_000);
-  if (!started) {
-    skip('Could not reach Engine client dev server — behavioral check requires the dev server to be running');
+    if (startArgs) {
+      devServer = spawn('pnpm', startArgs, {
+        cwd: repoRoot,
+        detached: true,
+        stdio: 'ignore',
+      });
+      devServer.unref();
+    } else if (verification.startCmd) {
+      devServer = spawn('sh', ['-c', verification.startCmd], {
+        cwd: repoRoot,
+        detached: true,
+        stdio: 'ignore',
+      });
+      devServer.unref();
+    }
+
+    const started = await waitForServer(clientUrl, 15_000);
+    if (!started) {
+      skip('Could not reach project dev server — behavioral check requires the server to be running');
+    }
   }
 }
 
-// ── Run Playwright checks ─────────────────────────────────────────────────────
+// ── Non-Playwright verification (rest-api, cli, library, service) ─────────────
+
+if (!verification.usesPlaywright) {
+  const checkCmds = verification.checkCmds || [];
+  if (checkCmds.length === 0) {
+    // No check commands and no Playwright — skip gracefully.
+    if (devServer) {
+      try { process.kill(-devServer.pid); } catch { /* ignore */ }
+    }
+    skip(`No verification commands for project type "${verification.projectType}" — skipping behavioral gate`);
+  }
+
+  const cmdErrors = [];
+  for (const cmd of checkCmds) {
+    const res = spawnSync('sh', ['-c', cmd], { cwd: repoRoot, encoding: 'utf8' });
+    if (res.status !== 0) {
+      cmdErrors.push(`Command failed (exit ${res.status}): ${cmd}\n${res.stderr || res.stdout || ''}`);
+    }
+  }
+
+  if (devServer) {
+    try { process.kill(-devServer.pid); } catch { /* ignore */ }
+  }
+
+  if (cmdErrors.length > 0) {
+    fail(cmdErrors, `${cmdErrors.length} check command(s) failed`);
+  }
+  pass([], []);
+}
+
+// ── Playwright verification (web-app) ─────────────────────────────────────────
+
+let chromium;
+try {
+  const pw = await import('@playwright/test');
+  chromium = pw.chromium;
+} catch {
+  try {
+    const pw = await import('playwright');
+    chromium = pw.chromium;
+  } catch {
+    skip('Playwright not installed — install @playwright/test or playwright to enable behavioral checks');
+  }
+}
 
 fs.mkdirSync(screenshotDir, { recursive: true });
 

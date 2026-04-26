@@ -1,6 +1,6 @@
 ---
 source: ../.github/WORKING_BEHAVIORS.md
-generatedAt: 2026-04-26T22:38:53.163Z
+generatedAt: 2026-04-26T23:35:43.494Z
 sectionCount: 21
 ---
 
@@ -86,7 +86,7 @@ The AI agent can use these tools when working on your code:
 
 **Test Runner:** Run the project's test suite from within an AI session.
 
-**Behavioral Debugging:** Run the application, observe its live behavior, form hypotheses about what is wrong, and validate fixes by running the app again — not only by running unit tests.
+**Behavioral Debugging:** Run the application, observe its live behavior, form hypotheses about what is wrong, and validate fixes by running the app again — not only by running unit tests. Behavioral completion checks are project-aware: web apps use browser checks, APIs/services use endpoint/health checks, and CLI/library projects use command-based verification.
 
 **Project Tools:** Define custom tools for any project by placing JSON files in `.engine/tools/<name>.json`. Each file specifies a description and a shell command to run. The AI discovers these tools automatically, can find them via `search_tools`, and can invoke them just like built-in tools. Inputs are passed as environment variables (e.g., `INPUT_<NAME>=value`) to prevent injection.
 
@@ -106,7 +106,7 @@ The AI scans outgoing messages for secrets (API keys, tokens, private keys) and 
 
 ## AI Session History
 
-Past AI sessions are stored and searchable. The AI automatically incorporates recent session history as context when starting a new session. Sessions can be summarized and retrieved. Engine also maintains a living project direction summary — tracking where the project started, key decisions that were made, and where it is heading — which persists across sessions and is automatically referenced when starting new work.
+Past AI sessions are stored and searchable. The AI automatically incorporates recent session history as context when starting a new session. Sessions can be summarized and retrieved. Engine also maintains a living project direction summary — tracking where the project started, key decisions that were made, and where it is heading — which persists across sessions and is automatically referenced when starting new work. On the first request of a session, Engine also captures a structured project intake profile (project type, success criteria, deploy target, verification strategy, and live-check command) and reuses it for autonomous verification.
 
 ---
 
@@ -114,7 +114,7 @@ Past AI sessions are stored and searchable. The AI automatically incorporates re
 
 Each AI session starts with an explicit autonomous working baseline in the session summary. As work progresses, Engine continuously cycles through planning, execution, validation, and revision until the request is complete. Session summaries are kept current with the active focus, validation status, weak points, and the next autonomous step so users can understand what Engine is doing and what it will do next.
 
-When direction is sufficient, Engine continues forward autonomously. Before stopping to ask the user anything, Engine classifies the blocker: human-required (missing credentials/secrets, irreversible destructive actions, or product decisions where user preference materially changes the outcome) vs. AI-resolvable (everything else — design choices, naming, ambiguity, missing context, tool errors). For AI-resolvable blockers, Engine picks the safest reasonable option, prefixes the message with "Assumption:", and continues without stopping. Only human-required blockers cause Engine to pause and ask.
+When direction is sufficient, Engine continues forward autonomously. Before stopping to ask the user anything, Engine classifies the blocker: human-required (missing credentials/secrets, irreversible destructive actions, or product decisions where user preference materially changes the outcome) vs. AI-resolvable (everything else — design choices, naming, ambiguity, missing context, tool errors). For AI-resolvable blockers, Engine picks the safest reasonable option, prefixes the message with "Assumption:", and continues without stopping. Only human-required blockers cause Engine to pause and ask. If style direction is not specified on the first request, Engine explicitly states the style assumption it selected (and invites reshaping) in chat and via Discord DM when configured.
 
 ---
 

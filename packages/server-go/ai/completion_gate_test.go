@@ -193,3 +193,96 @@ func TestRunBehavioralGate_InvalidJSON_FallsThrough(t *testing.T) {
 		t.Errorf("expected Passed=true when JSON is malformed, got Passed=%v Skipped=%v", result.Passed, result.Skipped)
 	}
 }
+
+// ── WriteProjectProfileCache ──────────────────────────────────────────────────
+
+func TestWriteProjectProfileCache_NilProfile_Noop(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteProjectProfileCache(dir, nil); err != nil {
+		t.Fatalf("nil profile should be a noop, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".cache", "project-profile.json")); !os.IsNotExist(err) {
+		t.Error("expected no file to be written for nil profile")
+	}
+}
+
+func TestWriteProjectProfileCache_WritesJSON(t *testing.T) {
+	dir := t.TempDir()
+	profile := &ProjectProfile{
+		ProjectPath:  dir,
+		Type:         ProjectTypeWebApp,
+		DeployTarget: "Vercel",
+		DoneDefinition: []string{"checkout works"},
+		Verification: VerificationStrategy{
+			UsesPlaywright: true,
+			Port:           3000,
+			CheckURL:       "http://localhost:3000",
+		},
+	}
+
+	if err := WriteProjectProfileCache(dir, profile); err != nil {
+		t.Fatalf("WriteProjectProfileCache: %v", err)
+	}
+
+	dest := filepath.Join(dir, ".cache", "project-profile.json")
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("expected file at %s, got %v", dest, err)
+	}
+
+	var parsed ProjectProfile
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("written JSON is not valid: %v", err)
+	}
+	if parsed.Type != ProjectTypeWebApp {
+		t.Errorf("type = %q, want web-app", parsed.Type)
+	}
+	if !parsed.Verification.UsesPlaywright {
+		t.Error("usesPlaywright should be true")
+	}
+}
+
+func TestWriteProjectProfileCache_CreatesDirectory(t *testing.T) {
+	dir := t.TempDir()
+	profile := &ProjectProfile{Type: ProjectTypeCLI}
+
+	if err := WriteProjectProfileCache(dir, profile); err != nil {
+		t.Fatalf("WriteProjectProfileCache: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, ".cache")); err != nil {
+		t.Errorf("expected .cache dir to be created: %v", err)
+	}
+}
+
+func TestWriteProjectProfileCache_MkdirError(t *testing.T) {
+	base := t.TempDir()
+	projectFile := filepath.Join(base, "not-a-dir")
+	if err := os.WriteFile(projectFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := WriteProjectProfileCache(projectFile, &ProjectProfile{Type: ProjectTypeCLI})
+	if err == nil {
+		t.Fatal("expected mkdir error, got nil")
+	}
+}
+
+func TestWriteProjectProfileCache_WriteError(t *testing.T) {
+	base := t.TempDir()
+	projectDir := filepath.Join(base, "project")
+	if err := os.MkdirAll(filepath.Join(projectDir, ".cache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(projectDir, ".cache"), 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(filepath.Join(projectDir, ".cache"), 0o755)
+	})
+
+	err := WriteProjectProfileCache(projectDir, &ProjectProfile{Type: ProjectTypeCLI})
+	if err == nil {
+		t.Fatal("expected write error with read-only cache dir, got nil")
+	}
+}

@@ -1503,6 +1503,13 @@ func Chat(ctx *ChatContext, userMessage string) {
 
 	history, _ := db.GetMessages(ctx.SessionID)
 	session, _ := db.GetSession(ctx.SessionID)
+	userMessageCount := 0
+	for _, h := range history {
+		if strings.EqualFold(strings.TrimSpace(h.Role), "user") {
+			userMessageCount++
+		}
+	}
+	isFirstUserMessage := userMessageCount <= 1
 	openTabs := []TabInfo{}
 	if ctx.GetOpenTabs != nil {
 		openTabs = ctx.GetOpenTabs()
@@ -1530,9 +1537,12 @@ func Chat(ctx *ChatContext, userMessage string) {
 	// Build system prompt: lean, role-focused.
 	var selectiveContext selectiveContextResult
 	extraContext := ""
+	projectDirection := resolveProjectDirection(ctx.ProjectPath)
+	applyFirstTurnAutonomyContext(ctx, userMessage, projectDirection, isFirstUserMessage)
 	if ctx.Role == RoleInteractive {
 		selectiveContext = BuildSelectiveContext(ctx.ProjectPath, session, userMessage, openTabs, residualProfile)
-		extraContext = selectiveContext.Prompt
+		expansion := BuildPreStartExpansion(userMessage, projectDirection)
+		extraContext = strings.TrimSpace(selectiveContext.Prompt + "\n\n" + expansion)
 	}
 	systemPrompt := buildRoleSystemPrompt(ctx.Role, ctx.ProjectPath, branch, extraContext)
 
@@ -1596,6 +1606,49 @@ func Chat(ctx *ChatContext, userMessage string) {
 		}
 	}
 	ctx.OnChunk("", true)
+}
+
+func resolveProjectDirection(projectPath string) string {
+	direction, _ := db.GetProjectDirection(projectPath)
+	if strings.TrimSpace(direction) != "" {
+		return direction
+	}
+	return EnsureProjectDirection(projectPath)
+}
+
+func applyFirstTurnAutonomyContext(ctx *ChatContext, userMessage, projectDirection string, isFirstUserMessage bool) {
+	if !isFirstUserMessage {
+		return
+	}
+	ensureProjectProfileCache(ctx.ProjectPath, userMessage, projectDirection)
+	if HasExplicitStyleGuidance(userMessage) {
+		return
+	}
+	notice := BuildStyleAssumptionNotice()
+	if ctx.SendToClient != nil {
+		ctx.SendToClient("chat.notice", map[string]any{"message": notice})
+	}
+	if ctx.DiscordDM != nil {
+		_ = ctx.DiscordDM(notice)
+	}
+}
+
+func ensureProjectProfileCache(projectPath, userMessage, projectDirection string) {
+	if strings.TrimSpace(projectPath) == "" || strings.TrimSpace(userMessage) == "" {
+		return
+	}
+
+	profile := BuildHeuristicProjectProfile(projectPath, userMessage, projectDirection)
+	if profile.Verification.StartCmd == "" && profile.Verification.CheckURL == "" &&
+		len(profile.Verification.CheckCmds) == 0 && !profile.Verification.UsesPlaywright {
+		profile.Verification = DeriveVerificationStrategy(profile.Type)
+	}
+
+	raw, err := json.Marshal(profile)
+	if err == nil {
+		db.UpsertProjectProfile(projectPath, string(raw)) //nolint:errcheck
+	}
+	WriteProjectProfileCache(projectPath, &profile) //nolint:errcheck
 }
 
 // runAnthropicLoop executes the Anthropic-native streaming agentic loop.

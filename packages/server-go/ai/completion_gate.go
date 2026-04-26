@@ -2,6 +2,7 @@ package ai
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,4 +121,26 @@ func firstLine(s string) string {
 		return strings.TrimSpace(s[:idx])
 	}
 	return s
+}
+
+// WriteProjectProfileCache serialises profile as JSON and writes it to
+// <projectPath>/.cache/project-profile.json so that behavioral-completion-check.mjs
+// can read it and adapt its verification strategy to the actual project type.
+// The .cache directory is created if it does not exist.
+func WriteProjectProfileCache(projectPath string, profile *ProjectProfile) error {
+	if profile == nil {
+		return nil
+	}
+	cacheDir := filepath.Join(projectPath, ".cache")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return fmt.Errorf("create cache dir: %w", err)
+	}
+	// ProjectProfile is a concrete serialisable struct; marshal errors are not
+	// expected in practice, so treat it as a guaranteed encode path.
+	data, _ := json.MarshalIndent(profile, "", "  ")
+	dest := filepath.Join(cacheDir, "project-profile.json")
+	if err := os.WriteFile(dest, data, 0o644); err != nil {
+		return fmt.Errorf("write project-profile.json: %w", err)
+	}
+	return nil
 }

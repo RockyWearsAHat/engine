@@ -35,6 +35,11 @@ const (
 	// RoleDocumenter updates WORKING_BEHAVIORS.md from a code-change summary.
 	// It matches existing style and never adds implementation details.
 	RoleDocumenter
+
+	// RoleIntaker processes the first user message or a GitHub README to produce a
+	// structured ProjectProfile JSON. It classifies the project type, extracts
+	// success criteria, and derives the verification strategy. Output is pure JSON.
+	RoleIntaker
 )
 
 // roleConfig holds the lean system prompt template and tool names pre-granted
@@ -53,6 +58,7 @@ var roleConfigs = map[AgentRole]roleConfig{
 			"{{context}}",
 			"Discover tools with search_tools before using them.",
 			"Validate changes by running the code. Fix problems completely.",
+			"Keep chat output concise and action-oriented. Report only meaningful milestones, blockers, or decisions.",
 			"AUTONOMOUS OPERATION: Before asking the user anything, classify the blocker.",
 			"Human-required (only these three): missing credentials/secrets not in env, an irreversible destructive action needing explicit approval, or a product decision where user preference materially changes the outcome.",
 			"AI-resolvable (everything else): design choices, naming, file structure, ambiguity, missing context, tool errors, unknown paths.",
@@ -131,6 +137,25 @@ var roleConfigs = map[AgentRole]roleConfig{
 			"Project: {{project}}",
 		}, "\n"),
 		tools: []string{"read_file", "list_directory", "write_file"},
+	},
+
+	RoleIntaker: {
+		// Extracts a structured ProjectProfile from the first user message or README.
+		// Output is ONLY the JSON object — no prose, no markdown fences.
+		prompt: strings.Join([]string{
+			"You extract a structured ProjectProfile from a project description.",
+			"Read the user message carefully. Output ONLY a JSON object matching this schema:",
+			intakeResponseSchema,
+			"Rules:",
+			"- type must be one of: web-app, rest-api, cli, library, service, unknown",
+			"- doneDefinition: list what the user explicitly says must be working",
+			"- deployTarget: where it should run when done (guess from context if not stated)",
+			"- workingBehaviors: restate as user-visible behaviors ('User can ...', 'App does ...')",
+			"- Set usesPlaywright=true only for web-app type",
+			"- Respond with ONLY the JSON object. No explanation, no markdown.",
+			"Project: {{project}}",
+		}, "\n"),
+		tools: nil,
 	},
 }
 
