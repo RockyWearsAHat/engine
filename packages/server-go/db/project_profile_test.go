@@ -86,3 +86,27 @@ func TestGetProjectProfile_ClosedDB_Error(t *testing.T) {
 		t.Fatal("expected error when DB is closed, got nil")
 	}
 }
+
+func TestGetProjectProfile_DBNotInitialized_NoPanic(t *testing.T) {
+	old := globalDB
+	globalDB = nil
+	t.Cleanup(func() { globalDB = old })
+
+	got, err := GetProjectProfile("/project/x")
+	if err != nil {
+		t.Fatalf("expected nil error when db is nil, got %v", err)
+	}
+	if got != "" {
+		t.Fatalf("expected empty profile, got %q", got)
+	}
+}
+
+func TestUpsertProjectProfile_DBNotInitialized_NoPanic(t *testing.T) {
+	old := globalDB
+	globalDB = nil
+	t.Cleanup(func() { globalDB = old })
+
+	if err := UpsertProjectProfile("/project/x", `{"type":"cli"}`); err != nil {
+		t.Fatalf("expected nil error when db is nil, got %v", err)
+	}
+}

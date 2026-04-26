@@ -113,3 +113,45 @@ func TestEnsureProjectProfileCache_EmptyInputs_NoPanic(t *testing.T) {
 	ensureProjectProfileCache("", "", "")
 	ensureProjectProfileCache("/tmp/any", "", "")
 }
+
+func TestLoadProjectProfile_FromDB(t *testing.T) {
+	dir := t.TempDir()
+	initContextProfileTestDB(t, dir)
+
+	raw := `{"projectPath":"` + dir + `","type":"web-app","doneDefinition":["home page loads"],"deployTarget":"local","verification":{"usesPlaywright":true,"startCmd":"pnpm dev","checkURL":"http://localhost:5173","port":5173,"checkCmds":[]},"liveCheckCmd":"curl -sf http://localhost:5173","workingBehaviors":["User can load homepage"]}`
+	if err := db.UpsertProjectProfile(dir, raw); err != nil {
+		t.Fatalf("UpsertProjectProfile: %v", err)
+	}
+
+	profile := loadProjectProfile(dir)
+	if profile == nil {
+		t.Fatal("expected profile to load from DB")
+	}
+	if profile.Type != ProjectTypeWebApp {
+		t.Fatalf("loaded profile type = %q, want web-app", profile.Type)
+	}
+}
+
+func TestLoadProjectProfile_InvalidJSON_ReturnsNil(t *testing.T) {
+	dir := t.TempDir()
+	initContextProfileTestDB(t, dir)
+
+	if err := db.UpsertProjectProfile(dir, "not-json"); err != nil {
+		t.Fatalf("UpsertProjectProfile: %v", err)
+	}
+
+	profile := loadProjectProfile(dir)
+	if profile != nil {
+		t.Fatal("expected nil profile for invalid JSON")
+	}
+}
+
+func TestLoadProjectProfile_Missing_ReturnsNil(t *testing.T) {
+	dir := t.TempDir()
+	initContextProfileTestDB(t, dir)
+
+	profile := loadProjectProfile(dir)
+	if profile != nil {
+		t.Fatal("expected nil profile when none is stored")
+	}
+}
