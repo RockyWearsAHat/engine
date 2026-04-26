@@ -19,7 +19,7 @@
     "tauri:build": "node ./scripts/run-cargo.mjs tauri build",
     "typecheck": "pnpm -r typecheck",
     "test:client": "pnpm --filter @engine/client test:coverage",
-    "test:go": "cd packages/server-go && go test ./... -coverprofile=coverage.out -covermode=atomic",
+    "test:go": "mkdir -p ./.cache/coverage/go && cd packages/server-go && go test ./... -coverprofile=../../.cache/coverage/go/coverage.out -covermode=atomic",
     "test:rust": "node ./scripts/run-cargo.mjs test",
     "coverage:all": "node ./scripts/coverage-all.mjs",
     "test:all": "pnpm test:client && pnpm test:go && pnpm test:rust",

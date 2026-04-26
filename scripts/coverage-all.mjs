@@ -6,7 +6,9 @@ import { spawnSync } from 'node:child_process';
 
 const root = process.cwd();
 const goDir = path.join(root, 'packages', 'server-go');
-const reportPath = path.join(root, 'coverage-summary.json');
+const coverageCacheDir = path.join(root, '.cache', 'coverage');
+const reportPath = path.join(coverageCacheDir, 'coverage-summary.json');
+const goCoverageProfile = path.join(coverageCacheDir, 'go', 'coverage.out');
 
 function run(command, args, cwd = root) {
   const result = spawnSync(command, args, {
@@ -72,17 +74,20 @@ function hasCargoLlvmCov() {
 }
 
 function main() {
+  fs.mkdirSync(path.join(coverageCacheDir, 'go'), { recursive: true });
+  fs.mkdirSync(path.join(coverageCacheDir, 'rust'), { recursive: true });
+
   const startedAt = new Date().toISOString();
   const summary = {
     generatedAt: startedAt,
     client: {
       tests: 'pass',
-      coverage: 'see packages/client/coverage/index.html',
+      coverage: 'see .cache/coverage/client/index.html',
     },
     go: {
       tests: 'pass',
       coverage: null,
-      profile: 'packages/server-go/coverage.out',
+      profile: path.relative(root, goCoverageProfile),
     },
     rust: {
       tests: 'pass',
@@ -96,8 +101,8 @@ function main() {
   requireOk('client coverage', run('pnpm', ['--filter', '@engine/client', 'test:coverage'], root));
 
   console.log('\n== Go (go test + coverprofile) ==');
-  requireOk('go tests', run('go', ['test', './...', '-coverprofile=coverage.out', '-covermode=atomic'], goDir));
-  const goCover = run('go', ['tool', 'cover', '-func=coverage.out'], goDir);
+  requireOk('go tests', run('go', ['test', './...', '-coverprofile=' + goCoverageProfile, '-covermode=atomic'], goDir));
+  const goCover = run('go', ['tool', 'cover', '-func=' + goCoverageProfile], goDir);
   requireOk('go coverage summary', goCover);
   summary.go.coverage = parseGoCoverageTotal(goCover.stdout);
 
@@ -124,7 +129,7 @@ function main() {
     summary.rust.coverage = parseRustLlvmCovTotal(rustCov.stdout);
 
     // Also emit lcov so coverage-gutters can display per-line coverage in the editor.
-    const rustLcovPath = path.join(root, 'packages', 'desktop-tauri', 'src-tauri', 'lcov.info');
+    const rustLcovPath = path.join(coverageCacheDir, 'rust', 'lcov.info');
     const rustLcov = spawnSync(
       'node',
       [

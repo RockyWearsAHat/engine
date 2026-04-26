@@ -119,8 +119,11 @@
     {
       "label": "Test Go Server",
       "type": "shell",
-      "command": "go",
-      "args": ["test", "./...", "-v", "-coverprofile=coverage.out", "-covermode=atomic"],
+      "command": "sh",
+      "args": [
+        "-c",
+        "mkdir -p \"${workspaceFolder}/.cache/coverage/go\" && go test ./... -v -coverprofile=\"${workspaceFolder}/.cache/coverage/go/coverage.out\" -covermode=atomic"
+      ],
       "options": {
         "cwd": "${workspaceFolder}/packages/server-go"
       },
