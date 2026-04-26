@@ -16,18 +16,62 @@ function isDesktopShell(): boolean {
   return typeof window !== 'undefined' && ('__TAURI__' in window || !!window.electronAPI?.isElectron);
 }
 
-/* istanbul ignore start */
-function localDesktopSocketURL(token: string | null): string {
-  if (!token) {
-    return 'ws://localhost:24444/ws';
+function isHttpDevOrigin(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
   }
-  return `ws://localhost:24444/ws?token=${encodeURIComponent(token)}`;
+  return window.location.protocol === 'http:' || window.location.protocol === 'https:';
+}
+
+function desktopDevProxyHost(): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const host = window.location.host;
+  if (!host) {
+    return null;
+  }
+  if (host.includes(':5173')) {
+    return host;
+  }
+  return null;
+}
+
+function localDesktopSocketURL(token: string | null): string {
+  const proxyHost = desktopDevProxyHost();
+  if (proxyHost) {
+    const base = `ws://${proxyHost}/ws`;
+    return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+  }
+  if (isHttpDevOrigin()) {
+    const base = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
+    return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+  }
+  if (!token) {
+    return 'ws://localhost:3000/ws';
+  }
+  return `ws://localhost:3000/ws?token=${encodeURIComponent(token)}`;
 }
 
 function localDesktopHealthURL(): string {
-  return 'http://localhost:24444/health';
+  if (desktopDevProxyHost()) {
+    return '/health';
+  }
+  if (isHttpDevOrigin()) {
+    return '/health';
+  }
+  // In Tauri/Electron the webview talks directly to the local server (no proxy,
+  // no CORS restriction). In the Vite dev server the request goes through the
+  // /health proxy entry so we use a same-origin relative path to avoid CORS.
+  if (isDesktopShell()) {
+    return 'http://localhost:3000/health';
+  }
+  return '/health';
 }
-/* istanbul ignore stop */
+
+interface LocalDesktopHealth {
+  status?: string;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -61,7 +105,6 @@ export class WSClient {
       this.remoteConfig = remote;
     } else if (!this.remoteConfig) {
       const activeProfile = loadActiveConnectionProfile();
-      /* istanbul ignore start */
       if (activeProfile?.host && activeProfile.port && activeProfile.token) {
         this.remoteConfig = {
           host: activeProfile.host,
@@ -69,7 +112,6 @@ export class WSClient {
           token: activeProfile.token,
         };
       }
-      /* istanbul ignore stop */
     }
     if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
       return;
@@ -78,12 +120,10 @@ export class WSClient {
   }
 
   private scheduleConnect(delay: number): void {
-    /* istanbul ignore start */
     if (!this.shouldConnect) return;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
     }
-    /* istanbul ignore stop */
     const attempt = ++this.connectAttempt;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -91,7 +131,6 @@ export class WSClient {
     }, delay);
   }
 
-  /* istanbul ignore start */
   private async waitForLocalDesktopServer(attempt: number): Promise<boolean> {
     let healthyStreak = 0;
     for (let i = 0; i < 40; i++) {
@@ -119,17 +158,8 @@ export class WSClient {
     this.scheduleConnect(delay);
     return false;
   }
-  /* istanbul ignore stop */
 
-  /* istanbul ignore start */
   private async probeLocalDesktopServer(): Promise<boolean> {
-    if (typeof window !== 'undefined' && '__TAURI__' in window) {
-      try {
-        return await bridge.localServerHealthy();
-      } catch {
-        return false;
-      }
-    }
     if (typeof fetch !== 'function') {
       return false;
     }
@@ -144,7 +174,7 @@ export class WSClient {
       if (!response.ok) {
         return false;
       }
-      const payload = (await response.json()) as { status?: string };
+      const payload = (await response.json()) as LocalDesktopHealth;
       return payload.status === 'ok';
     } catch {
       return false;
@@ -152,9 +182,7 @@ export class WSClient {
       clearTimeout(timeoutId);
     }
   }
-  /* istanbul ignore stop */
 
-  /* istanbul ignore start */
   private async doConnect(attempt: number): Promise<void> {
     if (!this.shouldConnect || attempt !== this.connectAttempt) return;
     let url: string;
@@ -177,13 +205,11 @@ export class WSClient {
     if (!this.shouldConnect || attempt !== this.connectAttempt) {
       return;
     }
-  /* istanbul ignore stop */
 
     const ws = new WebSocket(url);
     this.ws = ws;
     let opened = false;
 
-    /* istanbul ignore start */
     ws.onopen = () => {
       if (this.ws !== ws) {
         return;
@@ -191,17 +217,14 @@ export class WSClient {
       opened = true;
       void this.handleOpen(ws);
     };
-    /* istanbul ignore stop */
 
     ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data as string) as ServerMessage;
         for (const handler of this.handlers) handler(msg);
-      /* istanbul ignore next */
       } catch { /* ignore malformed */ }
     };
 
-    /* istanbul ignore start */
     ws.onclose = () => {
       const closedBeforeOpen = !opened;
       if (this.ws === ws) {
@@ -227,9 +250,7 @@ export class WSClient {
 
     ws.onerror = () => {};
   }
-  /* istanbul ignore stop */
 
-  /* istanbul ignore start */
   private async restartLocalDesktopServer(): Promise<boolean> {
     const now = Date.now();
     if (this.localRecoveryInFlight || now - this.lastLocalRecoveryAt < 3000) {
@@ -245,9 +266,7 @@ export class WSClient {
       this.localRecoveryInFlight = false;
     }
   }
-  /* istanbul ignore stop */
 
-  /* istanbul ignore start */
   private async handleOpen(ws: WebSocket): Promise<void> {
     this.reconnectDelay = 1000;
     for (const handler of this.openHandlers) {
@@ -259,7 +278,6 @@ export class WSClient {
     if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) {
       return;
     }
-  /* istanbul ignore stop */
     const queued = this.queuedMessages.splice(0);
     for (const message of queued) {
       ws.send(JSON.stringify(message));
@@ -267,11 +285,9 @@ export class WSClient {
   }
 
   disconnect(): void {
-    /* istanbul ignore start */
     if (this.disconnectTimer) {
       clearTimeout(this.disconnectTimer);
     }
-    /* istanbul ignore stop */
     this.disconnectTimer = setTimeout(() => {
       this.disconnectTimer = null;
       this.performDisconnect();
@@ -282,12 +298,10 @@ export class WSClient {
     this.shouldConnect = false;
     this.connectAttempt += 1;
     this.remoteConfig = null;
-    /* istanbul ignore start */
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    /* istanbul ignore stop */
 
     const ws = this.ws;
     this.ws = null;
@@ -299,12 +313,10 @@ export class WSClient {
       ws.onmessage = null;
       ws.onerror = null;
       ws.onclose = null;
-      /* istanbul ignore start */
       ws.onopen = () => {
         ws.onopen = null;
         ws.close();
       };
-      /* istanbul ignore stop */
       return;
     }
 
@@ -350,16 +362,12 @@ export class WSClient {
 
   onOpen(handler: OpenHandler): () => void {
     this.openHandlers.add(handler);
-    /* istanbul ignore start */
     return () => this.openHandlers.delete(handler);
-    /* istanbul ignore stop */
   }
 
   onClose(handler: CloseHandler): () => void {
     this.closeHandlers.add(handler);
-    /* istanbul ignore start */
     return () => this.closeHandlers.delete(handler);
-    /* istanbul ignore stop */
   }
 
   get isConnected(): boolean {

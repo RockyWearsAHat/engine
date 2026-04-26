@@ -29,6 +29,7 @@ type discordRuntime interface {
 	Reload(cfg discord.Config) error
 	SearchHistory(projectPath, query, since string, limit int) ([]db.DiscordSearchHit, error)
 	RecentHistory(projectPath, threadID, since string, limit int) ([]db.DiscordMessage, error)
+	SendDMToOwner(message string) error
 }
 
 var (

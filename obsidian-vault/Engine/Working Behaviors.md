@@ -1,6 +1,6 @@
 ---
 source: ../.github/WORKING_BEHAVIORS.md
-generatedAt: 2026-04-26T17:15:00.032Z
+generatedAt: 2026-04-26T18:47:20.143Z
 sectionCount: 21
 ---
 
@@ -226,6 +226,11 @@ Access Engine from any device including a phone. Engine runs on your local machi
 ## App Shell
 
 Cmd/Ctrl+P opens file search. Cmd/Ctrl+Shift+P opens the command palette. Cmd/Ctrl+, opens preferences. AI approval requests (e.g. killing a process) surface as a modal with allow and deny.
+**Browser Automation:** Navigate Chrome to a URL, read the visible page text, click at screen coordinates, and type text — all from within an AI session (macOS via AppleScript; Linux via xdotool). The AI can research the web, fill in login forms, and interact with browser-based services autonomously.
+
+**Credential Storage:** Store, retrieve, and delete credentials by named key in the OS keychain (macOS Keychain; Linux secret-service). Credentials are scoped to this machine, not per project, so they persist across Engine sessions and are reusable whenever the agent needs them again.
+
+**Discord DM to Owner:** When the AI is blocked and needs credentials, approval, or other input it cannot obtain autonomously, it can DM the configured Discord owner directly to request that information. The owner's Discord user ID is resolved from the bot's `AllowedUsers` config.
 
 
 

@@ -11,12 +11,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/engine/server/db"
 	gofs "github.com/engine/server/fs"
 	gogit "github.com/engine/server/git"
 	gh "github.com/engine/server/github"
+	"github.com/engine/server/remote"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/mem"
@@ -62,6 +64,21 @@ var cloneRepoFn = func(url, dest string) error {
 	}
 	return nil
 }
+
+
+var (
+	machineCredStoreOnce sync.Once
+	machineCredStore     *remote.KeychainStore
+)
+
+func getMachineCredStore() *remote.KeychainStore {
+	machineCredStoreOnce.Do(func() { machineCredStore = remote.NewKeychainStore() })
+	return machineCredStore
+}
+
+var credStoreGetFn = func(key string) (string, error) { return getMachineCredStore().Get(key) }
+var credStoreSetFn = func(key, value string) error    { return getMachineCredStore().Set(key, value) }
+var credStoreDelFn = func(key string) error           { return getMachineCredStore().Delete(key) }
 
 // Must be less than OLLAMA_KEEP_ALIVE (default 30m) so the model never expires.
 // Exported as a var so tests can override it to a short duration.
@@ -264,6 +281,8 @@ type ChatContext struct {
 	// ProjectTools holds project-defined tools discovered from <projectRoot>/.engine/tools/.
 	// Loaded once per Chat() call; nil when the directory is absent or empty.
 	ProjectTools []projectToolDef
+	// DiscordDM sends a direct message to the project owner via Discord. Nil when Discord is not configured.
+	DiscordDM func(message string) error
 }
 
 // isCancelled returns true if the context's cancel channel has been closed.
@@ -594,6 +613,66 @@ var toolRegistry = []anthropicTool{
 			"recent window. This keeps context lean without losing key milestones.",
 		InputSchema: objSchema(nil, map[string]interface{}{
 			"n": map[string]interface{}{"type": "number", "description": "Number of recent messages to mark vital (default 1)"},
+		}),
+	},
+
+	// ── Browser automation ───────────────────────────────────────────────────────
+	{
+		Name:        "browser_navigate",
+		Description: "Navigate the system browser (Chrome on macOS) to a URL. Use to research sites, access web apps, or start a login flow.",
+		InputSchema: objSchema([]string{"url"}, map[string]interface{}{
+			"url": strProp("URL to navigate to"),
+		}),
+	},
+	{
+		Name:        "browser_read_page",
+		Description: "Read the visible text content of the currently active browser tab (up to 8000 chars). Use after browser_navigate to extract page content.",
+		InputSchema: objSchema(nil, map[string]interface{}{}),
+	},
+	{
+		Name:        "browser_click",
+		Description: "Click at screen coordinates in the browser window. Use after browser_navigate and screenshot to interact with UI elements.",
+		InputSchema: objSchema([]string{"x", "y"}, map[string]interface{}{
+			"x": map[string]interface{}{"type": "number", "description": "Screen X coordinate"},
+			"y": map[string]interface{}{"type": "number", "description": "Screen Y coordinate"},
+		}),
+	},
+	{
+		Name:        "browser_type",
+		Description: "Type text into the focused browser element. Use after browser_click to fill in a form field.",
+		InputSchema: objSchema([]string{"text"}, map[string]interface{}{
+			"text": strProp("Text to type"),
+		}),
+	},
+	// ── Machine-scoped credential storage ────────────────────────────────────────
+	{
+		Name:        "credential_set",
+		Description: "Store a credential in the machine keychain, scoped to this Engine installation (not per-project). Use to save passwords, tokens, or API keys for reuse across sessions.",
+		InputSchema: objSchema([]string{"key", "value"}, map[string]interface{}{
+			"key":   strProp("Credential key/name (e.g. 'github_token', 'openai_key')"),
+			"value": strProp("Secret value to store"),
+		}),
+	},
+	{
+		Name:        "credential_get",
+		Description: "Retrieve a previously stored credential from the machine keychain.",
+		InputSchema: objSchema([]string{"key"}, map[string]interface{}{
+			"key": strProp("Credential key/name to retrieve"),
+		}),
+	},
+	{
+		Name:        "credential_delete",
+		Description: "Delete a stored credential from the machine keychain.",
+		InputSchema: objSchema([]string{"key"}, map[string]interface{}{
+			"key": strProp("Credential key/name to delete"),
+		}),
+	},
+	// ── Discord communication ─────────────────────────────────────────────────────
+	{
+		Name:        "discord_dm",
+		Description: "Send a direct message to the project owner via Discord. Use when you need credentials, approval, or human input that cannot be obtained autonomously.",
+		InputSchema: objSchema([]string{"message"}, map[string]interface{}{
+			"message": strProp("Message to send to the project owner"),
 		}),
 	},
 }
@@ -1250,6 +1329,89 @@ func aiExecuteTool(name string, input map[string]interface{}, ctx *ChatContext) 
 		}
 		ctx.MarkVital(n)
 		return fmt.Sprintf("Marked last %d message(s) as vital checkpoints.", n), false
+
+	case "browser_navigate":
+		url := str("url")
+		if url == "" {
+			return "browser_navigate: url is required", true
+		}
+		result, err := browserNavigateFnForOS(url)
+		if err != nil {
+			return err.Error(), true
+		}
+		return result, false
+
+	case "browser_read_page":
+		result, err := browserReadPageFnForOS()
+		if err != nil {
+			return err.Error(), true
+		}
+		return result, false
+
+	case "browser_click":
+		x := int(numVal("x"))
+		y := int(numVal("y"))
+		result, err := browserClickFnForOS(x, y)
+		if err != nil {
+			return err.Error(), true
+		}
+		return result, false
+
+	case "browser_type":
+		text := str("text")
+		if text == "" {
+			return "browser_type: text is required", true
+		}
+		result, err := browserTypeFnForOS(text)
+		if err != nil {
+			return err.Error(), true
+		}
+		return result, false
+
+	case "credential_set":
+		key := str("key")
+		value := str("value")
+		if key == "" {
+			return "credential_set: key is required", true
+		}
+		if err := credStoreSetFn(key, value); err != nil {
+			return err.Error(), true
+		}
+		return "Credential stored: " + key, false
+
+	case "credential_get":
+		key := str("key")
+		if key == "" {
+			return "credential_get: key is required", true
+		}
+		val, err := credStoreGetFn(key)
+		if err != nil {
+			return err.Error(), true
+		}
+		return val, false
+
+	case "credential_delete":
+		key := str("key")
+		if key == "" {
+			return "credential_delete: key is required", true
+		}
+		if err := credStoreDelFn(key); err != nil {
+			return err.Error(), true
+		}
+		return "Credential deleted: " + key, false
+
+	case "discord_dm":
+		message := str("message")
+		if message == "" {
+			return "discord_dm: message is required", true
+		}
+		if ctx.DiscordDM == nil {
+			return "discord_dm: Discord not configured", true
+		}
+		if err := ctx.DiscordDM(message); err != nil {
+			return err.Error(), true
+		}
+		return "DM sent", false
 
 	default:
 		if result, isError, found := executeProjectTool(name, input, ctx); found {

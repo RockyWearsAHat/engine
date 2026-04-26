@@ -499,6 +499,7 @@ func (m *mockDiscordBridge) SearchHistory(_, _, _ string, _ int) ([]db.DiscordSe
 func (m *mockDiscordBridge) RecentHistory(_, _, _ string, _ int) ([]db.DiscordMessage, error) {
 	return nil, nil
 }
+func (m *mockDiscordBridge) SendDMToOwner(_ string) error { return nil }
 
 // panicDiscordBridge panics on CurrentConfig, used to trigger the run() panic handler.
 type panicDiscordBridge struct{}
@@ -511,6 +512,7 @@ func (p *panicDiscordBridge) SearchHistory(_, _, _ string, _ int) ([]db.DiscordS
 func (p *panicDiscordBridge) RecentHistory(_, _, _ string, _ int) ([]db.DiscordMessage, error) {
 	return nil, nil
 }
+func (p *panicDiscordBridge) SendDMToOwner(_ string) error { return nil }
 
 func TestServeWS_UpgradeError(t *testing.T) {
 	projectDir := setupWSProject(t)

@@ -40,6 +40,7 @@ func (s *stubDiscordBridge) SearchHistory(_, _, _ string, _ int) ([]db.DiscordSe
 func (s *stubDiscordBridge) RecentHistory(_, _, _ string, _ int) ([]db.DiscordMessage, error) {
 	return s.recentRows, s.recentErr
 }
+func (s *stubDiscordBridge) SendDMToOwner(_ string) error { return nil }
 
 // ─── stub HTTP transport ──────────────────────────────────────────────────────
 
@@ -1640,4 +1641,71 @@ func TestHandler_RepoRemove_Error(t *testing.T) {
 	if code, _ := msg["code"].(string); code != "REPO_REMOVE_ERROR" {
 		t.Errorf("code = %q, want REPO_REMOVE_ERROR", code)
 	}
+}
+
+// ── DiscordDM closure coverage ────────────────────────────────────────────────
+
+func testSendChatAndWaitForRunAIChat(t *testing.T, conn *websocket.Conn, projectDir string) {
+	t.Helper()
+	writeWSMessage(t, conn, map[string]interface{}{"type": "project.open", "path": projectDir})
+	readWSMessageOfType(t, conn, "session.created")
+	writeWSMessage(t, conn, map[string]interface{}{"type": "chat", "content": "ping"})
+}
+
+func TestHandler_DiscordDM_NilBridge_ReturnsError(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	SetDiscordBridge(nil)
+
+	origRunAIChat := runAIChat
+	defer func() { runAIChat = origRunAIChat }()
+	var dmErr error
+	done := make(chan struct{})
+	runAIChat = func(ctx *ai.ChatContext, _ string) {
+		dmErr = ctx.DiscordDM("hello owner")
+		close(done)
+		ctx.OnChunk("ok", true)
+	}
+
+	testSendChatAndWaitForRunAIChat(t, conn, projectDir)
+	<-done
+	if dmErr == nil || dmErr.Error() != "Discord not configured" {
+		t.Fatalf("expected 'Discord not configured', got %v", dmErr)
+	}
+}
+
+func TestHandler_DiscordDM_WithBridge_CallsSendDMToOwner(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	var capturedMsg string
+	SetDiscordBridge(&stubDiscordBridgeWithDM{captureMsg: &capturedMsg})
+
+	origRunAIChat := runAIChat
+	defer func() { runAIChat = origRunAIChat }()
+	done := make(chan struct{})
+	runAIChat = func(ctx *ai.ChatContext, _ string) {
+		_ = ctx.DiscordDM("hello from agent")
+		close(done)
+		ctx.OnChunk("ok", true)
+	}
+
+	testSendChatAndWaitForRunAIChat(t, conn, projectDir)
+	<-done
+	if capturedMsg != "hello from agent" {
+		t.Fatalf("SendDMToOwner not called with correct msg, got %q", capturedMsg)
+	}
+}
+
+type stubDiscordBridgeWithDM struct {
+	stubDiscordBridge
+	captureMsg *string
+}
+
+func (s *stubDiscordBridgeWithDM) SendDMToOwner(message string) error {
+	*s.captureMsg = message
+	return nil
 }
