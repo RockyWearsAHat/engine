@@ -52,6 +52,8 @@ The AI agent can use these tools when working on your code:
 
 **Behavioral Debugging:** Run the application, observe its live behavior, form hypotheses about what is wrong, and validate fixes by running the app again — not only by running unit tests.
 
+**Project Tools:** Define custom tools for any project by placing JSON files in `.engine/tools/<name>.json`. Each file specifies a description and a shell command to run. The AI discovers these tools automatically, can find them via `search_tools`, and can invoke them just like built-in tools. Inputs are passed as environment variables (e.g., `INPUT_<NAME>=value`) to prevent injection.
+
 ---
 
 ## AI Provider Support
