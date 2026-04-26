@@ -234,7 +234,7 @@ func TestTrustStore_Save_MarshalError(t *testing.T) {
 	_ = ts.AddDevice("d1", "Dev1", pub)
 
 	orig := jsonMarshalIndentFn
-	jsonMarshalIndentFn = func(_ interface{}, _, _ string) ([]byte, error) {
+	jsonMarshalIndentFn = func(_ any, _, _ string) ([]byte, error) {
 		return nil, errors.New("injected marshal error")
 	}
 	defer func() { jsonMarshalIndentFn = orig }()

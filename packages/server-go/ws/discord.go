@@ -112,7 +112,7 @@ func (c *conn) handleDiscordConfigGet() {
 		// Still return the on-disk config so the UI can show values even if
 		// the service failed to start.
 		cfg, _ := discord.LoadConfig(c.projectPath)
-		c.send(map[string]interface{}{
+		c.send(map[string]any{
 			"type":   "discord.config",
 			"config": toPayload(cfg),
 			"active": false,
@@ -120,7 +120,7 @@ func (c *conn) handleDiscordConfigGet() {
 		return
 	}
 	active := discordBridge.CurrentConfig().Enabled
-	c.send(map[string]interface{}{
+	c.send(map[string]any{
 		"type":   "discord.config",
 		"config": toPayload(discordBridge.CurrentConfig()),
 		"active": active,
@@ -145,7 +145,7 @@ func (c *conn) handleDiscordConfigSet(payload discordConfigPayload) {
 	active := false
 	if hadBridge && sameDiscordRuntimeConfig(existing, cfg) {
 		active = discordBridge.CurrentConfig().Enabled
-		c.send(map[string]interface{}{
+		c.send(map[string]any{
 			"type":   "discord.config.saved",
 			"config": toPayload(cfg),
 			"active": active,
@@ -155,7 +155,7 @@ func (c *conn) handleDiscordConfigSet(payload discordConfigPayload) {
 
 	if discordBridge != nil {
 		if err := discordBridge.Reload(cfg); err != nil {
-			c.send(map[string]interface{}{
+			c.send(map[string]any{
 				"type":    "discord.config.saved",
 				"config":  toPayload(cfg),
 				"active":  false,
@@ -167,7 +167,7 @@ func (c *conn) handleDiscordConfigSet(payload discordConfigPayload) {
 	} else if cfg.Enabled {
 		service, err := discord.NewService(cfg, c.projectPath)
 		if err != nil {
-			c.send(map[string]interface{}{
+			c.send(map[string]any{
 				"type":    "discord.config.saved",
 				"config":  toPayload(cfg),
 				"active":  false,
@@ -176,7 +176,7 @@ func (c *conn) handleDiscordConfigSet(payload discordConfigPayload) {
 			return
 		}
 		if err := discordServiceStartFn(service); err != nil {
-			c.send(map[string]interface{}{
+			c.send(map[string]any{
 				"type":    "discord.config.saved",
 				"config":  toPayload(cfg),
 				"active":  false,
@@ -187,7 +187,7 @@ func (c *conn) handleDiscordConfigSet(payload discordConfigPayload) {
 		SetDiscordBridge(service)
 		active = true
 	}
-	c.send(map[string]interface{}{
+	c.send(map[string]any{
 		"type":   "discord.config.saved",
 		"config": toPayload(cfg),
 		"active": active,
@@ -230,7 +230,7 @@ func (c *conn) handleDiscordUnlink(leaveGuild bool) {
 		}
 	}
 
-	out := map[string]interface{}{
+	out := map[string]any{
 		"type":   "discord.config.saved",
 		"config": toPayload(cfg),
 		"active": active,
@@ -257,7 +257,7 @@ func (c *conn) handleDiscordValidate(override *discordConfigPayload) {
 		cfg, _ = discord.LoadConfig(c.projectPath)
 	}
 	result := discord.Validate(cfg)
-	c.send(map[string]interface{}{
+	c.send(map[string]any{
 		"type":   "discord.validate.result",
 		"result": result,
 	})
@@ -277,7 +277,7 @@ func (c *conn) handleDiscordHistorySearch(projectPath, query, since string, limi
 		c.sendErr(err.Error(), "DISCORD_SEARCH")
 		return
 	}
-	c.send(map[string]interface{}{
+	c.send(map[string]any{
 		"type":  "discord.history.results",
 		"query": query,
 		"hits":  hits,
@@ -298,7 +298,7 @@ func (c *conn) handleDiscordHistoryRecent(projectPath, threadID, since string, l
 		c.sendErr(err.Error(), "DISCORD_RECENT")
 		return
 	}
-	c.send(map[string]interface{}{
+	c.send(map[string]any{
 		"type":     "discord.history.recent",
 		"threadId": threadID,
 		"rows":     rows,

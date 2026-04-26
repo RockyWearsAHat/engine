@@ -152,8 +152,8 @@ func makeChatCtx(t *testing.T) *ChatContext {
 		ProjectPath: dir,
 		SessionID:   "ctx-test",
 		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(string) {},
 		ActiveTools: bootstrapTools(),
 	}
@@ -180,7 +180,7 @@ func initGitRepoForContextTests(t *testing.T, dir string) {
 
 func TestExecuteToolForTest_SearchTools(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("search_tools", map[string]interface{}{"query": "git status"}, ctx)
+	result, isErr := ExecuteToolForTest("search_tools", map[string]any{"query": "git status"}, ctx)
 	if isErr {
 		t.Errorf("unexpected error: %s", result)
 	}
@@ -191,7 +191,7 @@ func TestExecuteToolForTest_SearchTools(t *testing.T) {
 
 func TestExecuteTool_DirectWrapper_Delegates(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := executeTool("list_open_tabs", map[string]interface{}{}, ctx)
+	result, isErr := executeTool("list_open_tabs", map[string]any{}, ctx)
 	if isErr {
 		t.Fatalf("executeTool returned error: %s", result)
 	}
@@ -201,7 +201,7 @@ func TestExecuteTool_DirectWrapper_Delegates(t *testing.T) {
 }
 
 func TestExecuteTool_DirectWrapper_UnknownTool(t *testing.T) {
-	result, isErr := executeTool("tool_that_does_not_exist", map[string]interface{}{}, nil)
+	result, isErr := executeTool("tool_that_does_not_exist", map[string]any{}, nil)
 	if !isErr {
 		t.Fatalf("expected unknown-tool error, got %q", result)
 	}
@@ -212,7 +212,7 @@ func TestExecuteTool_DirectWrapper_UnknownTool(t *testing.T) {
 
 func TestExecuteToolForTest_ListDirectory(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("list_directory", map[string]interface{}{"path": "."}, ctx)
+	result, isErr := ExecuteToolForTest("list_directory", map[string]any{"path": "."}, ctx)
 	if isErr {
 		t.Errorf("unexpected error: %s", result)
 	}
@@ -223,7 +223,7 @@ func TestExecuteToolForTest_ListDirectory(t *testing.T) {
 
 func TestExecuteToolForTest_ReadFile(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("read_file", map[string]interface{}{"path": "PROJECT_GOAL.md"}, ctx)
+	result, isErr := ExecuteToolForTest("read_file", map[string]any{"path": "PROJECT_GOAL.md"}, ctx)
 	if isErr {
 		t.Errorf("unexpected error: %s", result)
 	}
@@ -234,7 +234,7 @@ func TestExecuteToolForTest_ReadFile(t *testing.T) {
 
 func TestExecuteToolForTest_ReadFile_InvalidPath(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("read_file", map[string]interface{}{"path": "../../etc/passwd"}, ctx)
+	result, isErr := ExecuteToolForTest("read_file", map[string]any{"path": "../../etc/passwd"}, ctx)
 	if !isErr {
 		t.Errorf("expected error for path traversal, got result=%q", result)
 	}
@@ -242,7 +242,7 @@ func TestExecuteToolForTest_ReadFile_InvalidPath(t *testing.T) {
 
 func TestExecuteToolForTest_WriteFile(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("write_file", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("write_file", map[string]any{
 		"path":    "tmp-test-output.txt",
 		"content": "hello from test",
 	}, ctx)
@@ -259,8 +259,8 @@ func TestExecuteToolForTest_WriteFile(t *testing.T) {
 func TestExecuteToolForTest_WriteFile_SendsEvent(t *testing.T) {
 	var events []string
 	ctx := makeChatCtx(t)
-	ctx.SendToClient = func(msgType string, _ interface{}) { events = append(events, msgType) }
-	ExecuteToolForTest("write_file", map[string]interface{}{
+	ctx.SendToClient = func(msgType string, _ any) { events = append(events, msgType) }
+	ExecuteToolForTest("write_file", map[string]any{
 		"path":    "notified.txt",
 		"content": "x",
 	}, ctx)
@@ -277,7 +277,7 @@ func TestExecuteToolForTest_WriteFile_SendsEvent(t *testing.T) {
 
 func TestExecuteToolForTest_GetSystemInfo(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("get_system_info", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("get_system_info", map[string]any{}, ctx)
 	if isErr {
 		t.Errorf("unexpected error: %s", result)
 	}
@@ -289,7 +289,7 @@ func TestExecuteToolForTest_GetSystemInfo(t *testing.T) {
 func TestExecuteToolForTest_ListOpenTabs_NilGetter(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.GetOpenTabs = nil
-	result, isErr := ExecuteToolForTest("list_open_tabs", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("list_open_tabs", map[string]any{}, ctx)
 	if isErr {
 		t.Errorf("unexpected error: %s", result)
 	}
@@ -303,7 +303,7 @@ func TestExecuteToolForTest_ListOpenTabs_WithGetter(t *testing.T) {
 	ctx.GetOpenTabs = func() []TabInfo {
 		return []TabInfo{{Path: "/project/main.go", IsActive: true}}
 	}
-	result, isErr := ExecuteToolForTest("list_open_tabs", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("list_open_tabs", map[string]any{}, ctx)
 	if isErr {
 		t.Errorf("unexpected error: %s", result)
 	}
@@ -314,7 +314,7 @@ func TestExecuteToolForTest_ListOpenTabs_WithGetter(t *testing.T) {
 
 func TestExecuteToolForTest_SearchHistory_EmptyQuery(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("search_history", map[string]interface{}{"query": ""}, ctx)
+	result, isErr := ExecuteToolForTest("search_history", map[string]any{"query": ""}, ctx)
 	if !isErr {
 		t.Errorf("expected error for empty query, got %q", result)
 	}
@@ -323,7 +323,7 @@ func TestExecuteToolForTest_SearchHistory_EmptyQuery(t *testing.T) {
 func TestExecuteToolForTest_SearchHistory_WithQuery(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.SessionID = "test-session-search"
-	result, isErr := ExecuteToolForTest("search_history", map[string]interface{}{"query": "testing"}, ctx)
+	result, isErr := ExecuteToolForTest("search_history", map[string]any{"query": "testing"}, ctx)
 	// may return no results but should not error
 	if isErr && !strings.Contains(result, "No stored history") {
 		t.Errorf("unexpected error: %s", result)
@@ -334,7 +334,7 @@ func TestExecuteToolForTest_SearchHistory_WithQuery(t *testing.T) {
 func TestExecuteToolForTest_OpenFile_NilSendToClient(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.SendToClient = nil
-	result, isErr := ExecuteToolForTest("open_file", map[string]interface{}{"path": "PROJECT_GOAL.md"}, ctx)
+	result, isErr := ExecuteToolForTest("open_file", map[string]any{"path": "PROJECT_GOAL.md"}, ctx)
 	if isErr {
 		t.Errorf("unexpected error: %s", result)
 	}
@@ -344,8 +344,8 @@ func TestExecuteToolForTest_OpenFile_NilSendToClient(t *testing.T) {
 func TestExecuteToolForTest_OpenFile_WithSendToClient(t *testing.T) {
 	var events []string
 	ctx := makeChatCtx(t)
-	ctx.SendToClient = func(msgType string, _ interface{}) { events = append(events, msgType) }
-	ExecuteToolForTest("open_file", map[string]interface{}{"path": "PROJECT_GOAL.md"}, ctx)
+	ctx.SendToClient = func(msgType string, _ any) { events = append(events, msgType) }
+	ExecuteToolForTest("open_file", map[string]any{"path": "PROJECT_GOAL.md"}, ctx)
 	found := false
 	for _, e := range events {
 		if e == "editor.open" {
@@ -360,7 +360,7 @@ func TestExecuteToolForTest_OpenFile_WithSendToClient(t *testing.T) {
 func TestExecuteToolForTest_CloseTab_NilSendToClient(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.SendToClient = nil
-	result, _ := ExecuteToolForTest("close_tab", map[string]interface{}{"path": "PROJECT_GOAL.md"}, ctx)
+	result, _ := ExecuteToolForTest("close_tab", map[string]any{"path": "PROJECT_GOAL.md"}, ctx)
 	_ = result
 }
 
@@ -370,7 +370,7 @@ func TestExecuteToolForTest_CloseTab_DirtyNoForce(t *testing.T) {
 	ctx.GetOpenTabs = func() []TabInfo {
 		return []TabInfo{{Path: tabPath, IsDirty: true}}
 	}
-	result, isErr := ExecuteToolForTest("close_tab", map[string]interface{}{"path": "PROJECT_GOAL.md"}, ctx)
+	result, isErr := ExecuteToolForTest("close_tab", map[string]any{"path": "PROJECT_GOAL.md"}, ctx)
 	if !isErr {
 		t.Errorf("expected error for dirty tab without force, got %q", result)
 	}
@@ -383,8 +383,8 @@ func TestExecuteToolForTest_CloseTab_Force(t *testing.T) {
 	ctx.GetOpenTabs = func() []TabInfo {
 		return []TabInfo{{Path: tabPath, IsDirty: true}}
 	}
-	ctx.SendToClient = func(msgType string, _ interface{}) { events = append(events, msgType) }
-	_, isErr := ExecuteToolForTest("close_tab", map[string]interface{}{"path": "PROJECT_GOAL.md", "force": true}, ctx)
+	ctx.SendToClient = func(msgType string, _ any) { events = append(events, msgType) }
+	_, isErr := ExecuteToolForTest("close_tab", map[string]any{"path": "PROJECT_GOAL.md", "force": true}, ctx)
 	if isErr {
 		t.Errorf("expected success with force=true")
 	}
@@ -393,8 +393,8 @@ func TestExecuteToolForTest_CloseTab_Force(t *testing.T) {
 func TestExecuteToolForTest_FocusTab(t *testing.T) {
 	var events []string
 	ctx := makeChatCtx(t)
-	ctx.SendToClient = func(msgType string, _ interface{}) { events = append(events, msgType) }
-	_, _ = ExecuteToolForTest("focus_tab", map[string]interface{}{"path": "PROJECT_GOAL.md"}, ctx)
+	ctx.SendToClient = func(msgType string, _ any) { events = append(events, msgType) }
+	_, _ = ExecuteToolForTest("focus_tab", map[string]any{"path": "PROJECT_GOAL.md"}, ctx)
 	found := false
 	for _, e := range events {
 		if e == "editor.tab.focus" {
@@ -409,7 +409,7 @@ func TestExecuteToolForTest_FocusTab(t *testing.T) {
 func TestExecuteToolForTest_TestRun_NilSendToClient(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.SendToClient = nil
-	result, isErr := ExecuteToolForTest("test.run", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("test.run", map[string]any{
 		"terminalId": "t1",
 		"command":    "go test ./...",
 		"issue":      "bug #1",
@@ -422,8 +422,8 @@ func TestExecuteToolForTest_TestRun_NilSendToClient(t *testing.T) {
 func TestExecuteToolForTest_TestRun_WithSendToClient(t *testing.T) {
 	var events []string
 	ctx := makeChatCtx(t)
-	ctx.SendToClient = func(msgType string, _ interface{}) { events = append(events, msgType) }
-	_, _ = ExecuteToolForTest("test.run", map[string]interface{}{
+	ctx.SendToClient = func(msgType string, _ any) { events = append(events, msgType) }
+	_, _ = ExecuteToolForTest("test.run", map[string]any{
 		"terminalId": "t1",
 		"command":    "go test ./...",
 		"issue":      "bug #1",
@@ -441,7 +441,7 @@ func TestExecuteToolForTest_TestRun_WithSendToClient(t *testing.T) {
 
 func TestExecuteToolForTest_Shell_Echo(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("shell", map[string]interface{}{"command": "echo hello-from-test"}, ctx)
+	result, isErr := ExecuteToolForTest("shell", map[string]any{"command": "echo hello-from-test"}, ctx)
 	if isErr {
 		t.Errorf("unexpected error: %s", result)
 	}
@@ -454,7 +454,7 @@ func TestExecuteToolForTest_Shell_RequiresApproval_NilHandler(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.RequestApproval = nil
 	// rm -rf requires approval.
-	result, isErr := ExecuteToolForTest("shell", map[string]interface{}{"command": "rm -rf /tmp/engine-test-safe"}, ctx)
+	result, isErr := ExecuteToolForTest("shell", map[string]any{"command": "rm -rf /tmp/engine-test-safe"}, ctx)
 	if !isErr {
 		t.Errorf("expected error when no approval handler, got %q", result)
 	}
@@ -466,7 +466,7 @@ func TestExecuteToolForTest_Shell_RequiresApproval_Denied(t *testing.T) {
 	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
 		return false, nil
 	}
-	result, isErr := ExecuteToolForTest("shell", map[string]interface{}{"command": "rm -rf /tmp/engine-test-safe2"}, ctx)
+	result, isErr := ExecuteToolForTest("shell", map[string]any{"command": "rm -rf /tmp/engine-test-safe2"}, ctx)
 	if !isErr {
 		t.Errorf("expected error when denied, got %q", result)
 	}
@@ -477,7 +477,7 @@ func TestExecuteToolForTest_Shell_RequiresApproval_Denied(t *testing.T) {
 
 func TestExecuteToolForTest_SearchFiles(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("search_files", map[string]interface{}{"pattern": "Engine"}, ctx)
+	result, isErr := ExecuteToolForTest("search_files", map[string]any{"pattern": "Engine"}, ctx)
 	if isErr {
 		t.Errorf("unexpected error: %s", result)
 	}
@@ -487,25 +487,25 @@ func TestExecuteToolForTest_SearchFiles(t *testing.T) {
 func TestExecuteToolForTest_GitStatus(t *testing.T) {
 	ctx := makeChatCtx(t)
 	// The temp dir is not a git repo, so this will error, but code path is covered.
-	result, _ := ExecuteToolForTest("git_status", map[string]interface{}{}, ctx)
+	result, _ := ExecuteToolForTest("git_status", map[string]any{}, ctx)
 	_ = result
 }
 
 func TestExecuteToolForTest_GitDiff(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, _ := ExecuteToolForTest("git_diff", map[string]interface{}{}, ctx)
+	result, _ := ExecuteToolForTest("git_diff", map[string]any{}, ctx)
 	_ = result
 }
 
 func TestExecuteToolForTest_GitDiff_WithPath(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, _ := ExecuteToolForTest("git_diff", map[string]interface{}{"path": "PROJECT_GOAL.md"}, ctx)
+	result, _ := ExecuteToolForTest("git_diff", map[string]any{"path": "PROJECT_GOAL.md"}, ctx)
 	_ = result
 }
 
 func TestExecuteToolForTest_GitDiff_InvalidPath(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("git_diff", map[string]interface{}{"path": "../../etc/passwd"}, ctx)
+	result, isErr := ExecuteToolForTest("git_diff", map[string]any{"path": "../../etc/passwd"}, ctx)
 	if !isErr {
 		t.Logf("path traversal allowed, result: %q", result)
 	}
@@ -514,7 +514,7 @@ func TestExecuteToolForTest_GitDiff_InvalidPath(t *testing.T) {
 func TestExecuteToolForTest_GitCommit_NilApproval(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.RequestApproval = nil
-	result, isErr := ExecuteToolForTest("git_commit", map[string]interface{}{"message": "test"}, ctx)
+	result, isErr := ExecuteToolForTest("git_commit", map[string]any{"message": "test"}, ctx)
 	if !isErr {
 		t.Errorf("expected error without approval handler, got %q", result)
 	}
@@ -525,7 +525,7 @@ func TestExecuteToolForTest_GitCommit_Denied(t *testing.T) {
 	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
 		return false, nil
 	}
-	result, isErr := ExecuteToolForTest("git_commit", map[string]interface{}{"message": "test"}, ctx)
+	result, isErr := ExecuteToolForTest("git_commit", map[string]any{"message": "test"}, ctx)
 	if !isErr {
 		t.Errorf("expected error when denied, got %q", result)
 	}
@@ -537,7 +537,7 @@ func TestExecuteToolForTest_GitCommit_Denied(t *testing.T) {
 func TestExecuteToolForTest_GitPush_NilApproval(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.RequestApproval = nil
-	result, isErr := ExecuteToolForTest("git_push", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("git_push", map[string]any{}, ctx)
 	if !isErr {
 		t.Errorf("expected error without approval handler, got %q", result)
 	}
@@ -549,7 +549,7 @@ func TestExecuteToolForTest_GitPush_Denied(t *testing.T) {
 	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
 		return false, nil
 	}
-	result, isErr := ExecuteToolForTest("git_push", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("git_push", map[string]any{}, ctx)
 	if !isErr {
 		t.Errorf("expected error when denied, got %q", result)
 	}
@@ -558,25 +558,25 @@ func TestExecuteToolForTest_GitPush_Denied(t *testing.T) {
 func TestExecuteToolForTest_GitPull(t *testing.T) {
 	ctx := makeChatCtx(t)
 	// Not a git repo — error expected, but code path is covered.
-	result, _ := ExecuteToolForTest("git_pull", map[string]interface{}{}, ctx)
+	result, _ := ExecuteToolForTest("git_pull", map[string]any{}, ctx)
 	_ = result
 }
 
 func TestExecuteToolForTest_GitBranch_List(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, _ := ExecuteToolForTest("git_branch", map[string]interface{}{}, ctx)
+	result, _ := ExecuteToolForTest("git_branch", map[string]any{}, ctx)
 	_ = result
 }
 
 func TestExecuteToolForTest_GitBranch_Create(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, _ := ExecuteToolForTest("git_branch", map[string]interface{}{"name": "test-branch", "create": true}, ctx)
+	result, _ := ExecuteToolForTest("git_branch", map[string]any{"name": "test-branch", "create": true}, ctx)
 	_ = result
 }
 
 func TestExecuteToolForTest_ProcessList(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("process_list", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("process_list", map[string]any{}, ctx)
 	if isErr {
 		t.Errorf("unexpected error: %s", result)
 	}
@@ -584,7 +584,7 @@ func TestExecuteToolForTest_ProcessList(t *testing.T) {
 
 func TestExecuteToolForTest_ProcessList_WithFilter(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("process_list", map[string]interface{}{"filter": "go"}, ctx)
+	result, isErr := ExecuteToolForTest("process_list", map[string]any{"filter": "go"}, ctx)
 	if isErr {
 		t.Errorf("unexpected error: %s", result)
 	}
@@ -594,7 +594,7 @@ func TestExecuteToolForTest_ProcessList_WithFilter(t *testing.T) {
 func TestExecuteToolForTest_ProcessKill_NilApproval(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.RequestApproval = nil
-	result, isErr := ExecuteToolForTest("process_kill", map[string]interface{}{"pid": float64(os.Getpid())}, ctx)
+	result, isErr := ExecuteToolForTest("process_kill", map[string]any{"pid": float64(os.Getpid())}, ctx)
 	if !isErr {
 		t.Errorf("expected error without approval handler, got %q", result)
 	}
@@ -602,7 +602,7 @@ func TestExecuteToolForTest_ProcessKill_NilApproval(t *testing.T) {
 
 func TestExecuteToolForTest_ProcessKill_NoPid(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("process_kill", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("process_kill", map[string]any{}, ctx)
 	if !isErr {
 		t.Errorf("expected error without pid, got %q", result)
 	}
@@ -610,7 +610,7 @@ func TestExecuteToolForTest_ProcessKill_NoPid(t *testing.T) {
 
 func TestExecuteToolForTest_OpenURL_Empty(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("open_url", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("open_url", map[string]any{}, ctx)
 	if !isErr {
 		t.Errorf("expected error for empty url, got %q", result)
 	}
@@ -618,7 +618,7 @@ func TestExecuteToolForTest_OpenURL_Empty(t *testing.T) {
 
 func TestExecuteToolForTest_GitListIssues_NoToken(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, _ := ExecuteToolForTest("github_list_issues", map[string]interface{}{
+	result, _ := ExecuteToolForTest("github_list_issues", map[string]any{
 		"owner": "engine",
 		"repo":  "test",
 		"state": "open",
@@ -628,7 +628,7 @@ func TestExecuteToolForTest_GitListIssues_NoToken(t *testing.T) {
 
 func TestExecuteToolForTest_GitGetIssue_ZeroNumber(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_get_issue", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_get_issue", map[string]any{
 		"owner": "engine", "repo": "test", "number": float64(0),
 	}, ctx)
 	if !isErr {
@@ -638,7 +638,7 @@ func TestExecuteToolForTest_GitGetIssue_ZeroNumber(t *testing.T) {
 
 func TestExecuteToolForTest_GitCreateIssue_NoTitle(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_create_issue", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_create_issue", map[string]any{
 		"owner": "engine", "repo": "test",
 	}, ctx)
 	if !isErr {
@@ -648,7 +648,7 @@ func TestExecuteToolForTest_GitCreateIssue_NoTitle(t *testing.T) {
 
 func TestExecuteToolForTest_GitComment_NoBody(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_comment", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_comment", map[string]any{
 		"owner": "engine", "repo": "test", "number": float64(1),
 	}, ctx)
 	if !isErr {
@@ -658,7 +658,7 @@ func TestExecuteToolForTest_GitComment_NoBody(t *testing.T) {
 
 func TestExecuteToolForTest_UnknownTool(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("definitely_unknown_tool_xyz", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("definitely_unknown_tool_xyz", map[string]any{}, ctx)
 	if !isErr {
 		t.Errorf("expected error for unknown tool, got %q", result)
 	}
@@ -693,7 +693,7 @@ func TestFirstOllamaModel_BadJSON(t *testing.T) {
 
 func TestFirstOllamaModel_EmptyList(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{"models": []interface{}{}}) //nolint:errcheck
+		json.NewEncoder(w).Encode(map[string]any{"models": []any{}}) //nolint:errcheck
 	}))
 	defer srv.Close()
 
@@ -705,9 +705,9 @@ func TestFirstOllamaModel_EmptyList(t *testing.T) {
 
 func TestFirstOllamaModel_WithModel(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
-			"models": []interface{}{
-				map[string]interface{}{"name": "llama3:latest"},
+		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+			"models": []any{
+				map[string]any{"name": "llama3:latest"},
 			},
 		})
 	}))
@@ -721,10 +721,10 @@ func TestFirstOllamaModel_WithModel(t *testing.T) {
 
 func TestFirstOllamaModel_EntryWithEmptyName(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
-			"models": []interface{}{
-				map[string]interface{}{"name": "   "},
-				map[string]interface{}{"name": "llama3:latest"},
+		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+			"models": []any{
+				map[string]any{"name": "   "},
+				map[string]any{"name": "llama3:latest"},
 			},
 		})
 	}))
@@ -738,10 +738,10 @@ func TestFirstOllamaModel_EntryWithEmptyName(t *testing.T) {
 
 func TestFirstOllamaModel_NilEntry(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
-			"models": []interface{}{
+		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+			"models": []any{
 				nil,
-				map[string]interface{}{"name": "mistral"},
+				map[string]any{"name": "mistral"},
 			},
 		})
 	}))
@@ -774,13 +774,13 @@ func TestDetectOllamaModel_ApsFallsBackToV1(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/api/ps") {
 			// Return empty list.
-			json.NewEncoder(w).Encode(map[string]interface{}{"models": []interface{}{}}) //nolint:errcheck
+			json.NewEncoder(w).Encode(map[string]any{"models": []any{}}) //nolint:errcheck
 			return
 		}
 		// /v1/models returns a model.
-		json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
-			"data": []interface{}{
-				map[string]interface{}{"id": "mistral-7b"},
+		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+			"data": []any{
+				map[string]any{"id": "mistral-7b"},
 			},
 		})
 	}))
@@ -800,8 +800,8 @@ func TestRunOpenAICompatibleLoop_Cancelled(t *testing.T) {
 	ctx := &ChatContext{
 		Cancel:      ch,
 		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(string) {},
 		ActiveTools: bootstrapTools(),
 	}
@@ -815,15 +815,15 @@ func TestRunOpenAICompatibleLoop_Cancelled(t *testing.T) {
 func TestRunOpenAICompatibleLoop_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{"error": "internal error"}) //nolint:errcheck
+		json.NewEncoder(w).Encode(map[string]any{"error": "internal error"}) //nolint:errcheck
 	}))
 	defer srv.Close()
 
 	var errors []string
 	ctx := &ChatContext{
 		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(err string) { errors = append(errors, err) },
 		ActiveTools: bootstrapTools(),
 	}
@@ -852,8 +852,8 @@ func TestRunOpenAICompatibleLoop_TextResponse(t *testing.T) {
 	var chunks []string
 	ctx := &ChatContext{
 		OnChunk:     func(content string, done bool) { chunks = append(chunks, content) },
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(string) {},
 		ActiveTools: bootstrapTools(),
 	}
@@ -872,7 +872,7 @@ func TestRunOpenAICompatibleLoop_TextResponse(t *testing.T) {
 func TestExecuteToolForTest_MarkVital_NilHandler(t *testing.T) {
 	ctx := makeChatCtx(t)
 	// MarkVital is nil by default — must return an error.
-	result, isErr := ExecuteToolForTest("mark_vital", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("mark_vital", map[string]any{}, ctx)
 	if !isErr {
 		t.Error("expected isErr=true when MarkVital is nil")
 	}
@@ -886,7 +886,7 @@ func TestExecuteToolForTest_MarkVital_WithHandler_ZeroN(t *testing.T) {
 	var markedN int
 	ctx.MarkVital = func(n int) { markedN = n }
 	// n <= 0 must default to 1.
-	result, isErr := ExecuteToolForTest("mark_vital", map[string]interface{}{"n": float64(0)}, ctx)
+	result, isErr := ExecuteToolForTest("mark_vital", map[string]any{"n": float64(0)}, ctx)
 	if isErr {
 		t.Errorf("expected no error, got %q", result)
 	}
@@ -899,7 +899,7 @@ func TestExecuteToolForTest_MarkVital_WithHandler_NormalN(t *testing.T) {
 	ctx := makeChatCtx(t)
 	var markedN int
 	ctx.MarkVital = func(n int) { markedN = n }
-	result, isErr := ExecuteToolForTest("mark_vital", map[string]interface{}{"n": float64(3)}, ctx)
+	result, isErr := ExecuteToolForTest("mark_vital", map[string]any{"n": float64(3)}, ctx)
 	if isErr {
 		t.Errorf("expected no error, got %q", result)
 	}
@@ -947,8 +947,8 @@ func TestRunAnthropicLoop_MarkVital_Closure(t *testing.T) {
 	var errs []string
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(msg string) { errs = append(errs, msg) },
 		ActiveTools:  bootstrapTools(),
 		Usage:        &SessionUsage{},
@@ -989,8 +989,8 @@ func TestRunOpenAICompatibleLoop_WindowsLargeHistory(t *testing.T) {
 
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 		ActiveTools:  bootstrapTools(),
 		Usage:        &SessionUsage{},
@@ -1013,8 +1013,8 @@ func TestRunAnthropicLoop_Cancelled(t *testing.T) {
 	ctx := &ChatContext{
 		Cancel:      ch,
 		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(string) {},
 		ActiveTools: bootstrapTools(),
 		Usage:       &SessionUsage{},
@@ -1032,15 +1032,15 @@ func TestRunAnthropicLoop_Cancelled(t *testing.T) {
 func TestRunAnthropicLoop_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]interface{}{"error": "bad request"}) //nolint:errcheck
+		json.NewEncoder(w).Encode(map[string]any{"error": "bad request"}) //nolint:errcheck
 	}))
 	defer srv.Close()
 
 	var errors []string
 	ctx := &ChatContext{
 		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(err string) { errors = append(errors, err) },
 		ActiveTools: bootstrapTools(),
 		Usage:       &SessionUsage{},
@@ -1076,8 +1076,8 @@ func TestRunAnthropicLoop_TextResponse(t *testing.T) {
 	var chunks []string
 	ctx := &ChatContext{
 		OnChunk:     func(content string, done bool) { chunks = append(chunks, content) },
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(string) {},
 		ActiveTools: bootstrapTools(),
 		Usage:       &SessionUsage{},
@@ -1252,8 +1252,8 @@ func TestStreamRequest_ToolUseBlock(t *testing.T) {
 
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 		Usage:        &SessionUsage{},
 	}
@@ -1321,8 +1321,8 @@ func TestRunAnthropicLoop_ToolUse_ThenText(t *testing.T) {
 	var toolCalls []string
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(name string, _ interface{}) { toolCalls = append(toolCalls, name) },
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(name string, _ any) { toolCalls = append(toolCalls, name) },
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 		ActiveTools:  bootstrapTools(),
 		Usage:        &SessionUsage{},
@@ -1367,8 +1367,8 @@ func TestRunAnthropicLoop_TransientRetry(t *testing.T) {
 	var errs []string
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(e string) { errs = append(errs, e) },
 		ActiveTools:  bootstrapTools(),
 		Usage:        &SessionUsage{},
@@ -1417,8 +1417,8 @@ func TestRunOpenAICompatibleLoop_ToolCall_ThenText(t *testing.T) {
 	var toolCalls []string
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(name string, _ interface{}) { toolCalls = append(toolCalls, name) },
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(name string, _ any) { toolCalls = append(toolCalls, name) },
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  projectDir,
@@ -1470,8 +1470,8 @@ func TestRunAnthropicLoop_QuarantinedTool(t *testing.T) {
 
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 		ActiveTools:  bootstrapTools(),
 		Usage:        &SessionUsage{},
@@ -1492,7 +1492,7 @@ func TestExecuteToolForTest_Shell_ApprovalError(t *testing.T) {
 	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
 		return false, errors.New("approval service unavailable")
 	}
-	result, isErr := ExecuteToolForTest("shell", map[string]interface{}{"command": "rm -rf /tmp/engine-approval-error-test"}, ctx)
+	result, isErr := ExecuteToolForTest("shell", map[string]any{"command": "rm -rf /tmp/engine-approval-error-test"}, ctx)
 	if !isErr {
 		t.Errorf("expected error from approval handler error, got %q", result)
 	}
@@ -1504,7 +1504,7 @@ func TestExecuteToolForTest_Shell_ApprovalError(t *testing.T) {
 func TestExecuteToolForTest_Shell_EmptyOutput(t *testing.T) {
 	ctx := makeChatCtx(t)
 	// "true" exits 0 and produces no output → should return "(no output)"
-	result, isErr := ExecuteToolForTest("shell", map[string]interface{}{"command": "true"}, ctx)
+	result, isErr := ExecuteToolForTest("shell", map[string]any{"command": "true"}, ctx)
 	if isErr {
 		t.Errorf("unexpected error: %s", result)
 	}
@@ -1518,7 +1518,7 @@ func TestExecuteToolForTest_GitCommit_ApprovalError(t *testing.T) {
 	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
 		return false, errors.New("commit approval error")
 	}
-	result, isErr := ExecuteToolForTest("git_commit", map[string]interface{}{"message": "test"}, ctx)
+	result, isErr := ExecuteToolForTest("git_commit", map[string]any{"message": "test"}, ctx)
 	if !isErr {
 		t.Errorf("expected error, got %q", result)
 	}
@@ -1532,7 +1532,7 @@ func TestExecuteToolForTest_GitPush_ApprovalError(t *testing.T) {
 	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
 		return false, errors.New("push approval error")
 	}
-	result, isErr := ExecuteToolForTest("git_push", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("git_push", map[string]any{}, ctx)
 	if !isErr {
 		t.Errorf("expected error, got %q", result)
 	}
@@ -1554,7 +1554,7 @@ func TestExecuteToolForTest_GitListIssues_EmptyList(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-tok")
 
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_list_issues", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_list_issues", map[string]any{
 		"owner": "owner", "repo": "repo", "state": "open",
 	}, ctx)
 	if isErr {
@@ -1577,7 +1577,7 @@ func TestExecuteToolForTest_GitListIssues_WithItems(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-tok")
 
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_list_issues", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_list_issues", map[string]any{
 		"owner": "owner", "repo": "repo",
 	}, ctx)
 	if isErr {
@@ -1600,7 +1600,7 @@ func TestExecuteToolForTest_GitGetIssue_Success(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-tok")
 
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_get_issue", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_get_issue", map[string]any{
 		"owner": "o", "repo": "r", "number": float64(42),
 	}, ctx)
 	if isErr {
@@ -1624,7 +1624,7 @@ func TestExecuteToolForTest_GitCreateIssue_Success(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-tok")
 
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_create_issue", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_create_issue", map[string]any{
 		"owner": "o", "repo": "r", "title": "New feature", "body": "body text",
 	}, ctx)
 	if isErr {
@@ -1647,7 +1647,7 @@ func TestExecuteToolForTest_GitCloseIssue_Success(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-tok")
 
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_close_issue", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_close_issue", map[string]any{
 		"owner": "o", "repo": "r", "number": float64(7), "comment": "fixed",
 	}, ctx)
 	if isErr {
@@ -1660,7 +1660,7 @@ func TestExecuteToolForTest_GitCloseIssue_Success(t *testing.T) {
 
 func TestExecuteToolForTest_GitCloseIssue_ZeroNumber(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_close_issue", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_close_issue", map[string]any{
 		"owner": "o", "repo": "r", "number": float64(0),
 	}, ctx)
 	if !isErr {
@@ -1681,7 +1681,7 @@ func TestExecuteToolForTest_GitComment_Success(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-tok")
 
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_comment", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_comment", map[string]any{
 		"owner": "o", "repo": "r", "number": float64(1), "body": "thanks",
 	}, ctx)
 	if isErr {
@@ -1697,7 +1697,7 @@ func TestExecuteToolForTest_ProcessKill_ApprovalDenied(t *testing.T) {
 	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
 		return false, nil
 	}
-	result, isErr := ExecuteToolForTest("process_kill", map[string]interface{}{"pid": float64(1)}, ctx)
+	result, isErr := ExecuteToolForTest("process_kill", map[string]any{"pid": float64(1)}, ctx)
 	if !isErr {
 		t.Errorf("expected error, got %q", result)
 	}
@@ -1711,7 +1711,7 @@ func TestExecuteToolForTest_ProcessKill_ApprovalError(t *testing.T) {
 	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
 		return false, errors.New("kill approval error")
 	}
-	result, isErr := ExecuteToolForTest("process_kill", map[string]interface{}{"pid": float64(1)}, ctx)
+	result, isErr := ExecuteToolForTest("process_kill", map[string]any{"pid": float64(1)}, ctx)
 	if !isErr {
 		t.Errorf("expected error, got %q", result)
 	}
@@ -1722,7 +1722,7 @@ func TestExecuteToolForTest_ProcessKill_ApprovalError(t *testing.T) {
 
 func TestExecuteToolForTest_GitComment_ZeroNumber(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_comment", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_comment", map[string]any{
 		"owner": "engine", "repo": "test", "number": float64(0), "body": "hello",
 	}, ctx)
 	if !isErr {
@@ -1746,7 +1746,7 @@ func TestExecuteToolForTest_OpenURL_Darwin(t *testing.T) {
 
 	ctx := makeChatCtx(t)
 	const targetURL = "http://localhost:1"
-	result, isErr := ExecuteToolForTest("open_url", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("open_url", map[string]any{
 		"url": targetURL,
 	}, ctx)
 	if isErr {
@@ -1766,7 +1766,7 @@ func TestExecuteToolForTest_OpenURL_Darwin(t *testing.T) {
 func TestExecuteToolForTest_Screenshot_Darwin(t *testing.T) {
 	ctx := makeChatCtx(t)
 	outPath := t.TempDir() + "/screenshot.png"
-	result, isErr := ExecuteToolForTest("screenshot", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("screenshot", map[string]any{
 		"path": outPath,
 	}, ctx)
 	// screencapture may fail in headless CI; either outcome is acceptable.
@@ -1792,7 +1792,7 @@ func TestExecuteToolForTest_ProcessKill_SuccessTerm(t *testing.T) {
 	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
 		return true, nil
 	}
-	result, isErr := ExecuteToolForTest("process_kill", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("process_kill", map[string]any{
 		"pid": float64(pid), "signal": "TERM",
 	}, ctx)
 	if isErr {
@@ -1813,7 +1813,7 @@ func TestExecuteToolForTest_ProcessKill_SuccessKill(t *testing.T) {
 	ctx.RequestApproval = func(kind, title, message, command string) (bool, error) {
 		return true, nil
 	}
-	result, isErr := ExecuteToolForTest("process_kill", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("process_kill", map[string]any{
 		"pid": float64(pid), "signal": "KILL",
 	}, ctx)
 	if isErr {
@@ -1826,7 +1826,7 @@ func TestExecuteToolForTest_ProcessKill_SuccessKill(t *testing.T) {
 func TestExecuteToolForTest_GitComment_NewClientError(t *testing.T) {
 	ctx := makeChatCtx(t)
 	// No GITHUB_TOKEN env var set in test env → NewClient fails.
-	result, isErr := ExecuteToolForTest("github_comment", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_comment", map[string]any{
 		"number": float64(1), "body": "hello",
 	}, ctx)
 	// If GITHUB_TOKEN is set in environment, skip.
@@ -1854,8 +1854,8 @@ func TestChat_Anthropic_NoKey(t *testing.T) {
 		ProjectPath: dir,
 		SessionID:   "sess-anth-nokey",
 		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(e string) { gotErr = e },
 	}
 	Chat(ctx, "hello")
@@ -1878,8 +1878,8 @@ func TestChat_OpenAI_NoKey(t *testing.T) {
 		ProjectPath: dir,
 		SessionID:   "sess-oai-nokey",
 		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(e string) { gotErr = e },
 	}
 	Chat(ctx, "hello")
@@ -1919,8 +1919,8 @@ func TestChat_Ollama_WithGetOpenTabs(t *testing.T) {
 		ProjectPath: projectDir,
 		SessionID:   "sess-opentabs",
 		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(string) {},
 		GetOpenTabs: func() []TabInfo {
 			tabsCalled = true
@@ -1938,7 +1938,7 @@ func TestChat_Ollama_WithGetOpenTabs(t *testing.T) {
 func TestExecuteToolForTest_Shell_NoSHELLEnv(t *testing.T) {
 	ctx := makeChatCtx(t)
 	t.Setenv("SHELL", "")
-	result, isErr := ExecuteToolForTest("shell", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("shell", map[string]any{
 		"command": "echo hello-noenv",
 	}, ctx)
 	if isErr {
@@ -1951,7 +1951,7 @@ func TestExecuteToolForTest_Shell_NoSHELLEnv(t *testing.T) {
 
 // TestExecuteToolForTest_SearchHistory_NilCtx covers the ctx==nil early return in search_history.
 func TestExecuteToolForTest_SearchHistory_NilCtx(t *testing.T) {
-	result, isErr := ExecuteToolForTest("search_history", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("search_history", map[string]any{
 		"query": "hello",
 	}, nil)
 	if !isErr {
@@ -1976,8 +1976,8 @@ func TestRunOpenAICompatibleLoop_WindowedHistory(t *testing.T) {
 
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  t.TempDir(),
@@ -2005,8 +2005,8 @@ func TestRunOpenAICompatibleLoop_RequestBuildError(t *testing.T) {
 	var gotErr string
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(s string) { gotErr = s },
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  t.TempDir(),
@@ -2054,8 +2054,8 @@ func TestRunOpenAICompatibleLoop_MalformedToolArgs(t *testing.T) {
 
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  projectDir,
@@ -2102,8 +2102,8 @@ func TestRunOpenAICompatibleLoop_NoIDSyntheticAssign(t *testing.T) {
 
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  projectDir,
@@ -2128,8 +2128,8 @@ func TestRunOpenAICompatibleLoop_StreamError(t *testing.T) {
 	var gotErr string
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(s string) { gotErr = s },
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  setupHistoryTestProject(t),
@@ -2148,8 +2148,8 @@ func TestRunOpenAICompatibleLoop_HTTPError(t *testing.T) {
 	var gotErr string
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(s string) { gotErr = s },
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  t.TempDir(),
@@ -2194,22 +2194,22 @@ func TestOllamaPing_WithModel(t *testing.T) {
 func TestExecuteToolForTest_ReadAndList_PathErrors(t *testing.T) {
 	ctx := makeChatCtx(t)
 
-	result, isErr := ExecuteToolForTest("read_file", map[string]interface{}{"path": "missing.txt"}, ctx)
+	result, isErr := ExecuteToolForTest("read_file", map[string]any{"path": "missing.txt"}, ctx)
 	if !isErr {
 		t.Fatalf("expected missing file error, got %q", result)
 	}
 
-	result, isErr = ExecuteToolForTest("write_file", map[string]interface{}{"path": "../escape.txt", "content": "x"}, ctx)
+	result, isErr = ExecuteToolForTest("write_file", map[string]any{"path": "../escape.txt", "content": "x"}, ctx)
 	if !isErr {
 		t.Fatalf("expected write path error, got %q", result)
 	}
 
-	result, isErr = ExecuteToolForTest("list_directory", map[string]interface{}{"path": "../escape"}, ctx)
+	result, isErr = ExecuteToolForTest("list_directory", map[string]any{"path": "../escape"}, ctx)
 	if !isErr {
 		t.Fatalf("expected list_directory path error, got %q", result)
 	}
 
-	result, isErr = ExecuteToolForTest("list_directory", map[string]interface{}{"path": "does-not-exist"}, ctx)
+	result, isErr = ExecuteToolForTest("list_directory", map[string]any{"path": "does-not-exist"}, ctx)
 	if !isErr {
 		t.Fatalf("expected list_directory missing directory error, got %q", result)
 	}
@@ -2218,7 +2218,7 @@ func TestExecuteToolForTest_ReadAndList_PathErrors(t *testing.T) {
 func TestExecuteToolForTest_Shell_CwdErrorAndNoOutputError(t *testing.T) {
 	ctx := makeChatCtx(t)
 
-	result, isErr := ExecuteToolForTest("shell", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("shell", map[string]any{
 		"command": "echo should-not-run",
 		"cwd":     "../escape",
 	}, ctx)
@@ -2226,7 +2226,7 @@ func TestExecuteToolForTest_Shell_CwdErrorAndNoOutputError(t *testing.T) {
 		t.Fatalf("expected cwd path error, got %q", result)
 	}
 
-	result, isErr = ExecuteToolForTest("shell", map[string]interface{}{"command": "exit 17"}, ctx)
+	result, isErr = ExecuteToolForTest("shell", map[string]any{"command": "exit 17"}, ctx)
 	if !isErr {
 		t.Fatalf("expected command failure when there is no output, got %q", result)
 	}
@@ -2238,7 +2238,7 @@ func TestExecuteToolForTest_Shell_CwdErrorAndNoOutputError(t *testing.T) {
 func TestExecuteToolForTest_Shell_TruncatesLargeOutput(t *testing.T) {
 	ctx := makeChatCtx(t)
 
-	result, isErr := ExecuteToolForTest("shell", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("shell", map[string]any{
 		"command": "yes a | head -c 4300000",
 	}, ctx)
 	if isErr {
@@ -2257,8 +2257,8 @@ func TestExecuteToolForTest_Git_BranchAndPushErrorPaths(t *testing.T) {
 		ProjectPath: projectDir,
 		SessionID:   "git-branch-push",
 		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(string) {},
 		ActiveTools: bootstrapTools(),
 		RequestApproval: func(kind, title, message, command string) (bool, error) {
@@ -2266,7 +2266,7 @@ func TestExecuteToolForTest_Git_BranchAndPushErrorPaths(t *testing.T) {
 		},
 	}
 
-	result, isErr := ExecuteToolForTest("git_branch", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("git_branch", map[string]any{}, ctx)
 	if isErr {
 		t.Fatalf("expected git_branch list success, got %q", result)
 	}
@@ -2274,12 +2274,12 @@ func TestExecuteToolForTest_Git_BranchAndPushErrorPaths(t *testing.T) {
 		t.Fatalf("expected branch listing, got %q", result)
 	}
 
-	result, isErr = ExecuteToolForTest("git_branch", map[string]interface{}{"name": "feature/test", "create": true}, ctx)
+	result, isErr = ExecuteToolForTest("git_branch", map[string]any{"name": "feature/test", "create": true}, ctx)
 	if isErr {
 		t.Fatalf("expected git_branch create success, got %q", result)
 	}
 
-	result, isErr = ExecuteToolForTest("git_push", map[string]interface{}{}, ctx)
+	result, isErr = ExecuteToolForTest("git_push", map[string]any{}, ctx)
 	if !isErr {
 		t.Fatalf("expected git_push error without remote, got %q", result)
 	}
@@ -2298,8 +2298,8 @@ func TestExecuteToolForTest_GitCommit_SecretScanBlocked(t *testing.T) {
 		ProjectPath: projectDir,
 		SessionID:   "git-secret-scan",
 		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(string) {},
 		ActiveTools: bootstrapTools(),
 		RequestApproval: func(kind, title, message, command string) (bool, error) {
@@ -2307,7 +2307,7 @@ func TestExecuteToolForTest_GitCommit_SecretScanBlocked(t *testing.T) {
 		},
 	}
 
-	result, isErr := ExecuteToolForTest("git_commit", map[string]interface{}{"message": "should fail"}, ctx)
+	result, isErr := ExecuteToolForTest("git_commit", map[string]any{"message": "should fail"}, ctx)
 	if !isErr {
 		t.Fatalf("expected secret scan to block commit, got %q", result)
 	}
@@ -2320,7 +2320,7 @@ func TestExecuteToolForTest_GitDiff_PathError(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.ProjectPath = filepath.Join(t.TempDir(), "missing-repo")
 
-	result, isErr := ExecuteToolForTest("git_diff", map[string]interface{}{"path": "../escape"}, ctx)
+	result, isErr := ExecuteToolForTest("git_diff", map[string]any{"path": "../escape"}, ctx)
 	if !isErr {
 		t.Fatalf("expected git_diff path error, got %q", result)
 	}
@@ -2352,8 +2352,8 @@ func TestRunAnthropicLoop_WindowAndCancelPaths(t *testing.T) {
 	ctx := &ChatContext{
 		Cancel:       cancel,
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(s string) { gotErr = s },
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  setupHistoryTestProject(t),
@@ -2425,8 +2425,8 @@ func TestRunAnthropicLoop_SkipsNonToolAndNilToolInput(t *testing.T) {
 
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  projectDir,
@@ -2520,8 +2520,8 @@ func TestRunOpenAICompatibleLoop_StreamEdgeCases(t *testing.T) {
 
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  projectDir,
@@ -2546,7 +2546,7 @@ func TestExecuteToolForTest_WriteFile_WriteError(t *testing.T) {
 	if err := os.WriteFile(conflictingParent, []byte("data"), 0644); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	result, isErr := ExecuteToolForTest("write_file", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("write_file", map[string]any{
 		"path":    "not-a-dir/child.txt",
 		"content": "hi",
 	}, ctx)
@@ -2561,8 +2561,8 @@ func TestExecuteToolForTest_GitPushPull_ErrorPaths(t *testing.T) {
 	ctx := makeChatCtx(t)
 	initGitRepoForContextTests(t, ctx.ProjectPath)
 	// Without a real remote these return errors — covers the return-value paths.
-	r1, _ := ExecuteToolForTest("git_push", map[string]interface{}{"remote": ""}, ctx)
-	r2, _ := ExecuteToolForTest("git_pull", map[string]interface{}{"remote": ""}, ctx)
+	r1, _ := ExecuteToolForTest("git_push", map[string]any{"remote": ""}, ctx)
+	r2, _ := ExecuteToolForTest("git_pull", map[string]any{"remote": ""}, ctx)
 	_ = r1
 	_ = r2
 }
@@ -2571,7 +2571,7 @@ func TestExecuteToolForTest_GitPushPull_ErrorPaths(t *testing.T) {
 
 func TestExecuteToolForTest_ProcessList_NoMatch(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("process_list", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("process_list", map[string]any{
 		"filter": "zzznonexistent999xyzprocess",
 	}, ctx)
 	if isErr {
@@ -2585,7 +2585,7 @@ func TestExecuteToolForTest_ProcessList_NoMatch(t *testing.T) {
 func TestExecuteToolForTest_ProcessKill_ZeroPid(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.RequestApproval = func(_, _, _, _ string) (bool, error) { return true, nil }
-	result, isErr := ExecuteToolForTest("process_kill", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("process_kill", map[string]any{
 		"pid": float64(0),
 	}, ctx)
 	if !isErr {
@@ -2601,7 +2601,7 @@ func TestExecuteToolForTest_ProcessKill_ZeroPid(t *testing.T) {
 func TestExecuteToolForTest_ProcessKill_InvalidPid(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.RequestApproval = func(_, _, _, _ string) (bool, error) { return true, nil }
-	result, isErr := ExecuteToolForTest("process_kill", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("process_kill", map[string]any{
 		"pid": float64(999999999),
 	}, ctx)
 	if !isErr {
@@ -2616,7 +2616,7 @@ func TestExecuteToolForTest_OpenURL_UnsupportedOS(t *testing.T) {
 		t.Skip("only tests unsupported-OS branch")
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("open_url", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("open_url", map[string]any{
 		"url": "https://example.com",
 	}, ctx)
 	if !isErr {
@@ -2631,7 +2631,7 @@ func TestExecuteToolForTest_Screenshot_UnsupportedOS(t *testing.T) {
 		t.Skip("only tests unsupported-OS branch")
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("screenshot", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("screenshot", map[string]any{}, ctx)
 	if !isErr {
 		t.Fatalf("expected error on unsupported OS, got %q", result)
 	}
@@ -2645,7 +2645,7 @@ func TestExecuteToolForTest_Screenshot_DefaultPathFails(t *testing.T) {
 	}
 	ctx := makeChatCtx(t)
 	// No path → default path is computed; screencapture/scrot will fail in CI. Both branches covered.
-	result, _ := ExecuteToolForTest("screenshot", map[string]interface{}{}, ctx)
+	result, _ := ExecuteToolForTest("screenshot", map[string]any{}, ctx)
 	_ = result
 }
 
@@ -2656,7 +2656,7 @@ func TestExecuteToolForTest_OpenURL_LinuxPath(t *testing.T) {
 		t.Skip("linux-only path")
 	}
 	ctx := makeChatCtx(t)
-	result, _ := ExecuteToolForTest("open_url", map[string]interface{}{
+	result, _ := ExecuteToolForTest("open_url", map[string]any{
 		"url": "https://example.com",
 	}, ctx)
 	_ = result
@@ -2673,7 +2673,7 @@ func TestExecuteToolForTest_SearchHistory_WithGetOpenTabs(t *testing.T) {
 	if err := db.CreateSession(ctx.SessionID, ctx.ProjectPath, "main"); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	result, _ := ExecuteToolForTest("search_history", map[string]interface{}{
+	result, _ := ExecuteToolForTest("search_history", map[string]any{
 		"query": "context",
 	}, ctx)
 	_ = result
@@ -2726,8 +2726,8 @@ func TestChat_TokenBudgetAndToolCalls(t *testing.T) {
 		ProjectPath:  projectDir,
 		SessionID:    sessionID,
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 	}
 	t.Setenv("ENGINE_MODEL_PROVIDER", "ollama")
@@ -2761,8 +2761,8 @@ func TestChat_SessionNilBranch(t *testing.T) {
 		ProjectPath:  projectDir,
 		SessionID:    sessionID,
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 	}
 	t.Setenv("ENGINE_MODEL_PROVIDER", "ollama")
@@ -2797,8 +2797,8 @@ func TestRunAnthropicLoop_Windowed50_Proceeds(t *testing.T) {
 	ctx := &ChatContext{
 		Cancel:       make(chan struct{}),
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  setupHistoryTestProject(t),
@@ -2839,8 +2839,8 @@ func TestRunAnthropicLoop_CancelDuringRetryBackoff(t *testing.T) {
 	ctx := &ChatContext{
 		Cancel:       cancel,
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  setupHistoryTestProject(t),
@@ -2884,8 +2884,8 @@ func TestRunAnthropicLoop_CancelAfterToolLoop(t *testing.T) {
 	ctx := &ChatContext{
 		Cancel:       cancel,
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  setupHistoryTestProject(t),
@@ -2941,8 +2941,8 @@ func TestRunOpenAICompatibleLoop_ScannerError(t *testing.T) {
 	var gotErr string
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(s string) { gotErr = s },
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  setupHistoryTestProject(t),
@@ -2985,8 +2985,8 @@ func TestRunOpenAICompatibleLoop_NilTcdInMap(t *testing.T) {
 
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  setupHistoryTestProject(t),
@@ -3024,8 +3024,8 @@ func TestRunOpenAICompatibleLoop_CancelAfterTools(t *testing.T) {
 	ctx := &ChatContext{
 		Cancel:       cancel,
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  setupHistoryTestProject(t),
@@ -3039,7 +3039,7 @@ func TestRunOpenAICompatibleLoop_CancelAfterTools(t *testing.T) {
 
 func TestExecuteToolForTest_SearchFiles_PathError(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("search_files", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("search_files", map[string]any{
 		"pattern":   "*.go",
 		"directory": "../../outside",
 	}, ctx)
@@ -3052,7 +3052,7 @@ func TestExecuteToolForTest_SearchFiles_PathError(t *testing.T) {
 
 func TestExecuteToolForTest_GitDiff_NotARepo(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, _ := ExecuteToolForTest("git_diff", map[string]interface{}{
+	result, _ := ExecuteToolForTest("git_diff", map[string]any{
 		"path": ".",
 	}, ctx)
 	_ = result
@@ -3070,7 +3070,7 @@ func TestExecuteToolForTest_GitCommit_Success(t *testing.T) {
 	}
 	ctx.RequestApproval = func(_, _, _, _ string) (bool, error) { return true, nil }
 
-	result, _ := ExecuteToolForTest("git_commit", map[string]interface{}{
+	result, _ := ExecuteToolForTest("git_commit", map[string]any{
 		"message": "test commit",
 	}, ctx)
 	_ = result
@@ -3082,7 +3082,7 @@ func TestExecuteToolForTest_GitCommit_CommitError(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.RequestApproval = func(_, _, _, _ string) (bool, error) { return true, nil }
 
-	result, _ := ExecuteToolForTest("git_commit", map[string]interface{}{
+	result, _ := ExecuteToolForTest("git_commit", map[string]any{
 		"message": "test",
 	}, ctx)
 	_ = result
@@ -3094,7 +3094,7 @@ func TestExecuteToolForTest_SearchHistory_DBError(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.ProjectPath = filepath.Join(t.TempDir(), "no-db")
 	ctx.SessionID = "bad-session"
-	result, _ := ExecuteToolForTest("search_history", map[string]interface{}{
+	result, _ := ExecuteToolForTest("search_history", map[string]any{
 		"query": "anything",
 	}, ctx)
 	_ = result
@@ -3104,7 +3104,7 @@ func TestExecuteToolForTest_SearchHistory_DBError(t *testing.T) {
 
 func TestExecuteToolForTest_CloseTab_PathError(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("close_tab", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("close_tab", map[string]any{
 		"path": "../../outside",
 	}, ctx)
 	if !isErr {
@@ -3116,7 +3116,7 @@ func TestExecuteToolForTest_CloseTab_PathError(t *testing.T) {
 
 func TestExecuteToolForTest_FocusTab_PathError(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("focus_tab", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("focus_tab", map[string]any{
 		"path": "../../outside",
 	}, ctx)
 	if !isErr {
@@ -3129,7 +3129,7 @@ func TestExecuteToolForTest_FocusTab_PathError(t *testing.T) {
 func TestExecuteToolForTest_GithubListIssues_NoToken(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_list_issues", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_list_issues", map[string]any{
 		"owner": "test", "repo": "test",
 	}, ctx)
 	if !isErr {
@@ -3140,7 +3140,7 @@ func TestExecuteToolForTest_GithubListIssues_NoToken(t *testing.T) {
 func TestExecuteToolForTest_GithubGetIssue_NoToken(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_get_issue", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_get_issue", map[string]any{
 		"owner": "test", "repo": "test", "number": float64(1),
 	}, ctx)
 	if !isErr {
@@ -3151,7 +3151,7 @@ func TestExecuteToolForTest_GithubGetIssue_NoToken(t *testing.T) {
 func TestExecuteToolForTest_GithubCloseIssue_NoToken(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_close_issue", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_close_issue", map[string]any{
 		"owner": "test", "repo": "test", "number": float64(1),
 	}, ctx)
 	if !isErr {
@@ -3162,7 +3162,7 @@ func TestExecuteToolForTest_GithubCloseIssue_NoToken(t *testing.T) {
 func TestExecuteToolForTest_GithubCreateIssue_NoToken(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_create_issue", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_create_issue", map[string]any{
 		"owner": "test", "repo": "test", "title": "test issue",
 	}, ctx)
 	if !isErr {
@@ -3173,7 +3173,7 @@ func TestExecuteToolForTest_GithubCreateIssue_NoToken(t *testing.T) {
 func TestExecuteToolForTest_GithubComment_NoToken(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_comment", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_comment", map[string]any{
 		"owner": "test", "repo": "test", "number": float64(1), "body": "hello",
 	}, ctx)
 	if !isErr {
@@ -3187,7 +3187,7 @@ func TestExecuteToolForTest_GitPush_WithApproval(t *testing.T) {
 	ctx := makeChatCtx(t)
 	initGitRepoForContextTests(t, ctx.ProjectPath)
 	ctx.RequestApproval = func(_, _, _, _ string) (bool, error) { return true, nil }
-	result, _ := ExecuteToolForTest("git_push", map[string]interface{}{"remote": "origin"}, ctx)
+	result, _ := ExecuteToolForTest("git_push", map[string]any{"remote": "origin"}, ctx)
 	_ = result
 }
 
@@ -3195,7 +3195,7 @@ func TestExecuteToolForTest_GitPull_WithApproval(t *testing.T) {
 	ctx := makeChatCtx(t)
 	initGitRepoForContextTests(t, ctx.ProjectPath)
 	ctx.RequestApproval = func(_, _, _, _ string) (bool, error) { return true, nil }
-	result, _ := ExecuteToolForTest("git_pull", map[string]interface{}{"remote": "origin"}, ctx)
+	result, _ := ExecuteToolForTest("git_pull", map[string]any{"remote": "origin"}, ctx)
 	_ = result
 }
 
@@ -3218,8 +3218,8 @@ func TestChat_SaveMessageError(t *testing.T) {
 		ProjectPath:  projectDir,
 		SessionID:    sessionID,
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(s string) { gotErrors = append(gotErrors, s) },
 	}
 	t.Setenv("ENGINE_MODEL_PROVIDER", "ollama")
@@ -3234,7 +3234,7 @@ func TestChat_SaveMessageError(t *testing.T) {
 
 func TestExecuteToolForTest_ProcessList_AllProcs(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, _ := ExecuteToolForTest("process_list", map[string]interface{}{}, ctx)
+	result, _ := ExecuteToolForTest("process_list", map[string]any{}, ctx)
 	_ = result
 }
 
@@ -3244,7 +3244,7 @@ func TestExecuteToolForTest_ProcessKill_KillSignalDenied(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.RequestApproval = func(_, _, _, _ string) (bool, error) { return false, nil }
 	ownPID := os.Getpid()
-	result, isErr := ExecuteToolForTest("process_kill", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("process_kill", map[string]any{
 		"pid": float64(ownPID), "signal": "KILL",
 	}, ctx)
 	// Approval denied → "The user denied the process kill." (not a real kill).
@@ -3268,7 +3268,7 @@ func TestExecuteToolForTest_GithubListIssues_APIError(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "fake-token-for-test")
 	t.Setenv("GITHUB_API_BASE", srvURL)
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_list_issues", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_list_issues", map[string]any{
 		"owner": "test", "repo": "test",
 	}, ctx)
 	if !isErr {
@@ -3282,7 +3282,7 @@ func TestExecuteToolForTest_GithubGetIssue_APIError(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "fake-token-for-test")
 	t.Setenv("GITHUB_API_BASE", srvURL)
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_get_issue", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_get_issue", map[string]any{
 		"owner": "test", "repo": "test", "number": float64(1),
 	}, ctx)
 	if !isErr {
@@ -3296,7 +3296,7 @@ func TestExecuteToolForTest_GithubCloseIssue_APIError(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "fake-token-for-test")
 	t.Setenv("GITHUB_API_BASE", srvURL)
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_close_issue", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_close_issue", map[string]any{
 		"owner": "test", "repo": "test", "number": float64(1),
 	}, ctx)
 	if !isErr {
@@ -3310,7 +3310,7 @@ func TestExecuteToolForTest_GithubCreateIssue_APIError(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "fake-token-for-test")
 	t.Setenv("GITHUB_API_BASE", srvURL)
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_create_issue", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_create_issue", map[string]any{
 		"owner": "test", "repo": "test", "title": "test issue",
 	}, ctx)
 	if !isErr {
@@ -3324,7 +3324,7 @@ func TestExecuteToolForTest_GithubComment_APIError(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "fake-token-for-test")
 	t.Setenv("GITHUB_API_BASE", srvURL)
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("github_comment", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("github_comment", map[string]any{
 		"owner": "test", "repo": "test", "number": float64(1), "body": "hello",
 	}, ctx)
 	if !isErr {
@@ -3336,7 +3336,7 @@ func TestExecuteToolForTest_GithubComment_APIError(t *testing.T) {
 
 func TestExecuteToolForTest_OpenFile_PathError(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("open_file", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("open_file", map[string]any{
 		"path": "../../outside",
 	}, ctx)
 	if !isErr {
@@ -3368,7 +3368,7 @@ func TestExecuteToolForTest_GitPush_SuccessLocalRemote(t *testing.T) {
 	_ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "push test commit").Run()
 
 	ctx.RequestApproval = func(_, _, _, _ string) (bool, error) { return true, nil }
-	result, _ := ExecuteToolForTest("git_push", map[string]interface{}{"remote": "localtest"}, ctx)
+	result, _ := ExecuteToolForTest("git_push", map[string]any{"remote": "localtest"}, ctx)
 	_ = result
 }
 
@@ -3404,7 +3404,7 @@ func TestExecuteToolForTest_GitPull_SuccessLocalRemote(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.ProjectPath = cloneDir
 	ctx.RequestApproval = func(_, _, _, _ string) (bool, error) { return true, nil }
-	result, _ := ExecuteToolForTest("git_pull", map[string]interface{}{"remote": "origin"}, ctx)
+	result, _ := ExecuteToolForTest("git_pull", map[string]any{"remote": "origin"}, ctx)
 	_ = result
 }
 
@@ -3417,7 +3417,7 @@ func TestExecuteToolForTest_ProcessList_Error(t *testing.T) {
 		return nil, errors.New("cannot list processes")
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("process_list", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("process_list", map[string]any{}, ctx)
 	if !isErr {
 		t.Fatalf("expected error, got %q", result)
 	}
@@ -3431,7 +3431,7 @@ func TestExecuteToolForTest_NewProcess_Error(t *testing.T) {
 	}
 	ctx := makeChatCtx(t)
 	ctx.RequestApproval = func(_, _, _, _ string) (bool, error) { return true, nil }
-	result, isErr := ExecuteToolForTest("process_kill", map[string]interface{}{"pid": float64(99999)}, ctx)
+	result, isErr := ExecuteToolForTest("process_kill", map[string]any{"pid": float64(99999)}, ctx)
 	if !isErr {
 		t.Fatalf("expected error, got %q", result)
 	}
@@ -3444,7 +3444,7 @@ func TestExecuteToolForTest_OpenURL_UnsupportedOSViaInject(t *testing.T) {
 		return nil, "open_url not supported on testOS"
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("open_url", map[string]interface{}{"url": "https://example.com"}, ctx)
+	result, isErr := ExecuteToolForTest("open_url", map[string]any{"url": "https://example.com"}, ctx)
 	if !isErr {
 		t.Fatalf("expected error, got %q", result)
 	}
@@ -3461,7 +3461,7 @@ func TestExecuteToolForTest_OpenURL_StartError(t *testing.T) {
 		return cmd, ""
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("open_url", map[string]interface{}{"url": "https://example.com"}, ctx)
+	result, isErr := ExecuteToolForTest("open_url", map[string]any{"url": "https://example.com"}, ctx)
 	if !isErr {
 		t.Fatalf("expected error from Start, got %q", result)
 	}
@@ -3474,7 +3474,7 @@ func TestExecuteToolForTest_OpenURL_LinuxViaInject(t *testing.T) {
 		return exec.Command("true"), ""
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("open_url", map[string]interface{}{"url": "https://example.com"}, ctx)
+	result, isErr := ExecuteToolForTest("open_url", map[string]any{"url": "https://example.com"}, ctx)
 	_ = isErr
 	_ = result
 }
@@ -3486,7 +3486,7 @@ func TestExecuteToolForTest_Screenshot_UnsupportedOSViaInject(t *testing.T) {
 		return nil, "screenshot not supported on testOS"
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("screenshot", map[string]interface{}{"path": "/tmp/test.png"}, ctx)
+	result, isErr := ExecuteToolForTest("screenshot", map[string]any{"path": "/tmp/test.png"}, ctx)
 	if !isErr {
 		t.Fatalf("expected error, got %q", result)
 	}
@@ -3499,7 +3499,7 @@ func TestExecuteToolForTest_Screenshot_CmdError(t *testing.T) {
 		return exec.Command("false"), ""
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("screenshot", map[string]interface{}{"path": "/tmp/test.png"}, ctx)
+	result, isErr := ExecuteToolForTest("screenshot", map[string]any{"path": "/tmp/test.png"}, ctx)
 	if !isErr {
 		t.Fatalf("expected error from screenshot cmd, got %q", result)
 	}
@@ -3508,7 +3508,7 @@ func TestExecuteToolForTest_Screenshot_CmdError(t *testing.T) {
 func TestChat_SaveMessage_Error(t *testing.T) {
 	orig := saveMessageFn
 	t.Cleanup(func() { saveMessageFn = orig })
-	saveMessageFn = func(id, sessionId, role, content string, toolCalls interface{}) error {
+	saveMessageFn = func(id, sessionId, role, content string, toolCalls any) error {
 		return errors.New("db write failed")
 	}
 	projectDir := setupHistoryTestProject(t)
@@ -3521,8 +3521,8 @@ func TestChat_SaveMessage_Error(t *testing.T) {
 		ProjectPath: projectDir,
 		SessionID:   sessionID,
 		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(msg string) { gotErr = msg },
 	}
 	t.Setenv("ENGINE_MODEL_PROVIDER", "ollama")
@@ -3550,8 +3550,8 @@ func TestChat_TokenBudgetExceeded(t *testing.T) {
 		ProjectPath: projectDir,
 		SessionID:   sessionID,
 		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(msg string) { gotErr = msg },
 	}
 	t.Setenv("ENGINE_MODEL_PROVIDER", "ollama")
@@ -3567,7 +3567,7 @@ func TestExecuteToolForTest_ProcessKill_KillSignalFails(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.RequestApproval = func(_, _, _, _ string) (bool, error) { return true, nil }
 	// PID 1 (launchd/init) — kill will be denied by the OS.
-	result, isErr := ExecuteToolForTest("process_kill", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("process_kill", map[string]any{
 		"pid":    float64(1),
 		"signal": "KILL",
 	}, ctx)
@@ -3580,7 +3580,7 @@ func TestExecuteToolForTest_ProcessKill_TermSignalFails(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.RequestApproval = func(_, _, _, _ string) (bool, error) { return true, nil }
 	// PID 1 (launchd/init) — terminate will be denied by the OS.
-	result, isErr := ExecuteToolForTest("process_kill", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("process_kill", map[string]any{
 		"pid":    float64(1),
 		"signal": "TERM",
 	}, ctx)
@@ -3593,7 +3593,7 @@ func TestExecuteToolForTest_ProcessKill_TermSignalFails(t *testing.T) {
 
 func TestExecuteToolForTest_GitClone_MissingURL(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("git_clone", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("git_clone", map[string]any{
 		"url": "",
 	}, ctx)
 	if !isErr {
@@ -3614,7 +3614,7 @@ func TestExecuteToolForTest_GitClone_AlreadyExists(t *testing.T) {
 		t.Error("cloneRepoFn should not be called when dest already exists")
 		return nil
 	}
-	result, isErr := ExecuteToolForTest("git_clone", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("git_clone", map[string]any{
 		"url":  "https://github.com/example/repo.git",
 		"path": dest,
 	}, ctx)
@@ -3641,7 +3641,7 @@ func TestExecuteToolForTest_GitClone_ClonesRepo(t *testing.T) {
 		return nil
 	}
 
-	result, isErr := ExecuteToolForTest("git_clone", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("git_clone", map[string]any{
 		"url":  "https://github.com/example/repo.git",
 		"path": dest,
 	}, ctx)
@@ -3666,7 +3666,7 @@ func TestExecuteToolForTest_GitClone_CloneError(t *testing.T) {
 		return fmt.Errorf("authentication failed")
 	}
 
-	result, isErr := ExecuteToolForTest("git_clone", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("git_clone", map[string]any{
 		"url":  "https://github.com/example/repo.git",
 		"path": dest,
 	}, ctx)
@@ -3693,7 +3693,7 @@ func TestExecuteToolForTest_GitClone_DefaultPath(t *testing.T) {
 		return os.MkdirAll(d, 0o755)
 	}
 
-	result, isErr := ExecuteToolForTest("git_clone", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("git_clone", map[string]any{
 		"url": "https://github.com/example/my-project.git",
 	}, ctx)
 	if isErr {
@@ -3766,8 +3766,8 @@ func TestRunAnthropicLoop_QuarantineFiresCallbacks(t *testing.T) {
 	var blocked []string
 	ctx := &ChatContext{
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(msg string) { errs = append(errs, msg) },
 		OnBlocked:    func(reason string) { blocked = append(blocked, reason) },
 		ActiveTools:  bootstrapTools(),
@@ -3798,7 +3798,7 @@ func TestExecuteToolForTest_GitClone_DefaultPath_NoEnv(t *testing.T) {
 		return os.MkdirAll(d, 0o755)
 	}
 
-	result, _ := ExecuteToolForTest("git_clone", map[string]interface{}{
+	result, _ := ExecuteToolForTest("git_clone", map[string]any{
 		"url": "https://github.com/example/no-env-project.git",
 	}, makeChatCtx(t))
 	// Result is either "Cloned to: .../no-env-project" or "Already cloned at: .../no-env-project".
@@ -3816,7 +3816,7 @@ func TestExecuteToolForTest_GitClone_MkdirAllError(t *testing.T) {
 	t.Cleanup(func() { cloneRepoFn = orig })
 	cloneRepoFn = func(url, d string) error { return nil }
 
-	_, isErr := ExecuteToolForTest("git_clone", map[string]interface{}{
+	_, isErr := ExecuteToolForTest("git_clone", map[string]any{
 		"url":  "https://github.com/example/proj.git",
 		"path": "/dev/null/x/y/z",
 	}, ctx)
@@ -3888,8 +3888,8 @@ dev_loop:
 		ProjectPath:  dir,
 		SessionID:    "sess-team-model",
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(e string) { gotErr = e },
 	}
 	Chat(ctx, "hello")
@@ -3934,8 +3934,8 @@ dev_loop:
 		ProjectPath:  dir,
 		SessionID:    "sess-team-auto",
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(e string) { gotErr = e },
 	}
 	Chat(ctx, "hello")
@@ -3958,7 +3958,7 @@ func TestExecuteToolForTest_GitCommit_AutonomousPolicy_AutoCommit(t *testing.T) 
 	}
 	policy := AutonomousPolicy{AutoCommit: true}
 	ctx.AutonomousPolicy = &policy
-	result, isErr := ExecuteToolForTest("git_commit", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("git_commit", map[string]any{
 		"message": "autonomous commit",
 	}, ctx)
 	if isErr {
@@ -3973,7 +3973,7 @@ func TestExecuteToolForTest_GitCommit_AutonomousPolicy_CommitError(t *testing.T)
 	ctx := makeChatCtx(t)
 	policy := AutonomousPolicy{AutoCommit: true}
 	ctx.AutonomousPolicy = &policy
-	result, isErr := ExecuteToolForTest("git_commit", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("git_commit", map[string]any{
 		"message": "will fail no repo",
 	}, ctx)
 	if !isErr {
@@ -3986,7 +3986,7 @@ func TestExecuteToolForTest_GitPush_AutonomousPolicy_AutoPush(t *testing.T) {
 	initGitRepoForContextTests(t, ctx.ProjectPath)
 	policy := AutonomousPolicy{AutoCommit: true, AutoPush: true}
 	ctx.AutonomousPolicy = &policy
-	result, _ := ExecuteToolForTest("git_push", map[string]interface{}{
+	result, _ := ExecuteToolForTest("git_push", map[string]any{
 		"remote": "origin",
 	}, ctx)
 	_ = result
@@ -4007,7 +4007,7 @@ func TestExecuteToolForTest_GitPush_AutonomousPolicy_Success(t *testing.T) {
 	runGitCmd(t, ctx.ProjectPath, "remote", "add", "origin", remoteDir)
 	policy := AutonomousPolicy{AutoCommit: true, AutoPush: true}
 	ctx.AutonomousPolicy = &policy
-	result, isErr := ExecuteToolForTest("git_push", map[string]interface{}{
+	result, isErr := ExecuteToolForTest("git_push", map[string]any{
 		"remote": "origin",
 	}, ctx)
 	if isErr {
@@ -4016,7 +4016,7 @@ func TestExecuteToolForTest_GitPush_AutonomousPolicy_Success(t *testing.T) {
 }
 
 func TestTokenCountFromUsage_AllTypes(t *testing.T) {
-	usage := map[string]interface{}{
+	usage := map[string]any{
 		"float": float64(7),
 		"int":   int(8),
 		"int64": int64(9),
@@ -4064,8 +4064,8 @@ func TestStreamRequest_TracksMessageDeltaUsage(t *testing.T) {
 
 	ctx := &ChatContext{
 		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:     func(string) {},
 	}
 	var text strings.Builder
@@ -4107,8 +4107,8 @@ func TestRunOpenAICompatibleLoop_TracksUsageAndAddsSessionUsage(t *testing.T) {
 		SessionID:    sessionID,
 		Usage:        usage,
 		OnChunk:      func(string, bool) {},
-		OnToolCall:   func(string, interface{}) {},
-		OnToolResult: func(string, interface{}, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
 		OnError:      func(string) {},
 		ActiveTools:  bootstrapTools(),
 	}
@@ -4127,7 +4127,7 @@ func TestRunOpenAICompatibleLoop_TracksUsageAndAddsSessionUsage(t *testing.T) {
 
 func TestExecuteToolForTest_BrowserNavigate_MissingURL(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("browser_navigate", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("browser_navigate", map[string]any{}, ctx)
 	if !isErr {
 		t.Fatal("expected error for missing url")
 	}
@@ -4143,7 +4143,7 @@ func TestExecuteToolForTest_BrowserNavigate_Success(t *testing.T) {
 		return "Navigated to: " + url, nil
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("browser_navigate", map[string]interface{}{"url": "https://example.com"}, ctx)
+	result, isErr := ExecuteToolForTest("browser_navigate", map[string]any{"url": "https://example.com"}, ctx)
 	if isErr {
 		t.Fatalf("unexpected error: %s", result)
 	}
@@ -4159,7 +4159,7 @@ func TestExecuteToolForTest_BrowserNavigate_Error(t *testing.T) {
 		return "", fmt.Errorf("chrome not found")
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("browser_navigate", map[string]interface{}{"url": "https://example.com"}, ctx)
+	result, isErr := ExecuteToolForTest("browser_navigate", map[string]any{"url": "https://example.com"}, ctx)
 	if !isErr {
 		t.Fatal("expected error")
 	}
@@ -4175,7 +4175,7 @@ func TestExecuteToolForTest_BrowserReadPage_Success(t *testing.T) {
 		return "page text content", nil
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("browser_read_page", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("browser_read_page", map[string]any{}, ctx)
 	if isErr {
 		t.Fatalf("unexpected error: %s", result)
 	}
@@ -4191,7 +4191,7 @@ func TestExecuteToolForTest_BrowserReadPage_Error(t *testing.T) {
 		return "", fmt.Errorf("no active tab")
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("browser_read_page", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("browser_read_page", map[string]any{}, ctx)
 	if !isErr {
 		t.Fatal("expected error")
 	}
@@ -4207,7 +4207,7 @@ func TestExecuteToolForTest_BrowserClick_Success(t *testing.T) {
 		return fmt.Sprintf("Clicked at (%d, %d)", x, y), nil
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("browser_click", map[string]interface{}{"x": float64(100), "y": float64(200)}, ctx)
+	result, isErr := ExecuteToolForTest("browser_click", map[string]any{"x": float64(100), "y": float64(200)}, ctx)
 	if isErr {
 		t.Fatalf("unexpected error: %s", result)
 	}
@@ -4223,7 +4223,7 @@ func TestExecuteToolForTest_BrowserClick_Error(t *testing.T) {
 		return "", fmt.Errorf("click failed")
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("browser_click", map[string]interface{}{"x": float64(10), "y": float64(20)}, ctx)
+	result, isErr := ExecuteToolForTest("browser_click", map[string]any{"x": float64(10), "y": float64(20)}, ctx)
 	if !isErr {
 		t.Fatal("expected error")
 	}
@@ -4234,7 +4234,7 @@ func TestExecuteToolForTest_BrowserClick_Error(t *testing.T) {
 
 func TestExecuteToolForTest_BrowserType_MissingText(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("browser_type", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("browser_type", map[string]any{}, ctx)
 	if !isErr {
 		t.Fatal("expected error for missing text")
 	}
@@ -4250,7 +4250,7 @@ func TestExecuteToolForTest_BrowserType_Success(t *testing.T) {
 		return "Typed text in browser", nil
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("browser_type", map[string]interface{}{"text": "hello"}, ctx)
+	result, isErr := ExecuteToolForTest("browser_type", map[string]any{"text": "hello"}, ctx)
 	if isErr {
 		t.Fatalf("unexpected error: %s", result)
 	}
@@ -4266,7 +4266,7 @@ func TestExecuteToolForTest_BrowserType_Error(t *testing.T) {
 		return "", fmt.Errorf("type failed")
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("browser_type", map[string]interface{}{"text": "hello"}, ctx)
+	result, isErr := ExecuteToolForTest("browser_type", map[string]any{"text": "hello"}, ctx)
 	if !isErr {
 		t.Fatal("expected error")
 	}
@@ -4279,7 +4279,7 @@ func TestExecuteToolForTest_BrowserType_Error(t *testing.T) {
 
 func TestExecuteToolForTest_CredentialSet_MissingKey(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("credential_set", map[string]interface{}{"value": "secret"}, ctx)
+	result, isErr := ExecuteToolForTest("credential_set", map[string]any{"value": "secret"}, ctx)
 	if !isErr {
 		t.Fatal("expected error for missing key")
 	}
@@ -4297,7 +4297,7 @@ func TestExecuteToolForTest_CredentialSet_Success(t *testing.T) {
 		return nil
 	}
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("credential_set", map[string]interface{}{"key": "my_token", "value": "abc123"}, ctx)
+	result, isErr := ExecuteToolForTest("credential_set", map[string]any{"key": "my_token", "value": "abc123"}, ctx)
 	if isErr {
 		t.Fatalf("unexpected error: %s", result)
 	}
@@ -4314,7 +4314,7 @@ func TestExecuteToolForTest_CredentialSet_Error(t *testing.T) {
 	t.Cleanup(func() { credStoreSetFn = orig })
 	credStoreSetFn = func(key, value string) error { return fmt.Errorf("keychain unavailable") }
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("credential_set", map[string]interface{}{"key": "k", "value": "v"}, ctx)
+	result, isErr := ExecuteToolForTest("credential_set", map[string]any{"key": "k", "value": "v"}, ctx)
 	if !isErr {
 		t.Fatal("expected error")
 	}
@@ -4325,7 +4325,7 @@ func TestExecuteToolForTest_CredentialSet_Error(t *testing.T) {
 
 func TestExecuteToolForTest_CredentialGet_MissingKey(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("credential_get", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("credential_get", map[string]any{}, ctx)
 	if !isErr {
 		t.Fatal("expected error for missing key")
 	}
@@ -4339,7 +4339,7 @@ func TestExecuteToolForTest_CredentialGet_Success(t *testing.T) {
 	t.Cleanup(func() { credStoreGetFn = orig })
 	credStoreGetFn = func(key string) (string, error) { return "secret_value", nil }
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("credential_get", map[string]interface{}{"key": "my_token"}, ctx)
+	result, isErr := ExecuteToolForTest("credential_get", map[string]any{"key": "my_token"}, ctx)
 	if isErr {
 		t.Fatalf("unexpected error: %s", result)
 	}
@@ -4353,7 +4353,7 @@ func TestExecuteToolForTest_CredentialGet_Error(t *testing.T) {
 	t.Cleanup(func() { credStoreGetFn = orig })
 	credStoreGetFn = func(key string) (string, error) { return "", fmt.Errorf("not found") }
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("credential_get", map[string]interface{}{"key": "missing"}, ctx)
+	result, isErr := ExecuteToolForTest("credential_get", map[string]any{"key": "missing"}, ctx)
 	if !isErr {
 		t.Fatal("expected error")
 	}
@@ -4364,7 +4364,7 @@ func TestExecuteToolForTest_CredentialGet_Error(t *testing.T) {
 
 func TestExecuteToolForTest_CredentialDelete_MissingKey(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("credential_delete", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("credential_delete", map[string]any{}, ctx)
 	if !isErr {
 		t.Fatal("expected error for missing key")
 	}
@@ -4379,7 +4379,7 @@ func TestExecuteToolForTest_CredentialDelete_Success(t *testing.T) {
 	var deletedKey string
 	credStoreDelFn = func(key string) error { deletedKey = key; return nil }
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("credential_delete", map[string]interface{}{"key": "old_token"}, ctx)
+	result, isErr := ExecuteToolForTest("credential_delete", map[string]any{"key": "old_token"}, ctx)
 	if isErr {
 		t.Fatalf("unexpected error: %s", result)
 	}
@@ -4396,7 +4396,7 @@ func TestExecuteToolForTest_CredentialDelete_Error(t *testing.T) {
 	t.Cleanup(func() { credStoreDelFn = orig })
 	credStoreDelFn = func(key string) error { return fmt.Errorf("delete failed") }
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("credential_delete", map[string]interface{}{"key": "k"}, ctx)
+	result, isErr := ExecuteToolForTest("credential_delete", map[string]any{"key": "k"}, ctx)
 	if !isErr {
 		t.Fatal("expected error")
 	}
@@ -4409,7 +4409,7 @@ func TestExecuteToolForTest_CredentialDelete_Error(t *testing.T) {
 
 func TestExecuteToolForTest_DiscordDM_MissingMessage(t *testing.T) {
 	ctx := makeChatCtx(t)
-	result, isErr := ExecuteToolForTest("discord_dm", map[string]interface{}{}, ctx)
+	result, isErr := ExecuteToolForTest("discord_dm", map[string]any{}, ctx)
 	if !isErr {
 		t.Fatal("expected error for missing message")
 	}
@@ -4421,7 +4421,7 @@ func TestExecuteToolForTest_DiscordDM_MissingMessage(t *testing.T) {
 func TestExecuteToolForTest_DiscordDM_NilDiscordDM(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.DiscordDM = nil
-	result, isErr := ExecuteToolForTest("discord_dm", map[string]interface{}{"message": "hello"}, ctx)
+	result, isErr := ExecuteToolForTest("discord_dm", map[string]any{"message": "hello"}, ctx)
 	if !isErr {
 		t.Fatal("expected error when DiscordDM is nil")
 	}
@@ -4434,7 +4434,7 @@ func TestExecuteToolForTest_DiscordDM_Success(t *testing.T) {
 	ctx := makeChatCtx(t)
 	var sent string
 	ctx.DiscordDM = func(msg string) error { sent = msg; return nil }
-	result, isErr := ExecuteToolForTest("discord_dm", map[string]interface{}{"message": "need creds"}, ctx)
+	result, isErr := ExecuteToolForTest("discord_dm", map[string]any{"message": "need creds"}, ctx)
 	if isErr {
 		t.Fatalf("unexpected error: %s", result)
 	}
@@ -4449,7 +4449,7 @@ func TestExecuteToolForTest_DiscordDM_Success(t *testing.T) {
 func TestExecuteToolForTest_DiscordDM_Error(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.DiscordDM = func(msg string) error { return fmt.Errorf("discord down") }
-	result, isErr := ExecuteToolForTest("discord_dm", map[string]interface{}{"message": "hi"}, ctx)
+	result, isErr := ExecuteToolForTest("discord_dm", map[string]any{"message": "hi"}, ctx)
 	if !isErr {
 		t.Fatal("expected error")
 	}

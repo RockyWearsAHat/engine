@@ -75,7 +75,7 @@ func (s *Server) registerRoutes() {
 	// Remote status — no auth, returns basic info
 	s.mux.HandleFunc("/remote/status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]any{
 			"engine": true,
 			"remote": true,
 			"port":   s.Config.Port,
@@ -85,7 +85,7 @@ func (s *Server) registerRoutes() {
 	// Health endpoint — no auth
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]any{
 			"status": "ok",
 			"remote": true,
 		})
@@ -123,7 +123,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 
 	if !s.Pairing.ValidateCode(req.Code) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]any{
 			"ok":    false,
 			"error": "invalid or expired pairing code",
 		})
@@ -146,7 +146,7 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[engine-remote] Device paired: %s...", deviceID[:8])
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"ok":       true,
 		"token":    token,
 		"deviceId": deviceID,
@@ -168,7 +168,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"ok":    true,
 		"token": newToken,
 	})

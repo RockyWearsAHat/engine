@@ -65,7 +65,7 @@ func TestHandler_DiscordConfigGet_NilBridge(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "discord.config.get"})
+	writeWSMessage(t, conn, map[string]any{"type": "discord.config.get"})
 	msg := readWSMessageOfType(t, conn, "discord.config")
 	if msg["type"] != "discord.config" {
 		t.Fatalf("expected discord.config, got %+v", msg)
@@ -81,7 +81,7 @@ func TestHandler_DiscordConfigGet_WithBridge(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "discord.config.get"})
+	writeWSMessage(t, conn, map[string]any{"type": "discord.config.get"})
 	msg := readWSMessageOfType(t, conn, "discord.config")
 	if msg["active"] != true {
 		t.Fatalf("expected active:true, got %+v", msg)
@@ -96,7 +96,7 @@ func TestHandler_DiscordHistorySearch_NilBridge(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":        "discord.history.search",
 		"projectPath": projectDir,
 		"query":       "hello",
@@ -120,14 +120,14 @@ func TestHandler_DiscordHistorySearch_WithBridge_Success(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":        "discord.history.search",
 		"projectPath": projectDir,
 		"query":       "cave",
 		"limit":       5,
 	})
 	msg := readWSMessageOfType(t, conn, "discord.history.results")
-	hits, _ := msg["hits"].([]interface{})
+	hits, _ := msg["hits"].([]any)
 	if len(hits) != 1 {
 		t.Fatalf("expected 1 hit, got %+v", msg)
 	}
@@ -142,7 +142,7 @@ func TestHandler_DiscordHistorySearch_WithBridge_Error(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":  "discord.history.search",
 		"query": "x",
 	})
@@ -160,7 +160,7 @@ func TestHandler_DiscordHistoryRecent_NilBridge(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":        "discord.history.recent",
 		"projectPath": projectDir,
 		"threadId":    "tid",
@@ -183,14 +183,14 @@ func TestHandler_DiscordHistoryRecent_WithBridge_Success(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":        "discord.history.recent",
 		"projectPath": projectDir,
 		"threadId":    "tid",
 		"limit":       5,
 	})
 	msg := readWSMessageOfType(t, conn, "discord.history.recent")
-	rows, _ := msg["rows"].([]interface{})
+	rows, _ := msg["rows"].([]any)
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 row, got %+v", msg)
 	}
@@ -205,7 +205,7 @@ func TestHandler_DiscordHistoryRecent_WithBridge_Error(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":     "discord.history.recent",
 		"threadId": "tid",
 	})
@@ -223,9 +223,9 @@ func TestHandler_DiscordConfigSet_NilBridgeDisabledConfig(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "discord.config.set",
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"enabled": false,
 			"token":   "",
 		},
@@ -245,9 +245,9 @@ func TestHandler_DiscordConfigSet_WithBridge_ReloadError(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "discord.config.set",
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"enabled": true,
 			"token":   "tok",
 		},
@@ -267,9 +267,9 @@ func TestHandler_DiscordConfigSet_WithBridge_ReloadOK(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "discord.config.set",
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"enabled": true,
 			"token":   "tok",
 		},
@@ -289,7 +289,7 @@ func TestHandler_GitHubUser_NoToken(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "github.user"})
+	writeWSMessage(t, conn, map[string]any{"type": "github.user"})
 	msg := readWSMessageOfType(t, conn, "github.user")
 	if msg["error"] == nil {
 		t.Fatalf("expected error in github.user response, got %+v", msg)
@@ -312,9 +312,9 @@ func TestHandler_GitHubUser_MockHTTP_Success(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "github.user"})
+	writeWSMessage(t, conn, map[string]any{"type": "github.user"})
 	msg := readWSMessageOfType(t, conn, "github.user")
-	user, _ := msg["user"].(map[string]interface{})
+	user, _ := msg["user"].(map[string]any)
 	if user["login"] != "caveman" {
 		t.Fatalf("expected login caveman, got %+v", msg)
 	}
@@ -333,7 +333,7 @@ func TestHandler_GitHubUser_MockHTTP_APIError(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "github.user"})
+	writeWSMessage(t, conn, map[string]any{"type": "github.user"})
 	msg := readWSMessageOfType(t, conn, "github.user")
 	if msg["error"] == nil {
 		t.Fatalf("expected error on 401, got %+v", msg)
@@ -352,7 +352,7 @@ func TestHandler_GitHubIssues_EnvOverridePartial(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":        "github.issues",
 		"projectPath": "/nonexistent/path",
 	})
@@ -382,12 +382,12 @@ func TestHandler_GitHubIssues_MockHTTP_Success(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":        "github.issues",
 		"projectPath": projectDir,
 	})
 	msg := readWSMessageOfType(t, conn, "github.issues")
-	issues, _ := msg["issues"].([]interface{})
+	issues, _ := msg["issues"].([]any)
 	if len(issues) != 1 {
 		t.Fatalf("expected 1 issue, got %+v", msg)
 	}
@@ -407,7 +407,7 @@ func TestHandler_GitHubIssues_MockHTTP_APIError(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "github.issues"})
+	writeWSMessage(t, conn, map[string]any{"type": "github.issues"})
 	msg := readWSMessageOfType(t, conn, "github.issues")
 	if msg["error"] == nil {
 		t.Fatalf("expected error on 403, got %+v", msg)
@@ -436,7 +436,7 @@ func TestHandler_ApprovalRespond_MissingID(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":  "approval.respond",
 		"id":    "",
 		"allow": true,
@@ -455,14 +455,14 @@ func TestHandler_ApprovalRespond_UnknownID_NoOp(t *testing.T) {
 
 	// Send approval.respond with an unknown ID — then send another message
 	// to confirm the connection is still alive.
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":  "approval.respond",
 		"id":    "nonexistent-id",
 		"allow": true,
 	})
 	// Send discord.config.get (quick no-bridge response) to verify connection alive.
 	SetDiscordBridge(nil)
-	writeWSMessage(t, conn, map[string]interface{}{"type": "discord.config.get"})
+	writeWSMessage(t, conn, map[string]any{"type": "discord.config.get"})
 	msg := readWSMessageOfType(t, conn, "discord.config")
 	if msg["type"] != "discord.config" {
 		t.Fatalf("connection dead after unknown approval.respond, got %+v", msg)
@@ -494,13 +494,13 @@ func TestHandler_RequestApproval_Timeout(t *testing.T) {
 		ctx.OnChunk("", true)
 	}
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
 	readWSMessageOfType(t, conn, "session.created")
 	// Don't send session ID — let it resolve to the current session.
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":    "chat",
 		"content": "run command",
 	})
@@ -537,13 +537,13 @@ func TestHandler_RequestApproval_Allow(t *testing.T) {
 		ctx.OnChunk("", true)
 	}
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
 	readWSMessageOfType(t, conn, "session.created")
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":    "chat",
 		"content": "approve me",
 	})
@@ -551,14 +551,14 @@ func TestHandler_RequestApproval_Allow(t *testing.T) {
 
 	// Read approval.request message.
 	approvalMsg := readWSMessageOfType(t, conn, "approval.request")
-	req, _ := approvalMsg["request"].(map[string]interface{})
+	req, _ := approvalMsg["request"].(map[string]any)
 	approvalID, _ := req["id"].(string)
 	if approvalID == "" {
 		t.Fatalf("expected approval id in request, got %+v", approvalMsg)
 	}
 
 	// Respond with allow=true.
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":  "approval.respond",
 		"id":    approvalID,
 		"allow": true,
@@ -592,23 +592,23 @@ func TestHandler_RequestApproval_Deny(t *testing.T) {
 		ctx.OnChunk("", true)
 	}
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
 	readWSMessageOfType(t, conn, "session.created")
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":    "chat",
 		"content": "deny me",
 	})
 	readWSMessageOfType(t, conn, "chat.started")
 
 	approvalMsg := readWSMessageOfType(t, conn, "approval.request")
-	req, _ := approvalMsg["request"].(map[string]interface{})
+	req, _ := approvalMsg["request"].(map[string]any)
 	approvalID, _ := req["id"].(string)
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":  "approval.respond",
 		"id":    approvalID,
 		"allow": false,
@@ -627,15 +627,15 @@ func TestHandler_SessionList(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
 	readWSMessageOfType(t, conn, "session.created")
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "session.list"})
+	writeWSMessage(t, conn, map[string]any{"type": "session.list"})
 	msg := readWSMessageOfType(t, conn, "session.list")
-	sessions, _ := msg["sessions"].([]interface{})
+	sessions, _ := msg["sessions"].([]any)
 	if len(sessions) == 0 {
 		t.Fatalf("expected at least one session in list, got %+v", msg)
 	}
@@ -646,12 +646,12 @@ func TestHandler_SessionCreate(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":        "session.create",
 		"projectPath": projectDir,
 	})
 	msg := readWSMessageOfType(t, conn, "session.created")
-	sess, _ := msg["session"].(map[string]interface{})
+	sess, _ := msg["session"].(map[string]any)
 	if sess["id"] == nil {
 		t.Fatalf("expected session id in session.created, got %+v", msg)
 	}
@@ -663,24 +663,24 @@ func TestHandler_SessionLoad(t *testing.T) {
 	defer cleanup()
 
 	// First open a project to create a session.
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
 	created := readWSMessageOfType(t, conn, "session.created")
-	sess, _ := created["session"].(map[string]interface{})
+	sess, _ := created["session"].(map[string]any)
 	sessionID, _ := sess["id"].(string)
 	if sessionID == "" {
 		t.Fatalf("no session id from project.open: %+v", created)
 	}
 
 	// Now request session.load with the same ID.
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":      "session.load",
 		"sessionId": sessionID,
 	})
 	msg := readWSMessageOfType(t, conn, "session.loaded")
-	loadedSess, _ := msg["session"].(map[string]interface{})
+	loadedSess, _ := msg["session"].(map[string]any)
 	if loadedSess["id"] != sessionID {
 		t.Fatalf("expected session %q, got %+v", sessionID, msg)
 	}
@@ -694,7 +694,7 @@ func TestHandler_FileRead_Success(t *testing.T) {
 	defer cleanup()
 
 	filePath := projectDir + "/PROJECT_GOAL.md"
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "file.read",
 		"path": filePath,
 	})
@@ -709,7 +709,7 @@ func TestHandler_FileRead_NotFound(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "file.read",
 		"path": "/nonexistent/cave.txt",
 	})
@@ -727,7 +727,7 @@ func TestHandler_FileSave(t *testing.T) {
 	defer cleanup()
 
 	filePath := projectDir + "/save-test.txt"
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":    "file.save",
 		"path":    filePath,
 		"content": "cave content",
@@ -744,7 +744,7 @@ func TestHandler_FileCreate(t *testing.T) {
 	defer cleanup()
 
 	filePath := projectDir + "/create-test.txt"
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "file.create",
 		"path": filePath,
 	})
@@ -760,7 +760,7 @@ func TestHandler_FolderCreate(t *testing.T) {
 	defer cleanup()
 
 	folderPath := projectDir + "/new-folder"
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "folder.create",
 		"path": folderPath,
 	})
@@ -777,7 +777,7 @@ func TestHandler_FileTree(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "file.tree",
 		"path": projectDir,
 	})
@@ -794,7 +794,7 @@ func TestHandler_EngineConfigGet_NoFile(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "engine.config.get",
 	})
 	msg := readWSMessageOfType(t, conn, "engine.config")
@@ -825,7 +825,7 @@ func TestHandler_TestObserve_MissingSessionID(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":      "test.observe",
 		"sessionId": "",
 		"line":      "go test ok",
@@ -843,7 +843,7 @@ func TestHandler_TestObserve_Valid(t *testing.T) {
 
 	// Observe 20 lines to force a summary to be sent.
 	for i := range 21 {
-		writeWSMessage(t, conn, map[string]interface{}{
+		writeWSMessage(t, conn, map[string]any{
 			"type":      "test.observe",
 			"sessionId": "sess-obs",
 			"line":      fmt.Sprintf("line %d", i),
@@ -876,13 +876,13 @@ func TestHandler_TestSummaryGet_Valid(t *testing.T) {
 	defer cleanup()
 
 	// First observe some lines.
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":      "test.observe",
 		"sessionId": "sess-sum",
 		"line":      "some output",
 	})
 	// Then explicitly request summary.
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":      "test.summary.get",
 		"sessionId": "sess-sum",
 	})
@@ -897,7 +897,7 @@ func TestHandler_TestSummaryGet_MissingSessionID(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":      "test.summary.get",
 		"sessionId": "",
 	})
@@ -927,15 +927,15 @@ func TestHandler_ResolveAllApprovals_OnConnectionClose(t *testing.T) {
 		ctx.OnChunk("", true)
 	}
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
 	created := readWSMessageOfType(t, conn, "session.created")
-	sess, _ := created["session"].(map[string]interface{})
+	sess, _ := created["session"].(map[string]any)
 	sessionID, _ := sess["id"].(string)
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":      "chat",
 		"sessionId": sessionID,
 		"content":   "stop me",
@@ -957,14 +957,14 @@ func TestHandler_ResolveAllApprovals_OnConnectionClose(t *testing.T) {
 }
 
 // readAnyWSMessage reads the next raw message without filtering by type.
-func readAnyWSMessage(t *testing.T, conn *websocket.Conn) map[string]interface{} {
+func readAnyWSMessage(t *testing.T, conn *websocket.Conn) map[string]any {
 	t.Helper()
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
 	_, raw, err := conn.ReadMessage()
 	if err != nil {
 		t.Fatalf("read websocket message: %v", err)
 	}
-	var msg map[string]interface{}
+	var msg map[string]any
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		t.Fatalf("decode websocket message: %v", err)
 	}
@@ -979,7 +979,7 @@ func TestHandler_DiscordValidate_NilBridgeNoOverride(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "discord.validate"})
+	writeWSMessage(t, conn, map[string]any{"type": "discord.validate"})
 	msg := readWSMessageOfType(t, conn, "discord.validate.result")
 	if msg["result"] == nil {
 		t.Fatalf("expected result in discord.validate.result, got %+v", msg)
@@ -992,9 +992,9 @@ func TestHandler_DiscordValidate_WithOverride(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "discord.validate",
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"enabled": true,
 			"token":   "test-token",
 			"guildId": "gid",
@@ -1012,7 +1012,7 @@ func TestHandler_GitStatus(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
-	writeWSMessage(t, conn, map[string]interface{}{"type": "git.status"})
+	writeWSMessage(t, conn, map[string]any{"type": "git.status"})
 	readWSMessageOfType(t, conn, "git.status")
 }
 
@@ -1020,7 +1020,7 @@ func TestHandler_GitDiff(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
-	writeWSMessage(t, conn, map[string]interface{}{"type": "git.diff", "path": ""})
+	writeWSMessage(t, conn, map[string]any{"type": "git.diff", "path": ""})
 	readWSMessageOfType(t, conn, "git.diff")
 }
 
@@ -1028,7 +1028,7 @@ func TestHandler_GitLog(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
-	writeWSMessage(t, conn, map[string]interface{}{"type": "git.log"})
+	writeWSMessage(t, conn, map[string]any{"type": "git.log"})
 	readWSMessageOfType(t, conn, "git.log")
 }
 
@@ -1038,7 +1038,7 @@ func TestHandler_GitCommit_BadPayload(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
-	writeWSMessage(t, conn, map[string]interface{}{"type": "git.commit", "message": 42})
+	writeWSMessage(t, conn, map[string]any{"type": "git.commit", "message": 42})
 	msg := readWSMessageOfType(t, conn, "git.commit.result")
 	if msg["ok"] != false {
 		t.Errorf("expected ok=false, got %v", msg["ok"])
@@ -1049,7 +1049,7 @@ func TestHandler_GitCommit_EmptyMessage(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
-	writeWSMessage(t, conn, map[string]interface{}{"type": "git.commit", "message": ""})
+	writeWSMessage(t, conn, map[string]any{"type": "git.commit", "message": ""})
 	msg := readWSMessageOfType(t, conn, "git.commit.result")
 	if msg["ok"] != false {
 		t.Errorf("expected ok=false for empty message, got %v", msg["ok"])
@@ -1062,7 +1062,7 @@ func TestHandler_WorkspaceTasks(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
-	writeWSMessage(t, conn, map[string]interface{}{"type": "workspace.tasks"})
+	writeWSMessage(t, conn, map[string]any{"type": "workspace.tasks"})
 	readWSMessageOfType(t, conn, "workspace.tasks")
 }
 
@@ -1073,7 +1073,7 @@ func TestHandler_ConfigSync_BadPayload(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 	// JSON with wrong type for config field triggers unmarshal error.
-	writeWSMessage(t, conn, map[string]interface{}{"type": "config.sync", "config": "not-an-object"})
+	writeWSMessage(t, conn, map[string]any{"type": "config.sync", "config": "not-an-object"})
 	readWSMessageOfType(t, conn, "error")
 }
 
@@ -1082,12 +1082,12 @@ func TestHandler_ConfigSync_Success(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 	// config.sync has no response on success; just verify it doesn't panic.
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":   "config.sync",
-		"config": map[string]interface{}{},
+		"config": map[string]any{},
 	})
 	// Send a known-response message to flush the connection.
-	writeWSMessage(t, conn, map[string]interface{}{"type": "session.list"})
+	writeWSMessage(t, conn, map[string]any{"type": "session.list"})
 	readWSMessageOfType(t, conn, "session.list")
 }
 
@@ -1097,7 +1097,7 @@ func TestHandler_SessionCleanup_BadPayload(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
-	writeWSMessage(t, conn, map[string]interface{}{"type": "session.cleanup", "sessionId": 42})
+	writeWSMessage(t, conn, map[string]any{"type": "session.cleanup", "sessionId": 42})
 	readWSMessageOfType(t, conn, "error")
 }
 
@@ -1105,7 +1105,7 @@ func TestHandler_SessionCleanup_MissingSessionId(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
-	writeWSMessage(t, conn, map[string]interface{}{"type": "session.cleanup", "sessionId": ""})
+	writeWSMessage(t, conn, map[string]any{"type": "session.cleanup", "sessionId": ""})
 	readWSMessageOfType(t, conn, "error")
 }
 
@@ -1113,7 +1113,7 @@ func TestHandler_SessionCleanup_NotFound(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
-	writeWSMessage(t, conn, map[string]interface{}{"type": "session.cleanup", "sessionId": "nonexistent-session-id"})
+	writeWSMessage(t, conn, map[string]any{"type": "session.cleanup", "sessionId": "nonexistent-session-id"})
 	readWSMessageOfType(t, conn, "error")
 }
 
@@ -1123,7 +1123,7 @@ func TestHandler_FileSearch_BadPayload(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
-	writeWSMessage(t, conn, map[string]interface{}{"type": "file.search", "query": 42})
+	writeWSMessage(t, conn, map[string]any{"type": "file.search", "query": 42})
 	readWSMessageOfType(t, conn, "search.results")
 }
 
@@ -1131,7 +1131,7 @@ func TestHandler_FileSearch_EmptyQuery(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
-	writeWSMessage(t, conn, map[string]interface{}{"type": "file.search", "query": ""})
+	writeWSMessage(t, conn, map[string]any{"type": "file.search", "query": ""})
 	readWSMessageOfType(t, conn, "search.results")
 }
 
@@ -1139,7 +1139,7 @@ func TestHandler_FileSearch_WithQuery(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":  "file.search",
 		"query": "Engine",
 		"root":  projectDir,
@@ -1153,7 +1153,7 @@ func TestHandler_EngineTeamSet_BadPayload(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
-	writeWSMessage(t, conn, map[string]interface{}{"type": "engine.team.set", "team": 42})
+	writeWSMessage(t, conn, map[string]any{"type": "engine.team.set", "team": 42})
 	readWSMessageOfType(t, conn, "error")
 }
 
@@ -1161,7 +1161,7 @@ func TestHandler_EngineTeamSet_Success(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":     "engine.team.set",
 		"team":     "fast",
 		"provider": "ollama",
@@ -1187,13 +1187,13 @@ func TestHandler_EngineTeamSet_ResolveFromConfigWhenProviderAndModelMissing(t *t
 		t.Fatalf("write config: %v", err)
 	}
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
 	readWSMessageOfType(t, conn, "session.created")
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "engine.team.set",
 		"team": "fast",
 	})
@@ -1213,12 +1213,12 @@ func TestHandler_EditorTabsSync(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "editor.tabs.sync",
-		"tabs": []map[string]interface{}{{"path": "src/main.go", "active": true}},
+		"tabs": []map[string]any{{"path": "src/main.go", "active": true}},
 	})
 	// No response expected; flush with session.list.
-	writeWSMessage(t, conn, map[string]interface{}{"type": "session.list"})
+	writeWSMessage(t, conn, map[string]any{"type": "session.list"})
 	readWSMessageOfType(t, conn, "session.list")
 }
 
@@ -1239,10 +1239,10 @@ func TestHandler_EngineConfigGet_WithFile(t *testing.T) {
 	}
 
 	// Open project so c.projectPath is set.
-	writeWSMessage(t, conn, map[string]interface{}{"type": "project.open", "path": projectDir})
+	writeWSMessage(t, conn, map[string]any{"type": "project.open", "path": projectDir})
 	readWSMessageOfType(t, conn, "session.created")
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "engine.config.get"})
+	writeWSMessage(t, conn, map[string]any{"type": "engine.config.get"})
 	msg := readWSMessageOfType(t, conn, "engine.config")
 	if msg["yaml"] == "" || msg["yaml"] == nil {
 		t.Errorf("expected yaml content, got %+v", msg)
@@ -1256,7 +1256,7 @@ func TestHandler_FileSave_BadPayload(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 	// "content" must be a string; send integer to trigger unmarshal error.
-	writeWSMessage(t, conn, map[string]interface{}{"type": "file.save", "path": "file.txt", "content": 42})
+	writeWSMessage(t, conn, map[string]any{"type": "file.save", "path": "file.txt", "content": 42})
 	readWSMessageOfType(t, conn, "error")
 }
 
@@ -1266,7 +1266,7 @@ func TestHandler_UnknownMessageType(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
-	writeWSMessage(t, conn, map[string]interface{}{"type": "totally.unknown.message.type.xyz"})
+	writeWSMessage(t, conn, map[string]any{"type": "totally.unknown.message.type.xyz"})
 	readWSMessageOfType(t, conn, "error")
 }
 
@@ -1278,13 +1278,13 @@ func TestHandler_ProjectOpen_LoadsExistingSession(t *testing.T) {
 	defer cleanup()
 
 	// First open — creates session.
-	writeWSMessage(t, conn, map[string]interface{}{"type": "project.open", "path": projectDir})
+	writeWSMessage(t, conn, map[string]any{"type": "project.open", "path": projectDir})
 	readWSMessageOfType(t, conn, "session.created")
 
 	// Open a new WS connection to the same project — should load existing session.
 	conn2, cleanup2 := openWSTestConnection(t, projectDir)
 	defer cleanup2()
-	writeWSMessage(t, conn2, map[string]interface{}{"type": "project.open", "path": projectDir})
+	writeWSMessage(t, conn2, map[string]any{"type": "project.open", "path": projectDir})
 	readWSMessageOfType(t, conn2, "session.loaded")
 }
 
@@ -1293,7 +1293,7 @@ func TestHandler_Chat_NoActiveSession_ReturnsError(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":    "chat",
 		"content": "hello without session",
 	})
@@ -1317,19 +1317,19 @@ func TestHandler_ChatStop_CancelsRunningChat(t *testing.T) {
 		ctx.OnChunk("", true)
 	}
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "project.open", "path": projectDir})
+	writeWSMessage(t, conn, map[string]any{"type": "project.open", "path": projectDir})
 	created := readWSMessageOfType(t, conn, "session.created")
-	sess, _ := created["session"].(map[string]interface{})
+	sess, _ := created["session"].(map[string]any)
 	sessionID, _ := sess["id"].(string)
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":      "chat",
 		"sessionId": sessionID,
 		"content":   "long-running command",
 	})
 	readWSMessageOfType(t, conn, "chat.started")
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":      "chat.stop",
 		"sessionId": sessionID,
 	})
@@ -1344,7 +1344,7 @@ func TestHandler_SessionLoad_NotFound(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":      "session.load",
 		"sessionId": "missing-session",
 	})
@@ -1359,12 +1359,12 @@ func TestHandler_SessionCleanup_Success(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "project.open", "path": projectDir})
+	writeWSMessage(t, conn, map[string]any{"type": "project.open", "path": projectDir})
 	created := readWSMessageOfType(t, conn, "session.created")
-	sess, _ := created["session"].(map[string]interface{})
+	sess, _ := created["session"].(map[string]any)
 	sessionID, _ := sess["id"].(string)
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":      "session.cleanup",
 		"sessionId": sessionID,
 		"merge":     false,
@@ -1380,12 +1380,12 @@ func TestHandler_SessionCreate_WorktreeFallbackProjectPath(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":        "session.create",
 		"projectPath": projectDir,
 	})
 	msg := readWSMessageOfType(t, conn, "session.created")
-	sess, _ := msg["session"].(map[string]interface{})
+	sess, _ := msg["session"].(map[string]any)
 	pp, _ := sess["projectPath"].(string)
 	if pp == "" {
 		t.Fatalf("expected non-empty session projectPath, got %+v", msg)
@@ -1402,7 +1402,7 @@ func TestHandler_TerminalCreate_BadCwd(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "terminal.create",
 		"cwd":  filepath.Join(projectDir, "does-not-exist"),
 	})
@@ -1414,7 +1414,7 @@ func TestHandler_TerminalLifecycle(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "terminal.create",
 		"cwd":  projectDir,
 	})
@@ -1424,18 +1424,18 @@ func TestHandler_TerminalLifecycle(t *testing.T) {
 		t.Fatalf("expected terminalId, got %+v", created)
 	}
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":       "terminal.input",
 		"terminalId": id,
 		"data":       "echo hi\n",
 	})
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":       "terminal.resize",
 		"terminalId": id,
 		"cols":       80,
 		"rows":       24,
 	})
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":       "terminal.close",
 		"terminalId": id,
 	})
@@ -1453,7 +1453,7 @@ func TestHandler_RemotePairCodeGenerate_Disabled(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "remote.pair.code.generate"})
+	writeWSMessage(t, conn, map[string]any{"type": "remote.pair.code.generate"})
 	readWSMessageOfType(t, conn, "error")
 }
 
@@ -1467,7 +1467,7 @@ func TestHandler_RemotePairCodeGenerate_Success(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "remote.pair.code.generate"})
+	writeWSMessage(t, conn, map[string]any{"type": "remote.pair.code.generate"})
 	msg := readWSMessageOfType(t, conn, "remote.pair.code")
 	code, _ := msg["code"].(string)
 	if len(code) != 6 {
@@ -1501,9 +1501,9 @@ func TestHandler_DiscordConfigSet_NilBridge_EnabledStartFails(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "discord.config.set",
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"enabled": true,
 			"token":   "fake-bot-token",
 			"guildId": "guild-ws-test",
@@ -1528,9 +1528,9 @@ func TestHandler_RepoList_Empty(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "repo.list"})
+	writeWSMessage(t, conn, map[string]any{"type": "repo.list"})
 	msg := drainWSUntilType(t, conn, "repo.list")
-	entries, ok := msg["entries"].([]interface{})
+	entries, ok := msg["entries"].([]any)
 	if !ok {
 		t.Fatalf("expected entries array, got %T", msg["entries"])
 	}
@@ -1550,7 +1550,7 @@ func TestHandler_RepoList_Error(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "repo.list"})
+	writeWSMessage(t, conn, map[string]any{"type": "repo.list"})
 	msg := drainWSUntilType(t, conn, "error")
 	if code, _ := msg["code"].(string); code != "REPO_LIST_ERROR" {
 		t.Errorf("code = %q, want REPO_LIST_ERROR", code)
@@ -1568,12 +1568,12 @@ func TestHandler_RepoAdd_Success(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":      "repo.add",
 		"urlOrPath": "/some/path",
 	})
 	msg := drainWSUntilType(t, conn, "repo.added")
-	entry, ok := msg["entry"].(map[string]interface{})
+	entry, ok := msg["entry"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected entry map, got %T", msg["entry"])
 	}
@@ -1593,7 +1593,7 @@ func TestHandler_RepoAdd_Error(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":      "repo.add",
 		"urlOrPath": "https://github.com/x/y.git",
 	})
@@ -1612,7 +1612,7 @@ func TestHandler_RepoRemove_Success(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "repo.remove",
 		"name": "testrepo",
 	})
@@ -1633,7 +1633,7 @@ func TestHandler_RepoRemove_Error(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "repo.remove",
 		"name": "ghost",
 	})
@@ -1647,9 +1647,9 @@ func TestHandler_RepoRemove_Error(t *testing.T) {
 
 func testSendChatAndWaitForRunAIChat(t *testing.T, conn *websocket.Conn, projectDir string) {
 	t.Helper()
-	writeWSMessage(t, conn, map[string]interface{}{"type": "project.open", "path": projectDir})
+	writeWSMessage(t, conn, map[string]any{"type": "project.open", "path": projectDir})
 	readWSMessageOfType(t, conn, "session.created")
-	writeWSMessage(t, conn, map[string]interface{}{"type": "chat", "content": "ping"})
+	writeWSMessage(t, conn, map[string]any{"type": "chat", "content": "ping"})
 }
 
 func TestHandler_DiscordDM_NilBridge_ReturnsError(t *testing.T) {

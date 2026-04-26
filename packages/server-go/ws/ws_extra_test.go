@@ -13,7 +13,7 @@ import (
 )
 
 // readWSMessageOfAnyType reads one message and returns it, regardless of type.
-func readWSMessageOfAnyType(t *testing.T, conn *websocket.Conn) map[string]interface{} {
+func readWSMessageOfAnyType(t *testing.T, conn *websocket.Conn) map[string]any {
 	t.Helper()
 	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		t.Fatalf("set deadline: %v", err)
@@ -22,7 +22,7 @@ func readWSMessageOfAnyType(t *testing.T, conn *websocket.Conn) map[string]inter
 	if err != nil {
 		t.Fatalf("read ws: %v", err)
 	}
-	var msg map[string]interface{}
+	var msg map[string]any
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -30,7 +30,7 @@ func readWSMessageOfAnyType(t *testing.T, conn *websocket.Conn) map[string]inter
 }
 
 // drainWSUntilType reads messages until it finds the target type or times out.
-func drainWSUntilType(t *testing.T, conn *websocket.Conn, targetType string) map[string]interface{} {
+func drainWSUntilType(t *testing.T, conn *websocket.Conn, targetType string) map[string]any {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -41,7 +41,7 @@ func drainWSUntilType(t *testing.T, conn *websocket.Conn, targetType string) map
 		if err != nil {
 			break
 		}
-		var msg map[string]interface{}
+		var msg map[string]any
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			continue
 		}
@@ -66,7 +66,7 @@ func TestSendErr_ViaUnknownMessageType(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "totally.unknown.type.xyz",
 	})
 	msg := drainWSUntilType(t, conn, "error")
@@ -82,13 +82,13 @@ func TestResolveApproval_NonExistentID(t *testing.T) {
 	defer cleanup()
 
 	// approval.respond with unknown id — should silently succeed (no panic, no error)
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":  "approval.respond",
 		"id":    "nonexistent-approval-id",
 		"allow": true,
 	})
 	// No response expected; just verify the connection stays alive.
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "totally.unknown.x",
 	})
 	msg := drainWSUntilType(t, conn, "error")
@@ -103,7 +103,7 @@ func TestResolveApproval_MissingID(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":  "approval.respond",
 		"id":    "",
 		"allow": true,
@@ -121,7 +121,7 @@ func TestHandleDiscordHistorySearch_NoBridge(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":  "discord.history.search",
 		"query": "test",
 	})
@@ -138,7 +138,7 @@ func TestHandleDiscordHistoryRecent_NoBridge(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "discord.history.recent",
 	})
 	msg := drainWSUntilType(t, conn, "error")
@@ -154,7 +154,7 @@ func TestHandleDiscordValidate_NoBridge(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "discord.validate",
 	})
 	msg := drainWSUntilType(t, conn, "discord.validate.result")
@@ -170,9 +170,9 @@ func TestHandleDiscordValidate_WithConfig(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "discord.validate",
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"token":     "my-test-token",
 			"guildId":   "123456",
 			"channelId": "789",
@@ -192,9 +192,9 @@ func TestHandleDiscordConfigSet_SavesConfig(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "discord.config.set",
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"token":     "test-token-value",
 			"guildId":   "100000000000000000",
 			"channelId": "200000000000000000",
@@ -215,7 +215,7 @@ func TestHandleGitHubIssues_NoRemoteConfigured(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":        "github.issues",
 		"projectPath": projectDir,
 	})
@@ -233,7 +233,7 @@ func TestHandleGitHubIssues_IncompleteOverride(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type":        "github.issues",
 		"projectPath": projectDir,
 	})
@@ -251,7 +251,7 @@ func TestHandleGitHubUser_NoToken(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "github.user",
 	})
 	// We get github.user response regardless of success/failure.
@@ -346,7 +346,7 @@ func TestFetchGitHubUser_ViaWS(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "github.user",
 	})
 	msg := drainWSUntilType(t, conn, "github.user")

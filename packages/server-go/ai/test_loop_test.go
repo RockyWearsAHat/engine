@@ -37,9 +37,9 @@ func TestSendTestCommand_NilSendToClient_NoOp(t *testing.T) {
 }
 
 func TestSendTestCommand_SendsMessage(t *testing.T) {
-	var captured []interface{}
+	var captured []any
 	ctx := &ChatContext{
-		SendToClient: func(msgType string, payload interface{}) {
+		SendToClient: func(msgType string, payload any) {
 			captured = append(captured, payload)
 		},
 	}
@@ -128,7 +128,7 @@ func TestReportTestResult_SendsResultToClient(t *testing.T) {
 	ctx := &ChatContext{
 		ProjectPath:  projectDir,
 		SessionID:    "report-session",
-		SendToClient: func(msgType string, _ interface{}) { sent = append(sent, msgType) },
+		SendToClient: func(msgType string, _ any) { sent = append(sent, msgType) },
 	}
 	tlc := NewTestLoopController(ctx, "issue-X", "term-3")
 	ReceiveTestOutput(tlc, "PASS")
@@ -160,7 +160,7 @@ func TestMakeTestCompleteHandler_WithSendToClient(t *testing.T) {
 	var sent []string
 	ctx := &ChatContext{
 		SessionID: "sess",
-		SendToClient: func(msgType string, _ interface{}) {
+		SendToClient: func(msgType string, _ any) {
 			sent = append(sent, msgType)
 		},
 	}
@@ -261,7 +261,7 @@ func TestIssueToTestPredicate_WithNilSendToClient_NoOp(t *testing.T) {
 func TestIssueToTestPredicate_SendsRecommendation(t *testing.T) {
 	var sent []string
 	ctx := &ChatContext{
-		SendToClient: func(msgType string, _ interface{}) {
+		SendToClient: func(msgType string, _ any) {
 			sent = append(sent, msgType)
 		},
 	}

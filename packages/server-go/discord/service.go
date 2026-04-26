@@ -497,7 +497,7 @@ func (s *Service) listProjects(channelID string) {
 		if p.Paused {
 			state = "paused"
 		}
-		b.WriteString(fmt.Sprintf("- %s (%s) in <#%s>\n", p.RepoName, state, p.ChannelID))
+		fmt.Fprintf(&b, "- %s (%s) in <#%s>\n", p.RepoName, state, p.ChannelID)
 	}
 	s.send(channelID, b.String())
 }
@@ -537,10 +537,7 @@ func (s *Service) handleSessionsCommand(m *discordgo.MessageCreate, args []strin
 		return
 	}
 
-	limit := len(sessions)
-	if limit > 5 {
-		limit = 5
-	}
+	limit := min(len(sessions), 5)
 	var b strings.Builder
 	b.WriteString("Recent sessions:\n")
 	for i := 0; i < limit; i++ {
@@ -552,7 +549,7 @@ func (s *Service) handleSessionsCommand(m *discordgo.MessageCreate, args []strin
 		if len(summary) > 120 {
 			summary = summary[:117] + "..."
 		}
-		b.WriteString(fmt.Sprintf("- %s | msgs=%d | %s\\n", shortID(sess.ID), sess.MessageCount, summary))
+		fmt.Fprintf(&b, "- %s | msgs=%d | %s\\n", shortID(sess.ID), sess.MessageCount, summary)
 	}
 	s.send(m.ChannelID, b.String())
 }
@@ -661,8 +658,8 @@ func (s *Service) handleAskCommand(m *discordgo.MessageCreate, args []string) {
 				output.WriteString(content)
 				outMu.Unlock()
 			},
-			OnToolCall:       func(_ string, _ interface{}) {},
-			OnToolResult:     func(_ string, _ interface{}, _ bool) {},
+			OnToolCall:       func(_ string, _ any) {},
+			OnToolResult:     func(_ string, _ any, _ bool) {},
 			OnError:          func(err string) { lastErr = strings.TrimSpace(err) },
 			OnSessionUpdated: func(_ *db.Session) {},
 			RequestApproval: func(kind, title, message, command string) (bool, error) {

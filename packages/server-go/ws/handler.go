@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -205,7 +206,7 @@ func newConn(ws *websocket.Conn, projectPath string) *conn {
 
 // send marshals and writes a message to the WebSocket client (thread-safe).
 // Returns silently if the connection has already been closed.
-func (c *conn) send(v interface{}) {
+func (c *conn) send(v any) {
 	data, err := json.Marshal(v)
 	if err != nil {
 		log.Printf("ws marshal error: %v", err)
@@ -242,7 +243,7 @@ func (c *conn) requestApproval(sessionID, kind, title, message, command string) 
 	c.approvalWaiters[id] = waiter
 	c.approvalMu.Unlock()
 
-	c.send(map[string]interface{}{
+	c.send(map[string]any{
 		"type": "approval.request",
 		"request": map[string]string{
 			"id":        id,
@@ -368,23 +369,23 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		c.sessionID = sessionID
 		session, _ := db.GetSession(sessionID)
 		if sessionCreated {
-			c.send(map[string]interface{}{"type": "session.created", "session": session})
+			c.send(map[string]any{"type": "session.created", "session": session})
 		} else {
 			messages, _ := db.GetMessages(sessionID)
-			c.send(map[string]interface{}{"type": "session.loaded", "session": session, "messages": messages})
+			c.send(map[string]any{"type": "session.loaded", "session": session, "messages": messages})
 		}
 
 		tree, err := gofs.GetTree(msg.Path, 1)
 		if err == nil {
-			c.send(map[string]interface{}{"type": "file.tree", "tree": tree})
+			c.send(map[string]any{"type": "file.tree", "tree": tree})
 		}
 		status, err := gogit.GetStatus(msg.Path)
 		if err == nil {
-			c.send(map[string]interface{}{"type": "git.status", "status": status})
+			c.send(map[string]any{"type": "git.status", "status": status})
 		}
 		// Push full session list so the sidebar shows prior sessions immediately.
 		if allSessions, err := dbListSessions(msg.Path); err == nil {
-			c.send(map[string]interface{}{"type": "session.list", "sessions": allSessions})
+			c.send(map[string]any{"type": "session.list", "sessions": allSessions})
 		}
 
 	// ── Sessions ──────────────────────────────────────────────────────────────
@@ -395,7 +396,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr(err.Error(), "DB_ERROR")
 			return
 		}
-		c.send(map[string]interface{}{"type": "session.list", "sessions": sessions})
+		c.send(map[string]any{"type": "session.list", "sessions": sessions})
 
 	case "session.create":
 		var msg struct {
@@ -426,7 +427,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		}
 		c.sessionID = id
 		session, _ := db.GetSession(id)
-		c.send(map[string]interface{}{"type": "session.created", "session": session})
+		c.send(map[string]any{"type": "session.created", "session": session})
 
 	case "session.cleanup":
 		var msg struct {
@@ -451,7 +452,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 				log.Printf("[engine] ws: session.cleanup error: %v", cleanupErr)
 			}
 		}()
-		c.send(map[string]interface{}{"type": "session.cleanup.started", "sessionId": msg.SessionID})
+		c.send(map[string]any{"type": "session.cleanup.started", "sessionId": msg.SessionID})
 
 	case "session.load":
 		var msg struct {
@@ -469,7 +470,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		c.sessionID = msg.SessionID
 		c.projectPath = session.ProjectPath
 		messages, _ := db.GetMessages(msg.SessionID)
-		c.send(map[string]interface{}{"type": "session.loaded", "session": session, "messages": messages})
+		c.send(map[string]any{"type": "session.loaded", "session": session, "messages": messages})
 
 	// ── Chat ──────────────────────────────────────────────────────────────────
 
@@ -484,7 +485,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		}
 		session, err := c.resolveChatSession(msg.SessionID)
 		if err != nil {
-			c.send(map[string]interface{}{"type": "chat.error", "sessionId": strings.TrimSpace(msg.SessionID), "error": err.Error()})
+			c.send(map[string]any{"type": "chat.error", "sessionId": strings.TrimSpace(msg.SessionID), "error": err.Error()})
 			return
 		}
 		sessionID := session.ID
@@ -499,7 +500,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		c.chatCancelFns[sessionID] = func() { close(cancelCh) }
 		c.chatCancelMu.Unlock()
 
-		c.send(map[string]interface{}{"type": "chat.started", "sessionId": sessionID})
+		c.send(map[string]any{"type": "chat.started", "sessionId": sessionID})
 		go func() {
 			defer func() {
 				// Remove cancel fn when goroutine exits.
@@ -513,7 +514,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 
 				if r := recover(); r != nil {
 					log.Printf("[engine] ws: panic in AI chat goroutine: %v", r)
-					c.send(map[string]interface{}{
+					c.send(map[string]any{
 						"type":      "chat.error",
 						"sessionId": sessionID,
 						"error":     "Internal error — please try again",
@@ -525,19 +526,19 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 				SessionID:   sessionID,
 				Cancel:      cancelCh,
 				OnChunk: func(content string, done bool) {
-					c.send(map[string]interface{}{"type": "chat.chunk", "sessionId": sessionID, "content": content, "done": done})
+					c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": content, "done": done})
 				},
-				OnToolCall: func(name string, input interface{}) {
-					c.send(map[string]interface{}{"type": "chat.tool_call", "sessionId": sessionID, "name": name, "input": input})
+				OnToolCall: func(name string, input any) {
+					c.send(map[string]any{"type": "chat.tool_call", "sessionId": sessionID, "name": name, "input": input})
 				},
-				OnToolResult: func(name string, result interface{}, isError bool) {
-					c.send(map[string]interface{}{"type": "chat.tool_result", "sessionId": sessionID, "name": name, "result": result, "isError": isError})
+				OnToolResult: func(name string, result any, isError bool) {
+					c.send(map[string]any{"type": "chat.tool_result", "sessionId": sessionID, "name": name, "result": result, "isError": isError})
 				},
 				OnError: func(errMsg string) {
-					c.send(map[string]interface{}{"type": "chat.error", "sessionId": sessionID, "error": errMsg})
+					c.send(map[string]any{"type": "chat.error", "sessionId": sessionID, "error": errMsg})
 				},
 				OnSessionUpdated: func(session *db.Session) {
-					c.send(map[string]interface{}{"type": "session.updated", "session": session})
+					c.send(map[string]any{"type": "session.updated", "session": session})
 				},
 				GetOpenTabs: func() []ai.TabInfo {
 					c.tabsMu.RLock()
@@ -547,13 +548,11 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 				RequestApproval: func(kind, title, message, command string) (bool, error) {
 					return c.requestApproval(sessionID, kind, title, message, command)
 				},
-				SendToClient: func(msgType string, payload interface{}) {
-					m := map[string]interface{}{"type": msgType}
+				SendToClient: func(msgType string, payload any) {
+					m := map[string]any{"type": msgType}
 					switch p := payload.(type) {
-					case map[string]interface{}:
-						for k, v := range p {
-							m[k] = v
-						}
+					case map[string]any:
+						maps.Copy(m, p)
 					case map[string]string:
 						for k, v := range p {
 							m[k] = v
@@ -611,7 +610,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr(err.Error(), "FILE_ERROR")
 			return
 		}
-		c.send(map[string]interface{}{"type": "file.content", "path": msg.Path, "content": fc.Content, "language": fc.Language, "size": fc.Size})
+		c.send(map[string]any{"type": "file.content", "path": msg.Path, "content": fc.Content, "language": fc.Language, "size": fc.Size})
 
 	case "file.save":
 		var msg struct {
@@ -626,7 +625,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr(err.Error(), "FILE_ERROR")
 			return
 		}
-		c.send(map[string]interface{}{"type": "file.saved", "path": msg.Path})
+		c.send(map[string]any{"type": "file.saved", "path": msg.Path})
 
 	case "file.create":
 		var msg struct {
@@ -637,7 +636,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr(err.Error(), "FILE_ERROR")
 			return
 		}
-		c.send(map[string]interface{}{"type": "file.created", "path": msg.Path})
+		c.send(map[string]any{"type": "file.created", "path": msg.Path})
 
 	case "folder.create":
 		var msg struct {
@@ -648,7 +647,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr(err.Error(), "FILE_ERROR")
 			return
 		}
-		c.send(map[string]interface{}{"type": "folder.created", "path": msg.Path})
+		c.send(map[string]any{"type": "folder.created", "path": msg.Path})
 
 	case "file.tree":
 		var msg struct {
@@ -660,7 +659,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr(err.Error(), "FILE_ERROR")
 			return
 		}
-		c.send(map[string]interface{}{"type": "file.tree", "tree": tree})
+		c.send(map[string]any{"type": "file.tree", "tree": tree})
 
 	case "file.search":
 		var msg struct {
@@ -669,12 +668,12 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			FileGlob string `json:"fileGlob"`
 		}
 		if err := json.Unmarshal(raw, &msg); err != nil {
-			c.send(map[string]interface{}{"type": "search.results", "query": "", "results": []gofs.SearchResult{}, "error": "Bad payload"})
+			c.send(map[string]any{"type": "search.results", "query": "", "results": []gofs.SearchResult{}, "error": "Bad payload"})
 			return
 		}
 		query := strings.TrimSpace(msg.Query)
 		if query == "" {
-			c.send(map[string]interface{}{"type": "search.results", "query": msg.Query, "results": []gofs.SearchResult{}, "error": "Query required"})
+			c.send(map[string]any{"type": "search.results", "query": msg.Query, "results": []gofs.SearchResult{}, "error": "Query required"})
 			return
 		}
 		root := msg.Root
@@ -683,17 +682,17 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		}
 		results, err := gofs.SearchMatches(query, root, msg.FileGlob)
 		if err != nil {
-			c.send(map[string]interface{}{"type": "search.results", "query": query, "results": []gofs.SearchResult{}, "error": err.Error()})
+			c.send(map[string]any{"type": "search.results", "query": query, "results": []gofs.SearchResult{}, "error": err.Error()})
 			return
 		}
-		c.send(map[string]interface{}{"type": "search.results", "query": query, "results": results})
+		c.send(map[string]any{"type": "search.results", "query": query, "results": results})
 
 	// ── Git ───────────────────────────────────────────────────────────────────
 
 	case "git.status":
 		go func() {
 			status, _ := gogit.GetStatus(projectPath)
-			c.send(map[string]interface{}{"type": "git.status", "status": status})
+			c.send(map[string]any{"type": "git.status", "status": status})
 		}()
 
 	case "git.diff":
@@ -702,7 +701,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		}
 		json.Unmarshal(raw, &msg) //nolint:errcheck
 		diff, _ := gogit.GetDiff(projectPath, msg.Path)
-		c.send(map[string]interface{}{"type": "git.diff", "path": msg.Path, "diff": diff})
+		c.send(map[string]any{"type": "git.diff", "path": msg.Path, "diff": diff})
 
 	case "git.log":
 		var msg struct {
@@ -713,32 +712,32 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			msg.Limit = 20
 		}
 		commits, _ := gogit.GetLog(projectPath, msg.Limit)
-		c.send(map[string]interface{}{"type": "git.log", "commits": commits})
+		c.send(map[string]any{"type": "git.log", "commits": commits})
 
 	case "git.commit":
 		var msg struct {
 			Message string `json:"message"`
 		}
 		if err := json.Unmarshal(raw, &msg); err != nil {
-			c.send(map[string]interface{}{"type": "git.commit.result", "ok": false, "message": "Bad payload"})
+			c.send(map[string]any{"type": "git.commit.result", "ok": false, "message": "Bad payload"})
 			return
 		}
 		message := strings.TrimSpace(msg.Message)
 		if message == "" {
-			c.send(map[string]interface{}{"type": "git.commit.result", "ok": false, "message": "Commit message required"})
+			c.send(map[string]any{"type": "git.commit.result", "ok": false, "message": "Commit message required"})
 			return
 		}
 		hash, err := gogit.Commit(projectPath, message)
 		if err != nil {
-			c.send(map[string]interface{}{"type": "git.commit.result", "ok": false, "message": err.Error()})
+			c.send(map[string]any{"type": "git.commit.result", "ok": false, "message": err.Error()})
 			return
 		}
-		c.send(map[string]interface{}{"type": "git.commit.result", "ok": true, "hash": hash, "message": message})
+		c.send(map[string]any{"type": "git.commit.result", "ok": true, "hash": hash, "message": message})
 		if status, err := gogit.GetStatus(projectPath); err == nil {
-			c.send(map[string]interface{}{"type": "git.status", "status": status})
+			c.send(map[string]any{"type": "git.status", "status": status})
 		}
 		if commits, err := gogit.GetLog(projectPath, 8); err == nil {
-			c.send(map[string]interface{}{"type": "git.log", "commits": commits})
+			c.send(map[string]any{"type": "git.log", "commits": commits})
 		}
 
 	case "workspace.tasks":
@@ -751,7 +750,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			root = msg.Path
 		}
 		detected := workspace.DetectTasks(root)
-		c.send(map[string]interface{}{
+		c.send(map[string]any{
 			"type":               "workspace.tasks",
 			"tasks":              detected.Tasks,
 			"defaultBuildTaskId": detected.DefaultBuildTask,
@@ -844,7 +843,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			Model       string `json:"model"`
 		}
 		if err := json.Unmarshal(raw, &msg); err != nil {
-			c.send(map[string]interface{}{"type": "usage.dashboard", "error": "Bad payload"})
+			c.send(map[string]any{"type": "usage.dashboard", "error": "Bad payload"})
 			return
 		}
 
@@ -859,10 +858,10 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 
 		dashboard, err := db.GetUsageDashboard(scope, targetProjectPath, strings.TrimSpace(msg.Model))
 		if err != nil {
-			c.send(map[string]interface{}{"type": "usage.dashboard", "error": err.Error()})
+			c.send(map[string]any{"type": "usage.dashboard", "error": err.Error()})
 			return
 		}
-		c.send(map[string]interface{}{"type": "usage.dashboard", "dashboard": dashboard})
+		c.send(map[string]any{"type": "usage.dashboard", "dashboard": dashboard})
 
 	// ── Terminals ─────────────────────────────────────────────────────────────
 
@@ -878,11 +877,11 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		}
 		_, err := c.termMgr.Create(id, cwd,
 			func(data string) {
-				c.send(map[string]interface{}{"type": "terminal.output", "terminalId": id, "data": data})
+				c.send(map[string]any{"type": "terminal.output", "terminalId": id, "data": data})
 			},
 			func() {
 				delete(c.termIDs, id)
-				c.send(map[string]interface{}{"type": "terminal.closed", "terminalId": id})
+				c.send(map[string]any{"type": "terminal.closed", "terminalId": id})
 			},
 		)
 		if err != nil {
@@ -890,7 +889,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			return
 		}
 		c.termIDs[id] = true
-		c.send(map[string]interface{}{"type": "terminal.created", "terminalId": id, "cwd": cwd})
+		c.send(map[string]any{"type": "terminal.created", "terminalId": id, "cwd": cwd})
 
 	case "terminal.input":
 		var msg struct {
@@ -935,14 +934,14 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		configPath := filepath.Join(projectPath, ".engine", "config.yaml")
 		content, err := os.ReadFile(configPath)
 		if err != nil {
-			c.send(map[string]interface{}{
+			c.send(map[string]any{
 				"type":  "engine.config",
 				"yaml":  "",
 				"error": "No .engine/config.yaml found",
 			})
 			return
 		}
-		c.send(map[string]interface{}{
+		c.send(map[string]any{
 			"type": "engine.config",
 			"yaml": string(content),
 		})
@@ -977,7 +976,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		if strings.TrimSpace(msg.Team) != "" {
 			os.Setenv("ENGINE_ACTIVE_TEAM", strings.TrimSpace(msg.Team)) //nolint:errcheck
 		}
-		c.send(map[string]interface{}{
+		c.send(map[string]any{
 			"type": "engine.team.updated",
 			"team": msg.Team,
 		})
@@ -1011,7 +1010,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		lineCount := strings.Count(summary.Output, "\n")
 		c.testObserverMu.Unlock()
 		if lineCount%20 == 0 || newErrCount > prevErrCount {
-			c.send(map[string]interface{}{
+			c.send(map[string]any{
 				"type":      "test.summary",
 				"sessionId": msg.SessionID,
 				"summary":   summary,
@@ -1039,7 +1038,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			summary = ai.TestSummary{Errors: []string{}, Warnings: []string{}, Success: true}
 		}
 		c.testObserverMu.Unlock()
-		c.send(map[string]interface{}{
+		c.send(map[string]any{
 			"type":      "test.summary",
 			"sessionId": msg.SessionID,
 			"summary":   summary,
@@ -1083,7 +1082,7 @@ func (c *conn) handleRepoList() {
 		c.sendErr("Failed to load repository registry: "+err.Error(), "REPO_LIST_ERROR")
 		return
 	}
-	c.send(map[string]interface{}{
+	c.send(map[string]any{
 		"type":    "repo.list",
 		"entries": entries,
 	})
@@ -1095,7 +1094,7 @@ func (c *conn) handleRepoAdd(urlOrPath string) {
 		c.sendErr("Failed to add repository: "+err.Error(), "REPO_ADD_ERROR")
 		return
 	}
-	c.send(map[string]interface{}{
+	c.send(map[string]any{
 		"type":  "repo.added",
 		"entry": entry,
 	})
@@ -1106,7 +1105,7 @@ func (c *conn) handleRepoRemove(name string) {
 		c.sendErr("Failed to remove repository: "+err.Error(), "REPO_REMOVE_ERROR")
 		return
 	}
-	c.send(map[string]interface{}{
+	c.send(map[string]any{
 		"type": "repo.removed",
 		"name": name,
 	})
@@ -1124,7 +1123,7 @@ func (c *conn) handleRemotePairCodeGenerate() {
 		c.sendErr("Failed to generate pairing code", "PAIRING_ERROR")
 		return
 	}
-	c.send(map[string]interface{}{
+	c.send(map[string]any{
 		"type":      "remote.pair.code",
 		"code":      code,
 		"expiresIn": 300,
@@ -1135,14 +1134,14 @@ func (c *conn) handleGitHubIssues(projectPath string) {
 	owner, repo, overrideConfigured := githubRepoOverride()
 	switch {
 	case overrideConfigured && (owner == "" || repo == ""):
-		c.send(map[string]interface{}{"type": "github.issues", "issues": []interface{}{}, "error": "GitHub owner and repository must both be set in Settings."})
+		c.send(map[string]any{"type": "github.issues", "issues": []any{}, "error": "GitHub owner and repository must both be set in Settings."})
 		return
 	case !overrideConfigured:
 		resolvedOwner, resolvedRepo, err := gogit.ResolveGitHubRepo(projectPath)
 		if err != nil {
-			c.send(map[string]interface{}{
+			c.send(map[string]any{
 				"type":   "github.issues",
-				"issues": []interface{}{},
+				"issues": []any{},
 				"error":  "No GitHub remote or configured repository. Add a GitHub remote or set GitHub owner/repository in Settings.",
 			})
 			return
@@ -1152,19 +1151,19 @@ func (c *conn) handleGitHubIssues(projectPath string) {
 
 	issues, err := fetchGitHubIssues(owner, repo)
 	if err != nil {
-		c.send(map[string]interface{}{"type": "github.issues", "issues": []interface{}{}, "error": err.Error()})
+		c.send(map[string]any{"type": "github.issues", "issues": []any{}, "error": err.Error()})
 		return
 	}
-	c.send(map[string]interface{}{"type": "github.issues", "issues": issues})
+	c.send(map[string]any{"type": "github.issues", "issues": issues})
 }
 
 func (c *conn) handleGitHubUser() {
 	user, err := fetchGitHubUser()
 	if err != nil {
-		c.send(map[string]interface{}{"type": "github.user", "user": nil, "error": err.Error()})
+		c.send(map[string]any{"type": "github.user", "user": nil, "error": err.Error()})
 		return
 	}
-	c.send(map[string]interface{}{"type": "github.user", "user": user})
+	c.send(map[string]any{"type": "github.user", "user": user})
 }
 
 type githubIssue struct {
@@ -1278,7 +1277,7 @@ func fetchGitHubIssues(owner, repo string) ([]githubIssue, error) {
 		} `json:"labels"`
 		CreatedAt   string      `json:"created_at"`
 		UpdatedAt   string      `json:"updated_at"`
-		PullRequest interface{} `json:"pull_request"`
+		PullRequest any `json:"pull_request"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, err

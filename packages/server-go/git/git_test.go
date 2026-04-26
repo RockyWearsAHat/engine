@@ -410,7 +410,7 @@ func TestPush_Error(t *testing.T) {
 func TestPull_Success(t *testing.T) {
 	bare := initBareRemote(t)
 
-	// Create a source repo, push to bare.
+	// Create a source repo and push initial commit to bare.
 	src := initTestRepo(t)
 	if out, err := exec.Command("git", "-C", src, "remote", "add", "origin", bare).CombinedOutput(); err != nil {
 		t.Fatalf("add remote: %v\n%s", err, out)
@@ -419,23 +419,30 @@ func TestPull_Success(t *testing.T) {
 		t.Fatalf("initial push: %v\n%s", err, out)
 	}
 
-	// Create a second clone repo, set remote, fetch, set upstream, then pull.
-	dst := initTestRepo(t)
-	if out, err := exec.Command("git", "-C", dst, "remote", "add", "origin", bare).CombinedOutput(); err != nil {
-		t.Fatalf("add remote: %v\n%s", err, out)
+	// Clone from bare so dst shares the same history (no divergence).
+	dstParent := t.TempDir()
+	dst := filepath.Join(dstParent, "dst")
+	if out, err := exec.Command("git", "clone", bare, dst).CombinedOutput(); err != nil {
+		t.Fatalf("clone: %v\n%s", err, out)
 	}
-	// Fetch first so the remote tracking branch exists.
-	if out, err := exec.Command("git", "-C", dst, "fetch", "origin").CombinedOutput(); err != nil {
-		t.Fatalf("fetch: %v\n%s", err, out)
+	exec.Command("git", "-C", dst, "config", "user.email", "test@test.com").Run() //nolint:errcheck
+	exec.Command("git", "-C", dst, "config", "user.name", "Test").Run()           //nolint:errcheck
+
+	// Push a new commit from src so dst has something to pull.
+	if err := os.WriteFile(filepath.Join(src, "update.txt"), []byte("update"), 0644); err != nil {
+		t.Fatal(err)
 	}
-	// Set up tracking.
-	branch, _ := GetCurrentBranch(dst)
-	exec.Command("git", "-C", dst, "branch", "--set-upstream-to=origin/"+branch, branch).Run()
+	exec.Command("git", "-C", src, "add", ".").Run()                                                                   //nolint:errcheck
+	exec.Command("git", "-C", src, "commit", "-m", "second commit").Run()                                              //nolint:errcheck
+	if out, err := exec.Command("git", "-C", src, "push", "origin", "HEAD").CombinedOutput(); err != nil {
+		t.Fatalf("push update: %v\n%s", err, out)
+	}
 
 	out, err := Pull(dst, "origin")
 	if err != nil {
 		t.Fatalf("Pull: %v\nout: %s", err, out)
 	}
+	_ = out
 }
 
 func TestPull_Error(t *testing.T) {

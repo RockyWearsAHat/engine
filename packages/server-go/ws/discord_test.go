@@ -224,14 +224,14 @@ func TestHandleDiscordConfigGet_NilBridge_ReturnsOnDiskConfig(t *testing.T) {
 	defer cleanup()
 
 	// Open the project so the connection has a projectPath.
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
 	readWSMessageOfType(t, conn, "session.created")
 
 	// Request discord config with no bridge registered.
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "discord.config.get",
 	})
 
@@ -268,15 +268,15 @@ func TestHandleDiscordConfigSet_WriteError(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
 	readWSMessageOfType(t, conn, "session.created")
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "discord.config.set",
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"token":   "token",
 			"guildId": "guild",
 			"enabled": false,
@@ -298,15 +298,15 @@ func TestHandleDiscordValidate_WithOverride(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
 	readWSMessageOfType(t, conn, "session.created")
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "discord.validate",
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"token":   "tkn",
 			"guildId": "gid",
 			"enabled": false,
@@ -330,13 +330,13 @@ func TestHandleDiscordUnlink_NilBridge_ClearsConfigOnDisk(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
 	readWSMessageOfType(t, conn, "session.created")
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "discord.unlink",
 	})
 
@@ -345,7 +345,7 @@ func TestHandleDiscordUnlink_NilBridge_ClearsConfigOnDisk(t *testing.T) {
 	if active, _ := response["active"].(bool); active {
 		t.Error("expected active=false after unlink")
 	}
-	cfgMap, _ := response["config"].(map[string]interface{})
+	cfgMap, _ := response["config"].(map[string]any)
 	if cfgMap == nil {
 		t.Fatal("expected config field in response")
 	}
@@ -373,13 +373,13 @@ func TestHandleDiscordUnlink_WriteError_ReturnsErrorCode(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
 	readWSMessageOfType(t, conn, "session.created")
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "discord.unlink",
 	})
 
@@ -420,13 +420,13 @@ func TestHandleDiscordUnlink_WithBridge_LeaveSuccess(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
 	readWSMessageOfType(t, conn, "session.created")
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "discord.unlink"})
+	writeWSMessage(t, conn, map[string]any{"type": "discord.unlink"})
 
 	response := readWSMessageOfType(t, conn, "discord.config.saved")
 	if w, ok := response["warning"].(string); ok && w != "" {
@@ -456,13 +456,13 @@ func TestHandleDiscordUnlink_WithBridge_LeaveError_WarningReturned(t *testing.T)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
 	readWSMessageOfType(t, conn, "session.created")
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "discord.unlink"})
+	writeWSMessage(t, conn, map[string]any{"type": "discord.unlink"})
 
 	response := readWSMessageOfType(t, conn, "discord.config.saved")
 	warning, _ := response["warning"].(string)
@@ -491,13 +491,13 @@ func TestHandleDiscordUnlink_WithBridge_ReloadError_WarningReturned(t *testing.T
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
 	readWSMessageOfType(t, conn, "session.created")
 
-	writeWSMessage(t, conn, map[string]interface{}{"type": "discord.unlink"})
+	writeWSMessage(t, conn, map[string]any{"type": "discord.unlink"})
 
 	response := readWSMessageOfType(t, conn, "discord.config.saved")
 	warning, _ := response["warning"].(string)
@@ -523,7 +523,7 @@ func TestHandleDiscordConfigSet_WithBridge_ReloadSuccess(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
@@ -531,9 +531,9 @@ func TestHandleDiscordConfigSet_WithBridge_ReloadSuccess(t *testing.T) {
 
 	// Send a config with Enabled=true — differs from stub (Enabled=false), so
 	// sameDiscordRuntimeConfig returns false and Reload is called.
-	writeWSMessage(t, conn, map[string]interface{}{
+	writeWSMessage(t, conn, map[string]any{
 		"type": "discord.config.set",
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"token":   "tok",
 			"guildId": "guild-1",
 			"enabled": true,

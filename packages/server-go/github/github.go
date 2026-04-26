@@ -117,7 +117,7 @@ func (c *Client) GetIssue(number int) (*Issue, error) {
 
 // CreateIssue creates a new issue and returns it.
 func (c *Client) CreateIssue(title, body string, labels []string) (*Issue, error) {
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"title": title,
 		"body":  body,
 	}
@@ -178,7 +178,7 @@ func (c *Client) CloseIssue(number int, comment string) error {
 }
 
 // UpdateIssue updates an issue's title, body, and/or state.
-func (c *Client) UpdateIssue(number int, updates map[string]interface{}) (*Issue, error) {
+func (c *Client) UpdateIssue(number int, updates map[string]any) (*Issue, error) {
 	respBody, err := c.doPatch(
 		fmt.Sprintf("%s/repos/%s/%s/issues/%d", apiBase(), c.owner, c.repo, number),
 		updates,
@@ -204,7 +204,7 @@ func (c *Client) doGet(url string) ([]byte, error) {
 	return c.doRequest(req)
 }
 
-func (c *Client) doPost(url string, payload interface{}) ([]byte, error) {
+func (c *Client) doPost(url string, payload any) ([]byte, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -216,7 +216,7 @@ func (c *Client) doPost(url string, payload interface{}) ([]byte, error) {
 	return c.doRequest(req)
 }
 
-func (c *Client) doPatch(url string, payload interface{}) ([]byte, error) {
+func (c *Client) doPatch(url string, payload any) ([]byte, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err

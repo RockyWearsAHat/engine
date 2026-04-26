@@ -36,7 +36,7 @@ type projectToolDef struct {
 // projectToolToSchema builds the anthropicTool schema for a project tool definition.
 // The description is prefixed with "[project tool]" so the AI can tell it apart from built-ins.
 func projectToolToSchema(def projectToolDef) anthropicTool {
-	props := make(map[string]interface{})
+	props := make(map[string]any)
 	required := []string{}
 	for _, p := range def.Params {
 		props[p.Name] = strProp(p.Description)
@@ -44,11 +44,11 @@ func projectToolToSchema(def projectToolDef) anthropicTool {
 			required = append(required, p.Name)
 		}
 	}
-	var schema interface{}
+	var schema any
 	if len(props) > 0 {
 		schema = objSchema(required, props)
 	} else {
-		schema = objSchema([]string{}, map[string]interface{}{})
+		schema = objSchema([]string{}, map[string]any{})
 	}
 	return anthropicTool{
 		Name:        def.Name,
@@ -107,7 +107,7 @@ var projectToolShellCommand = func(name string, args ...string) *exec.Cmd {
 // Inputs are passed as INPUT_<NAME>=<value> environment variables so callers
 // cannot inject arbitrary shell syntax through parameter values.
 // Returns (result, isError, found). found=false when no project tool matches name.
-func executeProjectTool(name string, input map[string]interface{}, ctx *ChatContext) (string, bool, bool) {
+func executeProjectTool(name string, input map[string]any, ctx *ChatContext) (string, bool, bool) {
 	if ctx == nil {
 		return "", false, false
 	}
