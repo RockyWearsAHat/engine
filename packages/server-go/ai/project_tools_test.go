@@ -405,6 +405,31 @@ func TestExecuteProjectTool_CommandFails_IsError(t *testing.T) {
 	}
 }
 
+func TestExecuteProjectTool_DeployBlockedWithoutExplicitIntent(t *testing.T) {
+	root := t.TempDir()
+	ctx := &ChatContext{
+		ProjectPath: root,
+		ProjectTools: []projectToolDef{
+			func() projectToolDef {
+				def := projectToolDef{Name: "deploy_prod", Description: "Deploy to production", Command: "echo deploy"}
+				def.schema = projectToolToSchema(def)
+				return def
+			}(),
+		},
+	}
+
+	result, isError, found := executeProjectTool("deploy_prod", nil, ctx)
+	if !found {
+		t.Fatal("expected found=true")
+	}
+	if !isError {
+		t.Fatalf("expected deploy tool to be blocked without explicit intent, got result=%q", result)
+	}
+	if !strings.Contains(strings.ToLower(result), "blocked") {
+		t.Fatalf("expected blocked message, got %q", result)
+	}
+}
+
 // ── executeSearchTools with project tools ─────────────────────────────────────
 
 func TestExecuteSearchTools_FindsProjectTool(t *testing.T) {

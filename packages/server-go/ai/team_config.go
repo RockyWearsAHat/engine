@@ -147,19 +147,32 @@ type AutonomousPolicy struct {
 	//   "aggressive"   — resolve almost everything autonomously; escalate only for
 	//                    credentials and irreversible actions with no safe default.
 	AssumptionTolerance string
+	// RequireExplicitPublishIntent blocks deploy/publish actions unless explicit
+	// request evidence is present in execution intent.
+	RequireExplicitPublishIntent bool
+	// MinimalChatMode keeps runtime updates sparse and action-focused.
+	MinimalChatMode bool
+	// StyleAssumptionNotice enables one short style-assumption notice when style
+	// direction is omitted on first-turn intake.
+	StyleAssumptionNotice bool
 }
 
 // ResolveAutonomousPolicy reads the autonomous: section from .engine/config.yaml.
 // Returns a zero-value policy (all defaults off) when the file is absent or the
 // section is missing, so callers can safely fall through to RequestApproval.
 func ResolveAutonomousPolicy(projectPath string) AutonomousPolicy {
+	defaults := AutonomousPolicy{
+		RequireExplicitPublishIntent: true,
+		MinimalChatMode:              true,
+		StyleAssumptionNotice:        true,
+	}
 	if strings.TrimSpace(projectPath) == "" {
-		return AutonomousPolicy{}
+		return defaults
 	}
 	configPath := filepath.Join(projectPath, ".engine", "config.yaml")
 	content, err := os.ReadFile(configPath)
 	if err != nil {
-		return AutonomousPolicy{}
+		return defaults
 	}
 	return parseAutonomousPolicy(string(content))
 }
@@ -167,7 +180,11 @@ func ResolveAutonomousPolicy(projectPath string) AutonomousPolicy {
 // parseAutonomousPolicy extracts the autonomous: block from raw YAML text.
 // Only indent-2 keys directly under autonomous: are read; deeper nesting is ignored.
 func parseAutonomousPolicy(yaml string) AutonomousPolicy {
-	var p AutonomousPolicy
+	p := AutonomousPolicy{
+		RequireExplicitPublishIntent: true,
+		MinimalChatMode:              true,
+		StyleAssumptionNotice:        true,
+	}
 	inAutonomous := false
 	for _, rawLine := range strings.Split(yaml, "\n") {
 		trimmedRight := strings.TrimRight(rawLine, " \t")
@@ -192,6 +209,12 @@ func parseAutonomousPolicy(yaml string) AutonomousPolicy {
 			p.Branch = parseYAMLValue(trimmedLeft, "branch:")
 		case strings.HasPrefix(trimmedLeft, "assumption_tolerance:"):
 			p.AssumptionTolerance = parseYAMLValue(trimmedLeft, "assumption_tolerance:")
+		case strings.HasPrefix(trimmedLeft, "require_explicit_publish_intent:"):
+			p.RequireExplicitPublishIntent = strings.TrimSpace(strings.TrimPrefix(trimmedLeft, "require_explicit_publish_intent:")) != "false"
+		case strings.HasPrefix(trimmedLeft, "minimal_chat_mode:"):
+			p.MinimalChatMode = strings.TrimSpace(strings.TrimPrefix(trimmedLeft, "minimal_chat_mode:")) != "false"
+		case strings.HasPrefix(trimmedLeft, "style_assumption_notice:"):
+			p.StyleAssumptionNotice = strings.TrimSpace(strings.TrimPrefix(trimmedLeft, "style_assumption_notice:")) != "false"
 		}
 	}
 	return p

@@ -284,6 +284,9 @@ func TestParseAutonomousPolicy_Defaults(t *testing.T) {
 	if p.AutoCommit || p.AutoPush || p.Branch != "" {
 		t.Fatalf("expected zero policy for config without autonomous section, got %+v", p)
 	}
+	if !p.RequireExplicitPublishIntent || !p.MinimalChatMode || !p.StyleAssumptionNotice {
+		t.Fatalf("expected secure defaults enabled, got %+v", p)
+	}
 }
 
 func TestParseAutonomousPolicy_AutoCommitTrue(t *testing.T) {
@@ -344,7 +347,10 @@ func TestParseAutonomousPolicy_AssumptionTolerance(t *testing.T) {
 func TestResolveAutonomousPolicy_MissingConfig(t *testing.T) {
 	p := ResolveAutonomousPolicy(t.TempDir())
 	if p.AutoCommit || p.AutoPush || p.Branch != "" {
-		t.Fatalf("expected zero policy for missing config, got %+v", p)
+		t.Fatalf("expected no commit/push defaults for missing config, got %+v", p)
+	}
+	if !p.RequireExplicitPublishIntent || !p.MinimalChatMode || !p.StyleAssumptionNotice {
+		t.Fatalf("expected secure defaults enabled for missing config, got %+v", p)
 	}
 }
 
@@ -367,5 +373,22 @@ func TestResolveAutonomousPolicy_FromFile(t *testing.T) {
 	}
 	if p.Branch != "engine/ci" {
 		t.Fatalf("expected branch engine/ci, got %q", p.Branch)
+	}
+	if !p.RequireExplicitPublishIntent || !p.MinimalChatMode || !p.StyleAssumptionNotice {
+		t.Fatalf("expected policy defaults still true when omitted, got %+v", p)
+	}
+}
+
+func TestParseAutonomousPolicy_NewPolicyFlags(t *testing.T) {
+	yaml := "autonomous:\n  require_explicit_publish_intent: false\n  minimal_chat_mode: false\n  style_assumption_notice: false\n"
+	p := parseAutonomousPolicy(yaml)
+	if p.RequireExplicitPublishIntent {
+		t.Fatal("expected RequireExplicitPublishIntent=false")
+	}
+	if p.MinimalChatMode {
+		t.Fatal("expected MinimalChatMode=false")
+	}
+	if p.StyleAssumptionNotice {
+		t.Fatal("expected StyleAssumptionNotice=false")
 	}
 }

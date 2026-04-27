@@ -102,6 +102,9 @@ func TestParseProjectProfileJSON_CleanJSON(t *testing.T) {
 	if len(profile.DoneDefinition) != 2 {
 		t.Errorf("doneDefinition len = %d, want 2", len(profile.DoneDefinition))
 	}
+	if profile.ExecutionIntent.PublishIntent != PublishIntentNone {
+		t.Errorf("default publishIntent = %q, want none", profile.ExecutionIntent.PublishIntent)
+	}
 }
 
 func TestParseProjectProfileJSON_WithSurroundingProse(t *testing.T) {
@@ -194,6 +197,15 @@ func TestBuildPreStartExpansion_IncludesObjectiveAndCriteria(t *testing.T) {
 	if !strings.Contains(expanded, "Direction context:") {
 		t.Fatalf("expected direction context in expansion, got: %s", expanded)
 	}
+	if !strings.Contains(expanded, "Scope (in):") {
+		t.Fatalf("expected scope section in expansion, got: %s", expanded)
+	}
+	if !strings.Contains(expanded, "Constraints:") {
+		t.Fatalf("expected constraints section in expansion, got: %s", expanded)
+	}
+	if !strings.Contains(expanded, "Deploy intent:") {
+		t.Fatalf("expected deploy intent section in expansion, got: %s", expanded)
+	}
 }
 
 func TestHasExplicitStyleGuidance_TrueForStyleKeywords(t *testing.T) {
@@ -228,6 +240,12 @@ func TestBuildHeuristicProjectProfile_RestAPI(t *testing.T) {
 	}
 	if profile.DeployTarget != "Docker" {
 		t.Fatalf("expected Docker deploy target, got %q", profile.DeployTarget)
+	}
+	if profile.ExecutionIntent.PublishIntent != PublishIntentExplicit {
+		t.Fatalf("expected explicit publish intent for deploy request, got %q", profile.ExecutionIntent.PublishIntent)
+	}
+	if len(profile.ExecutionIntent.PublishEvidence) == 0 {
+		t.Fatal("expected publish intent evidence for deploy request")
 	}
 	if profile.Verification.CheckURL == "" {
 		t.Fatal("expected non-empty CheckURL for rest-api")
@@ -322,6 +340,72 @@ func TestBuildHeuristicProjectProfile_CLI_LiveCheckFromCheckCmd(t *testing.T) {
 	}
 	if profile.LiveCheckCmd != profile.Verification.CheckCmds[0] {
 		t.Fatalf("expected live check to use first check command, got %q want %q", profile.LiveCheckCmd, profile.Verification.CheckCmds[0])
+	}
+	if profile.ExecutionIntent.PublishIntent != PublishIntentNone {
+		t.Fatalf("expected no publish intent for CLI request, got %q", profile.ExecutionIntent.PublishIntent)
+	}
+}
+
+func TestDetectPublishIntentEvidence_ExplicitAndNone(t *testing.T) {
+	explicit, evidence := detectPublishIntentEvidence("Deploy this service to Docker in production")
+	if explicit != PublishIntentExplicit {
+		t.Fatalf("expected explicit publish intent, got %q", explicit)
+	}
+	if len(evidence) == 0 {
+		t.Fatal("expected evidence for explicit publish intent")
+	}
+	none, noneEvidence := detectPublishIntentEvidence("Implement local REST API only")
+	if none != PublishIntentNone {
+		t.Fatalf("expected none publish intent, got %q", none)
+	}
+	if len(noneEvidence) != 0 {
+		t.Fatalf("expected no evidence for non-publish request, got %d", len(noneEvidence))
+	}
+}
+
+func TestDetectPublishIntentEvidence_EmptyInput(t *testing.T) {
+	intent, evidence := detectPublishIntentEvidence("   ")
+	if intent != PublishIntentNone {
+		t.Fatalf("expected none intent for empty input, got %q", intent)
+	}
+	if len(evidence) != 0 {
+		t.Fatalf("expected empty evidence for empty input, got %d", len(evidence))
+	}
+}
+
+func TestDetectPublishIntentEvidence_CapsEvidenceAtTwo(t *testing.T) {
+	msg := "Deploy to Docker\nPublish to npm\nRelease to production\nGo live now"
+	intent, evidence := detectPublishIntentEvidence(msg)
+	if intent != PublishIntentExplicit {
+		t.Fatalf("expected explicit intent, got %q", intent)
+	}
+	if len(evidence) != 2 {
+		t.Fatalf("expected evidence capped at 2 entries, got %d", len(evidence))
+	}
+}
+
+func TestDetectPublishIntentEvidence_MixedLines(t *testing.T) {
+	msg := "\ngeneral note\n   \nrelease to production now\nplain line"
+	intent, evidence := detectPublishIntentEvidence(msg)
+	if intent != PublishIntentExplicit {
+		t.Fatalf("expected explicit intent for mixed lines, got %q", intent)
+	}
+	if len(evidence) != 1 {
+		t.Fatalf("expected one evidence line, got %d", len(evidence))
+	}
+}
+
+func TestDeriveConstraints_UserProhibitionAddsConstraint(t *testing.T) {
+	out := deriveConstraints("Don't modify deployment config")
+	found := false
+	for _, c := range out {
+		if strings.Contains(c, "prohibitions") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected prohibition constraint, got %+v", out)
 	}
 }
 
