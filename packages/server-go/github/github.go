@@ -194,6 +194,70 @@ func (c *Client) UpdateIssue(number int, updates map[string]any) (*Issue, error)
 	return &issue, nil
 }
 
+// ── Profile-level API ─────────────────────────────────────────────────────────
+
+// UserRepo is a minimal representation of a repository returned by the
+// authenticated user's repository list.
+type UserRepo struct {
+	FullName      string `json:"full_name"`
+	DefaultBranch string `json:"default_branch"`
+	Private       bool   `json:"private"`
+	HTMLURL       string `json:"html_url"`
+}
+
+// NewProfileClient creates a Client scoped to the authenticated user's profile
+// rather than a specific repository.  The owner and repo fields are left empty;
+// only profile-level calls (ListUserRepos, GetAuthenticatedLogin) are valid.
+func NewProfileClient(token string) *Client {
+	return &Client{
+		token:      token,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+// GetAuthenticatedLogin returns the login name of the token owner.
+func (c *Client) GetAuthenticatedLogin() (string, error) {
+	body, err := c.doGet(apiBase() + "/user")
+	if err != nil {
+		return "", fmt.Errorf("get authenticated user: %w", err)
+	}
+	var u struct {
+		Login string `json:"login"`
+	}
+	if err := json.Unmarshal(body, &u); err != nil {
+		return "", fmt.Errorf("parse user response: %w", err)
+	}
+	return u.Login, nil
+}
+
+// ListUserRepos returns all repositories visible to the authenticated user.
+// It follows pagination automatically.  Pass perPage ≤ 0 to use the default (100).
+func (c *Client) ListUserRepos(perPage int) ([]UserRepo, error) {
+	if perPage <= 0 {
+		perPage = 100
+	}
+	var all []UserRepo
+	page := 1
+	for {
+		url := fmt.Sprintf("%s/user/repos?per_page=%d&page=%d&affiliation=owner,collaborator,organization_member",
+			apiBase(), perPage, page)
+		body, err := c.doGet(url)
+		if err != nil {
+			return nil, fmt.Errorf("list user repos (page %d): %w", page, err)
+		}
+		var batch []UserRepo
+		if err := json.Unmarshal(body, &batch); err != nil {
+			return nil, fmt.Errorf("parse repos (page %d): %w", page, err)
+		}
+		all = append(all, batch...)
+		if len(batch) < perPage {
+			break
+		}
+		page++
+	}
+	return all, nil
+}
+
 // --- HTTP helpers ---
 
 func (c *Client) doGet(url string) ([]byte, error) {

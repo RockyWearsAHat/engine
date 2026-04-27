@@ -45,6 +45,8 @@ var (
 	newWebhookReceiverFn = github.NewWebhookReceiver
 	newRepoMonitorFn     = github.NewRepoMonitor
 	repoMonitorStartFn   = func(rm *github.RepoMonitor) { rm.Start(context.Background()) }
+	newEventsWatcherFn   = github.NewEventsWatcherFromEnv
+	eventsWatcherStartFn = func(ew *github.EventsWatcher) { ew.Start(context.Background()) }
 	newVPNTunnelFn       = vpn.NewTunnel
 	vpnRegisterRoutesFn  = (*vpn.Tunnel).RegisterRoutes
 	vpnListenTLSFn       = (*vpn.Tunnel).ListenAndServeTLS
@@ -196,6 +198,11 @@ func run() error {
 	}
 	webhookReceiver.AddHandler(repoMonitor.Enqueue)
 	repoMonitorStartFn(repoMonitor)
+	// Start the events watcher — near-real-time @engine detection via GitHub Events API.
+	if ew := newEventsWatcherFn(repoMonitor); ew != nil {
+		eventsWatcherStartFn(ew)
+		log.Printf("events-watcher: started (requires GITHUB_TOKEN)")
+	}
 	// Register the webhook route.
 	httpHandleFn("/webhook/github", webhookReceiver)
 
@@ -271,6 +278,17 @@ func buildReadmeAutonomousBuildPrompt(owner, repo, localRepoPath string) string 
 	)
 }
 
+// readmeContainsEngineTag returns true when README.md in repoPath contains the
+// @engine tag, indicating the repository owner has opted in to autonomous
+// development by Engine.
+func readmeContainsEngineTag(repoPath string) bool {
+	data, err := os.ReadFile(filepath.Join(repoPath, "README.md"))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), "@engine")
+}
+
 // triggerScaffoldSession fires an AI session when a README changes on GitHub.
 // It reads the README content and asks the AI to plan and scaffold the project.
 func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
@@ -295,34 +313,44 @@ func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
 		targetProjectPath = projectPath
 	}
 
-	sessionID := fmt.Sprintf("scaffold-%s-%d", repo, time.Now().UnixNano())
-	branch, _ := gogit.GetCurrentBranch(targetProjectPath)
-	if err := createSessionFn(sessionID, targetProjectPath, branch); err != nil {
-		log.Printf("[scaffold %s/%s] create session: %v", owner, repo, err)
-	}
-	scaffoldPolicy := ai.ResolveAutonomousPolicy(targetProjectPath)
-	ctx := &ai.ChatContext{
-		ProjectPath:     targetProjectPath,
-		SessionID:       sessionID,
-		AutonomousPolicy: &scaffoldPolicy,
-		OnChunk: func(content string, done bool) {
-			if content != "" {
-				log.Printf("[scaffold %s/%s] %s", owner, repo, content)
-			}
-			if done {
-				msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
-				if dbErr := saveMessageFn(msgID, sessionID, "assistant", content, nil); dbErr != nil {
-					log.Printf("[scaffold %s/%s] save message: %v", owner, repo, dbErr)
-				}
-			}
-		},
-		OnError: func(msg string) {
-			log.Printf("[scaffold error %s/%s] %s", owner, repo, msg)
-		},
+	if !readmeContainsEngineTag(targetProjectPath) {
+		log.Printf("scaffold: README in %s/%s does not contain @engine tag; skipping autonomous build", owner, repo)
+		return
 	}
 
-	prompt := buildReadmeAutonomousBuildPrompt(owner, repo, targetProjectPath)
-	aiChatFn(ctx, prompt)
+	if dbErr := db.WithProject(targetProjectPath, func() error {
+		sessionID := fmt.Sprintf("scaffold-%s-%d", repo, time.Now().UnixNano())
+		branch, _ := gogit.GetCurrentBranch(targetProjectPath)
+		if err := createSessionFn(sessionID, targetProjectPath, branch); err != nil {
+			log.Printf("[scaffold %s/%s] create session: %v", owner, repo, err)
+		}
+		scaffoldPolicy := ai.ResolveAutonomousPolicy(targetProjectPath)
+		ctx := &ai.ChatContext{
+			ProjectPath:      targetProjectPath,
+			SessionID:        sessionID,
+			AutonomousPolicy: &scaffoldPolicy,
+			OnChunk: func(content string, done bool) {
+				if content != "" {
+					log.Printf("[scaffold %s/%s] %s", owner, repo, content)
+				}
+				if done {
+					msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
+					if dbErr := saveMessageFn(msgID, sessionID, "assistant", content, nil); dbErr != nil {
+						log.Printf("[scaffold %s/%s] save message: %v", owner, repo, dbErr)
+					}
+				}
+			},
+			OnError: func(msg string) {
+				log.Printf("[scaffold error %s/%s] %s", owner, repo, msg)
+			},
+		}
+
+		prompt := buildReadmeAutonomousBuildPrompt(owner, repo, targetProjectPath)
+		aiChatFn(ctx, prompt)
+		return nil
+	}); dbErr != nil {
+		log.Printf("[scaffold %s/%s] db.WithProject: %v", owner, repo, dbErr)
+	}
 }
 
 // triggerCIAnalysisSession fires an AI session when a CI failure is detected.
@@ -342,48 +370,53 @@ func triggerCIAnalysisSession(projectPath string, payload json.RawMessage) {
 		return
 	}
 
-	sessionID := fmt.Sprintf("ci-fix-%d", time.Now().UnixNano())
-	branch, _ := gogit.GetCurrentBranch(projectPath)
-	if err := createSessionFn(sessionID, projectPath, branch); err != nil {
-		log.Printf("[ci-fix %s] create session: %v", ciEvent.Repository.FullName, err)
-	}
-	ciPolicy := ai.ResolveAutonomousPolicy(projectPath)
-	ctx := &ai.ChatContext{
-		ProjectPath:     projectPath,
-		SessionID:       sessionID,
-		AutonomousPolicy: &ciPolicy,
-		OnChunk: func(content string, done bool) {
-			if content != "" {
-				log.Printf("[ci-fix %s] %s", ciEvent.Repository.FullName, content)
-			}
-			if done {
-				msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
-				if dbErr := saveMessageFn(msgID, sessionID, "assistant", content, nil); dbErr != nil {
-					log.Printf("[ci-fix %s] save message: %v", ciEvent.Repository.FullName, dbErr)
+	if dbErr := db.WithProject(projectPath, func() error {
+		sessionID := fmt.Sprintf("ci-fix-%d", time.Now().UnixNano())
+		branch, _ := gogit.GetCurrentBranch(projectPath)
+		if err := createSessionFn(sessionID, projectPath, branch); err != nil {
+			log.Printf("[ci-fix %s] create session: %v", ciEvent.Repository.FullName, err)
+		}
+		ciPolicy := ai.ResolveAutonomousPolicy(projectPath)
+		ctx := &ai.ChatContext{
+			ProjectPath:      projectPath,
+			SessionID:        sessionID,
+			AutonomousPolicy: &ciPolicy,
+			OnChunk: func(content string, done bool) {
+				if content != "" {
+					log.Printf("[ci-fix %s] %s", ciEvent.Repository.FullName, content)
 				}
-			}
-		},
-		OnError: func(msg string) {
-			log.Printf("[ci-fix error] %s", msg)
-		},
-	}
+				if done {
+					msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
+					if dbErr := saveMessageFn(msgID, sessionID, "assistant", content, nil); dbErr != nil {
+						log.Printf("[ci-fix %s] save message: %v", ciEvent.Repository.FullName, dbErr)
+					}
+				}
+			},
+			OnError: func(msg string) {
+				log.Printf("[ci-fix error] %s", msg)
+			},
+		}
 
-	prompt := fmt.Sprintf(
-		"CI workflow '%s' failed for %s (conclusion: %s, url: %s).\n\n"+
-			"Your job:\n"+
-			"1. Use git_status and search_files to find recent changes\n"+
-			"2. Run the failing tests or build command with the shell tool to reproduce the failure\n"+
-			"3. Identify the root cause\n"+
-			"4. Fix the issue\n"+
-			"5. Verify the fix by running the tests again\n"+
-			"6. Commit the fix with git_commit\n"+
-			"Start by reproducing the failure now.",
-		ciEvent.WorkflowRun.Name,
-		ciEvent.Repository.FullName,
-		ciEvent.WorkflowRun.Conclusion,
-		ciEvent.WorkflowRun.HTMLURL,
-	)
-	aiChatFn(ctx, prompt)
+		prompt := fmt.Sprintf(
+			"CI workflow '%s' failed for %s (conclusion: %s, url: %s).\n\n"+
+				"Your job:\n"+
+				"1. Use git_status and search_files to find recent changes\n"+
+				"2. Run the failing tests or build command with the shell tool to reproduce the failure\n"+
+				"3. Identify the root cause\n"+
+				"4. Fix the issue\n"+
+				"5. Verify the fix by running the tests again\n"+
+				"6. Commit the fix with git_commit\n"+
+				"Start by reproducing the failure now.",
+			ciEvent.WorkflowRun.Name,
+			ciEvent.Repository.FullName,
+			ciEvent.WorkflowRun.Conclusion,
+			ciEvent.WorkflowRun.HTMLURL,
+		)
+		aiChatFn(ctx, prompt)
+		return nil
+	}); dbErr != nil {
+		log.Printf("[ci-fix %s] db.WithProject: %v", ciEvent.Repository.FullName, dbErr)
+	}
 }
 
 // triggerIssueSession fires an AI session when a new comment is posted on a GitHub issue.
@@ -395,50 +428,55 @@ func triggerIssueSession(projectPath string, payload json.RawMessage) {
 		return
 	}
 
-	sessionID := fmt.Sprintf("issue-%d-%d", parsed.Issue.Number, time.Now().UnixNano())
-	branch, _ := gogit.GetCurrentBranch(projectPath)
-	if dbErr := createSessionFn(sessionID, projectPath, branch); dbErr != nil {
-		log.Printf("issue-session: create session: %v", dbErr)
-	}
+	if dbErr := db.WithProject(projectPath, func() error {
+		sessionID := fmt.Sprintf("issue-%d-%d", parsed.Issue.Number, time.Now().UnixNano())
+		branch, _ := gogit.GetCurrentBranch(projectPath)
+		if dbErr := createSessionFn(sessionID, projectPath, branch); dbErr != nil {
+			log.Printf("issue-session: create session: %v", dbErr)
+		}
 
-	issuePolicy := ai.ResolveAutonomousPolicy(projectPath)
-	ctx := &ai.ChatContext{
-		ProjectPath:     projectPath,
-		SessionID:       sessionID,
-		AutonomousPolicy: &issuePolicy,
-		OnChunk: func(content string, done bool) {
-			if content != "" {
-				log.Printf("[issue #%d %s] %s", parsed.Issue.Number, parsed.Repository.FullName, content)
-			}
-			if done {
-				msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
-				if dbErr := saveMessageFn(msgID, sessionID, "assistant", content, nil); dbErr != nil {
-					log.Printf("issue-session: save message: %v", dbErr)
+		issuePolicy := ai.ResolveAutonomousPolicy(projectPath)
+		ctx := &ai.ChatContext{
+			ProjectPath:      projectPath,
+			SessionID:        sessionID,
+			AutonomousPolicy: &issuePolicy,
+			OnChunk: func(content string, done bool) {
+				if content != "" {
+					log.Printf("[issue #%d %s] %s", parsed.Issue.Number, parsed.Repository.FullName, content)
 				}
-			}
-		},
-		OnError: func(msg string) {
-			log.Printf("[issue error #%d] %s", parsed.Issue.Number, msg)
-		},
-	}
+				if done {
+					msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
+					if dbErr := saveMessageFn(msgID, sessionID, "assistant", content, nil); dbErr != nil {
+						log.Printf("issue-session: save message: %v", dbErr)
+					}
+				}
+			},
+			OnError: func(msg string) {
+				log.Printf("[issue error #%d] %s", parsed.Issue.Number, msg)
+			},
+		}
 
-	prompt := fmt.Sprintf(
-		"GitHub issue #%d '%s' in %s received a new comment from %s.\n\n"+
-			"Comment: %s\n\n"+
-			"Your job:\n"+
-			"1. Read the issue and understand what needs to be fixed\n"+
-			"2. Use search_files and read_file to explore the relevant code\n"+
-			"3. Write code to fix the issue\n"+
-			"4. Run tests with the shell tool to verify the fix\n"+
-			"5. Commit the fix with git_commit\n"+
-			"Start by exploring the codebase to understand the issue now.",
-		parsed.Issue.Number,
-		parsed.Issue.Title,
-		parsed.Repository.FullName,
-		parsed.Comment.User.Login,
-		parsed.Comment.Body,
-	)
-	aiChatFn(ctx, prompt)
+		prompt := fmt.Sprintf(
+			"GitHub issue #%d '%s' in %s received a new comment from %s.\n\n"+
+				"Comment: %s\n\n"+
+				"Your job:\n"+
+				"1. Read the issue and understand what needs to be fixed\n"+
+				"2. Use search_files and read_file to explore the relevant code\n"+
+				"3. Write code to fix the issue\n"+
+				"4. Run tests with the shell tool to verify the fix\n"+
+				"5. Commit the fix with git_commit\n"+
+				"Start by exploring the codebase to understand the issue now.",
+			parsed.Issue.Number,
+			parsed.Issue.Title,
+			parsed.Repository.FullName,
+			parsed.Comment.User.Login,
+			parsed.Comment.Body,
+		)
+		aiChatFn(ctx, prompt)
+		return nil
+	}); dbErr != nil {
+		log.Printf("[issue #%d] db.WithProject: %v", parsed.Issue.Number, dbErr)
+	}
 }
 
 // triggerIssueOpenedSession fires an AI session when a new GitHub issue is opened.
@@ -450,49 +488,54 @@ func triggerIssueOpenedSession(projectPath string, payload json.RawMessage) {
 		return
 	}
 
-	sessionID := fmt.Sprintf("issue-%d-%d", parsed.Issue.Number, time.Now().UnixNano())
-	branch, _ := gogit.GetCurrentBranch(projectPath)
-	if dbErr := createSessionFn(sessionID, projectPath, branch); dbErr != nil {
-		log.Printf("issue-opened: create session: %v", dbErr)
-	}
+	if dbErr := db.WithProject(projectPath, func() error {
+		sessionID := fmt.Sprintf("issue-%d-%d", parsed.Issue.Number, time.Now().UnixNano())
+		branch, _ := gogit.GetCurrentBranch(projectPath)
+		if dbErr := createSessionFn(sessionID, projectPath, branch); dbErr != nil {
+			log.Printf("issue-opened: create session: %v", dbErr)
+		}
 
-	issueOpenedPolicy := ai.ResolveAutonomousPolicy(projectPath)
-	ctx := &ai.ChatContext{
-		ProjectPath:     projectPath,
-		SessionID:       sessionID,
-		AutonomousPolicy: &issueOpenedPolicy,
-		OnChunk: func(content string, done bool) {
-			if content != "" {
-				log.Printf("[issue-opened #%d %s] %s", parsed.Issue.Number, parsed.Repository.FullName, content)
-			}
-			if done {
-				msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
-				if dbErr := saveMessageFn(msgID, sessionID, "assistant", content, nil); dbErr != nil {
-					log.Printf("issue-opened: save message: %v", dbErr)
+		issueOpenedPolicy := ai.ResolveAutonomousPolicy(projectPath)
+		ctx := &ai.ChatContext{
+			ProjectPath:      projectPath,
+			SessionID:        sessionID,
+			AutonomousPolicy: &issueOpenedPolicy,
+			OnChunk: func(content string, done bool) {
+				if content != "" {
+					log.Printf("[issue-opened #%d %s] %s", parsed.Issue.Number, parsed.Repository.FullName, content)
 				}
-			}
-		},
-		OnError: func(msg string) {
-			log.Printf("[issue-opened error #%d] %s", parsed.Issue.Number, msg)
-		},
-	}
+				if done {
+					msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
+					if dbErr := saveMessageFn(msgID, sessionID, "assistant", content, nil); dbErr != nil {
+						log.Printf("issue-opened: save message: %v", dbErr)
+					}
+				}
+			},
+			OnError: func(msg string) {
+				log.Printf("[issue-opened error #%d] %s", parsed.Issue.Number, msg)
+			},
+		}
 
-	prompt := fmt.Sprintf(
-		"A new GitHub issue #%d was opened in %s by %s.\n\n"+
-			"Issue title: %s\n"+
-			"Issue body: %s\n\n"+
-			"Your job:\n"+
-			"1. Read the issue and understand what needs to be fixed\n"+
-			"2. Use search_files and read_file to explore the relevant code\n"+
-			"3. Write code to fix the issue\n"+
-			"4. Run tests with the shell tool to verify the fix\n"+
-			"5. Commit the fix with git_commit\n"+
-			"Start by exploring the codebase to understand the issue now.",
-		parsed.Issue.Number,
-		parsed.Repository.FullName,
-		parsed.Sender.Login,
-		parsed.Issue.Title,
-		parsed.Issue.Body,
-	)
-	aiChatFn(ctx, prompt)
+		prompt := fmt.Sprintf(
+			"A new GitHub issue #%d was opened in %s by %s.\n\n"+
+				"Issue title: %s\n"+
+				"Issue body: %s\n\n"+
+				"Your job:\n"+
+				"1. Read the issue and understand what needs to be fixed\n"+
+				"2. Use search_files and read_file to explore the relevant code\n"+
+				"3. Write code to fix the issue\n"+
+				"4. Run tests with the shell tool to verify the fix\n"+
+				"5. Commit the fix with git_commit\n"+
+				"Start by exploring the codebase to understand the issue now.",
+			parsed.Issue.Number,
+			parsed.Repository.FullName,
+			parsed.Sender.Login,
+			parsed.Issue.Title,
+			parsed.Issue.Body,
+		)
+		aiChatFn(ctx, prompt)
+		return nil
+	}); dbErr != nil {
+		log.Printf("[issue-opened #%d] db.WithProject: %v", parsed.Issue.Number, dbErr)
+	}
 }

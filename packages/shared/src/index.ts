@@ -237,7 +237,8 @@ export type ClientMessage =
   | { type: 'repo.add'; urlOrPath: string }
   | { type: 'repo.remove'; name: string }
   | { type: 'remote.pair.code.generate' }
-  | { type: 'usage.dashboard.get'; scope: 'project' | 'user'; projectPath?: string; model?: string };
+  | { type: 'usage.dashboard.get'; scope: 'project' | 'user'; projectPath?: string; model?: string }
+  | { type: 'github.auth.start' };
 // WebSocket protocol — Server → Client
 export type ServerMessage =
   | { type: 'chat.started'; sessionId: string }
@@ -283,7 +284,11 @@ export type ServerMessage =
   | { type: 'repo.list'; entries: RepositoryEntry[] }
   | { type: 'repo.added'; entry: RepositoryEntry }
   | { type: 'repo.removed'; name: string }
-  | { type: 'usage.dashboard'; dashboard?: UsageDashboard; error?: string };
+  | { type: 'usage.dashboard'; dashboard?: UsageDashboard; error?: string }
+  | { type: 'github.auth.code'; userCode: string; verificationUri: string; expiresIn: number }
+  | { type: 'github.auth.status'; status: string }
+  | { type: 'github.auth.done'; token: string }
+  | { type: 'github.auth.error'; error: string };
 
 // Tab and system info types
 

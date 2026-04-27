@@ -75,6 +75,8 @@ export default function PreferencesPanel() {
     githubToken: token,
     setGithubToken,
     setGithubUser,
+    githubAuthFlow,
+    setGithubAuthFlow,
     editorPreferences,
     setEditorPreferences,
   } = useStore();
@@ -642,6 +644,64 @@ export default function PreferencesPanel() {
           </div>
 
           <div className="preferences-stack">
+            {/* ── GitHub OAuth device flow ── */}
+            {githubAuthFlow ? (
+              <div className="preferences-field" style={{ gap: 8 }}>
+                <span className="preferences-label">Login pending — visit GitHub and enter the code below</span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <a
+                    href={githubAuthFlow.verificationUri}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="preferences-muted"
+                    style={{ wordBreak: 'break-all' }}
+                  >
+                    {githubAuthFlow.verificationUri}
+                  </a>
+                  <code
+                    style={{
+                      fontSize: 22,
+                      fontFamily: 'monospace',
+                      letterSpacing: '0.15em',
+                      padding: '6px 10px',
+                      background: 'var(--color-bg-surface)',
+                      borderRadius: 6,
+                      width: 'fit-content',
+                    }}
+                  >
+                    {githubAuthFlow.userCode}
+                  </code>
+                  <span className="preferences-muted">
+                    Expires in {Math.round(githubAuthFlow.expiresIn / 60)} minutes.
+                  </span>
+                </div>
+                <button
+                  className="btn-secondary"
+                  style={{ width: 'fit-content' }}
+                  onClick={() => setGithubAuthFlow(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              !token && (
+                <div className="preferences-field">
+                  <button
+                    className="btn-primary"
+                    style={{ width: 'fit-content' }}
+                    onClick={() => {
+                      wsClient.send({ type: 'github.auth.start' });
+                    }}
+                  >
+                    Login with GitHub
+                  </button>
+                  <span className="preferences-muted" style={{ marginTop: 4 }}>
+                    Uses the GitHub Device Flow — no copy-pasting tokens needed. Requires <code>GITHUB_CLIENT_ID</code> on the server.
+                  </span>
+                </div>
+              )
+            )}
+
             <label className="preferences-field">
               <span className="preferences-label">GitHub token</span>
               <input

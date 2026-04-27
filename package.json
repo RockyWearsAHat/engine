@@ -22,6 +22,7 @@
     "test:go": "mkdir -p ./.cache/coverage/go && cd packages/server-go && go test ./... -coverprofile=../../.cache/coverage/go/coverage.out -covermode=atomic",
     "test:rust": "node ./scripts/run-cargo.mjs test",
     "coverage:all": "node ./scripts/coverage-all.mjs",
+    "test:model-capabilities": "node ./scripts/model-capability-suite.mjs",
     "test:all": "pnpm test:client && pnpm test:go && pnpm test:rust",
     "lint": "node -e \"console.log('Lint disabled in npm scripts. Use gsh strict lint.')\"",
     "sync:obsidian": "node ./scripts/sync-obsidian-memory.mjs",

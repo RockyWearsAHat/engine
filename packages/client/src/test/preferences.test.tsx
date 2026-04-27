@@ -84,6 +84,7 @@ function setupStore() {
   useStore.setState({
     githubToken: null,
     githubUser: null,
+    githubAuthFlow: null,
     editorPreferences: {
       fontFamily: 'default',
       fontSize: 13,
@@ -1152,5 +1153,51 @@ describe('PreferencesPanel — repo registry interactions', () => {
     vi.mocked(wsClient.send).mockClear();
     render(<PreferencesPanel />);
     expect(vi.mocked(wsClient.send)).toHaveBeenCalledWith({ type: 'repo.list' });
+  });
+});
+
+describe('PreferencesPanel — GitHub auth flow UI', () => {
+  it('NoToken_NoFlow_LoginButtonShown', () => {
+    useStore.setState({ githubToken: null, githubAuthFlow: null });
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^github/i));
+    expect(screen.getByRole('button', { name: /login with github/i })).toBeTruthy();
+  });
+
+  it('LoginButtonClicked_SendsAuthStart', () => {
+    vi.mocked(wsClient.send).mockClear();
+    useStore.setState({ githubToken: null, githubAuthFlow: null });
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^github/i));
+    fireEvent.click(screen.getByRole('button', { name: /login with github/i }));
+    expect(vi.mocked(wsClient.send)).toHaveBeenCalledWith({ type: 'github.auth.start' });
+  });
+
+  it('TokenPresent_LoginButtonHidden', () => {
+    useStore.setState({ githubToken: 'ghp_exists', githubAuthFlow: null });
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^github/i));
+    expect(screen.queryByRole('button', { name: /login with github/i })).toBeNull();
+  });
+
+  it('AuthFlowActive_ShowsUserCode', () => {
+    useStore.setState({
+      githubToken: null,
+      githubAuthFlow: { userCode: 'WXYZ-5678', verificationUri: 'https://github.com/login/device', expiresIn: 900 },
+    });
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^github/i));
+    expect(screen.getByText('WXYZ-5678')).toBeTruthy();
+  });
+
+  it('AuthFlowActive_CancelClearsFlow', () => {
+    useStore.setState({
+      githubToken: null,
+      githubAuthFlow: { userCode: 'ABCD-0000', verificationUri: 'https://github.com/login/device', expiresIn: 60 },
+    });
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^github/i));
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+    expect(useStore.getState().githubAuthFlow).toBeNull();
   });
 });

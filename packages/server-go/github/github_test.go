@@ -10,22 +10,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
-
-// ── WebhookReceiver ───────────────────────────────────────────────────────────
-
-func TestWebhookReceiver_WrongMethod(t *testing.T) {
-	wr := NewWebhookReceiver("")
-	req := httptest.NewRequest("GET", "/webhook", nil)
-	rr := httptest.NewRecorder()
-	wr.ServeHTTP(rr, req)
-	if rr.Code != http.StatusMethodNotAllowed {
-		t.Errorf("status = %d, want 405", rr.Code)
-	}
-}
-
 func TestWebhookReceiver_NoSecret_Dispatches(t *testing.T) {
 	wr := NewWebhookReceiver("")
 	dispatched := false
@@ -953,5 +941,416 @@ func TestAPIBase_EnvOverride(t *testing.T) {
 	got := apiBase()
 	if got != "http://custom.example.com" {
 		t.Errorf("apiBase() = %q, want custom URL", got)
+	}
+}
+
+// ── ProfilePoller ─────────────────────────────────────────────────────────────
+
+// stubLister implements profileRepoLister for tests.
+type stubLister struct {
+	repos []UserRepo
+	err   error
+}
+
+func (s *stubLister) ListUserRepos(_ int) ([]UserRepo, error) { return s.repos, s.err }
+func (s *stubLister) GetAuthenticatedLogin() (string, error)  { return "testuser", nil }
+
+func TestProfilePoller_FiresOnEngineTag(t *testing.T) {
+	monitor := NewRepoMonitor()
+	var fired []json.RawMessage
+	monitor.OnReadmeChange = func(p json.RawMessage) { fired = append(fired, p) }
+
+	repos := []UserRepo{{FullName: "alice/myproject", DefaultBranch: "main"}}
+	poller := &ProfilePoller{
+		token:    "tok",
+		interval: time.Minute,
+		lister:   &stubLister{repos: repos},
+		monitor:  monitor,
+		seen:     make(map[string]bool),
+	}
+
+	old := profileHTTPGet
+	defer func() { profileHTTPGet = old }()
+	profileHTTPGet = func(url, token string) ([]byte, error) {
+		return []byte("# My Project\n@engine please build"), nil
+	}
+
+	poller.poll()
+
+	if len(fired) != 1 {
+		t.Fatalf("expected 1 OnReadmeChange call, got %d", len(fired))
+	}
+}
+
+func TestProfilePoller_NoFireWithoutTag(t *testing.T) {
+	monitor := NewRepoMonitor()
+	var fired int
+	monitor.OnReadmeChange = func(_ json.RawMessage) { fired++ }
+
+	repos := []UserRepo{{FullName: "alice/noop", DefaultBranch: "main"}}
+	poller := &ProfilePoller{
+		token:    "tok",
+		interval: time.Minute,
+		lister:   &stubLister{repos: repos},
+		monitor:  monitor,
+		seen:     make(map[string]bool),
+	}
+
+	old := profileHTTPGet
+	defer func() { profileHTTPGet = old }()
+	profileHTTPGet = func(url, token string) ([]byte, error) {
+		return []byte("# My Project\nNo trigger here."), nil
+	}
+
+	poller.poll()
+
+	if fired != 0 {
+		t.Fatalf("expected 0 OnReadmeChange calls, got %d", fired)
+	}
+}
+
+func TestProfilePoller_DoesNotFireTwiceForSameRepo(t *testing.T) {
+	monitor := NewRepoMonitor()
+	var count int
+	monitor.OnReadmeChange = func(_ json.RawMessage) { count++ }
+
+	repos := []UserRepo{{FullName: "alice/stable", DefaultBranch: "main"}}
+	poller := &ProfilePoller{
+		token:    "tok",
+		interval: time.Minute,
+		lister:   &stubLister{repos: repos},
+		monitor:  monitor,
+		seen:     make(map[string]bool),
+	}
+
+	old := profileHTTPGet
+	defer func() { profileHTTPGet = old }()
+	profileHTTPGet = func(url, token string) ([]byte, error) {
+		return []byte("# Project @engine"), nil
+	}
+
+	poller.poll()
+	poller.poll() // second poll — already seen
+
+	if count != 1 {
+		t.Fatalf("expected 1 OnReadmeChange call, got %d", count)
+	}
+}
+
+func TestProfilePoller_RefiresWhenTagReappears(t *testing.T) {
+	monitor := NewRepoMonitor()
+	var count int
+	monitor.OnReadmeChange = func(_ json.RawMessage) { count++ }
+
+	repos := []UserRepo{{FullName: "alice/cycling", DefaultBranch: "main"}}
+	hasTag := true
+	poller := &ProfilePoller{
+		token:    "tok",
+		interval: time.Minute,
+		lister:   &stubLister{repos: repos},
+		monitor:  monitor,
+		seen:     make(map[string]bool),
+	}
+
+	old := profileHTTPGet
+	defer func() { profileHTTPGet = old }()
+	profileHTTPGet = func(url, token string) ([]byte, error) {
+		if hasTag {
+			return []byte("# @engine"), nil
+		}
+		return []byte("# no tag"), nil
+	}
+
+	poller.poll() // fires — tag present (first time)
+	hasTag = false
+	poller.poll() // no fire — tag removed
+	hasTag = true
+	poller.poll() // fires again — tag re-added
+
+	if count != 2 {
+		t.Fatalf("expected 2 OnReadmeChange calls, got %d", count)
+	}
+}
+
+func TestProfilePoller_ListReposError_NoFire(t *testing.T) {
+	monitor := NewRepoMonitor()
+	var fired int
+	monitor.OnReadmeChange = func(_ json.RawMessage) { fired++ }
+
+	poller := &ProfilePoller{
+		token:    "tok",
+		interval: time.Minute,
+		lister:   &stubLister{err: errors.New("rate limited")},
+		monitor:  monitor,
+		seen:     make(map[string]bool),
+	}
+
+	poller.poll()
+
+	if fired != 0 {
+		t.Fatalf("expected no OnReadmeChange, got %d", fired)
+	}
+}
+
+func TestProfilePoller_ReadmeHTTPError_SkipsRepo(t *testing.T) {
+	monitor := NewRepoMonitor()
+	var fired int
+	monitor.OnReadmeChange = func(_ json.RawMessage) { fired++ }
+
+	repos := []UserRepo{{FullName: "alice/broken", DefaultBranch: "main"}}
+	poller := &ProfilePoller{
+		token:    "tok",
+		interval: time.Minute,
+		lister:   &stubLister{repos: repos},
+		monitor:  monitor,
+		seen:     make(map[string]bool),
+	}
+
+	old := profileHTTPGet
+	defer func() { profileHTTPGet = old }()
+	profileHTTPGet = func(url, token string) ([]byte, error) {
+		return nil, errors.New("connection refused")
+	}
+
+	poller.poll()
+
+	if fired != 0 {
+		t.Fatalf("expected 0 OnReadmeChange calls, got %d", fired)
+	}
+}
+
+func TestProfilePoller_NilOnReadmeChange_NoPanic(t *testing.T) {
+	monitor := NewRepoMonitor() // OnReadmeChange is nil
+
+	repos := []UserRepo{{FullName: "alice/safe", DefaultBranch: "main"}}
+	poller := &ProfilePoller{
+		token:    "tok",
+		interval: time.Minute,
+		lister:   &stubLister{repos: repos},
+		monitor:  monitor,
+		seen:     make(map[string]bool),
+	}
+
+	old := profileHTTPGet
+	defer func() { profileHTTPGet = old }()
+	profileHTTPGet = func(url, token string) ([]byte, error) {
+		return []byte("@engine"), nil
+	}
+
+	// Must not panic.
+	poller.poll()
+}
+
+func TestNewProfilePollerFromEnv_NoToken_ReturnsNil(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+	if p := NewProfilePollerFromEnv(NewRepoMonitor()); p != nil {
+		t.Error("expected nil when GITHUB_TOKEN is unset")
+	}
+}
+
+func TestNewProfilePollerFromEnv_WithToken_ReturnsPoller(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "ghp_test")
+	t.Setenv("ENGINE_PROFILE_POLL_INTERVAL", "2m")
+	p := NewProfilePollerFromEnv(NewRepoMonitor())
+	if p == nil {
+		t.Fatal("expected non-nil ProfilePoller")
+	}
+	if p.interval != 2*time.Minute {
+		t.Errorf("interval = %v, want 2m", p.interval)
+	}
+}
+
+func TestNewProfilePollerFromEnv_BadInterval_UsesDefault(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "ghp_test")
+	t.Setenv("ENGINE_PROFILE_POLL_INTERVAL", "not-a-duration")
+	p := NewProfilePollerFromEnv(NewRepoMonitor())
+	if p == nil {
+		t.Fatal("expected non-nil ProfilePoller")
+	}
+	if p.interval != 5*time.Minute {
+		t.Errorf("interval = %v, want 5m", p.interval)
+	}
+}
+
+func TestProfilePoller_StartAndStop(t *testing.T) {
+	monitor := NewRepoMonitor()
+	poller := &ProfilePoller{
+		token:    "tok",
+		interval: 50 * time.Millisecond,
+		lister:   &stubLister{},
+		monitor:  monitor,
+		seen:     make(map[string]bool),
+	}
+
+	old := profileHTTPGet
+	defer func() { profileHTTPGet = old }()
+	profileHTTPGet = func(url, token string) ([]byte, error) { return []byte("no tag"), nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	poller.Start(ctx)
+	time.Sleep(120 * time.Millisecond)
+	cancel() // must not deadlock or panic
+}
+
+func TestNewProfileClient_HasToken(t *testing.T) {
+	c := NewProfileClient("mytoken")
+	if c.token != "mytoken" {
+		t.Errorf("token = %q, want %q", c.token, "mytoken")
+	}
+}
+
+func TestListUserRepos_HTTPError(t *testing.T) {
+	c := NewProfileClient("tok")
+	c.httpClient = &http.Client{Transport: roundTripFuncGH(func(req *http.Request) (*http.Response, error) {
+		return nil, errors.New("connection refused")
+	})}
+	_, err := c.ListUserRepos(10)
+	if err == nil {
+		t.Fatal("expected error from ListUserRepos")
+	}
+}
+
+func TestListUserRepos_Pagination(t *testing.T) {
+	page := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page++
+		var batch []UserRepo
+		if page == 1 {
+			for i := range 2 {
+				batch = append(batch, UserRepo{FullName: "a/r" + string(rune('0'+i)), DefaultBranch: "main"})
+			}
+		}
+		// page 2 returns empty — pagination stops
+		json.NewEncoder(w).Encode(batch)
+	}))
+	defer srv.Close()
+	t.Setenv("GITHUB_API_BASE", srv.URL)
+
+	c := NewProfileClient("tok")
+	repos, err := c.ListUserRepos(2)
+	if err != nil {
+		t.Fatalf("ListUserRepos: %v", err)
+	}
+	if len(repos) != 2 {
+		t.Errorf("got %d repos, want 2", len(repos))
+	}
+}
+
+func TestGetAuthenticatedLogin_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"login": "octocat"})
+	}))
+	defer srv.Close()
+	t.Setenv("GITHUB_API_BASE", srv.URL)
+
+	c := NewProfileClient("tok")
+	login, err := c.GetAuthenticatedLogin()
+	if err != nil {
+		t.Fatalf("GetAuthenticatedLogin: %v", err)
+	}
+	if login != "octocat" {
+		t.Errorf("login = %q, want octocat", login)
+	}
+}
+
+func TestGetAuthenticatedLogin_HTTPError(t *testing.T) {
+	c := NewProfileClient("tok")
+	c.httpClient = &http.Client{Transport: roundTripFuncGH(func(req *http.Request) (*http.Response, error) {
+		return nil, errors.New("transport error")
+	})}
+	_, err := c.GetAuthenticatedLogin()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestGetAuthenticatedLogin_ParseError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("not json"))
+	}))
+	defer srv.Close()
+	t.Setenv("GITHUB_API_BASE", srv.URL)
+	c := NewProfileClient("tok")
+	_, err := c.GetAuthenticatedLogin()
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
+func TestListUserRepos_ParseError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("not json"))
+	}))
+	defer srv.Close()
+	t.Setenv("GITHUB_API_BASE", srv.URL)
+	c := NewProfileClient("tok")
+	_, err := c.ListUserRepos(10)
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
+func TestListUserRepos_DefaultPerPage(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("per_page") == "100" {
+			called = true
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+	t.Setenv("GITHUB_API_BASE", srv.URL)
+	c := NewProfileClient("tok")
+	_, err := c.ListUserRepos(0) // ≤0 should default to 100
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Error("expected per_page=100 for default perPage")
+	}
+}
+
+func TestNewProfilePoller_DefaultInterval(t *testing.T) {
+	p := NewProfilePoller("tok", 0, NewRepoMonitor())
+	if p.interval != 5*time.Minute {
+		t.Errorf("expected 5m default interval, got %v", p.interval)
+	}
+}
+
+func TestReadmeHasEngineTag_EmptyBranch(t *testing.T) {
+	old := profileHTTPGet
+	defer func() { profileHTTPGet = old }()
+
+	var gotURL string
+	profileHTTPGet = func(url, token string) ([]byte, error) {
+		gotURL = url
+		return []byte("@engine"), nil
+	}
+
+	p := NewProfilePoller("tok", time.Minute, NewRepoMonitor())
+	repo := UserRepo{FullName: "owner/testrepo", DefaultBranch: ""}
+	has, err := p.readmeHasEngineTag(repo)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !has {
+		t.Error("expected @engine tag found")
+	}
+	if !strings.Contains(gotURL, "HEAD") {
+		t.Errorf("expected URL to contain HEAD for empty branch, got %q", gotURL)
+	}
+}
+
+func TestWebhookReceiver_MethodNotAllowed(t *testing.T) {
+	wr := NewWebhookReceiver("")
+	req := httptest.NewRequest("GET", "/webhook", nil)
+	rr := httptest.NewRecorder()
+	wr.ServeHTTP(rr, req)
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rr.Code)
 	}
 }

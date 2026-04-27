@@ -3,7 +3,10 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
+	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -142,4 +145,163 @@ func (m *RepoMonitor) dispatch(ev *MonitoredEvent) {
 		// Unhandled event type — log and ignore.
 		log.Printf("monitor: unhandled event type %q (delivery %s)", ev.Type, ev.Delivery)
 	}
+}
+
+// ── ProfilePoller ─────────────────────────────────────────────────────────────
+
+// profileRepoLister abstracts the GitHub API call so tests can stub it.
+type profileRepoLister interface {
+	ListUserRepos(perPage int) ([]UserRepo, error)
+	GetAuthenticatedLogin() (string, error)
+}
+
+// profileHTTPGet abstracts fetching a raw URL (used for README reads).
+var profileHTTPGet = func(url, token string) ([]byte, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github.raw+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil // no README is fine
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("fetch README returned %d", resp.StatusCode)
+	}
+	buf := make([]byte, 1<<20) // 1 MB cap
+	n, _ := resp.Body.Read(buf)
+	return buf[:n], nil
+}
+
+// ProfilePoller polls the authenticated user's GitHub repositories for changes
+// to README files that contain the @engine tag.  It synthesises webhook-style
+// push payloads and forwards them to a RepoMonitor so the existing trigger
+// pipeline is reused without modification.
+//
+// Required environment variable: GITHUB_TOKEN.
+// Optional: ENGINE_PROFILE_POLL_INTERVAL — duration string (default "5m").
+type ProfilePoller struct {
+	token    string
+	interval time.Duration
+	lister   profileRepoLister
+	monitor  *RepoMonitor
+
+	mu      sync.Mutex
+	seen    map[string]bool // full_name → README contained @engine last poll
+}
+
+// NewProfilePoller creates a ProfilePoller that forwards events to monitor.
+// The token must be a valid GitHub personal access token with repo scope.
+// Pass interval ≤ 0 to use the default (5 minutes).
+func NewProfilePoller(token string, interval time.Duration, monitor *RepoMonitor) *ProfilePoller {
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	return &ProfilePoller{
+		token:    token,
+		interval: interval,
+		lister:   NewProfileClient(token),
+		monitor:  monitor,
+		seen:     make(map[string]bool),
+	}
+}
+
+// NewProfilePollerFromEnv creates a ProfilePoller driven by environment variables.
+// Returns nil (and logs) when GITHUB_TOKEN is absent.
+func NewProfilePollerFromEnv(monitor *RepoMonitor) *ProfilePoller {
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		return nil
+	}
+	interval := 5 * time.Minute
+	if raw := os.Getenv("ENGINE_PROFILE_POLL_INTERVAL"); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil {
+			interval = d
+		} else {
+			log.Printf("profile-poller: invalid ENGINE_PROFILE_POLL_INTERVAL %q, using 5m", raw)
+		}
+	}
+	return NewProfilePoller(token, interval, monitor)
+}
+
+// Start begins the polling loop.  The first poll runs immediately.
+func (p *ProfilePoller) Start(ctx context.Context) {
+	go func() {
+		p.poll()
+		ticker := time.NewTicker(p.interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				p.poll()
+			}
+		}
+	}()
+}
+
+// poll fetches the user's repo list and fires OnReadmeChange for any repo whose
+// README contains @engine for the first time (or begins containing it again).
+func (p *ProfilePoller) poll() {
+	repos, err := p.lister.ListUserRepos(100)
+	if err != nil {
+		log.Printf("profile-poller: list repos: %v", err)
+		return
+	}
+
+	for _, repo := range repos {
+		hasTag, err := p.readmeHasEngineTag(repo)
+		if err != nil {
+			log.Printf("profile-poller: check README %s: %v", repo.FullName, err)
+			continue
+		}
+
+		p.mu.Lock()
+		wasTagged := p.seen[repo.FullName]
+		p.seen[repo.FullName] = hasTag
+		p.mu.Unlock()
+
+		if hasTag && !wasTagged {
+			// Synthesise a minimal push payload so the existing pipeline fires.
+			log.Printf("profile-poller: @engine tag detected in %s — triggering scaffold", repo.FullName)
+			payload, _ := json.Marshal(map[string]any{
+				"ref": "refs/heads/" + repo.DefaultBranch,
+				"repository": map[string]any{
+					"full_name":      repo.FullName,
+					"default_branch": repo.DefaultBranch,
+				},
+				"commits": []map[string]any{
+					{"id": "poll", "message": "profile-poll", "added": []string{"README.md"}, "modified": []string{}, "removed": []string{}},
+				},
+			})
+			if p.monitor.OnReadmeChange != nil {
+				p.monitor.OnReadmeChange(json.RawMessage(payload))
+			}
+		}
+	}
+}
+
+// readmeHasEngineTag fetches the README for repo and reports whether it
+// contains the @engine tag.
+func (p *ProfilePoller) readmeHasEngineTag(repo UserRepo) (bool, error) {
+	branch := repo.DefaultBranch
+	if branch == "" {
+		branch = "HEAD"
+	}
+	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/README.md",
+		repo.FullName, branch)
+	data, err := profileHTTPGet(url, p.token)
+	if err != nil {
+		return false, err
+	}
+	return strings.Contains(string(data), "@engine"), nil
 }

@@ -1,7 +1,7 @@
 ---
 source: ../.github/session-memory/session-log.jsonl
-generatedAt: 2026-04-27T00:19:59.439Z
-eventCount: 366
+generatedAt: 2026-04-27T03:08:40.679Z
+eventCount: 374
 ---
 
 # Session Memory
@@ -12,6 +12,14 @@ Auto-export of session events for Obsidian review.
 
 | Time | Action | Outcome | Surprise |
 | --- | --- | --- | --- |
+| 2026-04-27T01:15:32.063Z | auto tool call: strict_lint | success - Strict Linting — WORKING_BEHAVIORS.md Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T01:13:38.268Z | auto tool call: strict_lint | success - Strict Linting — model-capability-suite.mjs Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T01:13:02.250Z | auto tool call: strict_lint | success - Strict Linting — ollama_chat_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T01:13:02.248Z | auto tool call: strict_lint | success - Strict Linting — context.go Summary: 0 error(s), 0 warning(s), 13 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/context.go hint [QF... | 0.82 |
+| 2026-04-27T01:09:33.621Z | auto tool call: strict_lint | success - Strict Linting — model-capability-suite.mjs Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T01:00:09.193Z | auto tool call: strict_lint | success - Strict Linting — package.json Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T01:00:09.191Z | auto tool call: strict_lint | success - Strict Linting — model-capability-suite.mjs Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T00:20:39.031Z | auto tool call: checkpoint | success - Committed b782ca7 on branch 'main' b782ca7 Implement autonomy handoff context persistence and explicit publish-intent enforcement with full coverage .github/WORKING_BEHAVIORS.md... | 0.20 |
 | 2026-04-27T00:19:39.506Z | auto tool call: strict_lint | success - Strict Linting — autonomy_handoff.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
 | 2026-04-27T00:16:12.630Z | auto tool call: strict_lint | success - Strict Linting — execute_publish_gate_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
 | 2026-04-27T00:16:12.630Z | auto tool call: strict_lint | success - Strict Linting — intake_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
@@ -84,11 +92,3 @@ Auto-export of session events for Obsidian review.
 | 2026-04-26T17:59:06.044Z | auto tool call: strict_lint | success - Strict Linting — .gitignore Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
 | 2026-04-26T17:56:35.905Z | auto tool call: workspace_context | success - Root: /Users/alexwaldmann/Desktop/MyEditor Branch: main Remote: https://github.com/RockyWearsAHat/engine.git Status: ## main...origin/main [ahead 2] M .github/WORKING_BEHAVIORS.... | 0.20 |
 | 2026-04-26T17:36:48.920Z | auto tool call: transcribe_video | success - { "videoPath": "https://www.youtube.com/watch?v=v2cPHF5oXcI", "durationSec": 765.261, "backend": "transformers.js", "segmentCount": 155, "segments": [ { "start": 0, "end": 4.08,... | 0.20 |
-| 2026-04-26T16:54:36.202Z | auto tool call: strict_lint | success - Strict Linting — agent-completion-report.json Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T16:53:29.139Z | auto tool call: strict_lint | success - Strict Linting — main_test.go Summary: 0 error(s), 0 warning(s), 3 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/main_test.go hint [an... | 0.82 |
-| 2026-04-26T16:53:27.853Z | auto tool call: strict_lint | success - Strict Linting — main.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T16:49:30.099Z | auto tool call: strict_lint | success - Strict Linting — .gitignore Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T16:47:57.210Z | auto tool call: strict_lint | success - Strict Linting — capabilities.json Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T16:47:57.178Z | auto tool call: strict_lint | success - Strict Linting — default.json Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T16:45:29.826Z | auto tool call: strict_lint | success - Strict Linting — bridge.test.ts Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T16:45:29.826Z | auto tool call: strict_lint | success - Strict Linting — lib.rs Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |

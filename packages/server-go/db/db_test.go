@@ -2,6 +2,7 @@ package db
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -845,5 +846,84 @@ func TestInit_MkdirAllError(t *testing.T) {
 	err = Init("/project")
 	if err == nil {
 		t.Error("expected error when MkdirAll fails")
+	}
+}
+
+// TestStateDir_PrefersProjectPathOverConfigDir verifies the project-path
+// branch wins over the user config dir, so per-project isolation works.
+func TestStateDir_PrefersProjectPathOverConfigDir(t *testing.T) {
+	t.Setenv("ENGINE_STATE_DIR", "")
+	got := stateDir("/myproject")
+	want := "/myproject/.engine"
+	if got != want {
+		t.Errorf("stateDir(/myproject) = %q, want %q", got, want)
+	}
+}
+
+// TestWithProject_IsolatesDB verifies sessions written inside WithProject
+// land in that project's local DB and are NOT visible after returning to
+// the prior project's DB.
+func TestWithProject_IsolatesDB(t *testing.T) {
+	// Clear env override so project path resolution wins.
+	t.Setenv("ENGINE_STATE_DIR", "")
+
+	projA := t.TempDir()
+	projB := t.TempDir()
+
+	if err := Init(projA); err != nil {
+		t.Fatalf("Init projA: %v", err)
+	}
+	t.Cleanup(func() {
+		if globalDB != nil {
+			globalDB.Close()
+			globalDB = nil
+		}
+	})
+
+	// Session in projA's DB.
+	if err := CreateSession("a-only", projA, "main"); err != nil {
+		t.Fatalf("CreateSession a-only: %v", err)
+	}
+
+	// Swap to projB and create a session there.
+	werr := WithProject(projB, func() error {
+		// projA's session must NOT be visible from projB's DB.
+		if _, err := GetSession("a-only"); err == nil {
+			t.Errorf("projA session a-only visible from projB DB; isolation broken")
+		}
+		if err := CreateSession("b-only", projB, "main"); err != nil {
+			t.Fatalf("CreateSession b-only: %v", err)
+		}
+		// b-only must be visible inside the closure.
+		if _, err := GetSession("b-only"); err != nil {
+			t.Errorf("b-only not visible inside WithProject(projB): %v", err)
+		}
+		return nil
+	})
+	if werr != nil {
+		t.Fatalf("WithProject: %v", werr)
+	}
+
+	// After WithProject returns, we should be back on projA's DB:
+	// a-only is visible, b-only is NOT.
+	if _, err := GetSession("a-only"); err != nil {
+		t.Errorf("a-only not visible after restore: %v", err)
+	}
+	if _, err := GetSession("b-only"); err == nil {
+		t.Errorf("b-only visible from projA DB after restore; isolation broken")
+	}
+
+	if got := CurrentProject(); got != projA {
+		t.Errorf("CurrentProject after restore = %q, want %q", got, projA)
+	}
+
+	// Verify the physical files exist where expected.
+	for _, p := range []string{
+		filepath.Join(projA, ".engine", "state.db"),
+		filepath.Join(projB, ".engine", "state.db"),
+	} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("expected state.db at %q: %v", p, err)
+		}
 	}
 }

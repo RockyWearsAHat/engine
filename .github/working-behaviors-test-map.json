@@ -37,6 +37,10 @@
   "Preferences Panel": [
     "packages/client/src/test/preferences.test.tsx"
   ],
+  "GitHub Event Detection": [
+    "packages/server-go/github/events_test.go",
+    "packages/server-go/ws/handler_extra_test.go"
+  ],
   "Status Bar": [
     "packages/client/src/test/statusbar.test.tsx",
     "packages/client/src/test/statusbar-branches.test.tsx"
@@ -66,6 +70,10 @@
   "End-to-End Autonomous Build": [
     "packages/server-go/main_test.go",
     "packages/server-go/ai/harness_test.go"
+  ],
+  "Per-Project Memory": [
+    "packages/server-go/db/db_test.go",
+    "packages/server-go/main_test.go"
   ],
   "App Shell": [
     "packages/client/src/test/commandpalette.test.tsx",

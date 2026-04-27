@@ -6,12 +6,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 var globalDB *sql.DB
+
+// globalDBMu serializes Init / WithProject swaps. Read paths use globalDB
+// directly without locking; the mutex only guards swap operations.
+var (
+	globalDBMu      sync.Mutex
+	globalDBProject string
+)
 
 // osUserConfigDirFn and osUserHomeDirFn are injectable for tests.
 var (
@@ -20,9 +29,16 @@ var (
 	sqlOpenFn         = sql.Open
 )
 
+// stateDir resolves the Engine state directory for a project. Per-project
+// isolation: when projectPath is non-empty, state lives at
+// <projectPath>/.engine so each cloned repo carries its own database,
+// session memory, and tooling artifacts alongside its source.
 func stateDir(projectPath string) string {
-	if override := os.Getenv("ENGINE_STATE_DIR"); override != "" {
+	if override := strings.TrimSpace(os.Getenv("ENGINE_STATE_DIR")); override != "" {
 		return override
+	}
+	if pp := strings.TrimSpace(projectPath); pp != "" {
+		return filepath.Join(pp, ".engine")
 	}
 	if configDir, err := osUserConfigDirFn(); err == nil && configDir != "" {
 		return filepath.Join(configDir, "Engine")
@@ -30,21 +46,26 @@ func stateDir(projectPath string) string {
 	if homeDir, err := osUserHomeDirFn(); err == nil && homeDir != "" {
 		return filepath.Join(homeDir, ".engine")
 	}
-	if projectPath != "" {
-		return filepath.Join(projectPath, ".engine")
-	}
 	return filepath.Join(".", ".engine")
 }
 
-// Init opens (or creates) the SQLite database at the Engine app state path.
+// Init opens (or creates) the SQLite database at the project's state path.
 func Init(projectPath string) error {
+	globalDBMu.Lock()
+	defer globalDBMu.Unlock()
+	return initLocked(projectPath)
+}
+
+// initLocked performs the swap without acquiring the mutex. Callers must
+// hold globalDBMu.
+func initLocked(projectPath string) error {
 	if globalDB != nil {
 		_ = globalDB.Close()
 		globalDB = nil
 	}
 
 	dir := stateDir(projectPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create engine state dir: %w", err)
 	}
 	dbPath := filepath.Join(dir, "state.db")
@@ -56,7 +77,33 @@ func Init(projectPath string) error {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	globalDB = db
+	globalDBProject = projectPath
 	return migrate()
+}
+
+// WithProject swaps the global DB to the given project's local database for
+// the duration of fn, then restores the previously active project DB. Calls
+// are serialized via globalDBMu so concurrent autonomous triggers (scaffold,
+// CI fix, issue session) each operate against their own repo's state file.
+func WithProject(projectPath string, fn func() error) error {
+	globalDBMu.Lock()
+	defer globalDBMu.Unlock()
+	prev := globalDBProject
+	if err := initLocked(projectPath); err != nil {
+		return err
+	}
+	defer func() {
+		_ = initLocked(prev)
+	}()
+	return fn()
+}
+
+// CurrentProject returns the project path the global DB is currently bound
+// to. Primarily for diagnostics and tests.
+func CurrentProject() string {
+	globalDBMu.Lock()
+	defer globalDBMu.Unlock()
+	return globalDBProject
 }
 
 func migrate() error {

@@ -18,6 +18,7 @@ import (
 	"github.com/engine/server/discord"
 	gofs "github.com/engine/server/fs"
 	gogit "github.com/engine/server/git"
+	"github.com/engine/server/github"
 	"github.com/engine/server/remote"
 	"github.com/engine/server/terminal"
 	"github.com/engine/server/workspace"
@@ -53,6 +54,17 @@ var approvalTimeout = 5 * time.Minute
 
 // wsHTTPClient is used for GitHub API calls; exposed for testing.
 var wsHTTPClient = http.DefaultClient
+
+// GitHub OAuth injectable fns — exposed so tests can stub them.
+var (
+	githubClientIDFn        = func() string { return os.Getenv("GITHUB_CLIENT_ID") }
+	githubStartDeviceFlowFn = func(clientID, scopes string) (*github.DeviceCodeResponse, error) {
+		return github.StartDeviceFlow(clientID, scopes)
+	}
+	githubPollForTokenFn = func(clientID string, dcr *github.DeviceCodeResponse, onStatus func(string)) (*github.TokenResponse, error) {
+		return github.PollForToken(clientID, dcr, onStatus)
+	}
+)
 
 // DiscordBridge is the subset of the Discord service the WS handler uses.
 // Kept narrow so tests can stub it.
@@ -818,7 +830,10 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 	case "remote.pair.code.generate":
 		c.handleRemotePairCodeGenerate()
 
-	// ── GitHub Issues ─────────────────────────────────────────────────────────────────────────────
+	// ── GitHub Auth / Issues ──────────────────────────────────────────────────
+
+	case "github.auth.start":
+		go c.handleGitHubAuthStart()
 
 	case "github.user":
 		c.handleGitHubUser()
@@ -1164,6 +1179,54 @@ func (c *conn) handleGitHubUser() {
 		return
 	}
 	c.send(map[string]any{"type": "github.user", "user": user})
+}
+
+// handleGitHubAuthStart runs the GitHub Device Authorization Flow so the user
+// can log in without ever entering a token manually.
+// Flow:
+//  1. Start device flow → send github.auth.code (userCode + verificationUri)
+//  2. Poll GitHub in background → send github.auth.status updates
+//  3. On success: set GITHUB_TOKEN env var, send github.auth.done
+//  4. On failure: send github.auth.error
+func (c *conn) handleGitHubAuthStart() {
+	clientID := githubClientIDFn()
+	if clientID == "" {
+		c.send(map[string]any{
+			"type":  "github.auth.error",
+			"error": "GITHUB_CLIENT_ID not configured — set it in the server environment",
+		})
+		return
+	}
+
+	dcr, err := githubStartDeviceFlowFn(clientID, "")
+	if err != nil {
+		c.send(map[string]any{"type": "github.auth.error", "error": err.Error()})
+		return
+	}
+
+	c.send(map[string]any{
+		"type":            "github.auth.code",
+		"userCode":        dcr.UserCode,
+		"verificationUri": dcr.VerificationURI,
+		"expiresIn":       dcr.ExpiresIn,
+	})
+
+	tok, err := githubPollForTokenFn(clientID, dcr, func(status string) {
+		c.send(map[string]any{"type": "github.auth.status", "status": status})
+	})
+	if err != nil {
+		c.send(map[string]any{"type": "github.auth.error", "error": err.Error()})
+		return
+	}
+	if tok.AccessToken == "" {
+		c.send(map[string]any{"type": "github.auth.error", "error": "no access token in response"})
+		return
+	}
+
+	// Activate the token immediately so the rest of the server uses it.
+	os.Setenv("GITHUB_TOKEN", tok.AccessToken) //nolint:errcheck
+
+	c.send(map[string]any{"type": "github.auth.done", "token": tok.AccessToken})
 }
 
 type githubIssue struct {

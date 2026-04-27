@@ -16,6 +16,7 @@ import (
 	"github.com/engine/server/ai"
 	"github.com/engine/server/db"
 	"github.com/engine/server/discord"
+	"github.com/engine/server/github"
 	"github.com/engine/server/remote"
 	"github.com/engine/server/workspace"
 	"github.com/gorilla/websocket"
@@ -1708,4 +1709,150 @@ type stubDiscordBridgeWithDM struct {
 func (s *stubDiscordBridgeWithDM) SendDMToOwner(message string) error {
 	*s.captureMsg = message
 	return nil
+}
+
+// ─── GitHub Auth device flow ──────────────────────────────────────────────────
+
+func withAuthFnsReset(t *testing.T) {
+	t.Helper()
+	origClientID := githubClientIDFn
+	origStart := githubStartDeviceFlowFn
+	origPoll := githubPollForTokenFn
+	t.Cleanup(func() {
+		githubClientIDFn = origClientID
+		githubStartDeviceFlowFn = origStart
+		githubPollForTokenFn = origPoll
+	})
+}
+
+func TestHandler_GitHubAuthStart_NoClientID(t *testing.T) {
+	withAuthFnsReset(t)
+	githubClientIDFn = func() string { return "" }
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{"type": "github.auth.start"})
+	msg := readWSMessageOfType(t, conn, "github.auth.error")
+	if msg["error"] == nil {
+		t.Fatalf("expected error when GITHUB_CLIENT_ID is empty, got %+v", msg)
+	}
+}
+
+func TestHandler_GitHubAuthStart_DeviceFlowError(t *testing.T) {
+	withAuthFnsReset(t)
+	githubClientIDFn = func() string { return "test-client-id" }
+	githubStartDeviceFlowFn = func(_, _ string) (*github.DeviceCodeResponse, error) {
+		return nil, fmt.Errorf("network error")
+	}
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{"type": "github.auth.start"})
+	msg := readWSMessageOfType(t, conn, "github.auth.error")
+	if msg["error"] == nil {
+		t.Fatalf("expected error when device flow fails, got %+v", msg)
+	}
+}
+
+func TestHandler_GitHubAuthStart_PollError(t *testing.T) {
+	withAuthFnsReset(t)
+	githubClientIDFn = func() string { return "test-client-id" }
+	githubStartDeviceFlowFn = func(_, _ string) (*github.DeviceCodeResponse, error) {
+		return &github.DeviceCodeResponse{
+			DeviceCode:      "dev123",
+			UserCode:        "ABCD-1234",
+			VerificationURI: "https://github.com/login/device",
+			ExpiresIn:       900,
+			Interval:        5,
+		}, nil
+	}
+	githubPollForTokenFn = func(_ string, _ *github.DeviceCodeResponse, _ func(string)) (*github.TokenResponse, error) {
+		return nil, fmt.Errorf("polling timeout")
+	}
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{"type": "github.auth.start"})
+	// Should receive github.auth.code first, then github.auth.error.
+	readWSMessageOfType(t, conn, "github.auth.code")
+	errMsg := readWSMessageOfType(t, conn, "github.auth.error")
+	if errMsg["error"] == nil {
+		t.Fatalf("expected error after poll failure, got %+v", errMsg)
+	}
+}
+
+func TestHandler_GitHubAuthStart_Success(t *testing.T) {
+	withAuthFnsReset(t)
+	t.Setenv("GITHUB_TOKEN", "") // start clean
+
+	githubClientIDFn = func() string { return "test-client-id" }
+	githubStartDeviceFlowFn = func(_, _ string) (*github.DeviceCodeResponse, error) {
+		return &github.DeviceCodeResponse{
+			DeviceCode:      "dev456",
+			UserCode:        "WXYZ-5678",
+			VerificationURI: "https://github.com/login/device",
+			ExpiresIn:       900,
+			Interval:        5,
+		}, nil
+	}
+	githubPollForTokenFn = func(_ string, _ *github.DeviceCodeResponse, onStatus func(string)) (*github.TokenResponse, error) {
+		onStatus("waiting")
+		return &github.TokenResponse{AccessToken: "ghp_testtoken"}, nil
+	}
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{"type": "github.auth.start"})
+
+	codeMsg := readWSMessageOfType(t, conn, "github.auth.code")
+	if codeMsg["userCode"] != "WXYZ-5678" {
+		t.Fatalf("unexpected userCode: %+v", codeMsg)
+	}
+	if codeMsg["verificationUri"] != "https://github.com/login/device" {
+		t.Fatalf("unexpected verificationUri: %+v", codeMsg)
+	}
+
+	// Status update.
+	readWSMessageOfType(t, conn, "github.auth.status")
+
+	doneMsg := readWSMessageOfType(t, conn, "github.auth.done")
+	if doneMsg["token"] != "ghp_testtoken" {
+		t.Fatalf("unexpected token in github.auth.done: %+v", doneMsg)
+	}
+}
+
+func TestHandler_GitHubAuthStart_EmptyAccessToken(t *testing.T) {
+	withAuthFnsReset(t)
+	githubClientIDFn = func() string { return "test-client-id" }
+	githubStartDeviceFlowFn = func(_, _ string) (*github.DeviceCodeResponse, error) {
+		return &github.DeviceCodeResponse{
+			DeviceCode:      "dev789",
+			UserCode:        "EMPTY-001",
+			VerificationURI: "https://github.com/login/device",
+			ExpiresIn:       900,
+			Interval:        5,
+		}, nil
+	}
+	githubPollForTokenFn = func(_ string, _ *github.DeviceCodeResponse, _ func(string)) (*github.TokenResponse, error) {
+		return &github.TokenResponse{AccessToken: ""}, nil // empty token
+	}
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{"type": "github.auth.start"})
+	readWSMessageOfType(t, conn, "github.auth.code")
+	errMsg := readWSMessageOfType(t, conn, "github.auth.error")
+	if errMsg["error"] == nil {
+		t.Fatalf("expected error for empty access token, got %+v", errMsg)
+	}
 }
