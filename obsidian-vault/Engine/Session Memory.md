@@ -1,7 +1,7 @@
 ---
 source: ../.github/session-memory/session-log.jsonl
-generatedAt: 2026-04-26T23:53:20.727Z
-eventCount: 348
+generatedAt: 2026-04-27T00:19:59.439Z
+eventCount: 366
 ---
 
 # Session Memory
@@ -12,6 +12,24 @@ Auto-export of session events for Obsidian review.
 
 | Time | Action | Outcome | Surprise |
 | --- | --- | --- | --- |
+| 2026-04-27T00:19:39.506Z | auto tool call: strict_lint | success - Strict Linting — autonomy_handoff.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T00:16:12.630Z | auto tool call: strict_lint | success - Strict Linting — execute_publish_gate_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T00:16:12.630Z | auto tool call: strict_lint | success - Strict Linting — intake_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T00:16:12.600Z | auto tool call: strict_lint | success - Strict Linting — autonomy_handoff_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T00:14:08.210Z | auto tool call: strict_lint | success - Strict Linting — autonomy_handoff.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T00:13:57.460Z | auto tool call: strict_lint | success - Strict Linting — team_config_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T00:13:57.460Z | auto tool call: strict_lint | success - Strict Linting — project_tools_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T00:13:57.460Z | auto tool call: strict_lint | success - Strict Linting — WORKING_BEHAVIORS.md Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T00:13:57.460Z | auto tool call: strict_lint | success - Strict Linting — autonomy_handoff_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T00:13:57.459Z | auto tool call: strict_lint | success - Strict Linting — roles.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T00:13:57.460Z | auto tool call: strict_lint | success - Strict Linting — autonomy_handoff.go Summary: 0 error(s), 0 warning(s), 1 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/autonomy_ha... | 0.82 |
+| 2026-04-27T00:13:57.460Z | auto tool call: strict_lint | success - Strict Linting — context_profile_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T00:13:57.459Z | auto tool call: strict_lint | success - Strict Linting — team_config.go Summary: 0 error(s), 0 warning(s), 1 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/team_config.go h... | 0.82 |
+| 2026-04-27T00:13:57.460Z | auto tool call: strict_lint | success - Strict Linting — intake_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T00:13:57.459Z | auto tool call: strict_lint | success - Strict Linting — context.go Summary: 0 error(s), 0 warning(s), 13 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/context.go hint [QF... | 0.82 |
+| 2026-04-27T00:13:57.459Z | auto tool call: strict_lint | success - Strict Linting — project_tools.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
+| 2026-04-27T00:13:57.457Z | auto tool call: strict_lint | success - Strict Linting — intake.go Summary: 0 error(s), 0 warning(s), 1 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/intake.go hint [strin... | 0.82 |
+| 2026-04-26T23:54:03.682Z | auto tool call: checkpoint | success - Committed ef1173c on branch 'main' ef1173c Parameterize intake context and behavioral gate with persisted project profile; add branch coverage tests and nil-DB guards .github/co... | 0.20 |
 | 2026-04-26T23:53:18.566Z | auto tool call: strict_lint | success - Strict Linting — context_profile_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
 | 2026-04-26T23:53:18.547Z | auto tool call: strict_lint | success - Strict Linting — completion_gate_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
 | 2026-04-26T23:50:42.394Z | auto tool call: strict_lint | success - Strict Linting — project_profile_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
@@ -74,21 +92,3 @@ Auto-export of session events for Obsidian review.
 | 2026-04-26T16:47:57.178Z | auto tool call: strict_lint | success - Strict Linting — default.json Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
 | 2026-04-26T16:45:29.826Z | auto tool call: strict_lint | success - Strict Linting — bridge.test.ts Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
 | 2026-04-26T16:45:29.826Z | auto tool call: strict_lint | success - Strict Linting — lib.rs Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T16:45:29.825Z | auto tool call: strict_lint | success - Strict Linting — ws-client.test.ts Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T16:45:29.821Z | auto tool call: strict_lint | success - Strict Linting — bridge.ts Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T16:45:29.825Z | auto tool call: strict_lint | success - Strict Linting — client.ts Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T16:05:18.472Z | auto tool call: strict_lint | success - Strict Linting — App.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T16:00:12.241Z | auto tool call: strict_lint | success - Strict Linting — usage-dashboard.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T15:59:24.642Z | auto tool call: strict_lint | success - Strict Linting — index.css Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T15:59:24.642Z | auto tool call: strict_lint | success - Strict Linting — UsageDashboard.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T15:59:24.627Z | auto tool call: strict_lint | success - Strict Linting — App.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T15:55:50.034Z | auto tool call: strict_lint | success - Strict Linting — UsageDashboard.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T15:55:16.210Z | auto tool call: strict_lint | success - Strict Linting — usage-dashboard.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T15:51:55.654Z | auto tool call: strict_lint | success - Strict Linting — index.css Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T15:51:55.654Z | auto tool call: strict_lint | success - Strict Linting — App.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T15:51:55.653Z | auto tool call: strict_lint | success - Strict Linting — UsageDashboard.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T10:18:48.747Z | auto tool call: strict_lint | success - Strict Linting — handler_test.go Summary: 0 error(s), 0 warning(s), 86 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ws/handler_test.g... | 0.82 |
-| 2026-04-26T10:16:58.505Z | auto tool call: strict_lint | success - Strict Linting — handler_test.go Summary: 0 error(s), 0 warning(s), 87 other(s) across 1 file(s). File: /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ws/handler_test.g... | 0.82 |
-| 2026-04-26T10:16:23.867Z | auto tool call: strict_lint | success - Strict Linting — registry_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T10:14:09.297Z | auto tool call: strict_lint | success - Strict Linting — usage_dashboard_test.go Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |
-| 2026-04-26T10:08:47.955Z | auto tool call: strict_lint | success - Strict Linting — usage-dashboard.test.tsx Summary: 0 error(s), 0 warning(s), 0 other(s) across 0 file(s). No diagnostics found. | 0.82 |

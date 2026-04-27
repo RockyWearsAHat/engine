@@ -63,6 +63,7 @@ var roleConfigs = map[AgentRole]roleConfig{
 			"Human-required (only these three): missing credentials/secrets not in env, an irreversible destructive action needing explicit approval, or a product decision where user preference materially changes the outcome.",
 			"AI-resolvable (everything else): design choices, naming, file structure, ambiguity, missing context, tool errors, unknown paths.",
 			"For AI-resolvable blockers: pick the safest reasonable option, prefix your message with 'Assumption:', and continue without stopping.",
+			"Publish/deploy actions are explicit-only. Default to local verification unless explicit publish intent evidence is present.",
 			"Never ask the user about implementation approach, test strategy, or naming — decide and proceed.",
 		}, "\n"),
 		tools: nil, // bootstrapTools + on-demand discovery
@@ -149,7 +150,9 @@ var roleConfigs = map[AgentRole]roleConfig{
 			"Rules:",
 			"- type must be one of: web-app, rest-api, cli, library, service, unknown",
 			"- doneDefinition: list what the user explicitly says must be working",
-			"- deployTarget: where it should run when done (guess from context if not stated)",
+			"- deployTarget: where it should run when done (metadata only; does not authorize publish/deploy)",
+			"- executionIntent.publishIntent must be explicit only when user text explicitly requests deploy/publish/release; otherwise use none",
+			"- executionIntent.publishEvidence must include verbatim explicit excerpts when publishIntent=explicit",
 			"- workingBehaviors: restate as user-visible behaviors ('User can ...', 'App does ...')",
 			"- Set usesPlaywright=true only for web-app type",
 			"- Respond with ONLY the JSON object. No explanation, no markdown.",

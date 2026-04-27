@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -129,6 +130,64 @@ func TestLoadProjectProfile_FromDB(t *testing.T) {
 	}
 	if profile.Type != ProjectTypeWebApp {
 		t.Fatalf("loaded profile type = %q, want web-app", profile.Type)
+	}
+}
+
+func TestEnsureProjectProfileCache_ExplicitPublishIntentStored(t *testing.T) {
+	dir := t.TempDir()
+	initContextProfileTestDB(t, dir)
+
+	ensureProjectProfileCache(dir, "Deploy this API to Docker and publish release", "")
+
+	profile := loadProjectProfile(dir)
+	if profile == nil {
+		t.Fatal("expected profile to load")
+	}
+	if profile.ExecutionIntent.PublishIntent != PublishIntentExplicit {
+		t.Fatalf("expected explicit publish intent, got %q", profile.ExecutionIntent.PublishIntent)
+	}
+	if len(profile.ExecutionIntent.PublishEvidence) == 0 {
+		t.Fatal("expected publish evidence for explicit deploy request")
+	}
+}
+
+func TestApplyFirstTurnAutonomyContext_StyleNoticeDisabledInPolicy(t *testing.T) {
+	dir := t.TempDir()
+	initContextProfileTestDB(t, dir)
+
+	engineDir := filepath.Join(dir, ".engine")
+	if err := os.MkdirAll(engineDir, 0o755); err != nil {
+		t.Fatalf("mkdir .engine: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(engineDir, "config.yaml"), []byte("autonomous:\n  style_assumption_notice: false\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	noticeCount := 0
+	ctx := &ChatContext{
+		ProjectPath: dir,
+		SendToClient: func(msgType string, payload any) {
+			if msgType == "chat.notice" {
+				noticeCount++
+			}
+		},
+	}
+
+	applyFirstTurnAutonomyContext(ctx, "Build anything", "", true)
+	if noticeCount != 0 {
+		t.Fatalf("expected no style notice when policy disables it, got %d", noticeCount)
+	}
+
+	raw, err := db.GetProjectProfile(dir)
+	if err != nil {
+		t.Fatalf("GetProjectProfile: %v", err)
+	}
+	var parsed ProjectProfile
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		t.Fatalf("unmarshal profile: %v", err)
+	}
+	if parsed.ExecutionIntent.PublishIntent == "" {
+		t.Fatal("expected execution intent to be set in stored profile")
 	}
 }
 

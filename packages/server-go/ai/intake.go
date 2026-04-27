@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 var styleSignalKeywords = []string{
@@ -42,6 +43,28 @@ type VerificationStrategy struct {
 	CheckCmds []string `json:"checkCmds"`
 }
 
+// PublishIntentState represents whether deploy/publish actions were explicitly
+// requested by the user. Deploy and publish are denied unless this is explicit.
+type PublishIntentState string
+
+const (
+	PublishIntentNone     PublishIntentState = "none"
+	PublishIntentExplicit PublishIntentState = "explicit"
+)
+
+// PublishIntentEvidence captures explicit deploy/publish request evidence.
+type PublishIntentEvidence struct {
+	Source     string `json:"source"`
+	Excerpt    string `json:"excerpt"`
+	CapturedAt string `json:"capturedAt"`
+}
+
+// ExecutionIntent captures whether publish/deploy actions are allowed.
+type ExecutionIntent struct {
+	PublishIntent   PublishIntentState      `json:"publishIntent"`
+	PublishEvidence []PublishIntentEvidence `json:"publishEvidence"`
+}
+
 // ProjectProfile is the structured intake artifact produced from the first user
 // message (or a GitHub README tagged @engine). It captures what the project is,
 // what "done" looks like, and how to verify the project is live and working.
@@ -60,6 +83,8 @@ type ProjectProfile struct {
 	Verification VerificationStrategy `json:"verification"`
 	// LiveCheckCmd is a single command confirming the project is live and reachable.
 	LiveCheckCmd string `json:"liveCheckCmd"`
+	// ExecutionIntent records if deploy/publish is explicitly requested.
+	ExecutionIntent ExecutionIntent `json:"executionIntent"`
 	// WorkingBehaviors is a list of user-visible behaviors analogous to
 	// WORKING_BEHAVIORS.md for this project.
 	WorkingBehaviors []string `json:"workingBehaviors"`
@@ -121,6 +146,16 @@ const intakeResponseSchema = `{
     "checkCmds": ["<verification command>", "..."]
   },
   "liveCheckCmd": "<single shell command proving it is live>",
+	"executionIntent": {
+		"publishIntent": "<explicit|none>",
+		"publishEvidence": [
+			{
+				"source": "<request|readme|issue>",
+				"excerpt": "<verbatim explicit publish/deploy excerpt>",
+				"capturedAt": "<ISO-8601 timestamp>"
+			}
+		]
+	},
   "workingBehaviors": ["<user-visible behavior>", "..."]
 }`
 
@@ -164,6 +199,9 @@ func ParseProjectProfileJSON(response string) (*ProjectProfile, error) {
 		len(profile.Verification.CheckCmds) == 0 && !profile.Verification.UsesPlaywright {
 		profile.Verification = DeriveVerificationStrategy(profile.Type)
 	}
+	if profile.ExecutionIntent.PublishIntent == "" {
+		profile.ExecutionIntent.PublishIntent = PublishIntentNone
+	}
 
 	return &profile, nil
 }
@@ -182,6 +220,8 @@ func BuildPreStartExpansionWithProfile(userMessage, projectDirection string, pro
 	if objective == "" {
 		objective = "No explicit objective provided. Infer safest high-impact objective from context."
 	}
+	scopeIn, scopeOut := deriveScope(userMessage)
+	constraints := deriveConstraints(userMessage)
 
 	criteria := extractSuccessCriteria(userMessage)
 	if len(criteria) == 0 {
@@ -195,19 +235,25 @@ func BuildPreStartExpansionWithProfile(userMessage, projectDirection string, pro
 
 	projectShape := "Project profile not yet materialized; infer type and verification strategy from request context."
 	verificationPlan := "Use project-appropriate verification and include a live check before completion."
+	deployIntent := "publishIntent=none (default local verification only)"
 	if profile != nil {
 		projectShape = fmt.Sprintf("Type=%s, DeployTarget=%s, Behaviors=%d", profile.Type, profile.DeployTarget, len(profile.WorkingBehaviors))
 		v := profile.Verification
 		verificationPlan = fmt.Sprintf("usesPlaywright=%t, startCmd=%q, checkURL=%q, checkCmdCount=%d, liveCheck=%q", v.UsesPlaywright, v.StartCmd, v.CheckURL, len(v.CheckCmds), profile.LiveCheckCmd)
+		deployIntent = fmt.Sprintf("publishIntent=%s, evidence=%d", profile.ExecutionIntent.PublishIntent, len(profile.ExecutionIntent.PublishEvidence))
 	}
 
 	parts := []string{
 		"Pre-start expansion:",
 		"- Objective: " + objective,
+		"- Scope (in): " + scopeIn,
+		"- Scope (out): " + scopeOut,
+		"- Constraints: " + strings.Join(constraints, " | "),
 		"- Success criteria: " + strings.Join(criteria, " | "),
 		"- Direction context: " + truncateForPrompt(strings.TrimSpace(projectDirection), 260),
 		"- Project shape: " + projectShape,
 		"- Verification plan: " + verificationPlan,
+		"- Deploy intent: " + deployIntent,
 		"- Style assumption: " + assumption,
 		"- Communication mode: Keep updates minimal and action-focused; avoid verbose status chatter.",
 	}
@@ -238,6 +284,7 @@ func BuildStyleAssumptionNotice() string {
 func BuildHeuristicProjectProfile(projectPath, userMessage, projectDirection string) ProjectProfile {
 	ptype := detectProjectTypeHeuristic(userMessage, projectDirection)
 	verification := DeriveVerificationStrategy(ptype)
+	publishIntent, publishEvidence := detectPublishIntentEvidence(userMessage)
 
 	done := extractSuccessCriteria(userMessage)
 	if len(done) == 0 {
@@ -263,8 +310,70 @@ func BuildHeuristicProjectProfile(projectPath, userMessage, projectDirection str
 		DeployTarget:     detectDeployTargetHeuristic(userMessage),
 		Verification:     verification,
 		LiveCheckCmd:     liveCheck,
+		ExecutionIntent: ExecutionIntent{
+			PublishIntent:   publishIntent,
+			PublishEvidence: publishEvidence,
+		},
 		WorkingBehaviors: behaviors,
 	}
+}
+
+func detectPublishIntentEvidence(userMessage string) (PublishIntentState, []PublishIntentEvidence) {
+	trimmed := strings.TrimSpace(userMessage)
+	if trimmed == "" {
+		return PublishIntentNone, nil
+	}
+
+	keywords := []string{"deploy", "publish", "release to", "ship to production", "go live", "production"}
+	lines := strings.Split(trimmed, "\n")
+	evidence := make([]PublishIntentEvidence, 0, 2)
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		lower := strings.ToLower(line)
+		for _, kw := range keywords {
+			if strings.Contains(lower, kw) {
+				evidence = append(evidence, PublishIntentEvidence{
+					Source:     "request",
+					Excerpt:    truncateForPrompt(line, 180),
+					CapturedAt: now,
+				})
+				break
+			}
+		}
+		if len(evidence) >= 2 {
+			break
+		}
+	}
+
+	if len(evidence) == 0 {
+		return PublishIntentNone, nil
+	}
+	return PublishIntentExplicit, evidence
+}
+
+func deriveScope(userMessage string) (inScope string, outOfScope string) {
+	obj := truncateForPrompt(firstNonEmptyLine(userMessage), 180)
+	if obj == "" {
+		obj = "Infer from workspace context and user request history"
+	}
+	return obj, "Deploy/publish actions unless explicit publish intent evidence is present"
+}
+
+func deriveConstraints(userMessage string) []string {
+	constraints := []string{
+		"Preserve existing behavior unless user requests a behavior change",
+		"Run project-appropriate verification before completion",
+		"Do not deploy/publish without explicit intent evidence",
+	}
+	lower := strings.ToLower(userMessage)
+	if strings.Contains(lower, "no ") || strings.Contains(lower, "don't") {
+		constraints = append(constraints, "Honor user-stated prohibitions exactly")
+	}
+	return constraints
 }
 
 func detectProjectTypeHeuristic(userMessage, projectDirection string) ProjectType {

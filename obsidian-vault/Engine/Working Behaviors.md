@@ -1,6 +1,6 @@
 ---
 source: ../.github/WORKING_BEHAVIORS.md
-generatedAt: 2026-04-26T23:53:20.726Z
+generatedAt: 2026-04-27T00:19:59.438Z
 sectionCount: 21
 ---
 
@@ -114,7 +114,7 @@ Past AI sessions are stored and searchable. The AI automatically incorporates re
 
 Each AI session starts with an explicit autonomous working baseline in the session summary. As work progresses, Engine continuously cycles through planning, execution, validation, and revision until the request is complete. Session summaries are kept current with the active focus, validation status, weak points, and the next autonomous step so users can understand what Engine is doing and what it will do next.
 
-When direction is sufficient, Engine continues forward autonomously. Before stopping to ask the user anything, Engine classifies the blocker: human-required (missing credentials/secrets, irreversible destructive actions, or product decisions where user preference materially changes the outcome) vs. AI-resolvable (everything else — design choices, naming, ambiguity, missing context, tool errors). For AI-resolvable blockers, Engine picks the safest reasonable option, prefixes the message with "Assumption:", and continues without stopping. Only human-required blockers cause Engine to pause and ask. If style direction is not specified on the first request, Engine explicitly states the style assumption it selected (and invites reshaping) in chat and via Discord DM when configured.
+When direction is sufficient, Engine continues forward autonomously. Before stopping to ask the user anything, Engine classifies the blocker: human-required (missing credentials/secrets, irreversible destructive actions, or product decisions where user preference materially changes the outcome) vs. AI-resolvable (everything else — design choices, naming, ambiguity, missing context, tool errors). For AI-resolvable blockers, Engine picks the safest reasonable option, prefixes the message with "Assumption:", and continues without stopping. Only human-required blockers cause Engine to pause and ask. If style direction is not specified on the first request, Engine sends one short style-assumption notice (with an override invitation) in chat and via Discord DM when configured. Engine treats deploy/publish as explicit-only: deployment and publish actions are blocked by default unless the request contains explicit publish/deploy intent evidence.
 
 ---
 

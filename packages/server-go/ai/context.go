@@ -842,6 +842,9 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 
 	case "shell":
 		command := str("command")
+		if intentErr := ValidatePublishIntentForAction(ctx.ProjectPath, command); intentErr != nil {
+			return intentErr.Error(), true
+		}
 		if title, message, needsApproval := requiresShellApproval(ctx.ProjectPath, command); needsApproval {
 			if ctx.RequestApproval == nil {
 				return "This shell command requires explicit approval, but no approval handler is available.", true
@@ -1539,12 +1542,21 @@ func Chat(ctx *ChatContext, userMessage string) {
 	extraContext := ""
 	projectDirection := resolveProjectDirection(ctx.ProjectPath)
 	applyFirstTurnAutonomyContext(ctx, userMessage, projectDirection, isFirstUserMessage)
+	profile := loadProjectProfile(ctx.ProjectPath)
 	if ctx.Role == RoleInteractive {
 		selectiveContext = BuildSelectiveContext(ctx.ProjectPath, session, userMessage, openTabs, residualProfile)
-		profile := loadProjectProfile(ctx.ProjectPath)
 		expansion := BuildPreStartExpansionWithProfile(userMessage, projectDirection, profile)
 		extraContext = strings.TrimSpace(selectiveContext.Prompt + "\n\n" + expansion)
 	}
+	_ = WriteAutonomyHandoffCache(ctx.ProjectPath, func() *AutonomyHandoff {
+		handoff := BuildAutonomyHandoff(userMsgID, ctx.SessionID, ctx.ProjectPath, userMessage, func() string {
+			if session == nil {
+				return ""
+			}
+			return session.Summary
+		}(), profile)
+		return &handoff
+	}())
 	systemPrompt := buildRoleSystemPrompt(ctx.Role, ctx.ProjectPath, branch, extraContext)
 
 	// Seed the active tool set from the role's pre-granted tools.
@@ -1605,6 +1617,10 @@ func Chat(ctx *ChatContext, userMessage string) {
 				ctx.OnSessionUpdated(updatedSession)
 			}
 		}
+		_ = WriteAutonomyHandoffCache(ctx.ProjectPath, func() *AutonomyHandoff {
+			handoff := BuildAutonomyHandoff(assistantMessageID, ctx.SessionID, ctx.ProjectPath, userMessage, summary, profile)
+			return &handoff
+		}())
 	}
 	ctx.OnChunk("", true)
 }
@@ -1623,6 +1639,9 @@ func applyFirstTurnAutonomyContext(ctx *ChatContext, userMessage, projectDirecti
 	}
 	ensureProjectProfileCache(ctx.ProjectPath, userMessage, projectDirection)
 	if HasExplicitStyleGuidance(userMessage) {
+		return
+	}
+	if policy := ResolveAutonomousPolicy(ctx.ProjectPath); !policy.StyleAssumptionNotice {
 		return
 	}
 	notice := BuildStyleAssumptionNotice()

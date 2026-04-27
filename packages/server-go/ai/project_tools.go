@@ -115,6 +115,9 @@ func executeProjectTool(name string, input map[string]any, ctx *ChatContext) (st
 		if def.Name != name {
 			continue
 		}
+		if intentErr := ValidatePublishIntentForAction(ctx.ProjectPath, def.Name+" "+def.Description+" "+def.Command); intentErr != nil {
+			return intentErr.Error(), true, true
+		}
 		env := os.Environ()
 		for k, v := range input {
 			env = append(env, "INPUT_"+strings.ToUpper(k)+"="+fmt.Sprintf("%v", v))
