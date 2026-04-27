@@ -82,6 +82,8 @@ func withRunDepsReset(t *testing.T) {
 	origNewWebhookReceiver := newWebhookReceiverFn
 	origNewRepoMonitor := newRepoMonitorFn
 	origRepoMonitorStart := repoMonitorStartFn
+	origNewEventsWatcher := newEventsWatcherFn
+	origEventsWatcherStart := eventsWatcherStartFn
 	origNewVPNTunnel := newVPNTunnelFn
 	origVPNRegister := vpnRegisterRoutesFn
 	origVPNListen := vpnListenTLSFn
@@ -111,6 +113,8 @@ func withRunDepsReset(t *testing.T) {
 		newWebhookReceiverFn = origNewWebhookReceiver
 		newRepoMonitorFn = origNewRepoMonitor
 		repoMonitorStartFn = origRepoMonitorStart
+		newEventsWatcherFn = origNewEventsWatcher
+		eventsWatcherStartFn = origEventsWatcherStart
 		newVPNTunnelFn = origNewVPNTunnel
 		vpnRegisterRoutesFn = origVPNRegister
 		vpnListenTLSFn = origVPNListen
@@ -357,6 +361,48 @@ func TestTriggerScaffoldSession_BadFullName(t *testing.T) {
 	triggerScaffoldSession(t.TempDir(), payload)
 }
 
+func TestReadmeContainsEngineTag_Present(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# My Project\n\n@engine please build this"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	if !readmeContainsEngineTag(dir) {
+		t.Error("expected readmeContainsEngineTag to return true when @engine is present")
+	}
+}
+
+func TestReadmeContainsEngineTag_Absent(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# My Project\n\nNo trigger here."), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	if readmeContainsEngineTag(dir) {
+		t.Error("expected readmeContainsEngineTag to return false when @engine is absent")
+	}
+}
+
+func TestReadmeContainsEngineTag_MissingFile(t *testing.T) {
+	if readmeContainsEngineTag(t.TempDir()) {
+		t.Error("expected readmeContainsEngineTag to return false when README.md does not exist")
+	}
+}
+
+func TestTriggerScaffoldSession_NoEngineTag_Skips(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	if err := os.WriteFile(filepath.Join(projectPath, "README.md"), []byte("# My Project\n\nNo trigger here."), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+
+	before := countSessions(t, projectPath)
+	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`))
+	after := countSessions(t, projectPath)
+
+	if after != before {
+		t.Fatalf("expected no session created when @engine tag absent, before=%d after=%d", before, after)
+	}
+}
+
 func TestTriggerCIAnalysisSession_BadPayload(t *testing.T) {
 	// Bad JSON should return early without side effects.
 	triggerCIAnalysisSession(t.TempDir(), json.RawMessage(`{bad json}`))
@@ -367,6 +413,9 @@ func TestTriggerScaffoldSession_ValidPayloadCreatesSession(t *testing.T) {
 	setupTestDB(t, projectPath)
 	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
 	t.Setenv("OPENAI_API_KEY", "")
+	if err := os.WriteFile(filepath.Join(projectPath, "README.md"), []byte("# Demo\n@engine"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
 
 	before := countSessions(t, projectPath)
 	payload := json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`)
@@ -856,6 +905,9 @@ func TestTriggerScaffoldSession_OnChunkCalled(t *testing.T) {
 	projectPath := t.TempDir()
 	setupTestDB(t, projectPath)
 	withAIMockServer(t)
+	if err := os.WriteFile(filepath.Join(projectPath, "README.md"), []byte("# Demo\n@engine"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
 
 	payload := json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`)
 	triggerScaffoldSession(projectPath, payload)
@@ -926,6 +978,9 @@ func TestTriggerSessions_DBCreateAndSaveErrorsCovered(t *testing.T) {
 	saveMessageFn = func(id, sessionId, role, content string, toolCalls any) error {
 		return errors.New("save fail")
 	}
+	if err := os.WriteFile(filepath.Join(projectPath, "README.md"), []byte("# Demo\n@engine"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
 
 	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`))
 	triggerCIAnalysisSession(projectPath, json.RawMessage(`{"workflow_run":{"name":"CI","html_url":"https://example.com","conclusion":"failure"},"repository":{"full_name":"owner/repo"}}`))
@@ -942,6 +997,9 @@ func TestTriggerSessions_SaveMessageErrorBranchesCovered(t *testing.T) {
 	}
 	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
 		ctx.OnChunk("", true)
+	}
+	if err := os.WriteFile(filepath.Join(projectPath, "README.md"), []byte("# Demo\n@engine"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
 	}
 
 	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`))
@@ -998,3 +1056,82 @@ func TestRunAsyncFn_DefaultImplementationRuns(t *testing.T) {
 	}
 }
 
+
+func TestRun_EventsWatcher_NonNil_Started(t *testing.T) {
+	withRunDepsReset(t)
+	projectPath := t.TempDir()
+	t.Setenv("PROJECT_PATH", projectPath)
+	t.Setenv("ENGINE_VPN", "")
+	t.Setenv("ENGINE_REMOTE", "")
+
+	dbInitFn = func(_ string) error { return nil }
+	loadDiscordConfigFn = func(_ string) (discord.Config, error) {
+		return discord.Config{Enabled: false}, nil
+	}
+	newDiscordServiceFn = func(_ discord.Config, _ string) (discordRuntime, error) {
+		return &fakeDiscordService{}, nil
+	}
+	httpHandleFuncFn = func(_ string, _ func(http.ResponseWriter, *http.Request)) {}
+	httpHandleFn = func(_ string, _ http.Handler) {}
+	httpListenAndServeFn = func(_ string, _ http.Handler) error { return errors.New("stop") }
+
+	var ewStarted bool
+	fakeWatcher := gh.NewEventsWatcher("fake-token", gh.NewRepoMonitor())
+	newEventsWatcherFn = func(_ *gh.RepoMonitor) *gh.EventsWatcher { return fakeWatcher }
+	eventsWatcherStartFn = func(_ *gh.EventsWatcher) { ewStarted = true }
+
+	_ = run()
+	if !ewStarted {
+		t.Error("expected eventsWatcherStartFn to be called with non-nil watcher")
+	}
+}
+// TestTriggerScaffoldSession_WritesToProjectLocalDB verifies the trigger
+// writes its session to the project's own .engine/state.db rather than a
+// workspace-wide DB. With no ENGINE_STATE_DIR override, stateDir resolves
+// per-project: <projectPath>/.engine/state.db.
+func TestTriggerScaffoldSession_WritesToProjectLocalDB(t *testing.T) {
+	t.Setenv("ENGINE_STATE_DIR", "")
+
+	workspace := t.TempDir()
+	if err := db.Init(workspace); err != nil {
+		t.Fatalf("workspace db.Init: %v", err)
+	}
+
+	projectPath := filepath.Join(workspace, ".engine", "projects", "owner-repo")
+	if err := os.MkdirAll(projectPath, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	// Pre-create .git so ensureAutonomousRepoWorkspace takes the existing-repo
+	// path and fetch/pull are stubbed below.
+	if err := os.MkdirAll(filepath.Join(projectPath, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectPath, "README.md"), []byte("# Demo\n@engine"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+
+	// Stub git fetch/pull and aiChatFn so the trigger short-circuits.
+	origRun := runCommandCombinedOutputFn
+	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		return []byte(""), nil
+	}
+	origAI := aiChatFn
+	aiChatFn = func(ctx *ai.ChatContext, prompt string) {}
+	t.Cleanup(func() {
+		runCommandCombinedOutputFn = origRun
+		aiChatFn = origAI
+	})
+
+	payload := json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`)
+	triggerScaffoldSession(workspace, payload)
+
+	projectDB := filepath.Join(projectPath, ".engine", "state.db")
+	if _, err := os.Stat(projectDB); err != nil {
+		t.Fatalf("expected project-local state.db at %q: %v", projectDB, err)
+	}
+
+	// Workspace DB should be active again after WithProject restored it.
+	if got := db.CurrentProject(); got != workspace {
+		t.Errorf("CurrentProject after trigger = %q, want %q", got, workspace)
+	}
+}

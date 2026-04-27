@@ -122,7 +122,7 @@ export default function App() {
     fileTree, setFileTree, mergeFileTree,
     openFiles, activeFilePath, openFile, clearOpenFiles, setActiveFile, markFileSaved,
     gitStatus, setGitStatus,
-    setGithubToken, setGithubUser,
+    setGithubToken, setGithubUser, setGithubAuthFlow,
     githubIssues, setGithubIssues, setGithubIssuesLoading, setGithubIssuesError,
     agentSessions, updateAgentSession, addLiveToolCall, resolveLiveToolCall,
     setSearchResults, setEditorPreferences,
@@ -1144,6 +1144,32 @@ export default function App() {
 
         case 'github.user':
           setGithubUser(msg.user);
+          break;
+
+        case 'github.auth.code':
+          setGithubAuthFlow({
+            userCode: (msg as any).userCode,
+            verificationUri: (msg as any).verificationUri,
+            expiresIn: (msg as any).expiresIn,
+          });
+          break;
+
+        case 'github.auth.done': {
+          const token = (msg as any).token as string;
+          setGithubAuthFlow(null);
+          void bridge.setGithubToken(token).then(() => {
+            setGithubToken(token);
+            void syncRuntimeConfigRef.current();
+          });
+          break;
+        }
+
+        case 'github.auth.error':
+          setGithubAuthFlow(null);
+          showNotice((msg as any).error ?? 'GitHub login failed', 'error');
+          break;
+
+        case 'github.auth.status':
           break;
 
         case 'approval.request':

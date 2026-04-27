@@ -38,6 +38,7 @@ function resetStore() {
     gitStatus: null,
     githubToken: null,
     githubUser: null,
+    githubAuthFlow: null,
     githubIssues: [],
     githubIssuesLoading: false,
     githubIssuesError: null,
@@ -634,3 +635,22 @@ describe('markMessageFailed — non-matching message untouched', () => {
       expect(useStore.getState().fileTree?.children?.some(c => c.name === 'a.ts')).toBe(true);
     });
   });
+
+
+describe('githubAuthFlow', () => {
+  it('DefaultNull_NullInitialState', () => {
+    expect(useStore.getState().githubAuthFlow).toBeNull();
+  });
+
+  it('SetFlow_FlowStored', () => {
+    const flow = { userCode: 'ABCD-1234', verificationUri: 'https://github.com/login/device', expiresIn: 900 };
+    useStore.getState().setGithubAuthFlow(flow);
+    expect(useStore.getState().githubAuthFlow).toEqual(flow);
+  });
+
+  it('ClearFlow_FlowNull', () => {
+    useStore.getState().setGithubAuthFlow({ userCode: 'X', verificationUri: 'y', expiresIn: 60 });
+    useStore.getState().setGithubAuthFlow(null);
+    expect(useStore.getState().githubAuthFlow).toBeNull();
+  });
+});

@@ -84,8 +84,10 @@ interface EditorStore {
   // GitHub
   githubToken: string | null;
   githubUser: GitHubUser | null;
+  githubAuthFlow: { userCode: string; verificationUri: string; expiresIn: number } | null;
   setGithubToken: (t: string | null) => void;
   setGithubUser: (u: GitHubUser | null) => void;
+  setGithubAuthFlow: (flow: { userCode: string; verificationUri: string; expiresIn: number } | null) => void;
 
   // GitHub Issues
   githubIssues: GitHubIssue[];
@@ -442,8 +444,10 @@ export const useStore = create<EditorStore>((set, get) => ({
 
   githubToken: null,
   githubUser: null,
+  githubAuthFlow: null,
   setGithubToken: (t) => set({ githubToken: t }),
   setGithubUser: (u) => set({ githubUser: u }),
+  setGithubAuthFlow: (flow) => set({ githubAuthFlow: flow }),
 
   githubIssues: [],
   githubIssuesLoading: false,

@@ -271,13 +271,17 @@ type ChatContext struct {
 	// Role determines the lean system prompt and pre-granted tool set.
 	// Defaults to RoleInteractive when zero-valued.
 	Role AgentRole
+	// ProviderOverride and ModelOverride allow callers to force a specific runtime
+	// model for this role execution (for example reviewer/planner split models).
+	ProviderOverride string
+	ModelOverride    string
 	// MarkVital is set by the agentic loop before iterating. Calling MarkVital(n) marks the
 	// last n messages in the active history as vital checkpoints so they survive context windowing.
 	// Nil outside of an active loop.
 	MarkVital func(n int)
-		// AutonomousPolicy, when non-nil, controls headless session behaviour:
-		// auto-approving commits and/or pushes without prompting the user.
-		AutonomousPolicy *AutonomousPolicy
+	// AutonomousPolicy, when non-nil, controls headless session behaviour:
+	// auto-approving commits and/or pushes without prompting the user.
+	AutonomousPolicy *AutonomousPolicy
 	// ProjectTools holds project-defined tools discovered from <projectRoot>/.engine/tools/.
 	// Loaded once per Chat() call; nil when the directory is absent or empty.
 	ProjectTools []projectToolDef
@@ -1461,19 +1465,35 @@ func formatTree(node *gofs.FileNode, depth int) string {
 
 // Chat runs the full agentic loop for a user message, streaming results via ctx callbacks.
 func Chat(ctx *ChatContext, userMessage string) {
-	explicitProvider := os.Getenv("ENGINE_MODEL_PROVIDER")
+	explicitProvider := strings.TrimSpace(os.Getenv("ENGINE_MODEL_PROVIDER"))
 	model := strings.TrimSpace(os.Getenv("ENGINE_MODEL"))
 	if resolvedTeam, teamProvider, teamModel, ok := ResolveTeamOrchestratorModel(ctx.ProjectPath, os.Getenv("ENGINE_ACTIVE_TEAM")); ok {
 		if model == "" {
 			model = teamModel
 		}
-		if strings.TrimSpace(explicitProvider) == "" || strings.EqualFold(strings.TrimSpace(explicitProvider), "auto") {
-			explicitProvider = teamProvider
+		if explicitProvider == "" || strings.EqualFold(explicitProvider, "auto") {
+			explicitProvider = strings.TrimSpace(teamProvider)
 		}
 		if strings.TrimSpace(os.Getenv("ENGINE_ACTIVE_TEAM")) == "" {
 			os.Setenv("ENGINE_ACTIVE_TEAM", resolvedTeam) //nolint:errcheck
 		}
 	}
+
+	if roleProvider, roleModel := roleModelOverrideFromEnv(ctx.Role); roleModel != "" {
+		model = roleModel
+		if roleProvider != "" {
+			explicitProvider = roleProvider
+		}
+	}
+	if ctx != nil {
+		if strings.TrimSpace(ctx.ModelOverride) != "" {
+			model = strings.TrimSpace(ctx.ModelOverride)
+		}
+		if strings.TrimSpace(ctx.ProviderOverride) != "" {
+			explicitProvider = strings.TrimSpace(ctx.ProviderOverride)
+		}
+	}
+
 	provider := resolveProvider(explicitProvider, model)
 	ollamaBaseURL := os.Getenv("OLLAMA_BASE_URL")
 	if provider == "ollama" && model == "" {
@@ -1548,6 +1568,20 @@ func Chat(ctx *ChatContext, userMessage string) {
 		expansion := BuildPreStartExpansionWithProfile(userMessage, projectDirection, profile)
 		extraContext = strings.TrimSpace(selectiveContext.Prompt + "\n\n" + expansion)
 	}
+
+	// For workflow requests run a planner pre-pass so the interactive agent
+	// starts with a concrete numbered plan instead of reasoning from scratch.
+	// ClassifyRequest is heuristic-only (no LLM call) so this is cheap.
+	if ClassifyRequest(userMessage, len(history)) == RequestWorkflow && ctx.Role == RoleInteractive {
+		planOutput := runPlannerPrePass(ctx, provider, model, userMessage, branch)
+		if strings.TrimSpace(planOutput) != "" {
+			if ctx.SendToClient != nil {
+				ctx.SendToClient("chat.plan", map[string]any{"plan": planOutput})
+			}
+			extraContext = strings.TrimSpace(extraContext + "\n\nIMPLEMENTATION PLAN:\n" + planOutput)
+		}
+	}
+
 	_ = WriteAutonomyHandoffCache(ctx.ProjectPath, func() *AutonomyHandoff {
 		handoff := BuildAutonomyHandoff(userMsgID, ctx.SessionID, ctx.ProjectPath, userMessage, func() string {
 			if session == nil {
@@ -1617,6 +1651,7 @@ func Chat(ctx *ChatContext, userMessage string) {
 				ctx.OnSessionUpdated(updatedSession)
 			}
 		}
+
 		_ = WriteAutonomyHandoffCache(ctx.ProjectPath, func() *AutonomyHandoff {
 			handoff := BuildAutonomyHandoff(assistantMessageID, ctx.SessionID, ctx.ProjectPath, userMessage, summary, profile)
 			return &handoff
@@ -1631,6 +1666,76 @@ func resolveProjectDirection(projectPath string) string {
 		return direction
 	}
 	return EnsureProjectDirection(projectPath)
+}
+
+// runPlannerPrePass fires a lean RolePlanner call and returns the plan text.
+// It calls the provider RunLoop directly — no DB save, no user-message history
+// side effects — so it is transparent to the main Chat loop.
+func runPlannerPrePass(ctx *ChatContext, provider, model, userMessage, branch string) string {
+	cancelChan := ctx.Cancel
+	if cancelChan == nil {
+		cancelChan = make(chan struct{})
+	}
+
+	resolvedProvider := strings.TrimSpace(provider)
+	resolvedModel := strings.TrimSpace(model)
+	plannerProvider, plannerModel := roleModelOverrideFromEnv(RolePlanner)
+	if plannerModel != "" {
+		resolvedModel = plannerModel
+	}
+	if plannerProvider != "" {
+		resolvedProvider = plannerProvider
+	}
+	resolvedProvider = resolveProvider(resolvedProvider, resolvedModel)
+	if resolvedProvider == "ollama" && resolvedModel == "" {
+		resolvedModel = detectOllamaModel(os.Getenv("OLLAMA_BASE_URL"))
+	}
+	if resolvedModel == "" {
+		resolvedModel = defaultModelForProvider(resolvedProvider)
+	}
+
+	plannerCtx := &ChatContext{
+		ProjectPath:      ctx.ProjectPath,
+		SessionID:        ctx.SessionID,
+		Role:             RolePlanner,
+		ProviderOverride: resolvedProvider,
+		ModelOverride:    resolvedModel,
+		Usage:            ctx.Usage,
+		Quarantine:       ctx.Quarantine,
+		Cancel:           cancelChan,
+		GetOpenTabs:      ctx.GetOpenTabs,
+		OnError:          func(string) {}, // suppress planner errors from reaching the user
+		OnChunk:          func(string, bool) {}, // no-op: output captured via finalText
+		OnToolCall:       func(string, any) {},
+		OnToolResult:     func(string, any, bool) {},
+	}
+	// Seed only the tools pre-granted to the planner role.
+	if preGranted := roleBootstrapTools(RolePlanner); preGranted != nil {
+		toolSet := make([]anthropicTool, 0, len(preGranted))
+		for _, name := range preGranted {
+			if t, ok := toolRegistryIndex[name]; ok {
+				toolSet = append(toolSet, t)
+			}
+		}
+		plannerCtx.ActiveTools = toolSet
+	}
+	systemPrompt := buildRoleSystemPrompt(RolePlanner, ctx.ProjectPath, branch, "")
+	history := []anthropicMessage{{Role: "user", Content: userMessage}}
+	var allToolCalls []ToolCall
+	var finalText strings.Builder
+	newProvider(resolvedProvider).RunLoop(plannerCtx, resolvedModel, systemPrompt, history, &allToolCalls, &finalText)
+	return strings.TrimSpace(finalText.String())
+}
+
+func roleModelOverrideFromEnv(role AgentRole) (provider string, model string) {
+	switch role {
+	case RolePlanner:
+		return strings.TrimSpace(os.Getenv("ENGINE_PLANNER_PROVIDER")), strings.TrimSpace(os.Getenv("ENGINE_PLANNER_MODEL"))
+	case RoleReviewer:
+		return strings.TrimSpace(os.Getenv("ENGINE_REVIEWER_PROVIDER")), strings.TrimSpace(os.Getenv("ENGINE_REVIEWER_MODEL"))
+	default:
+		return "", ""
+	}
 }
 
 func applyFirstTurnAutonomyContext(ctx *ChatContext, userMessage, projectDirection string, isFirstUserMessage bool) {

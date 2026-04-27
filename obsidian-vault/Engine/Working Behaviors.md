@@ -1,7 +1,7 @@
 ---
 source: ../.github/WORKING_BEHAVIORS.md
-generatedAt: 2026-04-27T00:19:59.438Z
-sectionCount: 21
+generatedAt: 2026-04-27T03:08:40.678Z
+sectionCount: 23
 ---
 
 # Working Behaviors
@@ -20,6 +20,7 @@ This note mirrors the repository contract and is regenerated automatically.
 - Autonomous Development Loop
 - File Tree
 - Preferences Panel
+- GitHub Event Detection
 - Status Bar
 - Terminal Panel
 - Markdown Preview
@@ -28,6 +29,7 @@ This note mirrors the repository contract and is regenerated automatically.
 - Autonomous Work Trigger
 - Configurable Autonomous Commit and Push
 - End-to-End Autonomous Build
+- Per-Project Memory
 - Machine Connections (IN PROGRESS)
 - Remote / Mobile Access (IN PROGRESS)
 - App Shell
@@ -94,7 +96,7 @@ The AI agent can use these tools when working on your code:
 
 ## AI Provider Support
 
-Connect to Anthropic (Claude), OpenAI-compatible endpoints, or Ollama for local models. The active provider is selected per session. Streaming responses are displayed token-by-token as they arrive.
+Connect to Anthropic (Claude), OpenAI-compatible endpoints, or Ollama for local models. The active provider is selected per session. Streaming responses are displayed token-by-token as they arrive. Engine also supports role-specific model overrides for split execution by setting planner/reviewer model env vars (`ENGINE_PLANNER_MODEL`, `ENGINE_PLANNER_PROVIDER`, `ENGINE_REVIEWER_MODEL`, `ENGINE_REVIEWER_PROVIDER`) while keeping the main worker model on `ENGINE_MODEL`.
 
 ---
 
@@ -139,6 +141,19 @@ Six tabs: Explorer, Git, Search, Issues, Open Editors, Usage Dashboard.
 ## Preferences Panel
 
 Tabs for Editor, Discord, and GitHub preferences. Control editor font and theme. Configure Discord integration. Configure GitHub token and repo. Form validation blocks saving an incomplete connection.
+
+Log in to GitHub directly from the Preferences panel using the **Login with GitHub** button — no copy-pasting tokens needed. The button starts the GitHub Device Authorization Flow: Engine displays a short user code and a link to `github.com/login/device`. After the user enters the code on GitHub the token is saved automatically and the login button disappears. While authorization is pending the panel shows a Cancel button to abort the flow. Requires `GITHUB_CLIENT_ID` to be set in the server environment (register an OAuth App on GitHub to get one).
+
+---
+
+## GitHub Event Detection
+
+When a `GITHUB_TOKEN` is set, Engine monitors the authenticated user's GitHub activity in near-real-time using the GitHub Events API with ETag conditional requests (304 responses are instant and do not count against rate limits). Engine checks for `@engine` in README files when:
+- A push event touches a README file in any repository.
+- A new repository is created (checks README immediately).
+- Engine starts up (scans all repositories once on boot).
+
+When `@engine` appears in a README for the first time, Engine triggers the autonomous scaffolding workflow for that repository. The detection latency is typically under one minute, far faster than the previous 5-minute polling approach.
 
 ---
 
@@ -208,6 +223,12 @@ Secret scanning still runs on every commit regardless of `auto_commit` — commi
 ## End-to-End Autonomous Build
 
 Given only a GitHub repository with a README describing a project idea, Engine scaffolds, implements, tests, and delivers the project entirely on its own. It plans and writes out what the idea means before writing any code, asks clarifying questions only if genuinely blocked, then drives the work to completion without requiring further human prompting.
+
+---
+
+## Per-Project Memory
+
+Every project Engine works on gets its own local memory directory inside the project itself, like a git repo carries its own `.git`. Sessions, messages, and project state for an autonomous build live in `<project>/.engine/state.db`, not in a shared global database. Switching between projects keeps each project's history separate; deleting a project's directory removes only that project's memory.
 
 ---
 
