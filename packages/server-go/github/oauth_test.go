@@ -42,9 +42,9 @@ func TestStartDeviceFlow_Success(t *testing.T) {
 	deviceCodeURL = srv.URL
 	defer func() { deviceCodeURL = origURL }()
 
-	origClient := oauthHTTPClient
-	oauthHTTPClient = srv.Client()
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = srv.Client()
+	defer func() { OAuthHTTPClient = origClient }()
 
 	dcr, err := StartDeviceFlow("client-id", "")
 	if err != nil {
@@ -75,9 +75,9 @@ func TestStartDeviceFlow_DefaultExpiresAndInterval(t *testing.T) {
 	deviceCodeURL = srv.URL
 	defer func() { deviceCodeURL = origURL }()
 
-	origClient := oauthHTTPClient
-	oauthHTTPClient = srv.Client()
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = srv.Client()
+	defer func() { OAuthHTTPClient = origClient }()
 
 	dcr, err := StartDeviceFlow("cid", "custom:scope")
 	if err != nil {
@@ -109,9 +109,9 @@ func TestStartDeviceFlow_EmptyDeviceCode_JSONFallback(t *testing.T) {
 	deviceCodeURL = srv.URL
 	defer func() { deviceCodeURL = origURL }()
 
-	origClient := oauthHTTPClient
-	oauthHTTPClient = srv.Client()
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = srv.Client()
+	defer func() { OAuthHTTPClient = origClient }()
 
 	dcr, err := StartDeviceFlow("cid", "")
 	if err != nil {
@@ -133,9 +133,9 @@ func TestStartDeviceFlow_EmptyDeviceCode_Error(t *testing.T) {
 	deviceCodeURL = srv.URL
 	defer func() { deviceCodeURL = origURL }()
 
-	origClient := oauthHTTPClient
-	oauthHTTPClient = srv.Client()
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = srv.Client()
+	defer func() { OAuthHTTPClient = origClient }()
 
 	_, err := StartDeviceFlow("cid", "")
 	if err == nil {
@@ -159,9 +159,9 @@ func TestPollForToken_ImmediateSuccess(t *testing.T) {
 	oauthTokenURL = srv.URL
 	defer func() { oauthTokenURL = origURL }()
 
-	origClient := oauthHTTPClient
-	oauthHTTPClient = srv.Client()
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = srv.Client()
+	defer func() { OAuthHTTPClient = origClient }()
 
 	dcr := &DeviceCodeResponse{
 		DeviceCode: "DC",
@@ -193,9 +193,9 @@ func TestPollForToken_AuthorizationPending_ThenSuccess(t *testing.T) {
 	oauthTokenURL = srv.URL
 	defer func() { oauthTokenURL = origURL }()
 
-	origClient := oauthHTTPClient
-	oauthHTTPClient = srv.Client()
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = srv.Client()
+	defer func() { OAuthHTTPClient = origClient }()
 
 	var statuses []string
 	dcr := &DeviceCodeResponse{DeviceCode: "DC", ExpiresIn: 30, Interval: 0}
@@ -227,9 +227,9 @@ func TestPollForToken_SlowDown(t *testing.T) {
 	oauthTokenURL = srv.URL
 	defer func() { oauthTokenURL = origURL }()
 
-	origClient := oauthHTTPClient
-	oauthHTTPClient = srv.Client()
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = srv.Client()
+	defer func() { OAuthHTTPClient = origClient }()
 
 	var statuses []string
 	dcr := &DeviceCodeResponse{DeviceCode: "DC", ExpiresIn: 30, Interval: 0}
@@ -255,9 +255,9 @@ func TestPollForToken_ExpiredToken(t *testing.T) {
 	oauthTokenURL = srv.URL
 	defer func() { oauthTokenURL = origURL }()
 
-	origClient := oauthHTTPClient
-	oauthHTTPClient = srv.Client()
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = srv.Client()
+	defer func() { OAuthHTTPClient = origClient }()
 
 	var statuses []string
 	dcr := &DeviceCodeResponse{DeviceCode: "DC", ExpiresIn: 30, Interval: 0}
@@ -280,9 +280,9 @@ func TestPollForToken_AccessDenied(t *testing.T) {
 	oauthTokenURL = srv.URL
 	defer func() { oauthTokenURL = origURL }()
 
-	origClient := oauthHTTPClient
-	oauthHTTPClient = srv.Client()
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = srv.Client()
+	defer func() { OAuthHTTPClient = origClient }()
 
 	dcr := &DeviceCodeResponse{DeviceCode: "DC", ExpiresIn: 30, Interval: 0}
 	_, err := PollForToken("cid", dcr, nil)
@@ -301,9 +301,9 @@ func TestPollForToken_UnknownError(t *testing.T) {
 	oauthTokenURL = srv.URL
 	defer func() { oauthTokenURL = origURL }()
 
-	origClient := oauthHTTPClient
-	oauthHTTPClient = srv.Client()
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = srv.Client()
+	defer func() { OAuthHTTPClient = origClient }()
 
 	var statuses []string
 	dcr := &DeviceCodeResponse{DeviceCode: "DC", ExpiresIn: 5, Interval: 0}
@@ -335,9 +335,9 @@ func TestPollForToken_Timeout(t *testing.T) {
 	oauthTokenURL = srv.URL
 	defer func() { oauthTokenURL = origURL }()
 
-	origClient := oauthHTTPClient
-	oauthHTTPClient = srv.Client()
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = srv.Client()
+	defer func() { OAuthHTTPClient = origClient }()
 
 	dcr := &DeviceCodeResponse{DeviceCode: "DC", ExpiresIn: 1, Interval: 0}
 	_, err := PollForToken("cid", dcr, nil)
@@ -349,9 +349,9 @@ func TestPollForToken_Timeout(t *testing.T) {
 // ─── GetAuthenticatedUser ─────────────────────────────────────────────────────
 
 func TestGetAuthenticatedUser_Success(t *testing.T) {
-	origClient := oauthHTTPClient
-	oauthHTTPClient = mockOAuthClient(200, `{"login":"cave-user","name":"Cave Person"}`)
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = mockOAuthClient(200, `{"login":"cave-user","name":"Cave Person"}`)
+	defer func() { OAuthHTTPClient = origClient }()
 
 	login, err := GetAuthenticatedUser("gho_test_token")
 	if err != nil {
@@ -363,9 +363,9 @@ func TestGetAuthenticatedUser_Success(t *testing.T) {
 }
 
 func TestGetAuthenticatedUser_APIError(t *testing.T) {
-	origClient := oauthHTTPClient
-	oauthHTTPClient = mockOAuthClient(401, `{"message":"Bad credentials"}`)
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = mockOAuthClient(401, `{"message":"Bad credentials"}`)
+	defer func() { OAuthHTTPClient = origClient }()
 
 	_, err := GetAuthenticatedUser("bad_token")
 	if err == nil {
@@ -374,9 +374,9 @@ func TestGetAuthenticatedUser_APIError(t *testing.T) {
 }
 
 func TestGetAuthenticatedUser_InvalidJSON(t *testing.T) {
-	origClient := oauthHTTPClient
-	oauthHTTPClient = mockOAuthClient(200, `{bad json}`)
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = mockOAuthClient(200, `{bad json}`)
+	defer func() { OAuthHTTPClient = origClient }()
 
 	_, err := GetAuthenticatedUser("tok")
 	if err == nil {
@@ -387,9 +387,9 @@ func TestGetAuthenticatedUser_InvalidJSON(t *testing.T) {
 // ─── RevokeToken ─────────────────────────────────────────────────────────────
 
 func TestRevokeToken_Success(t *testing.T) {
-	origClient := oauthHTTPClient
-	oauthHTTPClient = mockOAuthClient(204, "")
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = mockOAuthClient(204, "")
+	defer func() { OAuthHTTPClient = origClient }()
 
 	err := RevokeToken("client-id", "client-secret", "gho_token")
 	if err != nil {
@@ -398,9 +398,9 @@ func TestRevokeToken_Success(t *testing.T) {
 }
 
 func TestRevokeToken_OK200(t *testing.T) {
-	origClient := oauthHTTPClient
-	oauthHTTPClient = mockOAuthClient(200, "")
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = mockOAuthClient(200, "")
+	defer func() { OAuthHTTPClient = origClient }()
 
 	err := RevokeToken("cid", "sec", "tok")
 	if err != nil {
@@ -409,9 +409,9 @@ func TestRevokeToken_OK200(t *testing.T) {
 }
 
 func TestRevokeToken_Error(t *testing.T) {
-	origClient := oauthHTTPClient
-	oauthHTTPClient = mockOAuthClient(422, `{"message":"error"}`)
-	defer func() { oauthHTTPClient = origClient }()
+	origClient := OAuthHTTPClient
+	OAuthHTTPClient = mockOAuthClient(422, `{"message":"error"}`)
+	defer func() { OAuthHTTPClient = origClient }()
 
 	err := RevokeToken("cid", "sec", "tok")
 	if err == nil {

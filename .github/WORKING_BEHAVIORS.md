@@ -104,18 +104,17 @@ Six tabs: Explorer, Git, Search, Issues, Open Editors, Usage Dashboard.
 
 Tabs for Editor, Discord, and GitHub preferences. Control editor font and theme. Configure Discord integration. Configure GitHub token and repo. Form validation blocks saving an incomplete connection.
 
-Log in to GitHub directly from the Preferences panel using the **Login with GitHub** button — no copy-pasting tokens needed. The button starts the GitHub Device Authorization Flow: Engine displays a short user code and a link to `github.com/login/device`. After the user enters the code on GitHub the token is saved automatically and the login button disappears. While authorization is pending the panel shows a Cancel button to abort the flow. Requires `GITHUB_CLIENT_ID` to be set in the server environment (register an OAuth App on GitHub to get one).
+Log in to GitHub directly from the Preferences panel using the **Login with GitHub** button — no copy-pasting tokens needed. The button starts the GitHub Device Authorization Flow: Engine displays a short user code and a link to `github.com/login/device`. After the user enters the code on GitHub the token is saved automatically and the login button disappears. While authorization is pending the panel shows a Cancel button to abort the flow. Requires `GITHUB_CLIENT_ID` to be set in the server environment (register an OAuth App on GitHub to get one). On successful login, Engine also auto-provisions a `GITHUB_WEBHOOK_SECRET` when missing so webhook validation is ready without manual secret setup.
+
+Configure where Engine stores autonomously-cloned repositories using the **Autonomous project save path** field in the GitHub section of Preferences. A folder-browse button opens a directory picker for quick selection. The path is persisted and synced to the server as the `ENGINE_CLONES_DIR` environment variable.
 
 ---
 
 ## GitHub Event Detection
 
-When a `GITHUB_TOKEN` is set, Engine monitors the authenticated user's GitHub activity in near-real-time using the GitHub Events API with ETag conditional requests (304 responses are instant and do not count against rate limits). Engine checks for `@engine` in README files when:
-- A push event touches a README file in any repository.
-- A new repository is created (checks README immediately).
-- Engine starts up (scans all repositories once on boot).
+When a `GITHUB_TOKEN` is set, Engine monitors the authenticated user's GitHub activity in near-real-time using the GitHub Events API with ETag conditional requests (304 responses are instant and do not count against rate limits). If the server started before a token existed, completing GitHub login in Preferences automatically starts the watcher so monitoring begins immediately. Engine checks for `@engine` in README files when:
 
-When `@engine` appears in a README for the first time, Engine triggers the autonomous scaffolding workflow for that repository. The detection latency is typically under one minute, far faster than the previous 5-minute polling approach.
+When `@engine` appears in a README for the first time, Engine triggers the autonomous scaffolding workflow for that repository. The detection latency is typically under one minute, far faster than the previous 5-minute polling approach. After detecting `@engine` and starting the scaffold session, Engine automatically enrolls the repository in Discord (creating a project channel) and announces it in the control channel so the team knows Engine has picked it up.
 
 ---
 
@@ -145,7 +144,7 @@ From Preferences → Discord, testing or saving a Discord config can return a on
 
 Available commands: `help`, `status` (server health), `sessions` (list AI sessions), `lastcommit` (most recent git commit), `pause`/`resume` (halt or resume AI activity), `ask` (send a message to the AI), `search` (search session history), `history` (view recent session history), `project add/list/remove` (manage which projects the bot monitors — accepts a local path or a GitHub/git URL which Engine clones automatically), `projects` (list all monitored projects).
 
-Configuration lives in `.engine/discord.json` in the project root. Environment variables override file config. The bot only responds to authorized users and channels as configured. When Engine is genuinely blocked and cannot proceed autonomously, it posts a help request in the relevant Discord project thread describing what it tried, what failed, and what information it needs — rather than silently stopping.
+Configuration lives in `.engine/discord.json` in the project root. Environment variables override file config. The bot only responds to authorized users and channels as configured. Project channels are the primary communication surface: users can chat directly in the project channel (no `!ask` required) and Engine responds there. Command mode is still available for administrative actions (`!status`, `!sessions`, `!pause`, etc.). When Engine is genuinely blocked and cannot proceed autonomously, it posts a help request in the relevant Discord project channel describing what it tried, what failed, and what information it needs — rather than silently stopping.
 
 ---
 
@@ -163,7 +162,11 @@ When a README or issue in a tracked repo contains instructions like "clone `<url
 
 ## Autonomous Work Trigger
 
-Opening a GitHub Issue, pushing a README update, or a CI workflow failure causes Engine to automatically pick up the task and begin working — no manual prompt needed. Engine posts progress updates to the relevant Discord project thread as it works.
+Opening a GitHub Issue, pushing a README update, or a CI workflow failure causes Engine to automatically pick up the task and begin working — no manual prompt needed. Engine posts kickoff and major progress updates to the relevant Discord project channel as it works.
+
+For README-triggered autonomous scaffold runs, if the first pass produces no repository changes Engine retries once with stricter execution instructions. If the retry still produces no changes, Engine posts an explicit blocked/no-op notice in the project Discord channel instead of reporting a false success.
+
+Engine also deduplicates repeated README-triggered scaffold starts per repository so duplicate GitHub events do not repeatedly re-enroll the same project channel or spam repeated kickoff messages in Discord.
 
 ---
 
@@ -191,6 +194,12 @@ Given only a GitHub repository with a README describing a project idea, Engine s
 ## Per-Project Memory
 
 Every project Engine works on gets its own local memory directory inside the project itself, like a git repo carries its own `.git`. Sessions, messages, and project state for an autonomous build live in `<project>/.engine/state.db`, not in a shared global database. Switching between projects keeps each project's history separate; deleting a project's directory removes only that project's memory.
+
+---
+
+## Persistent Background Service
+
+Run Engine's Go server as a macOS launchd agent so it stays alive across reboots and monitors GitHub and Discord without the desktop app open. Install with `./scripts/engine-service.sh install` (requires `ANTHROPIC_API_KEY` and optionally `GITHUB_TOKEN` in the environment). Uninstall with `uninstall`, check with `status`, tail logs with `logs`. Once installed the service restarts automatically if it crashes.
 
 ---
 

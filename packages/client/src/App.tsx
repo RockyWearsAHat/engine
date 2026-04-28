@@ -335,7 +335,7 @@ export default function App() {
   }, [resizingPanel]);
 
   const syncRuntimeConfig = useCallback(async () => {
-    const [savedGithubToken, githubOwner, githubRepo, anthropicKey, openaiKey, savedModelProvider, ollamaBaseUrl, model, editorPreferences] = await Promise.all([
+    const [savedGithubToken, githubOwner, githubRepo, anthropicKey, openaiKey, savedModelProvider, ollamaBaseUrl, model, editorPreferences, clonesDir] = await Promise.all([
       bridge.getGithubToken().catch(() => null),
       bridge.getGithubRepoOwner().catch(() => null),
       bridge.getGithubRepoName().catch(() => null),
@@ -345,6 +345,7 @@ export default function App() {
       bridge.getOllamaBaseUrl().catch(() => null),
       bridge.getModel().catch(() => null),
       bridge.getEditorPreferences().catch(() => null),
+      bridge.getClonesDir().catch(() => null),
     ]);
     const modelProvider = savedModelProvider || 'ollama';
 
@@ -363,6 +364,7 @@ export default function App() {
         modelProvider,
         ollamaBaseUrl,
         model,
+        clonesDir,
       },
     });
 

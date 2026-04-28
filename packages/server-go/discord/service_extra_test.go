@@ -701,3 +701,206 @@ func TestSendDM_UserChannelCreateError_ReturnsError(t *testing.T) {
 	}
 }
 
+
+// ── AutoEnrollProject ─────────────────────────────────────────────────────────
+
+func TestAutoEnrollProject_InvalidPath_ReturnsError(t *testing.T) {
+	svc := &Service{
+		cfg:   Config{GuildID: "g1"},
+		state: persistedState{Projects: make(map[string]ProjectBinding)},
+	}
+	if err := svc.AutoEnrollProject("/nonexistent-path-xyz", "owner", "repo"); err == nil {
+		t.Fatal("expected error for nonexistent path, got nil")
+	}
+}
+
+func TestAutoEnrollProject_ValidPath_EnrollsAndAnnounces(t *testing.T) {
+	projectDir := t.TempDir()
+
+	var sentMessages []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/guilds/"):
+			// channels list
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/guilds/") && strings.HasSuffix(r.URL.Path, "/channels"):
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			name, _ := body["name"].(string)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "ch-" + name, "name": name})
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/channels/") && strings.HasSuffix(r.URL.Path, "/messages"):
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if content, ok := body["content"].(string); ok {
+				sentMessages = append(sentMessages, content)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "msg-1"})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	oldAPI := discordgo.EndpointAPI
+	oldGuilds := discordgo.EndpointGuilds
+	oldChannels := discordgo.EndpointChannels
+	oldChannelMessages := discordgo.EndpointChannelMessages
+	t.Cleanup(func() {
+		discordgo.EndpointAPI = oldAPI
+		discordgo.EndpointGuilds = oldGuilds
+		discordgo.EndpointChannels = oldChannels
+		discordgo.EndpointChannelMessages = oldChannelMessages
+	})
+	discordgo.EndpointAPI = server.URL + "/"
+	discordgo.EndpointGuilds = discordgo.EndpointAPI + "guilds/"
+	discordgo.EndpointChannels = discordgo.EndpointAPI + "channels/"
+	discordgo.EndpointChannelMessages = func(cID string) string {
+		return discordgo.EndpointChannels + cID + "/messages"
+	}
+
+	dg, _ := discordgo.New("Bot fake-token")
+	svc := &Service{
+		cfg:             Config{GuildID: "g1", ControlChannelName: "engine-control"},
+		state:           persistedState{Projects: make(map[string]ProjectBinding)},
+		dg:              dg,
+		cloneProjectFn:  func(_, _ string) error { return nil },
+	}
+
+	if err := svc.AutoEnrollProject(projectDir, "myowner", "myrepo"); err != nil {
+		t.Fatalf("AutoEnrollProject unexpected error: %v", err)
+	}
+
+	// Project should be enrolled.
+	svc.stateMu.Lock()
+	_, enrolled := svc.state.Projects[projectDir]
+	svc.stateMu.Unlock()
+	if !enrolled {
+		t.Fatal("expected project to be enrolled after AutoEnrollProject")
+	}
+
+	// Control channel announcement should contain owner/repo.
+	found := false
+	for _, msg := range sentMessages {
+		if strings.Contains(msg, "myowner/myrepo") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected announcement containing 'myowner/myrepo', got: %v", sentMessages)
+	}
+}
+
+func TestAutoEnrollProject_ControlChannelFails_ReturnsError(t *testing.T) {
+	projectDir := t.TempDir()
+
+	// Request counter: first GET (ensureProjectChannel) succeeds, second GET (ensureControlChannel) fails.
+	var getCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/guilds/") && strings.HasSuffix(r.URL.Path, "/channels"):
+			getCount++
+			if getCount == 1 {
+				// First call: ensureProjectChannel lists channels — return empty list.
+				_ = json.NewEncoder(w).Encode([]map[string]any{})
+			} else {
+				// Second call: ensureControlChannel fails.
+				http.Error(w, "guild error", http.StatusInternalServerError)
+			}
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/guilds/") && strings.HasSuffix(r.URL.Path, "/channels"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "ch-proj", "name": "proj-test"})
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/channels/") && strings.HasSuffix(r.URL.Path, "/messages"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "msg-1"})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	oldAPI := discordgo.EndpointAPI
+	oldGuilds := discordgo.EndpointGuilds
+	oldChannels := discordgo.EndpointChannels
+	oldChannelMessages := discordgo.EndpointChannelMessages
+	t.Cleanup(func() {
+		discordgo.EndpointAPI = oldAPI
+		discordgo.EndpointGuilds = oldGuilds
+		discordgo.EndpointChannels = oldChannels
+		discordgo.EndpointChannelMessages = oldChannelMessages
+	})
+	discordgo.EndpointAPI = server.URL + "/"
+	discordgo.EndpointGuilds = discordgo.EndpointAPI + "guilds/"
+	discordgo.EndpointChannels = discordgo.EndpointAPI + "channels/"
+	discordgo.EndpointChannelMessages = func(cID string) string {
+		return discordgo.EndpointChannels + cID + "/messages"
+	}
+
+	dg, _ := discordgo.New("Bot fake-token")
+	svc := &Service{
+		cfg:            Config{GuildID: "g1", ControlChannelName: "engine-control"},
+		state:          persistedState{Projects: make(map[string]ProjectBinding)},
+		dg:             dg,
+		cloneProjectFn: func(_, _ string) error { return nil },
+	}
+	err := svc.AutoEnrollProject(projectDir, "myowner", "myrepo")
+	if err == nil {
+		t.Fatal("expected error when ensureControlChannel fails, got nil")
+	}
+}
+
+func TestAutoEnrollProject_AlreadyEnrolled_IsIdempotent(t *testing.T) {
+	projectDir := t.TempDir()
+
+	var sentMessages []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/channels/") && strings.HasSuffix(r.URL.Path, "/messages"):
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if content, ok := body["content"].(string); ok {
+				sentMessages = append(sentMessages, content)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "msg-1"})
+		default:
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	oldAPI := discordgo.EndpointAPI
+	oldGuilds := discordgo.EndpointGuilds
+	oldChannels := discordgo.EndpointChannels
+	oldChannelMessages := discordgo.EndpointChannelMessages
+	t.Cleanup(func() {
+		discordgo.EndpointAPI = oldAPI
+		discordgo.EndpointGuilds = oldGuilds
+		discordgo.EndpointChannels = oldChannels
+		discordgo.EndpointChannelMessages = oldChannelMessages
+	})
+	discordgo.EndpointAPI = server.URL + "/"
+	discordgo.EndpointGuilds = discordgo.EndpointAPI + "guilds/"
+	discordgo.EndpointChannels = discordgo.EndpointAPI + "channels/"
+	discordgo.EndpointChannelMessages = func(cID string) string {
+		return discordgo.EndpointChannels + cID + "/messages"
+	}
+
+	dg, _ := discordgo.New("Bot fake-token")
+	svc := &Service{
+		cfg:            Config{GuildID: "g1", ControlChannelName: "engine-control"},
+		state:          persistedState{Projects: make(map[string]ProjectBinding)},
+		dg:             dg,
+		cloneProjectFn: func(_, _ string) error { return nil },
+	}
+
+	absProject, _ := filepath.Abs(projectDir)
+	svc.stateMu.Lock()
+	svc.state.Projects[absProject] = ProjectBinding{ProjectPath: absProject, RepoName: "myrepo", ChannelID: "ch-proj", Paused: false}
+	svc.stateMu.Unlock()
+
+	if err := svc.AutoEnrollProject(projectDir, "myowner", "myrepo"); err != nil {
+		t.Fatalf("AutoEnrollProject unexpected error: %v", err)
+	}
+
+	if len(sentMessages) != 0 {
+		t.Fatalf("expected no duplicate discord messages for already-enrolled project, got: %v", sentMessages)
+	}
+}

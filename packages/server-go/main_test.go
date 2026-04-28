@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -99,6 +100,13 @@ func withRunDepsReset(t *testing.T) {
 	origTriggerCI := triggerCIAnalysisSessionFn
 	origTriggerIssue := triggerIssueSessionFn
 	origTriggerIssueOpened := triggerIssueOpenedSessionFn
+	origScaffoldRunning := scaffoldTriggerRunning
+	origScaffoldLastStart := scaffoldTriggerLastStart
+
+	scaffoldTriggerMu.Lock()
+	scaffoldTriggerRunning = make(map[string]bool)
+	scaffoldTriggerLastStart = make(map[string]time.Time)
+	scaffoldTriggerMu.Unlock()
 
 	t.Cleanup(func() {
 		runFn = origRun
@@ -130,6 +138,11 @@ func withRunDepsReset(t *testing.T) {
 		triggerCIAnalysisSessionFn = origTriggerCI
 		triggerIssueSessionFn = origTriggerIssue
 		triggerIssueOpenedSessionFn = origTriggerIssueOpened
+
+		scaffoldTriggerMu.Lock()
+		scaffoldTriggerRunning = origScaffoldRunning
+		scaffoldTriggerLastStart = origScaffoldLastStart
+		scaffoldTriggerMu.Unlock()
 	})
 }
 
@@ -148,6 +161,41 @@ func countSessions(t *testing.T, projectPath string) int {
 		t.Fatalf("db.ListSessions: %v", err)
 	}
 	return len(sessions)
+}
+
+func prepareScaffoldTargetRepo(t *testing.T, baseProjectPath, owner, repo, readme string) string {
+	t.Helper()
+	targetPath := buildAutonomousRepoPath(baseProjectPath, owner, repo)
+
+	// Reset the in-memory dedup state so tests don't interfere via the shared cooldown map.
+	repoKey := strings.ToLower(owner + "/" + repo)
+	scaffoldTriggerMu.Lock()
+	delete(scaffoldTriggerLastStart, repoKey)
+	delete(scaffoldTriggerRunning, repoKey)
+	scaffoldTriggerMu.Unlock()
+	t.Cleanup(func() {
+		scaffoldTriggerMu.Lock()
+		delete(scaffoldTriggerLastStart, repoKey)
+		delete(scaffoldTriggerRunning, repoKey)
+		scaffoldTriggerMu.Unlock()
+	})
+
+	if err := os.MkdirAll(filepath.Join(targetPath, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir scaffold target git dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetPath, "README.md"), []byte(readme), 0o644); err != nil {
+		t.Fatalf("write scaffold target README: %v", err)
+	}
+
+	orig := runCommandCombinedOutputFn
+	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		return []byte("ok"), nil
+	}
+	t.Cleanup(func() {
+		runCommandCombinedOutputFn = orig
+	})
+
+	return targetPath
 }
 
 func TestDefaultProjectPath_NonEmpty(t *testing.T) {
@@ -174,6 +222,82 @@ func TestBuildAutonomousRepoPath_EmptyOwner(t *testing.T) {
 	want := filepath.Join(base, ".engine", "projects", "demo")
 	if got != want {
 		t.Fatalf("unexpected path: got %q want %q", got, want)
+	}
+}
+
+func TestScaffoldTrigger_DedupeAndCooldown(t *testing.T) {
+	withRunDepsReset(t)
+	repoKey := "owner/repo"
+
+	if !beginScaffoldTrigger(repoKey) {
+		t.Fatal("expected first scaffold trigger to start")
+	}
+	if beginScaffoldTrigger(repoKey) {
+		t.Fatal("expected concurrent scaffold trigger to be deduped")
+	}
+
+	finishScaffoldTrigger(repoKey)
+	if beginScaffoldTrigger(repoKey) {
+		t.Fatal("expected immediate restart to be deduped by cooldown")
+	}
+
+	scaffoldTriggerMu.Lock()
+	scaffoldTriggerLastStart[repoKey] = time.Now().Add(-(scaffoldTriggerCooldown + time.Second))
+	scaffoldTriggerMu.Unlock()
+
+	if !beginScaffoldTrigger(repoKey) {
+		t.Fatal("expected scaffold trigger to run after cooldown elapsed")
+	}
+}
+
+func TestHasRecentScaffoldSession(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+
+	target := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	if err := db.WithProject(target, func() error {
+		if err := db.CreateSession("scaffold-repo-123", target, "main"); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WithProject create scaffold session: %v", err)
+	}
+
+	if !hasRecentScaffoldSession(target, "repo", 2*time.Minute) {
+		t.Fatal("expected recent scaffold session to be detected")
+	}
+	if hasRecentScaffoldSession(target, "repo", 0) {
+		t.Fatal("expected zero-duration window to return false")
+	}
+	if hasRecentScaffoldSession(target, "other-repo", 2*time.Minute) {
+		t.Fatal("expected non-matching repo prefix to return false")
+	}
+}
+
+func TestTriggerScaffoldSession_DedupesWhenRecentScaffoldExists(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	target := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	if err := db.WithProject(target, func() error {
+		return db.CreateSession("scaffold-repo-987", target, "main")
+	}); err != nil {
+		t.Fatalf("WithProject create scaffold session: %v", err)
+	}
+
+	chatCalls := 0
+	origAI := aiChatFn
+	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+		chatCalls++
+	}
+	t.Cleanup(func() { aiChatFn = origAI })
+
+	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`))
+	if chatCalls != 0 {
+		t.Fatalf("expected deduped scaffold trigger to skip aiChatFn, got calls=%d", chatCalls)
 	}
 }
 
@@ -390,9 +514,7 @@ func TestReadmeContainsEngineTag_MissingFile(t *testing.T) {
 func TestTriggerScaffoldSession_NoEngineTag_Skips(t *testing.T) {
 	projectPath := t.TempDir()
 	setupTestDB(t, projectPath)
-	if err := os.WriteFile(filepath.Join(projectPath, "README.md"), []byte("# My Project\n\nNo trigger here."), 0o644); err != nil {
-		t.Fatalf("write README: %v", err)
-	}
+	prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# My Project\n\nNo trigger here.")
 
 	before := countSessions(t, projectPath)
 	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`))
@@ -413,14 +535,12 @@ func TestTriggerScaffoldSession_ValidPayloadCreatesSession(t *testing.T) {
 	setupTestDB(t, projectPath)
 	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
 	t.Setenv("OPENAI_API_KEY", "")
-	if err := os.WriteFile(filepath.Join(projectPath, "README.md"), []byte("# Demo\n@engine"), 0o644); err != nil {
-		t.Fatalf("write README: %v", err)
-	}
+	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
 
-	before := countSessions(t, projectPath)
+	before := countSessions(t, targetPath)
 	payload := json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`)
 	triggerScaffoldSession(projectPath, payload)
-	after := countSessions(t, projectPath)
+	after := countSessions(t, targetPath)
 
 	if after <= before {
 		t.Fatalf("expected session count to increase, before=%d after=%d", before, after)
@@ -448,11 +568,12 @@ func TestTriggerIssueSession_ValidPayloadCreatesSession(t *testing.T) {
 	setupTestDB(t, projectPath)
 	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
 	t.Setenv("OPENAI_API_KEY", "")
+	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
 
-	before := countSessions(t, projectPath)
-	payload := json.RawMessage(`{"action":"created","comment":{"body":"please fix","user":{"login":"bob"}},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`)
+	before := countSessions(t, targetPath)
+	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine please fix","user":{"login":"bob"}},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`)
 	triggerIssueSession(projectPath, payload)
-	after := countSessions(t, projectPath)
+	after := countSessions(t, targetPath)
 
 	if after <= before {
 		t.Fatalf("expected session count to increase, before=%d after=%d", before, after)
@@ -464,11 +585,12 @@ func TestTriggerIssueOpenedSession_ValidPayloadCreatesSession(t *testing.T) {
 	setupTestDB(t, projectPath)
 	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
 	t.Setenv("OPENAI_API_KEY", "")
+	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
 
-	before := countSessions(t, projectPath)
+	before := countSessions(t, targetPath)
 	payload := json.RawMessage(`{"action":"opened","issue":{"number":43,"title":"Feature","body":"Please add X"},"repository":{"full_name":"owner/repo"},"sender":{"login":"alice"}}`)
 	triggerIssueOpenedSession(projectPath, payload)
-	after := countSessions(t, projectPath)
+	after := countSessions(t, targetPath)
 
 	if after <= before {
 		t.Fatalf("expected session count to increase, before=%d after=%d", before, after)
@@ -905,15 +1027,13 @@ func TestTriggerScaffoldSession_OnChunkCalled(t *testing.T) {
 	projectPath := t.TempDir()
 	setupTestDB(t, projectPath)
 	withAIMockServer(t)
-	if err := os.WriteFile(filepath.Join(projectPath, "README.md"), []byte("# Demo\n@engine"), 0o644); err != nil {
-		t.Fatalf("write README: %v", err)
-	}
+	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
 
 	payload := json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`)
 	triggerScaffoldSession(projectPath, payload)
 	// If OnChunk was not called, the session message count would still be from ai.Chat.
 	// Just verify no panic and session was created.
-	sessions, err := db.ListSessions(projectPath)
+	sessions, err := db.ListSessions(targetPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -942,10 +1062,11 @@ func TestTriggerIssueSession_OnChunkCalled(t *testing.T) {
 	projectPath := t.TempDir()
 	setupTestDB(t, projectPath)
 	withAIMockServer(t)
+	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
 
-	payload := json.RawMessage(`{"action":"created","comment":{"body":"please fix","user":{"login":"bob"}},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`)
+	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine please fix","user":{"login":"bob"}},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`)
 	triggerIssueSession(projectPath, payload)
-	sessions, err := db.ListSessions(projectPath)
+	sessions, err := db.ListSessions(targetPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -958,10 +1079,11 @@ func TestTriggerIssueOpenedSession_OnChunkCalled(t *testing.T) {
 	projectPath := t.TempDir()
 	setupTestDB(t, projectPath)
 	withAIMockServer(t)
+	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
 
 	payload := json.RawMessage(`{"action":"opened","issue":{"number":43,"title":"Feature","body":"Please add X"},"repository":{"full_name":"owner/repo"},"sender":{"login":"alice"}}`)
 	triggerIssueOpenedSession(projectPath, payload)
-	sessions, err := db.ListSessions(projectPath)
+	sessions, err := db.ListSessions(targetPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -978,13 +1100,11 @@ func TestTriggerSessions_DBCreateAndSaveErrorsCovered(t *testing.T) {
 	saveMessageFn = func(id, sessionId, role, content string, toolCalls any) error {
 		return errors.New("save fail")
 	}
-	if err := os.WriteFile(filepath.Join(projectPath, "README.md"), []byte("# Demo\n@engine"), 0o644); err != nil {
-		t.Fatalf("write README: %v", err)
-	}
+	prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
 
 	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`))
 	triggerCIAnalysisSession(projectPath, json.RawMessage(`{"workflow_run":{"name":"CI","html_url":"https://example.com","conclusion":"failure"},"repository":{"full_name":"owner/repo"}}`))
-	triggerIssueSession(projectPath, json.RawMessage(`{"action":"created","comment":{"body":"please fix","user":{"login":"bob"}},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`))
+	triggerIssueSession(projectPath, json.RawMessage(`{"action":"created","comment":{"body":"@engine please fix","user":{"login":"bob"}},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`))
 	triggerIssueOpenedSession(projectPath, json.RawMessage(`{"action":"opened","issue":{"number":43,"title":"Feature","body":"Please add X"},"repository":{"full_name":"owner/repo"},"sender":{"login":"alice"}}`))
 }
 
@@ -996,16 +1116,50 @@ func TestTriggerSessions_SaveMessageErrorBranchesCovered(t *testing.T) {
 		return errors.New("save fail")
 	}
 	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+		ctx.OnChunk("assistant reply", false)
 		ctx.OnChunk("", true)
 	}
-	if err := os.WriteFile(filepath.Join(projectPath, "README.md"), []byte("# Demo\n@engine"), 0o644); err != nil {
-		t.Fatalf("write README: %v", err)
-	}
+	prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
 
 	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`))
 	triggerCIAnalysisSession(projectPath, json.RawMessage(`{"workflow_run":{"name":"CI","html_url":"https://example.com","conclusion":"failure"},"repository":{"full_name":"owner/repo"}}`))
-	triggerIssueSession(projectPath, json.RawMessage(`{"action":"created","comment":{"body":"please fix","user":{"login":"bob"}},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`))
+	triggerIssueSession(projectPath, json.RawMessage(`{"action":"created","comment":{"body":"@engine please fix","user":{"login":"bob"}},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`))
 	triggerIssueOpenedSession(projectPath, json.RawMessage(`{"action":"opened","issue":{"number":43,"title":"Feature","body":"Please add X"},"repository":{"full_name":"owner/repo"},"sender":{"login":"alice"}}`))
+}
+
+func TestTriggerScaffoldSession_NoOpFirstPass_RetriesThenReportsNoop(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	notifier := &mockProgressNotifier{}
+	ws.SetDiscordBridge(notifier)
+	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
+
+	callCount := 0
+	origAI := aiChatFn
+	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+		callCount++
+		ctx.OnChunk("planned but unchanged", false)
+		ctx.OnChunk("", true)
+	}
+	t.Cleanup(func() { aiChatFn = origAI })
+
+	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`))
+
+	if callCount != 2 {
+		t.Fatalf("expected scaffold retry after first no-op, got %d attempts", callCount)
+	}
+
+	joined := strings.Join(notifier.notified, "\n")
+	if !strings.Contains(joined, "First scaffold pass") {
+		t.Fatalf("expected first-pass no-op warning in notifications, got: %v", notifier.notified)
+	}
+	if !strings.Contains(joined, "ended with no repository changes") {
+		t.Fatalf("expected final no-op failure notification, got: %v", notifier.notified)
+	}
 }
 
 func TestRun_RepoMonitorCallbacks_InvokeTriggerClosures(t *testing.T) {
@@ -1133,5 +1287,725 @@ func TestTriggerScaffoldSession_WritesToProjectLocalDB(t *testing.T) {
 	// Workspace DB should be active again after WithProject restored it.
 	if got := db.CurrentProject(); got != workspace {
 		t.Errorf("CurrentProject after trigger = %q, want %q", got, workspace)
+	}
+}
+// ── scaffold + Discord auto-enroll ───────────────────────────────────────────
+
+type mockAutoEnroller struct {
+	enrolledPath string
+	enrolledOwner string
+	enrolledRepo  string
+}
+
+func (m *mockAutoEnroller) SendDMToOwner(_ string) error { return nil }
+func (m *mockAutoEnroller) CurrentConfig() discord.Config { return discord.Config{} }
+func (m *mockAutoEnroller) Reload(_ discord.Config) error { return nil }
+func (m *mockAutoEnroller) SearchHistory(_, _, _ string, _ int) ([]db.DiscordSearchHit, error) {
+	return nil, nil
+}
+func (m *mockAutoEnroller) RecentHistory(_, _, _ string, _ int) ([]db.DiscordMessage, error) {
+	return nil, nil
+}
+func (m *mockAutoEnroller) AutoEnrollProject(projectPath, owner, repo string) error {
+	m.enrolledPath = projectPath
+	m.enrolledOwner = owner
+	m.enrolledRepo = repo
+	return nil
+}
+
+func TestTriggerScaffoldSession_CallsAutoEnrollProject(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "")
+	targetProjectPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "myrepo", "# Demo\n@engine")
+
+	enroller := &mockAutoEnroller{}
+	ws.SetDiscordBridge(enroller)
+	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
+
+	payload := json.RawMessage(`{"repository":{"full_name":"owner/myrepo"}}`)
+	triggerScaffoldSession(projectPath, payload)
+
+	if enroller.enrolledOwner != "owner" || enroller.enrolledRepo != "myrepo" {
+		t.Fatalf("expected enroll owner/myrepo, got %q/%q", enroller.enrolledOwner, enroller.enrolledRepo)
+	}
+	if enroller.enrolledPath != targetProjectPath {
+		t.Fatalf("expected enroll path %q, got %q", targetProjectPath, enroller.enrolledPath)
+	}
+}
+
+func TestTriggerScaffoldSession_DBInitFails_LogsError(t *testing.T) {
+	projectPath := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", "/dev/null/cannot-create")
+	prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	payload := json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`)
+	// No panic expected; dbErr != nil path logs the error.
+	triggerScaffoldSession(projectPath, payload)
+}
+
+func TestTriggerScaffoldSession_CloneSyncFailure_SkipsBuild(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+
+	origRun := runCommandCombinedOutputFn
+	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "clone" {
+			return []byte("repository not found"), errors.New("clone failed")
+		}
+		return []byte("ok"), nil
+	}
+	t.Cleanup(func() { runCommandCombinedOutputFn = origRun })
+
+	before := countSessions(t, projectPath)
+	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`))
+	after := countSessions(t, projectPath)
+
+	if after != before {
+		t.Fatalf("expected no scaffold session when clone/sync fails, before=%d after=%d", before, after)
+	}
+}
+
+func TestTriggerCIAnalysisSession_DBInitFails_LogsError(t *testing.T) {
+	projectPath := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", "/dev/null/cannot-create")
+	payload := json.RawMessage(`{"workflow_run":{"name":"CI","html_url":"https://example.com","conclusion":"failure"},"repository":{"full_name":"owner/repo"}}`)
+	triggerCIAnalysisSession(projectPath, payload)
+}
+
+func TestTriggerIssueSession_DBInitFails_LogsError(t *testing.T) {
+	projectPath := t.TempDir()
+	prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	t.Setenv("ENGINE_STATE_DIR", "/dev/null/cannot-create")
+	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine fix it","user":{"login":"bob"}},"issue":{"number":1,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`)
+	triggerIssueSession(projectPath, payload)
+}
+
+// mockProgressNotifier implements AutoEnrollProject AND NotifyProjectProgress so
+// we can exercise both interface-assertion branches in autoEnrollDiscordProject
+// and notifyDiscordProjectProgress.
+type mockProgressNotifier struct {
+	mockAutoEnroller
+	notified []string
+	enrollErr error
+}
+
+func (m *mockProgressNotifier) NotifyProjectProgress(_ string, message string) {
+	m.notified = append(m.notified, message)
+}
+func (m *mockProgressNotifier) AutoEnrollProject(projectPath, owner, repo string) error {
+	m.enrolledPath = projectPath
+	m.enrolledOwner = owner
+	m.enrolledRepo = repo
+	return m.enrollErr
+}
+func (m *mockProgressNotifier) Start() error  { return nil }
+func (m *mockProgressNotifier) Close() error  { return nil }
+
+func TestAutoEnrollDiscordProject_EnrollError_Logs(t *testing.T) {
+	mock := &mockProgressNotifier{enrollErr: errors.New("enroll boom")}
+	ws.SetDiscordBridge(mock)
+	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
+	autoEnrollDiscordProject(t.TempDir(), "owner", "repo")
+}
+
+func TestNotifyDiscordProjectProgress_CallsNotifier(t *testing.T) {
+	mock := &mockProgressNotifier{}
+	ws.SetDiscordBridge(mock)
+	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
+	notifyDiscordProjectProgress(t.TempDir(), "hello from test")
+	if len(mock.notified) == 0 || mock.notified[0] != "hello from test" {
+		t.Errorf("expected notification, got %v", mock.notified)
+	}
+}
+
+func TestTriggerIssueSession_WorkspaceError_SkipsSession(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+
+	origRun := runCommandCombinedOutputFn
+	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		return nil, errors.New("clone fail")
+	}
+	t.Cleanup(func() { runCommandCombinedOutputFn = origRun })
+
+	before := countSessions(t, projectPath)
+	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine please fix","user":{"login":"bob"}},"issue":{"number":99,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`)
+	triggerIssueSession(projectPath, payload)
+	after := countSessions(t, projectPath)
+	if after != before {
+		t.Fatalf("expected no session when workspace error, before=%d after=%d", before, after)
+	}
+}
+
+func TestTriggerIssueOpenedSession_WorkspaceError_SkipsSession(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+
+	origRun := runCommandCombinedOutputFn
+	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		return nil, errors.New("clone fail")
+	}
+	t.Cleanup(func() { runCommandCombinedOutputFn = origRun })
+
+	before := countSessions(t, projectPath)
+	payload := json.RawMessage(`{"action":"opened","issue":{"number":98,"title":"Feature","body":"desc"},"repository":{"full_name":"owner/repo"},"sender":{"login":"alice"}}`)
+	triggerIssueOpenedSession(projectPath, payload)
+	after := countSessions(t, projectPath)
+	if after != before {
+		t.Fatalf("expected no session when workspace error, before=%d after=%d", before, after)
+	}
+}
+
+func TestRun_DiscordDisabled_StubInitError_IsIgnored(t *testing.T) {
+	withRunDepsReset(t)
+	projectPath := t.TempDir()
+	t.Setenv("PROJECT_PATH", projectPath)
+	t.Setenv("ENGINE_VPN", "")
+	t.Setenv("ENGINE_REMOTE", "")
+
+	dbInitFn = func(path string) error { return nil }
+	loadDiscordConfigFn = func(path string) (discord.Config, error) {
+		return discord.Config{Enabled: false}, nil
+	}
+	newDiscordServiceFn = func(cfg discord.Config, path string) (discordRuntime, error) {
+		return nil, errors.New("stub init error")
+	}
+	httpHandleFuncFn = func(_ string, _ func(http.ResponseWriter, *http.Request)) {}
+	httpHandleFn = func(_ string, _ http.Handler) {}
+	listenErr := errors.New("stop")
+	httpListenAndServeFn = func(addr string, handler http.Handler) error { return listenErr }
+
+	err := run()
+	if !errors.Is(err, listenErr) {
+		t.Fatalf("expected listen error after ignored stub init error, got %v", err)
+	}
+}
+
+// ── hasRepoProgress ───────────────────────────────────────────────────────────
+
+func TestHasRepoProgress_StagedDiff(t *testing.T) {
+	before := repoActivitySnapshot{head: "abc", staged: 0}
+	after := repoActivitySnapshot{head: "abc", staged: 1}
+	if !hasRepoProgress(before, after) {
+		t.Error("expected true when staged count changes")
+	}
+}
+
+func TestHasRepoProgress_UnstagedDiff(t *testing.T) {
+	before := repoActivitySnapshot{head: "abc", unstaged: 0}
+	after := repoActivitySnapshot{head: "abc", unstaged: 2}
+	if !hasRepoProgress(before, after) {
+		t.Error("expected true when unstaged count changes")
+	}
+}
+
+func TestHasRepoProgress_UntrackedDiff(t *testing.T) {
+	before := repoActivitySnapshot{head: "abc", untracked: 0}
+	after := repoActivitySnapshot{head: "abc", untracked: 1}
+	if !hasRepoProgress(before, after) {
+		t.Error("expected true when untracked count changes")
+	}
+}
+
+func TestHasRepoProgress_NoChange(t *testing.T) {
+	s := repoActivitySnapshot{head: "abc", staged: 1, unstaged: 1, untracked: 1}
+	if hasRepoProgress(s, s) {
+		t.Error("expected false when snapshots are identical")
+	}
+}
+
+// ── captureRepoActivity ───────────────────────────────────────────────────────
+
+func TestCaptureRepoActivity_RealGitRepo(t *testing.T) {
+	dir := t.TempDir()
+	// Initialize a real git repo so GetLog can return commits.
+	if out, err := exec.Command("git", "-C", dir, "init").CombinedOutput(); err != nil {
+		t.Skipf("git init: %v: %s", err, out)
+	}
+	_ = exec.Command("git", "-C", dir, "config", "user.email", "test@example.com").Run()
+	_ = exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
+	testFile := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(testFile, []byte("hi"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", dir, "add", ".").CombinedOutput(); err != nil {
+		t.Skipf("git add: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", dir, "commit", "-m", "init").CombinedOutput(); err != nil {
+		t.Skipf("git commit: %v: %s", err, out)
+	}
+
+	snap := captureRepoActivity(dir)
+	if snap.head == "" {
+		t.Error("expected non-empty head after commit")
+	}
+}
+
+// ── runCommandCombinedOutputFn default body ───────────────────────────────────
+
+func TestRunCommandCombinedOutputFn_Default(t *testing.T) {
+	// The default runCommandCombinedOutputFn body wraps exec.Command.CombinedOutput.
+	// Call it directly with a safe command to exercise the default body.
+	out, err := runCommandCombinedOutputFn("echo", "hello")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if !strings.Contains(string(out), "hello") {
+		t.Errorf("expected 'hello' in output, got: %s", out)
+	}
+}
+
+// ── GitHubAuthSuccessHook paths in run() ─────────────────────────────────────
+
+func TestRun_GitHubAuthSuccessHook_EmptyToken(t *testing.T) {
+	withRunDepsReset(t)
+	projectPath := t.TempDir()
+	t.Setenv("PROJECT_PATH", projectPath)
+	t.Setenv("ENGINE_VPN", "")
+	t.Setenv("ENGINE_REMOTE", "")
+
+	dbInitFn = func(path string) error { return nil }
+	loadDiscordConfigFn = func(path string) (discord.Config, error) {
+		return discord.Config{Enabled: false}, nil
+	}
+	newDiscordServiceFn = func(cfg discord.Config, path string) (discordRuntime, error) {
+		return &fakeDiscordService{}, nil
+	}
+	httpHandleFuncFn = func(_ string, _ func(http.ResponseWriter, *http.Request)) {}
+	httpHandleFn = func(_ string, _ http.Handler) {}
+	newEventsWatcherFn = func(_ *gh.RepoMonitor) *gh.EventsWatcher {
+		return nil
+	}
+
+	listenErr := errors.New("stop")
+	httpListenAndServeFn = func(addr string, handler http.Handler) error {
+		// Trigger the hook with empty token — exercises the "return" branch.
+		ws.TriggerGitHubAuthSuccessHook("", "")
+		return listenErr
+	}
+
+	err := run()
+	if !errors.Is(err, listenErr) {
+		t.Fatalf("expected listen err, got %v", err)
+	}
+}
+
+func TestRun_GitHubAuthSuccessHook_NonEmptyToken(t *testing.T) {
+	withRunDepsReset(t)
+	projectPath := t.TempDir()
+	t.Setenv("PROJECT_PATH", projectPath)
+	t.Setenv("ENGINE_VPN", "")
+	t.Setenv("ENGINE_REMOTE", "")
+
+	dbInitFn = func(path string) error { return nil }
+	loadDiscordConfigFn = func(path string) (discord.Config, error) {
+		return discord.Config{Enabled: false}, nil
+	}
+	newDiscordServiceFn = func(cfg discord.Config, path string) (discordRuntime, error) {
+		return &fakeDiscordService{}, nil
+	}
+	httpHandleFuncFn = func(_ string, _ func(http.ResponseWriter, *http.Request)) {}
+	httpHandleFn = func(_ string, _ http.Handler) {}
+	newEventsWatcherFn = func(_ *gh.RepoMonitor) *gh.EventsWatcher {
+		return nil
+	}
+
+	listenErr := errors.New("stop")
+	httpListenAndServeFn = func(addr string, handler http.Handler) error {
+		// Trigger the hook with non-empty token — exercises SetSecret + startEventsWatcher.
+		ws.TriggerGitHubAuthSuccessHook("tok123", "secret456")
+		return listenErr
+	}
+
+	err := run()
+	if !errors.Is(err, listenErr) {
+		t.Fatalf("expected listen err, got %v", err)
+	}
+}
+
+// ── OnChunk / OnError callback coverage ──────────────────────────────────────
+
+func TestTriggerScaffoldSession_OnChunkContent(t *testing.T) {
+	withRunDepsReset(t)
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo2", "# Demo\n@engine")
+
+	aiChatFn = func(ctx *ai.ChatContext, _ string) {
+		ctx.OnChunk("scaffold output", false)
+		ctx.OnChunk("", true)
+	}
+
+	payload := json.RawMessage(`{"repository":{"full_name":"owner/repo2"}}`)
+	triggerScaffoldSession(projectPath, payload)
+	_ = targetPath
+}
+
+func TestTriggerScaffoldSession_OnError(t *testing.T) {
+	withRunDepsReset(t)
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	prepareScaffoldTargetRepo(t, projectPath, "owner", "repo3", "# Demo\n@engine")
+
+	aiChatFn = func(ctx *ai.ChatContext, _ string) {
+		ctx.OnError("scaffold error msg")
+	}
+
+	payload := json.RawMessage(`{"repository":{"full_name":"owner/repo3"}}`)
+	triggerScaffoldSession(projectPath, payload)
+}
+
+func TestTriggerIssueSession_OnChunkDone(t *testing.T) {
+	withRunDepsReset(t)
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "issuerepo", "# Demo")
+
+	aiChatFn = func(ctx *ai.ChatContext, _ string) {
+		ctx.OnChunk("issue content", false)
+		ctx.OnChunk("", true)
+	}
+	setupTestDB(t, targetPath)
+
+	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine fix it","user":{"login":"bob"}},"issue":{"number":77,"title":"Bug"},"repository":{"full_name":"owner/issuerepo"}}`)
+	triggerIssueSession(projectPath, payload)
+}
+
+func TestTriggerIssueSession_OnError(t *testing.T) {
+	withRunDepsReset(t)
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "issuerepo2", "# Demo")
+
+	aiChatFn = func(ctx *ai.ChatContext, _ string) {
+		ctx.OnError("issue error")
+	}
+	setupTestDB(t, targetPath)
+
+	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine fix","user":{"login":"bob"}},"issue":{"number":78,"title":"Other"},"repository":{"full_name":"owner/issuerepo2"}}`)
+	triggerIssueSession(projectPath, payload)
+}
+
+func TestTriggerIssueOpenedSession_OnChunkDone(t *testing.T) {
+	withRunDepsReset(t)
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "openedrepo", "# Demo")
+
+	aiChatFn = func(ctx *ai.ChatContext, _ string) {
+		ctx.OnChunk("opened content", false)
+		ctx.OnChunk("", true)
+	}
+	setupTestDB(t, targetPath)
+
+	payload := json.RawMessage(`{"action":"opened","issue":{"number":88,"title":"Feature","body":"desc"},"repository":{"full_name":"owner/openedrepo"},"sender":{"login":"alice"}}`)
+	triggerIssueOpenedSession(projectPath, payload)
+}
+
+func TestTriggerIssueOpenedSession_OnError(t *testing.T) {
+	withRunDepsReset(t)
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "openederrrepo", "# Demo")
+
+	aiChatFn = func(ctx *ai.ChatContext, _ string) {
+		ctx.OnError("opened error")
+	}
+	setupTestDB(t, targetPath)
+
+	payload := json.RawMessage(`{"action":"opened","issue":{"number":89,"title":"Bug2","body":"desc2"},"repository":{"full_name":"owner/openederrrepo"},"sender":{"login":"alice"}}`)
+	triggerIssueOpenedSession(projectPath, payload)
+}
+
+// ── hasRepoProgress: head differs branch ─────────────────────────────────────
+
+func TestHasRepoProgress_HeadDiffers(t *testing.T) {
+		before := repoActivitySnapshot{head: "abc123", staged: 0, unstaged: 0, untracked: 0}
+		after := repoActivitySnapshot{head: "def456", staged: 0, unstaged: 0, untracked: 0}
+		if !hasRepoProgress(before, after) {
+			t.Fatal("expected progress when head changes")
+		}
+	}
+
+	// ── beginScaffoldTrigger: empty repoKey branch ────────────────────────────────
+
+	func TestBeginScaffoldTrigger_EmptyRepoKey(t *testing.T) {
+		if beginScaffoldTrigger("") {
+			t.Fatal("expected false for empty repoKey")
+		}
+		if beginScaffoldTrigger("   ") {
+			t.Fatal("expected false for whitespace-only repoKey")
+		}
+	}
+
+	// ── hasRecentScaffoldSession: timestamp edge cases ────────────────────────────
+
+	func TestHasRecentScaffoldSession_EmptyUpdatedAtUsesCreatedAt(t *testing.T) {
+		projectPath := t.TempDir()
+		target := prepareScaffoldTargetRepo(t, projectPath, "owner", "tsrepo1", "# Demo\n@engine")
+		setupTestDB(t, target)
+
+		// Insert session with empty updated_at but valid recent created_at.
+		recentTS := time.Now().UTC().Add(-30 * time.Second).Format(time.RFC3339)
+		if err := db.WithProject(target, func() error {
+			return db.InsertSessionWithTimestamps("scaffold-tsrepo1-empty-upd", target, "main", recentTS, "")
+		}); err != nil {
+			t.Fatalf("WithProject insert: %v", err)
+		}
+
+		if !hasRecentScaffoldSession(target, "tsrepo1", 2*time.Minute) {
+			t.Fatal("expected recent session detected when UpdatedAt empty but CreatedAt is recent")
+		}
+	}
+
+	func TestHasRecentScaffoldSession_BothTimestampsEmptySkipped(t *testing.T) {
+		projectPath := t.TempDir()
+		target := prepareScaffoldTargetRepo(t, projectPath, "owner", "tsrepo2", "# Demo\n@engine")
+		setupTestDB(t, target)
+
+		// Insert only a session with both timestamps empty — the loop hits `continue` and returns false.
+		if err := db.WithProject(target, func() error {
+			return db.InsertSessionWithTimestamps("scaffold-tsrepo2-both-empty", target, "main", "", "")
+		}); err != nil {
+			t.Fatalf("WithProject insert: %v", err)
+		}
+
+		// Both timestamps empty → session skipped → no recent session.
+		if hasRecentScaffoldSession(target, "tsrepo2", 2*time.Minute) {
+			t.Fatal("expected no recent session when only empty-timestamp sessions exist")
+		}
+	}
+
+	func TestHasRecentScaffoldSession_UnparsableTimestampSkipped(t *testing.T) {
+		projectPath := t.TempDir()
+		target := prepareScaffoldTargetRepo(t, projectPath, "owner", "tsrepo3", "# Demo\n@engine")
+		setupTestDB(t, target)
+
+		// Insert a session with an unparsable timestamp (should be skipped).
+		// Insert a second session with a valid timestamp so the loop finds something.
+		recentTS := time.Now().UTC().Add(-30 * time.Second).Format(time.RFC3339)
+		if err := db.WithProject(target, func() error {
+			if err := db.InsertSessionWithTimestamps("scaffold-tsrepo3-bad-ts", target, "main", "not-a-date", "not-a-date"); err != nil {
+				return err
+			}
+			return db.InsertSessionWithTimestamps("scaffold-tsrepo3-valid", target, "main", recentTS, recentTS)
+		}); err != nil {
+			t.Fatalf("WithProject insert: %v", err)
+		}
+
+		if !hasRecentScaffoldSession(target, "tsrepo3", 2*time.Minute) {
+			t.Fatal("expected recent session detected despite one session having unparsable timestamp")
+		}
+	}
+
+	// ── triggerScaffoldSession: beginScaffoldTrigger dedup branch ─────────────────
+
+	func TestTriggerScaffoldSession_DedupedByBeginScaffoldTrigger(t *testing.T) {
+		projectPath := t.TempDir()
+		setupTestDB(t, projectPath)
+
+		prepareScaffoldTargetRepo(t, projectPath, "owner", "deduptest", "# Demo\n@engine")
+
+		// Mark trigger as already running so beginScaffoldTrigger returns false.
+		scaffoldTriggerMu.Lock()
+		scaffoldTriggerRunning["owner/deduptest"] = true
+		scaffoldTriggerMu.Unlock()
+
+		called := false
+		origAI := aiChatFn
+		aiChatFn = func(ctx *ai.ChatContext, prompt string) { called = true }
+		t.Cleanup(func() { aiChatFn = origAI })
+
+		triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/deduptest"}}`))
+
+		if called {
+			t.Fatal("expected AI to NOT be called when trigger is deduped")
+		}
+	}
+
+	// ── triggerScaffoldSession: second attempt makes progress branch ──────────────
+
+	func TestTriggerScaffoldSession_SecondAttemptMakesProgress(t *testing.T) {
+		projectPath := t.TempDir()
+		setupTestDB(t, projectPath)
+		t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
+		t.Setenv("OPENAI_API_KEY", "")
+
+		// Build a real git repo so captureRepoActivity can detect file changes.
+		targetPath := buildAutonomousRepoPath(projectPath, "owner", "progressrepo")
+
+		// Reset dedup state for this key.
+		repoKey := "owner/progressrepo"
+		scaffoldTriggerMu.Lock()
+		delete(scaffoldTriggerLastStart, repoKey)
+		delete(scaffoldTriggerRunning, repoKey)
+		scaffoldTriggerMu.Unlock()
+		t.Cleanup(func() {
+			scaffoldTriggerMu.Lock()
+			delete(scaffoldTriggerLastStart, repoKey)
+			delete(scaffoldTriggerRunning, repoKey)
+			scaffoldTriggerMu.Unlock()
+		})
+
+		if err := os.MkdirAll(targetPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command("git", "-C", targetPath, "init").CombinedOutput(); err != nil {
+			t.Skipf("git init failed: %v: %s", err, out)
+		}
+		_ = exec.Command("git", "-C", targetPath, "config", "user.email", "test@example.com").Run()
+		_ = exec.Command("git", "-C", targetPath, "config", "user.name", "Test").Run()
+		if err := os.WriteFile(filepath.Join(targetPath, "README.md"), []byte("# Demo\n@engine"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command("git", "-C", targetPath, "add", ".").CombinedOutput(); err != nil {
+			t.Skipf("git add failed: %v: %s", err, out)
+		}
+		if out, err := exec.Command("git", "-C", targetPath, "commit", "-m", "init").CombinedOutput(); err != nil {
+			t.Skipf("git commit failed: %v: %s", err, out)
+		}
+		setupTestDB(t, targetPath)
+
+		// Mock git clone/pull to succeed (actual git ops on the real repo are fine).
+		origRun := runCommandCombinedOutputFn
+		runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+			return []byte("ok"), nil
+		}
+		t.Cleanup(func() { runCommandCombinedOutputFn = origRun })
+
+		notifier := &mockProgressNotifier{}
+		ws.SetDiscordBridge(notifier)
+		t.Cleanup(func() { ws.SetDiscordBridge(nil) })
+
+		callCount := 0
+		origAI := aiChatFn
+		aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+			callCount++
+			if callCount == 2 {
+				// Create an untracked file so captureRepoActivity detects progress.
+				_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "progress.txt"), []byte("done"), 0o644)
+			}
+			ctx.OnChunk("response", false)
+			ctx.OnChunk("", true)
+		}
+		t.Cleanup(func() { aiChatFn = origAI })
+
+		triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/progressrepo"}}`))
+
+		if callCount != 2 {
+			t.Fatalf("expected 2 AI calls (first no-op, second with progress), got %d", callCount)
+		}
+		joined := strings.Join(notifier.notified, "\n")
+		if !strings.Contains(joined, "no-op retry") {
+			t.Fatalf("expected 'no-op retry' notification, got: %v", notifier.notified)
+		}
+	}
+
+	// ── triggerIssueSession: bad full_name branch ─────────────────────────────────
+
+func TestTriggerIssueSession_BadFullName(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine fix it","user":{"login":"bob"}},"issue":{"number":1,"title":"Bug"},"repository":{"full_name":"no-slash-here"}}`)
+	triggerIssueSession(projectPath, payload)
+}
+
+// ── triggerIssueOpenedSession: bad full_name branch ───────────────────────────
+
+func TestTriggerIssueOpenedSession_BadFullName(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	payload := json.RawMessage(`{"action":"opened","issue":{"number":1,"title":"Bug","body":"desc"},"repository":{"full_name":"no-slash-here"},"sender":{"login":"alice"}}`)
+	triggerIssueOpenedSession(projectPath, payload)
+}
+
+// ── triggerIssueOpenedSession: db.WithProject error branch ───────────────────
+
+func TestTriggerIssueOpenedSession_DBInitFails_LogsError(t *testing.T) {
+	projectPath := t.TempDir()
+	prepareScaffoldTargetRepo(t, projectPath, "owner", "openeddbfail", "# Demo")
+	t.Setenv("ENGINE_STATE_DIR", "/dev/null/cannot-create")
+	payload := json.RawMessage(`{"action":"opened","issue":{"number":1,"title":"Bug","body":"desc"},"repository":{"full_name":"owner/openeddbfail"},"sender":{"login":"alice"}}`)
+	triggerIssueOpenedSession(projectPath, payload)
+}
+
+// ── triggerIssueSession: no @engine mention branch ────────────────────────────
+
+func TestTriggerIssueSession_NoEngineMention(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	payload := json.RawMessage(`{"action":"created","comment":{"body":"just a comment","user":{"login":"bob"}},"issue":{"number":1,"title":"Bug"},"repository":{"full_name":"owner/somerepo"}}`)
+	triggerIssueSession(projectPath, payload)
+}
+
+// ── triggerScaffoldSession: first attempt makes progress ──────────────────────
+
+func TestTriggerScaffoldSession_FirstAttemptMakesProgress(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	targetPath := buildAutonomousRepoPath(projectPath, "owner", "firstprogress")
+	repoKey := "owner/firstprogress"
+	scaffoldTriggerMu.Lock()
+	delete(scaffoldTriggerLastStart, repoKey)
+	delete(scaffoldTriggerRunning, repoKey)
+	scaffoldTriggerMu.Unlock()
+	t.Cleanup(func() {
+		scaffoldTriggerMu.Lock()
+		delete(scaffoldTriggerLastStart, repoKey)
+		delete(scaffoldTriggerRunning, repoKey)
+		scaffoldTriggerMu.Unlock()
+	})
+
+	if err := os.MkdirAll(targetPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", targetPath, "init").CombinedOutput(); err != nil {
+		t.Skipf("git init failed: %v: %s", err, out)
+	}
+	_ = exec.Command("git", "-C", targetPath, "config", "user.email", "test@example.com").Run()
+	_ = exec.Command("git", "-C", targetPath, "config", "user.name", "Test").Run()
+	if err := os.WriteFile(filepath.Join(targetPath, "README.md"), []byte("# Demo\n@engine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", targetPath, "add", ".").CombinedOutput(); err != nil {
+		t.Skipf("git add failed: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", targetPath, "commit", "-m", "init").CombinedOutput(); err != nil {
+		t.Skipf("git commit failed: %v: %s", err, out)
+	}
+	setupTestDB(t, targetPath)
+
+	origRun := runCommandCombinedOutputFn
+	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		return []byte("ok"), nil
+	}
+	t.Cleanup(func() { runCommandCombinedOutputFn = origRun })
+
+	notifier := &mockProgressNotifier{}
+	ws.SetDiscordBridge(notifier)
+	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
+
+	callCount := 0
+	origAI := aiChatFn
+	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+		callCount++
+		_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "first_progress.txt"), []byte("done"), 0o644)
+		ctx.OnChunk("response", false)
+		ctx.OnChunk("", true)
+	}
+	t.Cleanup(func() { aiChatFn = origAI })
+
+	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/firstprogress"}}`))
+
+	if callCount != 1 {
+		t.Fatalf("expected 1 AI call (first attempt makes progress), got %d", callCount)
+	}
+	joined := strings.Join(notifier.notified, "\n")
+	if !strings.Contains(joined, "Scaffold session") || strings.Contains(joined, "no-op retry") {
+		t.Fatalf("expected first-attempt success notification, got: %v", notifier.notified)
 	}
 }

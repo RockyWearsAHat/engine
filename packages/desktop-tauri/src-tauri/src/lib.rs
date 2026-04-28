@@ -962,6 +962,19 @@ fn set_model(model: String) -> bool {
 }
 
 #[tauri::command]
+fn get_clones_dir() -> Option<String> {
+    read_config().clones_dir
+}
+
+#[tauri::command]
+fn set_clones_dir(path: String) -> bool {
+    let mut cfg = read_config();
+    let path = path.trim().to_string();
+    cfg.clones_dir = if path.is_empty() { None } else { Some(path) };
+    write_config(&cfg)
+}
+
+#[tauri::command]
 fn get_active_team() -> Option<String> {
     read_config().active_team
 }
@@ -972,7 +985,6 @@ fn set_active_team(team: String) -> bool {
     cfg.active_team = if team.is_empty() { None } else { Some(team) };
     write_config(&cfg)
 }
-
 #[tauri::command]
 fn get_editor_preferences() -> EditorPreferences {
     editor_preferences_from_config(&read_config())
@@ -1404,6 +1416,8 @@ pub fn run() {
             set_ollama_base_url,
             get_model,
             set_model,
+            get_clones_dir,
+            set_clones_dir,
             get_active_team,
             set_active_team,
             get_editor_preferences,

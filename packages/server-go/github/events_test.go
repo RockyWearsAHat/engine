@@ -38,8 +38,11 @@ func makeWatcher(monitor *RepoMonitor) *EventsWatcher {
 
 func TestNewEventsWatcherFromEnv_NoToken_ReturnsNil(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
+	orig := ghCLITokenFn
+	ghCLITokenFn = func() string { return "" }
+	defer func() { ghCLITokenFn = orig }()
 	if w := NewEventsWatcherFromEnv(NewRepoMonitor()); w != nil {
-		t.Error("expected nil when GITHUB_TOKEN is absent")
+		t.Error("expected nil when GITHUB_TOKEN is absent and gh CLI returns empty")
 	}
 }
 
@@ -48,6 +51,31 @@ func TestNewEventsWatcherFromEnv_WithToken_ReturnsWatcher(t *testing.T) {
 	w := NewEventsWatcherFromEnv(NewRepoMonitor())
 	if w == nil {
 		t.Fatal("expected non-nil EventsWatcher")
+	}
+}
+
+func TestNewEventsWatcherFromEnv_CLIFallback_ReturnsWatcher(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+	orig := ghCLITokenFn
+	ghCLITokenFn = func() string { return "gho_cli_token" }
+	defer func() { ghCLITokenFn = orig }()
+	w := NewEventsWatcherFromEnv(NewRepoMonitor())
+	if w == nil {
+		t.Fatal("expected non-nil EventsWatcher when gh CLI supplies token")
+	}
+}
+
+func TestNewEventsWatcherFromEnv_EnvTakesPrecedenceOverCLI(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "ghp_env_token")
+	orig := ghCLITokenFn
+	ghCLITokenFn = func() string { return "gho_cli_should_not_be_used" }
+	defer func() { ghCLITokenFn = orig }()
+	w := NewEventsWatcherFromEnv(NewRepoMonitor())
+	if w == nil {
+		t.Fatal("expected non-nil EventsWatcher")
+	}
+	if w.token != "ghp_env_token" {
+		t.Errorf("expected env token to take precedence, got %q", w.token)
 	}
 }
 
@@ -713,5 +741,26 @@ func TestDefaultFetchEventsFn_HTTPDoError(t *testing.T) {
 	_, _, _, _, err := defaultFetchEventsFn("tok", "login", "")
 	if err == nil {
 		t.Error("expected error when server is closed")
+	}
+}
+
+func TestGhTokenFromCLI_NoBinary_ReturnsEmpty(t *testing.T) {
+	orig := ghCandidatePaths
+	t.Cleanup(func() { ghCandidatePaths = orig })
+	ghCandidatePaths = []string{"/no-such-binary-xyz"}
+	tok := ghTokenFromCLI()
+	if tok != "" {
+		t.Errorf("expected empty token, got %q", tok)
+	}
+}
+
+func TestGhTokenFromCLI_EchoPath_ReturnsToken(t *testing.T) {
+	orig := ghCandidatePaths
+	t.Cleanup(func() { ghCandidatePaths = orig })
+	// Use echo as a stand-in: "echo auth token" outputs "auth token"
+	ghCandidatePaths = []string{"echo"}
+	tok := ghTokenFromCLI()
+	if tok == "" {
+		t.Error("expected non-empty token from echo stand-in")
 	}
 }

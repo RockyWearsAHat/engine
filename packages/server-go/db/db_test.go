@@ -927,3 +927,11 @@ func TestWithProject_IsolatesDB(t *testing.T) {
 		}
 	}
 }
+
+func TestWithProject_InitLocked_Fails_ReturnsError(t *testing.T) {
+	t.Setenv("ENGINE_STATE_DIR", "/dev/null/cannot-create")
+	err := WithProject("/some/path", func() error { return nil })
+	if err == nil {
+		t.Fatal("expected error when db state dir is unwritable, got nil")
+	}
+}

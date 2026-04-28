@@ -16,6 +16,7 @@ func TestAgentRoleConstants_Distinct(t *testing.T) {
 		RoleTester,
 		RoleReviewer,
 		RoleDocumenter,
+		RoleAutonomousBuilder,
 	}
 	seen := map[AgentRole]bool{}
 	for _, r := range roles {
@@ -99,6 +100,9 @@ func TestBuildRoleSystemPrompt_Reviewer_ContainsApproveReject(t *testing.T) {
 	if !strings.Contains(p, "APPROVE") || !strings.Contains(p, "REJECT") {
 		t.Errorf("expected APPROVE/REJECT in reviewer prompt, got %q", p)
 	}
+	if !strings.Contains(p, "intended system") {
+		t.Errorf("expected runtime validation directive in reviewer prompt, got %q", p)
+	}
 }
 
 func TestBuildRoleSystemPrompt_Documenter_ReferencesWorkingBehaviors(t *testing.T) {
@@ -160,11 +164,22 @@ func TestRoleBootstrapTools_Tester_IncludesShell(t *testing.T) {
 	}
 }
 
-func TestRoleBootstrapTools_Reviewer_ReadOnly(t *testing.T) {
+func TestRoleBootstrapTools_Reviewer_RuntimeCapable(t *testing.T) {
 	tools := roleBootstrapTools(RoleReviewer)
-	for _, n := range tools {
-		if n == "write_file" || n == "shell" {
-			t.Errorf("reviewer should not have write/shell access, found %q", n)
+	if tools == nil {
+		t.Fatal("expected non-nil tool list for RoleReviewer")
+	}
+	has := func(name string) bool {
+		for _, n := range tools {
+			if n == name {
+				return true
+			}
+		}
+		return false
+	}
+	for _, required := range []string{"read_file", "write_file", "shell", "test.run", "screenshot", "git_diff"} {
+		if !has(required) {
+			t.Errorf("RoleReviewer missing required tool %q, got %v", required, tools)
 		}
 	}
 }
@@ -178,7 +193,7 @@ func TestRoleBootstrapTools_UnknownRole_ReturnsNil(t *testing.T) {
 func TestRoleBootstrapTools_AllNonInteractiveRoles_HaveAtLeastOneReadTool(t *testing.T) {
 	roles := []AgentRole{
 		RolePlanner, RoleScaffolder, RoleImplementer,
-		RoleTester, RoleReviewer, RoleDocumenter,
+		RoleTester, RoleReviewer, RoleDocumenter, RoleAutonomousBuilder,
 	}
 	for _, r := range roles {
 		tools := roleBootstrapTools(r)
@@ -196,5 +211,38 @@ func TestRoleBootstrapTools_AllNonInteractiveRoles_HaveAtLeastOneReadTool(t *tes
 		if !found {
 			t.Errorf("role %d missing read_file in pre-granted tools: %v", r, tools)
 		}
+	}
+}
+
+func TestRoleBootstrapTools_AutonomousBuilder_HasWriteAndShellAndGit(t *testing.T) {
+	tools := roleBootstrapTools(RoleAutonomousBuilder)
+	if tools == nil {
+		t.Fatal("expected non-nil tool list for RoleAutonomousBuilder")
+	}
+	has := func(name string) bool {
+		for _, n := range tools {
+			if n == name {
+				return true
+			}
+		}
+		return false
+	}
+	for _, required := range []string{"write_file", "shell", "git_commit", "read_file", "list_directory"} {
+		if !has(required) {
+			t.Errorf("RoleAutonomousBuilder missing required tool %q, got %v", required, tools)
+		}
+	}
+}
+
+func TestBuildRoleSystemPrompt_AutonomousBuilder_ContainsExecutionRules(t *testing.T) {
+	p := buildRoleSystemPrompt(RoleAutonomousBuilder, "/proj", "main", "")
+	if !strings.Contains(p, "write_file") {
+		t.Errorf("expected write_file directive in autonomous builder prompt, got %q", p)
+	}
+	if !strings.Contains(p, "git_commit") {
+		t.Errorf("expected git_commit directive in autonomous builder prompt, got %q", p)
+	}
+	if !strings.Contains(p, "/proj") {
+		t.Errorf("expected project path in autonomous builder prompt, got %q", p)
 	}
 }

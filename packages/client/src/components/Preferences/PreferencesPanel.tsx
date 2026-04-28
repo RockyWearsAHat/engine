@@ -89,6 +89,7 @@ export default function PreferencesPanel() {
   const [providerInput, setProviderInput] = useState<'auto' | 'anthropic' | 'openai' | 'ollama'>('ollama');
   const [ollamaBaseUrlInput, setOllamaBaseUrlInput] = useState('');
   const [modelInput, setModelInput] = useState('');
+  const [clonesDirInput, setClonesDirInput] = useState('');
   const [saved, setSaved] = useState<string | null>(null);
   const [serviceStatus, setServiceStatus] = useState<BackgroundServiceStatus | null>(null);
   const [serviceMsg, setServiceMsg] = useState('');
@@ -243,6 +244,7 @@ export default function PreferencesPanel() {
     });
     bridge.getOllamaBaseUrl().then(url => { if (url) setOllamaBaseUrlInput(url); });
     bridge.getModel().then(m => { if (m) setModelInput(m); });
+    bridge.getClonesDir().then(d => { if (d) setClonesDirInput(d); });
     bridge.getEditorPreferences().then(setEditorPreferences);
     bridge.agentServiceStatus().then(setServiceStatus);
   }, [setEditorPreferences, setGithubToken]);
@@ -263,6 +265,7 @@ export default function PreferencesPanel() {
       modelProvider?: string | null;
       ollamaBaseUrl?: string | null;
       model?: string | null;
+      clonesDir?: string | null;
     }) => {
       const nextConfig = {
         githubToken: overrides?.githubToken ?? (ghInput.trim() || null),
@@ -273,6 +276,7 @@ export default function PreferencesPanel() {
           modelProvider: overrides?.modelProvider ?? (/* istanbul ignore next */ providerInput === 'auto' ? null : providerInput),
         ollamaBaseUrl: overrides?.ollamaBaseUrl ?? (ollamaBaseUrlInput.trim() || null),
         model: overrides?.model ?? (modelInput.trim() || null),
+        clonesDir: overrides?.clonesDir ?? (clonesDirInput.trim() || null),
       };
 
     setGithubToken(nextConfig.githubToken);
@@ -784,6 +788,41 @@ export default function PreferencesPanel() {
                 {saved === 'gh-repo' ? <><Check size={12} /> Repo saved</> : 'Save repo'}
               </button>
             </div>
+
+            <label className="preferences-field">
+              <span className="preferences-label">Autonomous project save path</span>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  type="text"
+                  placeholder="Default: {PROJECT_PATH}/engine/projects/"
+                  value={clonesDirInput}
+                  onChange={event => setClonesDirInput(event.target.value)}
+                  style={{ ...inputStyle, flex: 1 }}
+                />
+                <button
+                  className="btn-secondary"
+                  style={{ whiteSpace: 'nowrap' }}
+                  onClick={async () => {
+                    const picked = await bridge.openFolderDialog();
+                    if (picked) setClonesDirInput(picked);
+                  }}
+                >
+                  Browse…
+                </button>
+              </div>
+              <span className="preferences-muted">Where Engine stores autonomously-cloned repos (sets ENGINE_CLONES_DIR).</span>
+            </label>
+            <button
+              className="btn-secondary"
+              style={{ width: 'fit-content' }}
+              onClick={() => void saveField('clones-dir', async () => {
+                const ok = await bridge.setClonesDir(clonesDirInput.trim());
+                if (ok) pushRuntimeConfig({ clonesDir: clonesDirInput.trim() || null });
+                return ok;
+              })}
+            >
+              {saved === 'clones-dir' ? <><Check size={12} /> Path saved</> : 'Save path'}
+            </button>
           </div>
         </section>
 
@@ -1146,7 +1185,7 @@ export default function PreferencesPanel() {
             </div>
           </div>
           <div className="preferences-section-copy">
-            Add local paths or remote URLs. Engine clones remote repos into <code>.engine/projects/</code>.
+            Add local paths or remote URLs. Engine clones remote repos into <code>engine/projects/</code> under the active project by default.
           </div>
           <div className="preferences-stack">
             {repoEntries.length === 0 ? (

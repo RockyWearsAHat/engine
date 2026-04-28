@@ -84,6 +84,69 @@ func TestSlug(t *testing.T) {
 	}
 }
 
+func TestResolveClonesDir_PrefersProjectPathByDefault(t *testing.T) {
+	projectPath := "/tmp/my-project"
+	t.Setenv("ENGINE_CLONES_DIR", "")
+
+	got := resolveClonesDir(projectPath)
+	want := filepath.Join(projectPath, ".engine", "projects")
+	if got != want {
+		t.Fatalf("resolveClonesDir() = %q want %q", got, want)
+	}
+}
+
+func TestParseGitHubOwnerRepo(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantOwner string
+		wantRepo  string
+		wantOK    bool
+	}{
+		{
+			name:      "https URL",
+			input:     "https://github.com/octo/demo.git",
+			wantOwner: "octo",
+			wantRepo:  "demo",
+			wantOK:    true,
+		},
+		{
+			name:      "ssh URL",
+			input:     "git@github.com:octo/demo.git",
+			wantOwner: "octo",
+			wantRepo:  "demo",
+			wantOK:    true,
+		},
+		{
+			name:   "non github URL",
+			input:  "https://example.com/octo/demo.git",
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			owner, repo, ok := parseGitHubOwnerRepo(tt.input)
+			if ok != tt.wantOK {
+				t.Fatalf("ok mismatch: got %v want %v", ok, tt.wantOK)
+			}
+			if owner != tt.wantOwner || repo != tt.wantRepo {
+				t.Fatalf("owner/repo mismatch: got %q/%q want %q/%q", owner, repo, tt.wantOwner, tt.wantRepo)
+			}
+		})
+	}
+}
+
+func TestCloneDirNameCandidates_GitHubIncludesLegacyAndCanonical(t *testing.T) {
+	candidates, primary := cloneDirNameCandidates("https://github.com/octo/demo.git")
+	if primary != "octo-demo" {
+		t.Fatalf("primary = %q want %q", primary, "octo-demo")
+	}
+	if !reflect.DeepEqual(candidates, []string{"octo-demo", "demo"}) {
+		t.Fatalf("candidates = %#v", candidates)
+	}
+}
+
 func TestSplitForDiscord(t *testing.T) {
 	parts := splitForDiscord("line1\nline2\nline3", 7)
 	if len(parts) < 2 {

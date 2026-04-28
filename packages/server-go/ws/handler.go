@@ -1,7 +1,9 @@
 package ws
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -64,7 +66,51 @@ var (
 	githubPollForTokenFn = func(clientID string, dcr *github.DeviceCodeResponse, onStatus func(string)) (*github.TokenResponse, error) {
 		return github.PollForToken(clientID, dcr, onStatus)
 	}
+	githubWebhookRandReadFn = rand.Read
 )
+
+var (
+	githubAuthSuccessHookMu sync.RWMutex
+	githubAuthSuccessHook   func(token, webhookSecret string)
+)
+
+// SetGitHubAuthSuccessHook registers a callback invoked after successful GitHub login.
+// Passing nil clears the callback.
+func SetGitHubAuthSuccessHook(hook func(token, webhookSecret string)) {
+	githubAuthSuccessHookMu.Lock()
+	defer githubAuthSuccessHookMu.Unlock()
+	githubAuthSuccessHook = hook
+}
+
+func notifyGitHubAuthSuccess(token, webhookSecret string) {
+	githubAuthSuccessHookMu.RLock()
+	hook := githubAuthSuccessHook
+	githubAuthSuccessHookMu.RUnlock()
+	if hook != nil {
+		hook(token, webhookSecret)
+	}
+}
+
+// TriggerGitHubAuthSuccessHook invokes the currently registered GitHub auth
+// success hook, if any. Exported for use in integration tests.
+func TriggerGitHubAuthSuccessHook(token, webhookSecret string) {
+	notifyGitHubAuthSuccess(token, webhookSecret)
+}
+
+func ensureGitHubWebhookSecret() (string, error) {
+	if secret := strings.TrimSpace(os.Getenv("GITHUB_WEBHOOK_SECRET")); secret != "" {
+		return secret, nil
+	}
+
+	raw := make([]byte, 32)
+	if _, err := githubWebhookRandReadFn(raw); err != nil {
+		return "", fmt.Errorf("generate webhook secret: %w", err)
+	}
+
+	secret := base64.RawURLEncoding.EncodeToString(raw)
+	os.Setenv("GITHUB_WEBHOOK_SECRET", secret) //nolint:errcheck
+	return secret, nil
+}
 
 // DiscordBridge is the subset of the Discord service the WS handler uses.
 // Kept narrow so tests can stub it.
@@ -83,6 +129,11 @@ var discordBridge DiscordBridge
 // Passing nil disables the discord.* endpoints.
 func SetDiscordBridge(d DiscordBridge) {
 	discordBridge = d
+}
+
+// GetDiscordBridge returns the currently registered DiscordBridge (may be nil).
+func GetDiscordBridge() DiscordBridge {
+	return discordBridge
 }
 
 // pairingCodeGenerator abstracts code generation so tests can inject error stubs.
@@ -179,6 +230,7 @@ type runtimeConfig struct {
 	ModelProvider *string `json:"modelProvider"`
 	OllamaBaseURL *string `json:"ollamaBaseUrl"`
 	Model         *string `json:"model"`
+	ClonesDir     *string `json:"clonesDir"`
 }
 
 func (c *conn) resolveChatSession(requestedSessionID string) (*db.Session, error) {
@@ -1222,9 +1274,15 @@ func (c *conn) handleGitHubAuthStart() {
 		c.send(map[string]any{"type": "github.auth.error", "error": "no access token in response"})
 		return
 	}
+	webhookSecret, err := ensureGitHubWebhookSecret()
+	if err != nil {
+		c.send(map[string]any{"type": "github.auth.error", "error": err.Error()})
+		return
+	}
 
 	// Activate the token immediately so the rest of the server uses it.
 	os.Setenv("GITHUB_TOKEN", tok.AccessToken) //nolint:errcheck
+	notifyGitHubAuthSuccess(tok.AccessToken, webhookSecret)
 
 	c.send(map[string]any{"type": "github.auth.done", "token": tok.AccessToken})
 }
@@ -1259,6 +1317,7 @@ func applyRuntimeConfig(cfg runtimeConfig) {
 	setRuntimeEnv("ENGINE_MODEL_PROVIDER", cfg.ModelProvider)
 	setRuntimeEnv("OLLAMA_BASE_URL", cfg.OllamaBaseURL)
 	setRuntimeEnv("ENGINE_MODEL", cfg.Model)
+	setRuntimeEnv("ENGINE_CLONES_DIR", cfg.ClonesDir)
 }
 
 func setRuntimeEnv(key string, value *string) {

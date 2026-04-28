@@ -46,6 +46,7 @@ const ollamaBaseUrlStorageKey = 'engine.ollamaBaseUrl';
 const modelStorageKey = 'engine.model';
 const lastProjectPathStorageKey = 'engine.lastProjectPath';
 const editorPreferencesStorageKey = 'engine.editorPreferences';
+const clonesDirStorageKey = 'engine.clonesDir';
 
 export interface InspectedPath {
   path: string;
@@ -316,6 +317,16 @@ export const bridge = {
   async setModel(model: string): Promise<boolean> {
     if (isTauri()) return window.__TAURI__!.core.invoke<boolean>('set_model', { model });
     return setBrowserSetting(modelStorageKey, model);
+  },
+
+  async getClonesDir(): Promise<string | null> {
+    if (isTauri()) return window.__TAURI__!.core.invoke<string | null>('get_clones_dir');
+    return getBrowserSetting(clonesDirStorageKey);
+  },
+
+  async setClonesDir(path: string): Promise<boolean> {
+    if (isTauri()) return window.__TAURI__!.core.invoke<boolean>('set_clones_dir', { path });
+    return setBrowserSetting(clonesDirStorageKey, path);
   },
 
   async getEditorPreferences(): Promise<EditorPreferences> {

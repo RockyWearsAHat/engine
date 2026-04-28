@@ -54,6 +54,9 @@ vi.mock('../bridge.js', () => ({
     setActiveTeam: vi.fn().mockResolvedValue(undefined),
     getActiveTeam: vi.fn().mockResolvedValue(null),
     setLastProjectPath: vi.fn().mockResolvedValue(undefined),
+    getClonesDir: vi.fn().mockResolvedValue(null),
+    setClonesDir: vi.fn().mockResolvedValue(true),
+    openFolderDialog: vi.fn().mockResolvedValue(null),
   },
 }));
 
@@ -1199,5 +1202,93 @@ describe('PreferencesPanel — GitHub auth flow UI', () => {
     fireEvent.click(getTab(/^github/i));
     fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
     expect(useStore.getState().githubAuthFlow).toBeNull();
+  });
+});
+
+describe('PreferencesPanel — clones dir field', () => {
+  beforeEach(setupStore);
+
+  it('LoadsClonesDir_PopulatesInput', async () => {
+    vi.mocked(bridge.getClonesDir).mockResolvedValueOnce('/saved/clones');
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^github/i));
+    await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+    expect(vi.mocked(bridge.getClonesDir)).toHaveBeenCalled();
+    const input = screen.getByPlaceholderText(/Default.*engine.*projects/i) as HTMLInputElement;
+    expect(input.value).toBe('/saved/clones');
+  });
+
+  it('SavePath_CallsSetClonesDir', async () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^github/i));
+    await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+    const input = screen.getByPlaceholderText(/Default.*engine.*projects/i);
+    fireEvent.change(input, { target: { value: '/new/path' } });
+    const saveBtn = screen.getByRole('button', { name: /save path/i });
+    await act(async () => { fireEvent.click(saveBtn); });
+    await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+    expect(vi.mocked(bridge.setClonesDir)).toHaveBeenCalledWith('/new/path');
+  });
+
+  it('Browse_OpensFolderDialog_SetsInput', async () => {
+    vi.mocked(bridge.openFolderDialog).mockResolvedValueOnce('/picked/dir');
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^github/i));
+    await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+    const browseBtn = screen.getByRole('button', { name: /browse/i });
+    await act(async () => { fireEvent.click(browseBtn); });
+    await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+    const input = screen.getByPlaceholderText(/Default.*engine.*projects/i) as HTMLInputElement;
+    expect(input.value).toBe('/picked/dir');
+  });
+
+  it('Browse_NullResult_DoesNotChangeInput', async () => {
+    vi.mocked(bridge.openFolderDialog).mockResolvedValueOnce(null);
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^github/i));
+    await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+    const input = screen.getByPlaceholderText(/Default.*engine.*projects/i) as HTMLInputElement;
+    const before = input.value;
+    const browseBtn = screen.getByRole('button', { name: /browse/i });
+    await act(async () => { fireEvent.click(browseBtn); });
+    await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+    expect(input.value).toBe(before);
+  });
+
+  it('SavePath_FailedSave_DoesNotPushConfig', async () => {
+    vi.mocked(bridge.setClonesDir).mockResolvedValueOnce(false);
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^github/i));
+    await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+    const input = screen.getByPlaceholderText(/Default.*engine.*projects/i);
+    fireEvent.change(input, { target: { value: '/fail/path' } });
+    const saveBtn = screen.getByRole('button', { name: /save path/i });
+    await act(async () => { fireEvent.click(saveBtn); });
+    await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+    expect(vi.mocked(bridge.setClonesDir)).toHaveBeenCalledWith('/fail/path');
+  });
+
+  it('SavePath_Success_ShowsSavedConfirmation', async () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^github/i));
+    await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+    const input = screen.getByPlaceholderText(/Default.*engine.*projects/i);
+    fireEvent.change(input, { target: { value: '/ok/path' } });
+    const saveBtn = screen.getByRole('button', { name: /save path/i });
+    await act(async () => { fireEvent.click(saveBtn); });
+    await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+    expect(screen.queryByText(/path saved/i)).not.toBeNull();
+  });
+
+  it('SavePath_EmptyInput_PassesNullToConfig', async () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^github/i));
+    await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+    const input = screen.getByPlaceholderText(/Default.*engine.*projects/i);
+    fireEvent.change(input, { target: { value: '' } });
+    const saveBtn = screen.getByRole('button', { name: /save path/i });
+    await act(async () => { fireEvent.click(saveBtn); });
+    await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+    expect(vi.mocked(bridge.setClonesDir)).toHaveBeenCalledWith('');
   });
 });

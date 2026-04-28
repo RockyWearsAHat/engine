@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/engine/server/ai"
@@ -66,7 +67,12 @@ var (
 		cmd := exec.Command(name, args...)
 		return cmd.CombinedOutput()
 	}
+	scaffoldTriggerMu sync.Mutex
+	scaffoldTriggerRunning = make(map[string]bool)
+	scaffoldTriggerLastStart = make(map[string]time.Time)
 )
+
+const scaffoldTriggerCooldown = 2 * time.Minute
 
 // osGetwdFn and osUserHomeDirFn are injectable for tests.
 var (
@@ -180,6 +186,23 @@ func run() error {
 	webhookSecret := os.Getenv("GITHUB_WEBHOOK_SECRET")
 	webhookReceiver := newWebhookReceiverFn(webhookSecret)
 	repoMonitor := newRepoMonitorFn()
+	var eventsWatcherOnce sync.Once
+	startEventsWatcher := func() {
+		eventsWatcherOnce.Do(func() {
+			if ew := newEventsWatcherFn(repoMonitor); ew != nil {
+				eventsWatcherStartFn(ew)
+				log.Printf("events-watcher: started (requires GITHUB_TOKEN)")
+			}
+		})
+	}
+	ws.SetGitHubAuthSuccessHook(func(token, webhookSecret string) {
+		if strings.TrimSpace(token) == "" {
+			return
+		}
+		webhookReceiver.SetSecret(webhookSecret)
+		startEventsWatcher()
+	})
+	defer ws.SetGitHubAuthSuccessHook(nil)
 	repoMonitor.OnReadmeChange = func(payload json.RawMessage) {
 		log.Printf("README changed: launching AI scaffold session (payload %d bytes)", len(payload))
 		runAsyncFn(func() { triggerScaffoldSessionFn(projectPath, payload) })
@@ -199,10 +222,7 @@ func run() error {
 	webhookReceiver.AddHandler(repoMonitor.Enqueue)
 	repoMonitorStartFn(repoMonitor)
 	// Start the events watcher — near-real-time @engine detection via GitHub Events API.
-	if ew := newEventsWatcherFn(repoMonitor); ew != nil {
-		eventsWatcherStartFn(ew)
-		log.Printf("events-watcher: started (requires GITHUB_TOKEN)")
-	}
+	startEventsWatcher()
 	// Register the webhook route.
 	httpHandleFn("/webhook/github", webhookReceiver)
 
@@ -278,6 +298,158 @@ func buildReadmeAutonomousBuildPrompt(owner, repo, localRepoPath string) string 
 	)
 }
 
+type repoActivitySnapshot struct {
+	head       string
+	staged    int
+	unstaged  int
+	untracked int
+}
+
+func captureRepoActivity(projectPath string) repoActivitySnapshot {
+	snapshot := repoActivitySnapshot{}
+	commits, _ := gogit.GetLog(projectPath, 1)
+	if len(commits) > 0 {
+		snapshot.head = strings.TrimSpace(commits[0].Hash)
+	}
+	status, _ := gogit.GetStatus(projectPath)
+	if status != nil {
+		snapshot.staged = len(status.Staged)
+		snapshot.unstaged = len(status.Unstaged)
+		snapshot.untracked = len(status.Untracked)
+	}
+	return snapshot
+}
+
+func hasRepoProgress(before, after repoActivitySnapshot) bool {
+	if strings.TrimSpace(before.head) != strings.TrimSpace(after.head) {
+		return true
+	}
+	if before.staged != after.staged {
+		return true
+	}
+	if before.unstaged != after.unstaged {
+		return true
+	}
+	if before.untracked != after.untracked {
+		return true
+	}
+	return false
+}
+
+func scaffoldNoopRetryPrompt(owner, repo string) string {
+	return fmt.Sprintf(
+		"Previous attempt made no repository changes for %s/%s. Retry now and do not stop at planning. " +
+			"You must execute tools, write or modify files, run project checks, and report concrete changed files and command results.",
+		owner,
+		repo,
+	)
+}
+
+func parseOwnerRepo(fullName string) (string, string, bool) {
+	parts := strings.SplitN(strings.TrimSpace(fullName), "/", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func beginScaffoldTrigger(repoKey string) bool {
+	if strings.TrimSpace(repoKey) == "" {
+		return false
+	}
+
+	scaffoldTriggerMu.Lock()
+	defer scaffoldTriggerMu.Unlock()
+
+	if scaffoldTriggerRunning[repoKey] {
+		return false
+	}
+	if lastStart, ok := scaffoldTriggerLastStart[repoKey]; ok {
+		if time.Since(lastStart) < scaffoldTriggerCooldown {
+			return false
+		}
+	}
+
+	scaffoldTriggerRunning[repoKey] = true
+	scaffoldTriggerLastStart[repoKey] = time.Now()
+	return true
+}
+
+func finishScaffoldTrigger(repoKey string) {
+	scaffoldTriggerMu.Lock()
+	defer scaffoldTriggerMu.Unlock()
+	delete(scaffoldTriggerRunning, repoKey)
+}
+
+func hasRecentScaffoldSession(projectPath, repo string, within time.Duration) bool {
+	if strings.TrimSpace(projectPath) == "" || strings.TrimSpace(repo) == "" || within <= 0 {
+		return false
+	}
+
+	recent := false
+	_ = db.WithProject(projectPath, func() error {
+		sessions, err := db.ListSessions(projectPath)
+		if err != nil || len(sessions) == 0 {
+			return nil
+		}
+
+		prefix := "scaffold-" + repo + "-"
+		for i := 0; i < len(sessions) && i < 12; i++ {
+			sess := sessions[i]
+			if !strings.HasPrefix(sess.ID, prefix) {
+				continue
+			}
+
+			ts := strings.TrimSpace(sess.UpdatedAt)
+			if ts == "" {
+				ts = strings.TrimSpace(sess.CreatedAt)
+			}
+			if ts == "" {
+				continue
+			}
+
+			when, parseErr := time.Parse(time.RFC3339, ts)
+			if parseErr != nil {
+				continue
+			}
+			if time.Since(when) < within {
+				recent = true
+				return nil
+			}
+		}
+		return nil
+	})
+	return recent
+}
+
+func hasEngineMention(text string) bool {
+	return strings.Contains(strings.ToLower(text), "@engine")
+}
+
+func autoEnrollDiscordProject(projectPath, owner, repo string) {
+	if bridge := ws.GetDiscordBridge(); bridge != nil {
+		type autoEnroller interface {
+			AutoEnrollProject(projectPath, owner, repo string) error
+		}
+		if enroller, ok := bridge.(autoEnroller); ok {
+			if err := enroller.AutoEnrollProject(projectPath, owner, repo); err != nil {
+				log.Printf("[autonomous %s/%s] discord enroll: %v", owner, repo, err)
+			}
+		}
+	}
+}
+
+func notifyDiscordProjectProgress(projectPath, message string) {
+	if bridge := ws.GetDiscordBridge(); bridge != nil {
+		type progressNotifier interface {
+			NotifyProjectProgress(projectPath, message string)
+		}
+		if notifier, ok := bridge.(progressNotifier); ok {
+			notifier.NotifyProjectProgress(projectPath, message)
+		}
+	}
+}
+
 // readmeContainsEngineTag returns true when README.md in repoPath contains the
 // @engine tag, indicating the repository owner has opted in to autonomous
 // development by Engine.
@@ -301,22 +473,35 @@ func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
 		log.Printf("scaffold: cannot parse repo from webhook payload: %v", err)
 		return
 	}
-	parts := strings.SplitN(pushEvent.Repository.FullName, "/", 2)
-	if len(parts) != 2 {
+	owner, repo, ok := parseOwnerRepo(pushEvent.Repository.FullName)
+	if !ok {
 		log.Printf("scaffold: unexpected full_name format: %s", pushEvent.Repository.FullName)
 		return
 	}
-	owner, repo := parts[0], parts[1]
+	repoKey := strings.ToLower(strings.TrimSpace(pushEvent.Repository.FullName))
+	if !beginScaffoldTrigger(repoKey) {
+		log.Printf("scaffold: deduped trigger for %s", pushEvent.Repository.FullName)
+		return
+	}
+	defer finishScaffoldTrigger(repoKey)
+
 	targetProjectPath, err := ensureAutonomousRepoWorkspace(projectPath, owner, repo)
 	if err != nil {
-		log.Printf("scaffold: clone/sync failed for %s/%s: %v; falling back to default project path", owner, repo, err)
-		targetProjectPath = projectPath
+		log.Printf("scaffold: clone/sync failed for %s/%s: %v; skipping autonomous build", owner, repo, err)
+		return
 	}
 
 	if !readmeContainsEngineTag(targetProjectPath) {
 		log.Printf("scaffold: README in %s/%s does not contain @engine tag; skipping autonomous build", owner, repo)
 		return
 	}
+	if hasRecentScaffoldSession(targetProjectPath, repo, scaffoldTriggerCooldown) {
+		log.Printf("scaffold: deduped recent scaffold session for %s/%s", owner, repo)
+		return
+	}
+
+	autoEnrollDiscordProject(targetProjectPath, owner, repo)
+	notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("🧭 Kickoff: reading README and planning autonomous build for **%s/%s**.", owner, repo))
 
 	if dbErr := db.WithProject(targetProjectPath, func() error {
 		sessionID := fmt.Sprintf("scaffold-%s-%d", repo, time.Now().UnixNano())
@@ -325,28 +510,73 @@ func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
 			log.Printf("[scaffold %s/%s] create session: %v", owner, repo, err)
 		}
 		scaffoldPolicy := ai.ResolveAutonomousPolicy(targetProjectPath)
-		ctx := &ai.ChatContext{
-			ProjectPath:      targetProjectPath,
-			SessionID:        sessionID,
-			AutonomousPolicy: &scaffoldPolicy,
-			OnChunk: func(content string, done bool) {
-				if content != "" {
-					log.Printf("[scaffold %s/%s] %s", owner, repo, content)
-				}
-				if done {
-					msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
-					if dbErr := saveMessageFn(msgID, sessionID, "assistant", content, nil); dbErr != nil {
-						log.Printf("[scaffold %s/%s] save message: %v", owner, repo, dbErr)
-					}
-				}
-			},
-			OnError: func(msg string) {
-				log.Printf("[scaffold error %s/%s] %s", owner, repo, msg)
-			},
-		}
 
 		prompt := buildReadmeAutonomousBuildPrompt(owner, repo, targetProjectPath)
-		aiChatFn(ctx, prompt)
+		for attempt := 1; attempt <= 2; attempt++ {
+			before := captureRepoActivity(targetProjectPath)
+
+			var outputMu sync.Mutex
+			var output strings.Builder
+			hadError := false
+			ctx := &ai.ChatContext{
+				ProjectPath:      targetProjectPath,
+				SessionID:        sessionID,
+				AutonomousPolicy: &scaffoldPolicy,
+				OnChunk: func(content string, done bool) {
+					_ = done
+					if content == "" {
+						return
+					}
+					log.Printf("[scaffold %s/%s] %s", owner, repo, content)
+					outputMu.Lock()
+					output.WriteString(content)
+					outputMu.Unlock()
+				},
+				OnError: func(msg string) {
+					hadError = true
+					log.Printf("[scaffold error %s/%s] %s", owner, repo, msg)
+					notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("❌ Scaffold blocked for **%s/%s**: %s", owner, repo, msg))
+				},
+			}
+
+			attemptPrompt := prompt
+			if attempt > 1 {
+				attemptPrompt = strings.TrimSpace(prompt + "\n\n" + scaffoldNoopRetryPrompt(owner, repo))
+			}
+			aiChatFn(ctx, attemptPrompt)
+
+			outputMu.Lock()
+			assistantOutput := strings.TrimSpace(output.String())
+			outputMu.Unlock()
+			if assistantOutput != "" {
+				msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
+				if saveErr := saveMessageFn(msgID, sessionID, "assistant", assistantOutput, nil); saveErr != nil {
+					log.Printf("[scaffold %s/%s] save message: %v", owner, repo, saveErr)
+				}
+			}
+
+			if hadError {
+				return nil
+			}
+
+			after := captureRepoActivity(targetProjectPath)
+			if hasRepoProgress(before, after) {
+				if attempt == 1 {
+					notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("✅ Scaffold session %s finished for **%s/%s**.", sessionID, owner, repo))
+				} else {
+					notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("✅ Scaffold session %s finished for **%s/%s** after a no-op retry.", sessionID, owner, repo))
+				}
+				return nil
+			}
+
+			if attempt == 1 {
+				notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("⚠️ First scaffold pass for **%s/%s** made no repository changes; retrying with stricter execution.", owner, repo))
+				continue
+			}
+
+			notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("❌ Scaffold session %s ended with no repository changes for **%s/%s**. Verify model/tool configuration and permissions.", sessionID, owner, repo))
+		}
+
 		return nil
 	}); dbErr != nil {
 		log.Printf("[scaffold %s/%s] db.WithProject: %v", owner, repo, dbErr)
@@ -427,17 +657,34 @@ func triggerIssueSession(projectPath string, payload json.RawMessage) {
 		log.Printf("issue-session: cannot parse issue_comment payload: %v", err)
 		return
 	}
+	if !hasEngineMention(parsed.Comment.Body) {
+		log.Printf("issue-session: skipping #%d in %s (no @engine mention)", parsed.Issue.Number, parsed.Repository.FullName)
+		return
+	}
 
-	if dbErr := db.WithProject(projectPath, func() error {
+	owner, repo, ok := parseOwnerRepo(parsed.Repository.FullName)
+	if !ok {
+		log.Printf("issue-session: unexpected full_name format: %s", parsed.Repository.FullName)
+		return
+	}
+	targetProjectPath, workspaceErr := ensureAutonomousRepoWorkspace(projectPath, owner, repo)
+	if workspaceErr != nil {
+		log.Printf("issue-session: clone/sync failed for %s/%s: %v", owner, repo, workspaceErr)
+		return
+	}
+	autoEnrollDiscordProject(targetProjectPath, owner, repo)
+	notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("🛠️ Kickoff: working issue #%d for **%s/%s** from @engine mention.", parsed.Issue.Number, owner, repo))
+
+	if dbErr := db.WithProject(targetProjectPath, func() error {
 		sessionID := fmt.Sprintf("issue-%d-%d", parsed.Issue.Number, time.Now().UnixNano())
-		branch, _ := gogit.GetCurrentBranch(projectPath)
-		if dbErr := createSessionFn(sessionID, projectPath, branch); dbErr != nil {
+		branch, _ := gogit.GetCurrentBranch(targetProjectPath)
+		if dbErr := createSessionFn(sessionID, targetProjectPath, branch); dbErr != nil {
 			log.Printf("issue-session: create session: %v", dbErr)
 		}
 
-		issuePolicy := ai.ResolveAutonomousPolicy(projectPath)
+		issuePolicy := ai.ResolveAutonomousPolicy(targetProjectPath)
 		ctx := &ai.ChatContext{
-			ProjectPath:      projectPath,
+			ProjectPath:      targetProjectPath,
 			SessionID:        sessionID,
 			AutonomousPolicy: &issuePolicy,
 			OnChunk: func(content string, done bool) {
@@ -445,6 +692,7 @@ func triggerIssueSession(projectPath string, payload json.RawMessage) {
 					log.Printf("[issue #%d %s] %s", parsed.Issue.Number, parsed.Repository.FullName, content)
 				}
 				if done {
+					notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("✅ Issue session %s finished for **%s** (#%d).", sessionID, parsed.Repository.FullName, parsed.Issue.Number))
 					msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
 					if dbErr := saveMessageFn(msgID, sessionID, "assistant", content, nil); dbErr != nil {
 						log.Printf("issue-session: save message: %v", dbErr)
@@ -453,6 +701,7 @@ func triggerIssueSession(projectPath string, payload json.RawMessage) {
 			},
 			OnError: func(msg string) {
 				log.Printf("[issue error #%d] %s", parsed.Issue.Number, msg)
+				notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("❌ Issue session blocked for **%s** (#%d): %s", parsed.Repository.FullName, parsed.Issue.Number, msg))
 			},
 		}
 
@@ -488,16 +737,29 @@ func triggerIssueOpenedSession(projectPath string, payload json.RawMessage) {
 		return
 	}
 
-	if dbErr := db.WithProject(projectPath, func() error {
+	owner, repo, ok := parseOwnerRepo(parsed.Repository.FullName)
+	if !ok {
+		log.Printf("issue-opened: unexpected full_name format: %s", parsed.Repository.FullName)
+		return
+	}
+	targetProjectPath, workspaceErr := ensureAutonomousRepoWorkspace(projectPath, owner, repo)
+	if workspaceErr != nil {
+		log.Printf("issue-opened: clone/sync failed for %s/%s: %v", owner, repo, workspaceErr)
+		return
+	}
+	autoEnrollDiscordProject(targetProjectPath, owner, repo)
+	notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("🛠️ Kickoff: working newly opened issue #%d for **%s/%s**.", parsed.Issue.Number, owner, repo))
+
+	if dbErr := db.WithProject(targetProjectPath, func() error {
 		sessionID := fmt.Sprintf("issue-%d-%d", parsed.Issue.Number, time.Now().UnixNano())
-		branch, _ := gogit.GetCurrentBranch(projectPath)
-		if dbErr := createSessionFn(sessionID, projectPath, branch); dbErr != nil {
+		branch, _ := gogit.GetCurrentBranch(targetProjectPath)
+		if dbErr := createSessionFn(sessionID, targetProjectPath, branch); dbErr != nil {
 			log.Printf("issue-opened: create session: %v", dbErr)
 		}
 
-		issueOpenedPolicy := ai.ResolveAutonomousPolicy(projectPath)
+		issueOpenedPolicy := ai.ResolveAutonomousPolicy(targetProjectPath)
 		ctx := &ai.ChatContext{
-			ProjectPath:      projectPath,
+			ProjectPath:      targetProjectPath,
 			SessionID:        sessionID,
 			AutonomousPolicy: &issueOpenedPolicy,
 			OnChunk: func(content string, done bool) {
@@ -505,6 +767,7 @@ func triggerIssueOpenedSession(projectPath string, payload json.RawMessage) {
 					log.Printf("[issue-opened #%d %s] %s", parsed.Issue.Number, parsed.Repository.FullName, content)
 				}
 				if done {
+					notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("✅ Issue-opened session %s finished for **%s** (#%d).", sessionID, parsed.Repository.FullName, parsed.Issue.Number))
 					msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
 					if dbErr := saveMessageFn(msgID, sessionID, "assistant", content, nil); dbErr != nil {
 						log.Printf("issue-opened: save message: %v", dbErr)
@@ -513,6 +776,7 @@ func triggerIssueOpenedSession(projectPath string, payload json.RawMessage) {
 			},
 			OnError: func(msg string) {
 				log.Printf("[issue-opened error #%d] %s", parsed.Issue.Number, msg)
+				notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("❌ Issue-opened session blocked for **%s** (#%d): %s", parsed.Repository.FullName, parsed.Issue.Number, msg))
 			},
 		}
 

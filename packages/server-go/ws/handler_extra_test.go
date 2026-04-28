@@ -1718,10 +1718,14 @@ func withAuthFnsReset(t *testing.T) {
 	origClientID := githubClientIDFn
 	origStart := githubStartDeviceFlowFn
 	origPoll := githubPollForTokenFn
+	origRandRead := githubWebhookRandReadFn
+	SetGitHubAuthSuccessHook(nil)
 	t.Cleanup(func() {
 		githubClientIDFn = origClientID
 		githubStartDeviceFlowFn = origStart
 		githubPollForTokenFn = origPoll
+		githubWebhookRandReadFn = origRandRead
+		SetGitHubAuthSuccessHook(nil)
 	})
 }
 
@@ -1790,6 +1794,7 @@ func TestHandler_GitHubAuthStart_PollError(t *testing.T) {
 func TestHandler_GitHubAuthStart_Success(t *testing.T) {
 	withAuthFnsReset(t)
 	t.Setenv("GITHUB_TOKEN", "") // start clean
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "")
 
 	githubClientIDFn = func() string { return "test-client-id" }
 	githubStartDeviceFlowFn = func(_, _ string) (*github.DeviceCodeResponse, error) {
@@ -1827,6 +1832,51 @@ func TestHandler_GitHubAuthStart_Success(t *testing.T) {
 	if doneMsg["token"] != "ghp_testtoken" {
 		t.Fatalf("unexpected token in github.auth.done: %+v", doneMsg)
 	}
+	if strings.TrimSpace(os.Getenv("GITHUB_WEBHOOK_SECRET")) == "" {
+		t.Fatalf("expected GITHUB_WEBHOOK_SECRET to be auto-provisioned")
+	}
+}
+
+func TestHandler_GitHubAuthStart_Success_NotifiesHookWithSecret(t *testing.T) {
+	withAuthFnsReset(t)
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "preset-webhook-secret")
+
+	githubClientIDFn = func() string { return "test-client-id" }
+	githubStartDeviceFlowFn = func(_, _ string) (*github.DeviceCodeResponse, error) {
+		return &github.DeviceCodeResponse{
+			DeviceCode:      "dev456",
+			UserCode:        "WXYZ-5678",
+			VerificationURI: "https://github.com/login/device",
+			ExpiresIn:       900,
+			Interval:        5,
+		}, nil
+	}
+	githubPollForTokenFn = func(_ string, _ *github.DeviceCodeResponse, _ func(string)) (*github.TokenResponse, error) {
+		return &github.TokenResponse{AccessToken: "ghp_testtoken"}, nil
+	}
+
+	var hookToken string
+	var hookSecret string
+	SetGitHubAuthSuccessHook(func(token, webhookSecret string) {
+		hookToken = token
+		hookSecret = webhookSecret
+	})
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{"type": "github.auth.start"})
+	readWSMessageOfType(t, conn, "github.auth.code")
+	readWSMessageOfType(t, conn, "github.auth.done")
+
+	if hookToken != "ghp_testtoken" {
+		t.Fatalf("expected hook token ghp_testtoken, got %q", hookToken)
+	}
+	if hookSecret != "preset-webhook-secret" {
+		t.Fatalf("expected hook secret preset-webhook-secret, got %q", hookSecret)
+	}
 }
 
 func TestHandler_GitHubAuthStart_EmptyAccessToken(t *testing.T) {
@@ -1854,5 +1904,128 @@ func TestHandler_GitHubAuthStart_EmptyAccessToken(t *testing.T) {
 	errMsg := readWSMessageOfType(t, conn, "github.auth.error")
 	if errMsg["error"] == nil {
 		t.Fatalf("expected error for empty access token, got %+v", errMsg)
+	}
+}
+
+func TestHandler_GitHubAuthStart_WebhookSecretGenerationError(t *testing.T) {
+	withAuthFnsReset(t)
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "")
+
+	githubClientIDFn = func() string { return "test-client-id" }
+	githubStartDeviceFlowFn = func(_, _ string) (*github.DeviceCodeResponse, error) {
+		return &github.DeviceCodeResponse{
+			DeviceCode:      "dev123",
+			UserCode:        "ABCD-1234",
+			VerificationURI: "https://github.com/login/device",
+			ExpiresIn:       900,
+			Interval:        5,
+		}, nil
+	}
+	githubPollForTokenFn = func(_ string, _ *github.DeviceCodeResponse, _ func(string)) (*github.TokenResponse, error) {
+		return &github.TokenResponse{AccessToken: "ghp_testtoken"}, nil
+	}
+	githubWebhookRandReadFn = func(_ []byte) (int, error) {
+		return 0, fmt.Errorf("rng failed")
+	}
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{"type": "github.auth.start"})
+	readWSMessageOfType(t, conn, "github.auth.code")
+	errMsg := readWSMessageOfType(t, conn, "github.auth.error")
+
+	if !strings.Contains(fmt.Sprint(errMsg["error"]), "generate webhook secret") {
+		t.Fatalf("expected webhook secret generation error, got %+v", errMsg)
+	}
+}
+
+func TestHandler_ConfigSync_ClonesDir_SetsEnv(t *testing.T) {
+	t.Setenv("ENGINE_CLONES_DIR", "")
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	clones := t.TempDir()
+	writeWSMessage(t, conn, map[string]any{
+		"type": "config.sync",
+		"config": map[string]any{
+			"clonesDir": clones,
+		},
+	})
+	// Flush with a known-response message.
+	writeWSMessage(t, conn, map[string]any{"type": "session.list"})
+	readWSMessageOfType(t, conn, "session.list")
+
+	if got := os.Getenv("ENGINE_CLONES_DIR"); got != clones {
+		t.Fatalf("expected ENGINE_CLONES_DIR %q, got %q", clones, got)
+	}
+}
+func TestTriggerGitHubAuthSuccessHook_CallsRegisteredHook(t *testing.T) {
+	var called bool
+	var gotToken, gotSecret string
+	SetGitHubAuthSuccessHook(func(token, webhookSecret string) {
+		called = true
+		gotToken = token
+		gotSecret = webhookSecret
+	})
+	t.Cleanup(func() { SetGitHubAuthSuccessHook(nil) })
+
+	TriggerGitHubAuthSuccessHook("mytoken", "mysecret")
+
+	if !called {
+		t.Fatal("expected hook to be called")
+	}
+	if gotToken != "mytoken" {
+		t.Errorf("expected token 'mytoken', got %q", gotToken)
+	}
+	if gotSecret != "mysecret" {
+		t.Errorf("expected secret 'mysecret', got %q", gotSecret)
+	}
+}
+
+// ── default injectable fn bodies ──────────────────────────────────────────────
+
+// roundTripFuncAdapter adapts a function to http.RoundTripper, used for mocking OAuthHTTPClient.
+type roundTripFuncAdapter func(*http.Request) (*http.Response, error)
+
+func (f roundTripFuncAdapter) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestGithubStartDeviceFlowFn_DefaultBody(t *testing.T) {
+	origFn := githubStartDeviceFlowFn
+	t.Cleanup(func() { githubStartDeviceFlowFn = origFn })
+
+	// Mock OAuthHTTPClient so no real network call is made.
+	origClient := github.OAuthHTTPClient
+	github.OAuthHTTPClient = &http.Client{
+		Transport: roundTripFuncAdapter(func(_ *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("device_code=DC&user_code=UC&verification_uri=https://example.com&expires_in=900&interval=5")),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+	t.Cleanup(func() { github.OAuthHTTPClient = origClient })
+
+	dcr, err := origFn("test-client", "repo")
+	if err != nil {
+		t.Fatalf("default githubStartDeviceFlowFn: %v", err)
+	}
+	if dcr.DeviceCode != "DC" {
+		t.Errorf("unexpected DeviceCode %q", dcr.DeviceCode)
+	}
+}
+
+func TestGithubPollForTokenFn_DefaultBody(t *testing.T) {
+	origFn := githubPollForTokenFn
+	t.Cleanup(func() { githubPollForTokenFn = origFn })
+
+	// ExpiresIn=0 so PollForToken loop never runs and returns immediately.
+	_, err := origFn("test-client", &github.DeviceCodeResponse{ExpiresIn: 0, Interval: 0}, nil)
+	if err == nil {
+		t.Fatal("expected polling timeout error with zero ExpiresIn")
 	}
 }

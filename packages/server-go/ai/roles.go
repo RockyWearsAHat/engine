@@ -28,8 +28,8 @@ const (
 	// It receives failing test output or a module path and runs the suite.
 	RoleTester
 
-	// RoleReviewer inspects a diff and returns APPROVE or REJECT with findings.
-	// It is read-only; it never edits files.
+	// RoleReviewer performs runtime quality review and returns APPROVE or REJECT.
+	// It verifies code, behavior, and visual/runtime quality on the target system.
 	RoleReviewer
 
 	// RoleDocumenter updates WORKING_BEHAVIORS.md from a code-change summary.
@@ -40,6 +40,11 @@ const (
 	// structured ProjectProfile JSON. It classifies the project type, extracts
 	// success criteria, and derives the verification strategy. Output is pure JSON.
 	RoleIntaker
+
+	// RoleAutonomousBuilder runs a headless scaffold+implement+validate loop.
+	// It receives a project path and full build brief; it must write files, run
+	// commands, and commit — never describe a plan without executing it.
+	RoleAutonomousBuilder
 )
 
 // roleConfig holds the lean system prompt template and tool names pre-granted
@@ -72,9 +77,11 @@ var roleConfigs = map[AgentRole]roleConfig{
 	RolePlanner: {
 		// Produces a numbered plan. Reads the codebase; writes nothing.
 		prompt: strings.Join([]string{
-			"You create implementation plans.",
+			"You create implementation plans with strong software design discipline.",
 			"Output 4–8 numbered steps. Each step: file to change + what to change + why.",
 			"No code. Each step must be achievable in one focused edit session.",
+			"Follow CS2420/CS3500 principles: decomposition, clear responsibilities, explicit invariants, appropriate data structures, and time-complexity awareness.",
+			"Plan for clean repository outcomes: no throwaway files, no duplicate paths, and only minimal essential documentation updates.",
 			"Project: {{project}}  Branch: {{branch}}",
 			"Respond ONLY with the numbered plan.",
 		}, "\n"),
@@ -99,6 +106,8 @@ var roleConfigs = map[AgentRole]roleConfig{
 			"You implement ONE function or module.",
 			"Given: file path + specification. Write production code for the spec.",
 			"Follow existing patterns in the codebase. Do not touch files outside the spec.",
+			"Apply CS2420/CS3500 principles: single responsibility, clear naming, boundary validation, no dead code, and efficient algorithms/data structures when behavior is unchanged.",
+			"Keep repository clean: create only required source files and minimal required docs, and avoid temporary artifacts.",
 			"Project: {{project}}",
 			"Report what you changed.",
 		}, "\n"),
@@ -111,6 +120,8 @@ var roleConfigs = map[AgentRole]roleConfig{
 			"You write tests and fix test failures.",
 			"Given failing test output or a module to test, write targeted tests.",
 			"Run them. Iterate until they pass.",
+			"Enforce CS2420/CS3500 quality: test behavior and edge cases, avoid brittle assertions, and verify no regressions.",
+			"Enforce cleanliness before finishing: no extra generated files in repository, only intended source changes and minimal required documentation updates.",
 			"Project: {{project}}",
 			"Report final test result (pass/fail counts).",
 		}, "\n"),
@@ -118,15 +129,26 @@ var roleConfigs = map[AgentRole]roleConfig{
 	},
 
 	RoleReviewer: {
-		// Reviews a diff. Never edits files.
+		// Performs runtime review, including behavioral and visual verification.
 		prompt: strings.Join([]string{
-			"You review code changes.",
+			"You are the final quality reviewer for the application.",
 			"Given a diff, output APPROVE or REJECT.",
 			"If REJECT: list each problem (file, line, reason). One sentence per finding.",
-			"Check: correctness, CS3500 design principles, performance, security.",
+			"Validate by running the actual application and tests on the intended system before approving.",
+			"Check code quality against CS2420/CS3500 principles, including design clarity, correctness, performance, and security.",
+			"Check runtime behavior end-to-end, not just static diff quality.",
+			"Check visual behavior when UI exists (screenshots + interaction checks) and reject on visual/interaction regressions.",
+			"Enforce repository cleanliness: no extra junk files, only intentional source changes, and minimal required docs.",
+			"You may apply targeted fixes when needed, then re-run validation before final APPROVE/REJECT.",
 			"Project: {{project}}",
 		}, "\n"),
-		tools: []string{"read_file"},
+		tools: []string{
+			"read_file", "list_directory", "write_file",
+			"shell", "test.run", "search_files",
+			"git_status", "git_diff", "git_commit",
+			"open_url", "screenshot", "process_list", "get_system_info",
+			"search_tools",
+		},
 	},
 
 	RoleDocumenter: {
@@ -159,6 +181,32 @@ var roleConfigs = map[AgentRole]roleConfig{
 			"Project: {{project}}",
 		}, "\n"),
 		tools: nil,
+	},
+
+	RoleAutonomousBuilder: {
+		// Headless scaffold+implement+validate loop. Tools are pre-granted so the
+		// model never needs to call search_tools before acting.
+		prompt: strings.Join([]string{
+			"You autonomously scaffold and implement a project. All tools are available NOW.",
+			"Project root: {{project}}",
+			"EXECUTION RULES — read once and follow every rule:",
+			"1. Call write_file to create or overwrite files. Never describe files without writing them.",
+			"2. Call shell to run build/test commands. Always verify output before continuing.",
+			"3. Call git_commit after completing each logical unit of work.",
+			"4. Do NOT output a plan as text without also executing it immediately after.",
+			"5. If a file already exists, read it first, then decide whether to overwrite.",
+			"6. Prefer small, incremental commits over one large commit at the end.",
+			"7. If a command fails, diagnose and fix, do not skip.",
+			"8. When all code is committed and the project is done, call signal_done.",
+			"NEVER: produce text that says 'I would write ...' or 'planned' without calling write_file.",
+			"ALWAYS: act — write files, run commands, commit, call signal_done when complete.",
+		}, "\n"),
+		tools: []string{
+			"read_file", "list_directory", "write_file",
+			"shell", "search_files",
+			"git_status", "git_diff", "git_commit",
+			"search_tools", "signal_done",
+		},
 	},
 }
 
