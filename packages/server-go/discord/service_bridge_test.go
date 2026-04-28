@@ -2091,6 +2091,18 @@ func TestEnsureProjectChannel_FindByName(t *testing.T) {
 
 // ── Validate — success path (all checks pass) ─────────────────────────────────
 
+// ── ensureProjectChannel — nil discord session ────────────────────────────────
+
+func TestEnsureProjectChannel_NilSession_ReturnsError(t *testing.T) {
+	svc, _ := newDisabledSvc(t)
+	svc.dg = nil
+	_, err := svc.ensureProjectChannel("someproject")
+	if err == nil {
+		t.Fatal("expected error when discord session is nil")
+	}
+}
+
+
 func TestValidate_Success(t *testing.T) {
 	guildID := "guild-validate-ok"
 	controlChannel := &discordgo.Channel{ID: "ctrl-ok", Name: "engine-control", Type: discordgo.ChannelTypeGuildText}

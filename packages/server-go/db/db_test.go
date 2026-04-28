@@ -935,3 +935,17 @@ func TestWithProject_InitLocked_Fails_ReturnsError(t *testing.T) {
 		t.Fatal("expected error when db state dir is unwritable, got nil")
 	}
 }
+
+func TestInsertSessionWithTimestamps_InsertsRow(t *testing.T) {
+	initTestDB(t)
+	if err := InsertSessionWithTimestamps("ts-id-1", "/some/project", "main", "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z"); err != nil {
+		t.Fatalf("InsertSessionWithTimestamps: %v", err)
+	}
+	sess, err := GetSession("ts-id-1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if sess.ID != "ts-id-1" {
+		t.Fatalf("expected session id ts-id-1, got %q", sess.ID)
+	}
+}

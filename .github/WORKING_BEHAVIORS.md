@@ -224,4 +224,7 @@ Cmd/Ctrl+P opens file search. Cmd/Ctrl+Shift+P opens the command palette. Cmd/Ct
 
 **Discord DM to Owner:** When the AI is blocked and needs credentials, approval, or other input it cannot obtain autonomously, it can DM the configured Discord owner directly to request that information. The owner's Discord user ID is resolved from the bot's `AllowedUsers` config.
 
+## Discord as Primary Progress Channel
+
+When Discord is configured, the AI posts milestone completions, task summaries, and session updates to the project's Discord channel — not to the in-editor chat. In-editor AI responses are terse (1–3 sentences): acknowledge the task, state what's happening, done. Discord is where the user sees what Engine actually accomplished.
 

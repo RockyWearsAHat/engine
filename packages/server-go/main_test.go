@@ -66,7 +66,8 @@ func (f *fakeDiscordService) SearchHistory(projectPath, query, since string, lim
 func (f *fakeDiscordService) RecentHistory(projectPath, threadID, since string, limit int) ([]db.DiscordMessage, error) {
 	return []db.DiscordMessage{}, nil
 }
-func (f *fakeDiscordService) SendDMToOwner(_ string) error { return nil }
+func (f *fakeDiscordService) SendDMToOwner(_ string) error      { return nil }
+func (f *fakeDiscordService) NotifyProjectProgress(_, _ string) {}
 
 func withRunDepsReset(t *testing.T) {
 	t.Helper()
@@ -102,6 +103,7 @@ func withRunDepsReset(t *testing.T) {
 	origTriggerIssueOpened := triggerIssueOpenedSessionFn
 	origScaffoldRunning := scaffoldTriggerRunning
 	origScaffoldLastStart := scaffoldTriggerLastStart
+	origScaffoldAttemptTimeout := scaffoldAttemptTimeout
 
 	scaffoldTriggerMu.Lock()
 	scaffoldTriggerRunning = make(map[string]bool)
@@ -143,6 +145,7 @@ func withRunDepsReset(t *testing.T) {
 		scaffoldTriggerRunning = origScaffoldRunning
 		scaffoldTriggerLastStart = origScaffoldLastStart
 		scaffoldTriggerMu.Unlock()
+		scaffoldAttemptTimeout = origScaffoldAttemptTimeout
 	})
 }
 
@@ -439,13 +442,17 @@ func TestEnsureAutonomousRepoWorkspace_UpdateFlow(t *testing.T) {
 	if gotDest != dest {
 		t.Fatalf("unexpected destination: got %q want %q", gotDest, dest)
 	}
-	if len(calls) != 2 {
-		t.Fatalf("expected fetch+pull commands, got %d", len(calls))
+	if len(calls) != 3 {
+		t.Fatalf("expected fetch+clean+pull commands, got %d", len(calls))
 	}
 	fetchCmd := strings.Join(calls[0], " ")
-	pullCmd := strings.Join(calls[1], " ")
+	cleanCmd := strings.Join(calls[1], " ")
+	pullCmd := strings.Join(calls[2], " ")
 	if !strings.Contains(fetchCmd, "git -C "+dest+" fetch origin --prune") {
 		t.Fatalf("unexpected fetch command: %s", fetchCmd)
+	}
+	if !strings.Contains(cleanCmd, "git -C "+dest+" clean -fdx") {
+		t.Fatalf("unexpected clean command: %s", cleanCmd)
 	}
 	if !strings.Contains(pullCmd, "git -C "+dest+" pull --ff-only origin HEAD") {
 		t.Fatalf("unexpected pull command: %s", pullCmd)
@@ -833,7 +840,8 @@ func (f *fakeDiscordServiceStartErr) SearchHistory(pp, q, since string, limit in
 func (f *fakeDiscordServiceStartErr) RecentHistory(pp, tid, since string, limit int) ([]db.DiscordMessage, error) {
 	return nil, nil
 }
-func (f *fakeDiscordServiceStartErr) SendDMToOwner(_ string) error { return nil }
+func (f *fakeDiscordServiceStartErr) SendDMToOwner(_ string) error      { return nil }
+func (f *fakeDiscordServiceStartErr) NotifyProjectProgress(_, _ string) {}
 
 func TestRun_DiscordEnabled_StartError_NonFatal(t *testing.T) {
 	withRunDepsReset(t)
@@ -1134,6 +1142,18 @@ func TestTriggerScaffoldSession_NoOpFirstPass_RetriesThenReportsNoop(t *testing.
 	t.Setenv("OPENAI_API_KEY", "")
 
 	prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	targetPath := buildAutonomousRepoPath(projectPath, "owner", "repo")
+	if out, err := exec.Command("git", "-C", targetPath, "init").CombinedOutput(); err != nil {
+		t.Skipf("git init failed: %v: %s", err, out)
+	}
+	_ = exec.Command("git", "-C", targetPath, "config", "user.email", "test@example.com").Run()
+	_ = exec.Command("git", "-C", targetPath, "config", "user.name", "Test").Run()
+	if out, err := exec.Command("git", "-C", targetPath, "add", "README.md").CombinedOutput(); err != nil {
+		t.Skipf("git add failed: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", targetPath, "commit", "-m", "init").CombinedOutput(); err != nil {
+		t.Skipf("git commit failed: %v: %s", err, out)
+	}
 	notifier := &mockProgressNotifier{}
 	ws.SetDiscordBridge(notifier)
 	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
@@ -1159,6 +1179,170 @@ func TestTriggerScaffoldSession_NoOpFirstPass_RetriesThenReportsNoop(t *testing.
 	}
 	if !strings.Contains(joined, "ended with no repository changes") {
 		t.Fatalf("expected final no-op failure notification, got: %v", notifier.notified)
+	}
+}
+
+func TestTriggerScaffoldSession_ErrorFirstPass_RetriesAndSucceeds(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	targetPath := buildAutonomousRepoPath(projectPath, "owner", "repo")
+	if out, err := exec.Command("git", "-C", targetPath, "init").CombinedOutput(); err != nil {
+		t.Skipf("git init failed: %v: %s", err, out)
+	}
+	_ = exec.Command("git", "-C", targetPath, "config", "user.email", "test@example.com").Run()
+	_ = exec.Command("git", "-C", targetPath, "config", "user.name", "Test").Run()
+	if out, err := exec.Command("git", "-C", targetPath, "add", "README.md").CombinedOutput(); err != nil {
+		t.Skipf("git add failed: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", targetPath, "commit", "-m", "init").CombinedOutput(); err != nil {
+		t.Skipf("git commit failed: %v: %s", err, out)
+	}
+	notifier := &mockProgressNotifier{}
+	ws.SetDiscordBridge(notifier)
+	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
+
+	callCount := 0
+	origAI := aiChatFn
+	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+		callCount++
+		if callCount == 1 {
+			ctx.OnError("temporary tool failure")
+			return
+		}
+		_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "scaffold_progress.txt"), []byte("done"), 0o644)
+		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "add", "scaffold_progress.txt").CombinedOutput()
+		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "scaffold: initial implementation").CombinedOutput()
+		ctx.OnChunk("recovered and completed", false)
+		ctx.OnChunk("", true)
+	}
+	t.Cleanup(func() { aiChatFn = origAI })
+
+	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`))
+
+	if callCount != 2 {
+		t.Fatalf("expected retry after first failed attempt, got %d attempts", callCount)
+	}
+
+	joined := strings.Join(notifier.notified, "\n")
+	if !strings.Contains(joined, "did not complete") || !strings.Contains(joined, "retrying automatically") {
+		t.Fatalf("expected automatic retry warning, got: %v", notifier.notified)
+	}
+	if !strings.Contains(joined, "finished") {
+		t.Fatalf("expected successful completion notification after retry, got: %v", notifier.notified)
+	}
+}
+
+// TestTriggerScaffoldSession_OnlyUntrackedFirstPass_RetriesAsNoop verifies that
+// creating only untracked metadata files (e.g. PROJECT_GOAL.md) without
+// committing does NOT count as a successful scaffold finish.  The session must
+// trigger a second attempt with the no-op retry prompt.
+func TestTriggerScaffoldSession_OnlyUntrackedFirstPass_RetriesAsNoop(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	targetPath := buildAutonomousRepoPath(projectPath, "owner", "repo")
+	if out, err := exec.Command("git", "-C", targetPath, "init").CombinedOutput(); err != nil {
+		t.Skipf("git init failed: %v: %s", err, out)
+	}
+	_ = exec.Command("git", "-C", targetPath, "config", "user.email", "test@example.com").Run()
+	_ = exec.Command("git", "-C", targetPath, "config", "user.name", "Test").Run()
+	if out, err := exec.Command("git", "-C", targetPath, "add", "README.md").CombinedOutput(); err != nil {
+		t.Skipf("git add failed: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", targetPath, "commit", "-m", "init").CombinedOutput(); err != nil {
+		t.Skipf("git commit failed: %v: %s", err, out)
+	}
+	notifier := &mockProgressNotifier{}
+	ws.SetDiscordBridge(notifier)
+	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
+
+	var attempt2Prompt string
+	callCount := 0
+	origAI := aiChatFn
+	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+		callCount++
+		if callCount == 1 {
+			// Simulate AI writing only a planning doc (untracked, not committed).
+			_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "PROJECT_GOAL.md"), []byte("plan"), 0o644)
+			ctx.OnChunk("wrote project goal", false)
+			ctx.OnChunk("", true)
+			return
+		}
+		// Second attempt: record the prompt then commit actual code.
+		attempt2Prompt = prompt
+		_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "main.go"), []byte("package main"), 0o644)
+		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "add", "main.go").CombinedOutput()
+		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "scaffold: add main").CombinedOutput()
+		ctx.OnChunk("implemented", false)
+		ctx.OnChunk("", true)
+	}
+	t.Cleanup(func() { aiChatFn = origAI })
+
+	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`))
+
+	if callCount != 2 {
+		t.Fatalf("expected retry when attempt 1 only created untracked files, got %d attempts", callCount)
+	}
+	if !strings.Contains(attempt2Prompt, "no committed repository changes") {
+		t.Fatalf("expected noop retry prompt for untracked-only attempt, got: %s", attempt2Prompt)
+	}
+	joined := strings.Join(notifier.notified, "\n")
+	if !strings.Contains(joined, "finished") {
+		t.Fatalf("expected finished notification after attempt 2 committed, got: %v", notifier.notified)
+	}
+}
+
+func TestTriggerScaffoldSession_TimeoutThenError_ReportsBlockedAfterRetry(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	notifier := &mockProgressNotifier{}
+	ws.SetDiscordBridge(notifier)
+	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
+
+	origTimeout := scaffoldAttemptTimeout
+	scaffoldAttemptTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { scaffoldAttemptTimeout = origTimeout })
+
+	callCount := 0
+	origAI := aiChatFn
+	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+		callCount++
+		if callCount == 1 {
+			if ctx.Cancel != nil {
+				<-ctx.Cancel
+			}
+			return
+		}
+		_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "partial_progress.txt"), []byte("done"), 0o644)
+		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "add", "partial_progress.txt").CombinedOutput()
+		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "partial progress").CombinedOutput()
+		ctx.OnError("agent exited early")
+	}
+	t.Cleanup(func() { aiChatFn = origAI })
+
+	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`))
+
+	if callCount != 2 {
+		t.Fatalf("expected two attempts after timeout, got %d", callCount)
+	}
+
+	joined := strings.Join(notifier.notified, "\n")
+	if !strings.Contains(joined, "did not complete") || !strings.Contains(joined, "retrying automatically") {
+		t.Fatalf("expected timeout retry warning, got: %v", notifier.notified)
+	}
+	if !strings.Contains(joined, "Scaffold blocked") {
+		t.Fatalf("expected terminal blocked notification after retry, got: %v", notifier.notified)
 	}
 }
 
@@ -1298,6 +1482,7 @@ type mockAutoEnroller struct {
 }
 
 func (m *mockAutoEnroller) SendDMToOwner(_ string) error { return nil }
+func (m *mockAutoEnroller) NotifyProjectProgress(_, _ string) {}
 func (m *mockAutoEnroller) CurrentConfig() discord.Config { return discord.Config{} }
 func (m *mockAutoEnroller) Reload(_ discord.Config) error { return nil }
 func (m *mockAutoEnroller) SearchHistory(_, _, _ string, _ int) ([]db.DiscordSearchHit, error) {
@@ -1728,6 +1913,39 @@ func TestHasRepoProgress_HeadDiffers(t *testing.T) {
 		}
 	}
 
+// ── hasCommitProgress ────────────────────────────────────────────────────────
+
+func TestHasCommitProgress_HeadChangedReturnsTrue(t *testing.T) {
+	before := repoActivitySnapshot{head: "abc123"}
+	after := repoActivitySnapshot{head: "def456"}
+	if !hasCommitProgress(before, after) {
+		t.Error("expected true when head changes")
+	}
+}
+
+func TestHasCommitProgress_OnlyUntrackedReturnsFalse(t *testing.T) {
+	before := repoActivitySnapshot{head: "abc", untracked: 0}
+	after := repoActivitySnapshot{head: "abc", untracked: 3}
+	if hasCommitProgress(before, after) {
+		t.Error("expected false when only untracked count changes (no new commits)")
+	}
+}
+
+func TestHasCommitProgress_OnlyStagedReturnsFalse(t *testing.T) {
+	before := repoActivitySnapshot{head: "abc", staged: 0}
+	after := repoActivitySnapshot{head: "abc", staged: 2}
+	if hasCommitProgress(before, after) {
+		t.Error("expected false when only staged count changes (no new commits)")
+	}
+}
+
+func TestHasCommitProgress_NoChangeReturnsFalse(t *testing.T) {
+	s := repoActivitySnapshot{head: "abc", staged: 1, unstaged: 1, untracked: 1}
+	if hasCommitProgress(s, s) {
+		t.Error("expected false when snapshots are identical")
+	}
+}
+
 	// ── beginScaffoldTrigger: empty repoKey branch ────────────────────────────────
 
 	func TestBeginScaffoldTrigger_EmptyRepoKey(t *testing.T) {
@@ -1883,8 +2101,10 @@ func TestHasRepoProgress_HeadDiffers(t *testing.T) {
 		aiChatFn = func(ctx *ai.ChatContext, prompt string) {
 			callCount++
 			if callCount == 2 {
-				// Create an untracked file so captureRepoActivity detects progress.
+				// Create and commit a file so hasCommitProgress detects real progress.
 				_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "progress.txt"), []byte("done"), 0o644)
+				_, _ = exec.Command("git", "-C", ctx.ProjectPath, "add", "progress.txt").CombinedOutput()
+				_, _ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "scaffold: add progress").CombinedOutput()
 			}
 			ctx.OnChunk("response", false)
 			ctx.OnChunk("", true)
@@ -1994,6 +2214,8 @@ func TestTriggerScaffoldSession_FirstAttemptMakesProgress(t *testing.T) {
 	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
 		callCount++
 		_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "first_progress.txt"), []byte("done"), 0o644)
+				_, _ = exec.Command("git", "-C", ctx.ProjectPath, "add", "first_progress.txt").CombinedOutput()
+				_, _ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "scaffold: first pass").CombinedOutput()
 		ctx.OnChunk("response", false)
 		ctx.OnChunk("", true)
 	}
@@ -2007,5 +2229,128 @@ func TestTriggerScaffoldSession_FirstAttemptMakesProgress(t *testing.T) {
 	joined := strings.Join(notifier.notified, "\n")
 	if !strings.Contains(joined, "Scaffold session") || strings.Contains(joined, "no-op retry") {
 		t.Fatalf("expected first-attempt success notification, got: %v", notifier.notified)
+	}
+}
+
+// TestScaffoldErrorRetryPrompt_EmptyReason_UsesDefault verifies that the
+// empty-reason guard in scaffoldErrorRetryPrompt substitutes "unknown failure".
+func TestScaffoldErrorRetryPrompt_EmptyReason_UsesDefault(t *testing.T) {
+	result := scaffoldErrorRetryPrompt("owner", "repo", "")
+	if !strings.Contains(result, "unknown failure") {
+		t.Fatalf("expected 'unknown failure' in prompt, got: %q", result)
+	}
+}
+
+// TestTriggerScaffoldSession_OnError_EmptyReason_DefaultsUnknown verifies that
+// when ctx.OnError("") is called the scaffold loop defaults attemptFailureReason
+// to "unknown failure" and retries attempt 1 with that reason.
+func TestTriggerScaffoldSession_OnError_EmptyReason_DefaultsUnknown(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	prepareScaffoldTargetRepo(t, projectPath, "owner", "emptyerrrepo", "# Demo\n@engine")
+	notifier := &mockProgressNotifier{}
+	ws.SetDiscordBridge(notifier)
+	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
+
+	callCount := 0
+	origAI := aiChatFn
+	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+		callCount++
+		if callCount == 1 {
+			ctx.OnError("")
+			return
+		}
+		ctx.OnError("second failure")
+	}
+	t.Cleanup(func() { aiChatFn = origAI })
+
+	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/emptyerrrepo"}}`))
+
+	if callCount != 2 {
+		t.Fatalf("expected 2 AI calls (retry after empty error), got %d", callCount)
+	}
+	joined := strings.Join(notifier.notified, "\n")
+	if !strings.Contains(joined, "did not complete") {
+		t.Fatalf("expected 'did not complete' retry notification, got: %v", notifier.notified)
+	}
+}
+
+// TestTriggerScaffoldSession_ErrorSecondAttemptWithRepoProgress_ReportsStoppedBeforeCompletion
+// verifies that when attempt 2 errors but the repo has commit progress, the
+// "stopped before completion" notification is sent (not "blocked").
+func TestTriggerScaffoldSession_ErrorSecondAttemptWithRepoProgress_ReportsStoppedBeforeCompletion(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	targetPath := buildAutonomousRepoPath(projectPath, "owner", "progbeforeerr")
+	repoKey := "owner/progbeforeerr"
+	scaffoldTriggerMu.Lock()
+	delete(scaffoldTriggerLastStart, repoKey)
+	delete(scaffoldTriggerRunning, repoKey)
+	scaffoldTriggerMu.Unlock()
+	t.Cleanup(func() {
+		scaffoldTriggerMu.Lock()
+		delete(scaffoldTriggerLastStart, repoKey)
+		delete(scaffoldTriggerRunning, repoKey)
+		scaffoldTriggerMu.Unlock()
+	})
+
+	if err := os.MkdirAll(targetPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", targetPath, "init").CombinedOutput(); err != nil {
+		t.Skipf("git init failed: %v: %s", err, out)
+	}
+	_ = exec.Command("git", "-C", targetPath, "config", "user.email", "test@example.com").Run()
+	_ = exec.Command("git", "-C", targetPath, "config", "user.name", "Test").Run()
+	if err := os.WriteFile(filepath.Join(targetPath, "README.md"), []byte("# Demo\n@engine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", targetPath, "add", ".").CombinedOutput(); err != nil {
+		t.Skipf("git add failed: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", targetPath, "commit", "-m", "init").CombinedOutput(); err != nil {
+		t.Skipf("git commit failed: %v: %s", err, out)
+	}
+	setupTestDB(t, targetPath)
+
+	origRun := runCommandCombinedOutputFn
+	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		return []byte("ok"), nil
+	}
+	t.Cleanup(func() { runCommandCombinedOutputFn = origRun })
+
+	notifier := &mockProgressNotifier{}
+	ws.SetDiscordBridge(notifier)
+	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
+
+	callCount := 0
+	origAI := aiChatFn
+	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+		callCount++
+		if callCount == 1 {
+			ctx.OnError("first attempt failed")
+			return
+		}
+		_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "partial.txt"), []byte("done"), 0o644)
+		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "add", "partial.txt").CombinedOutput()
+		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "partial work").CombinedOutput()
+		ctx.OnError("incomplete")
+	}
+	t.Cleanup(func() { aiChatFn = origAI })
+
+	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/progbeforeerr"}}`))
+
+	if callCount != 2 {
+		t.Fatalf("expected 2 AI calls, got %d", callCount)
+	}
+	joined := strings.Join(notifier.notified, "\n")
+	if !strings.Contains(joined, "stopped before completion") {
+		t.Fatalf("expected 'stopped before completion' notification, got: %v", notifier.notified)
 	}
 }

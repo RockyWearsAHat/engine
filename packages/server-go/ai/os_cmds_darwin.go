@@ -8,6 +8,11 @@ import (
 	"strings"
 )
 
+// osascriptFn is injectable for testing; production code uses exec.Command.
+var osascriptFn = func(script string) ([]byte, error) {
+	return exec.Command("osascript", "-e", script).CombinedOutput()
+}
+
 var openURLForOS = func(urlStr string) (*exec.Cmd, string) {
 	return openURLCommand("open", urlStr), ""
 }
@@ -23,8 +28,7 @@ var browserNavigateFnForOS = func(urlStr string) (string, error) {
 	if (count of windows) = 0 then make new window
 	set URL of active tab of front window to "%s"
 end tell`, escaped)
-	cmd := exec.Command("osascript", "-e", script)
-	out, err := cmd.CombinedOutput()
+	out, err := osascriptFn(script)
 	if err != nil {
 		return "", fmt.Errorf("browser_navigate: %v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -35,8 +39,7 @@ var browserReadPageFnForOS = func() (string, error) {
 	script := `tell application "Google Chrome"
 	execute active tab of front window javascript "document.body.innerText.substring(0,8000)"
 end tell`
-	cmd := exec.Command("osascript", "-e", script)
-	out, err := cmd.CombinedOutput()
+	out, err := osascriptFn(script)
 	if err != nil {
 		return "", fmt.Errorf("browser_read_page: %v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -45,8 +48,7 @@ end tell`
 
 var browserClickFnForOS = func(x, y int) (string, error) {
 	script := fmt.Sprintf(`tell application "System Events" to click at {%d, %d}`, x, y)
-	cmd := exec.Command("osascript", "-e", script)
-	out, err := cmd.CombinedOutput()
+	out, err := osascriptFn(script)
 	if err != nil {
 		return "", fmt.Errorf("browser_click: %v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -56,8 +58,7 @@ var browserClickFnForOS = func(x, y int) (string, error) {
 var browserTypeFnForOS = func(text string) (string, error) {
 	escaped := strings.ReplaceAll(strings.ReplaceAll(text, `\`, `\\`), `"`, `\"`)
 	script := fmt.Sprintf(`tell application "System Events" to keystroke "%s"`, escaped)
-	cmd := exec.Command("osascript", "-e", script)
-	out, err := cmd.CombinedOutput()
+	out, err := osascriptFn(script)
 	if err != nil {
 		return "", fmt.Errorf("browser_type: %v: %s", err, strings.TrimSpace(string(out)))
 	}

@@ -246,3 +246,41 @@ func TestBuildRoleSystemPrompt_AutonomousBuilder_ContainsExecutionRules(t *testi
 		t.Errorf("expected project path in autonomous builder prompt, got %q", p)
 	}
 }
+
+func TestBuildRoleSystemPrompt_Interactive_ContainsTerseRule(t *testing.T) {
+	p := buildRoleSystemPrompt(RoleInteractive, "/proj", "main", "")
+	if !strings.Contains(p, "terse") {
+		t.Errorf("expected terse chat rule in interactive prompt, got %q", p)
+	}
+	if !strings.Contains(p, "discord_post_progress") {
+		t.Errorf("expected discord_post_progress mention in interactive prompt, got %q", p)
+	}
+}
+
+func TestRoleBootstrapTools_AutonomousBuilder_HasDiscordProgressAndDM(t *testing.T) {
+	tools := roleBootstrapTools(RoleAutonomousBuilder)
+	if tools == nil {
+		t.Fatal("expected non-nil tool list for RoleAutonomousBuilder")
+	}
+	has := func(name string) bool {
+		for _, n := range tools {
+			if n == name {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("discord_post_progress") {
+		t.Errorf("RoleAutonomousBuilder missing discord_post_progress, got %v", tools)
+	}
+	if !has("discord_dm") {
+		t.Errorf("RoleAutonomousBuilder missing discord_dm, got %v", tools)
+	}
+}
+
+func TestBuildRoleSystemPrompt_AutonomousBuilder_ContainsDiscordProgressRule(t *testing.T) {
+	p := buildRoleSystemPrompt(RoleAutonomousBuilder, "/proj", "main", "")
+	if !strings.Contains(p, "discord_post_progress") {
+		t.Errorf("expected discord_post_progress rule in autonomous builder prompt, got %q", p)
+	}
+}

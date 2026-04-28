@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
 	"github.com/engine/server/ai"
 	"github.com/engine/server/db"
 	"github.com/engine/server/discord"
@@ -41,7 +39,8 @@ func (s *stubDiscordBridge) SearchHistory(_, _, _ string, _ int) ([]db.DiscordSe
 func (s *stubDiscordBridge) RecentHistory(_, _, _ string, _ int) ([]db.DiscordMessage, error) {
 	return s.recentRows, s.recentErr
 }
-func (s *stubDiscordBridge) SendDMToOwner(_ string) error { return nil }
+func (s *stubDiscordBridge) SendDMToOwner(_ string) error     { return nil }
+func (s *stubDiscordBridge) NotifyProjectProgress(_, _ string) {}
 
 // ─── stub HTTP transport ──────────────────────────────────────────────────────
 
@@ -1479,8 +1478,6 @@ func TestHandler_RemotePairCodeGenerate_Success(t *testing.T) {
 // Suppress unused import lint.
 var _ = json.Marshal
 var _ *websocket.Conn
-var _ = httptest.NewServer
-var _ = discordgo.EndpointGatewayBot
 
 // TestHandler_DiscordConfigSet_NilBridge_EnabledStartFails covers the
 // discordBridge==nil && cfg.Enabled==true && service.Start() fails path.
@@ -1488,15 +1485,12 @@ func TestHandler_DiscordConfigSet_NilBridge_EnabledStartFails(t *testing.T) {
 	SetDiscordBridge(nil)
 	defer SetDiscordBridge(nil)
 
-	// Intercept Discord gateway endpoint to return 401 so dg.Open() fails.
-	errSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, `{"message":"401: Unauthorized","code":0}`, http.StatusUnauthorized)
-	}))
-	defer errSrv.Close()
-
-	origGWB := discordgo.EndpointGatewayBot
-	defer func() { discordgo.EndpointGatewayBot = origGWB }()
-	discordgo.EndpointGatewayBot = errSrv.URL + "/gateway/bot"
+	// Inject a start function that always fails so we don't need a real network call.
+	origStart := discordServiceStartFn
+	discordServiceStartFn = func(_ *discord.Service) error {
+		return fmt.Errorf("simulated start failure")
+	}
+	defer func() { discordServiceStartFn = origStart }()
 
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
@@ -1709,6 +1703,73 @@ type stubDiscordBridgeWithDM struct {
 func (s *stubDiscordBridgeWithDM) SendDMToOwner(message string) error {
 	*s.captureMsg = message
 	return nil
+}
+func (s *stubDiscordBridgeWithDM) NotifyProjectProgress(_, _ string) {}
+
+type stubDiscordBridgeWithProgress struct {
+	stubDiscordBridge
+	capturedPath *string
+	capturedMsg  *string
+}
+
+func (s *stubDiscordBridgeWithProgress) NotifyProjectProgress(projectPath, message string) {
+	*s.capturedPath = projectPath
+	*s.capturedMsg = message
+}
+
+func TestHandler_DiscordProgress_NilBridge_ReturnsError(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	SetDiscordBridge(nil)
+
+	origRunAIChat := runAIChat
+	defer func() { runAIChat = origRunAIChat }()
+	var progressErr error
+	done := make(chan struct{})
+	runAIChat = func(ctx *ai.ChatContext, _ string) {
+		progressErr = ctx.DiscordProgress("milestone reached")
+		close(done)
+		ctx.OnChunk("ok", true)
+	}
+
+	testSendChatAndWaitForRunAIChat(t, conn, projectDir)
+	<-done
+	if progressErr == nil || progressErr.Error() != "Discord not configured" {
+		t.Fatalf("expected 'Discord not configured', got %v", progressErr)
+	}
+}
+
+func TestHandler_DiscordProgress_WithBridge_CallsNotifyProjectProgress(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	var capturedPath, capturedMsg string
+	SetDiscordBridge(&stubDiscordBridgeWithProgress{
+		capturedPath: &capturedPath,
+		capturedMsg:  &capturedMsg,
+	})
+	defer SetDiscordBridge(nil)
+
+	origRunAIChat := runAIChat
+	defer func() { runAIChat = origRunAIChat }()
+	done := make(chan struct{})
+	runAIChat = func(ctx *ai.ChatContext, _ string) {
+		_ = ctx.DiscordProgress("scaffold complete")
+		close(done)
+		ctx.OnChunk("ok", true)
+	}
+
+	testSendChatAndWaitForRunAIChat(t, conn, projectDir)
+	<-done
+	if capturedMsg != "scaffold complete" {
+		t.Fatalf("NotifyProjectProgress not called with correct msg, got %q", capturedMsg)
+	}
+	if capturedPath != projectDir {
+		t.Fatalf("NotifyProjectProgress not called with correct path, got %q want %q", capturedPath, projectDir)
+	}
 }
 
 // ─── GitHub Auth device flow ──────────────────────────────────────────────────
