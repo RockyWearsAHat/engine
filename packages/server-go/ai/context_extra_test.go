@@ -475,6 +475,29 @@ func TestExecuteToolForTest_Shell_RequiresApproval_Denied(t *testing.T) {
 	}
 }
 
+// TestExecuteToolForTest_Shell_GoworkOff verifies that shell commands run inside
+// a .engine/projects/ path automatically get GOWORK=off injected, so Go commands
+// don't collide with the parent Engine go.work workspace.
+func TestExecuteToolForTest_Shell_GoworkOff(t *testing.T) {
+	base := t.TempDir()
+	// Mimic a scaffold project path: something/.engine/projects/some-repo
+	projectPath := filepath.Join(base, ".engine", "projects", "some-repo")
+	if err := os.MkdirAll(projectPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	ctx := makeChatCtx(t)
+	ctx.ProjectPath = projectPath
+	ctx.ActiveTools = bootstrapTools()
+	// `go env GOWORK` will print "off" if GOWORK=off is set in the env.
+	result, isErr := ExecuteToolForTest("shell", map[string]any{"command": "go env GOWORK"}, ctx)
+	if isErr {
+		t.Skipf("go not available in test env: %s", result)
+	}
+	if strings.TrimSpace(result) != "off" {
+		t.Errorf("expected GOWORK=off for .engine/projects path, got %q", result)
+	}
+}
+
 func TestExecuteToolForTest_SearchFiles(t *testing.T) {
 	ctx := makeChatCtx(t)
 	result, isErr := ExecuteToolForTest("search_files", map[string]any{"pattern": "Engine"}, ctx)

@@ -1,6 +1,6 @@
 ---
 source: ../.github/WORKING_BEHAVIORS.md
-generatedAt: 2026-04-28T19:42:23.169Z
+generatedAt: 2026-04-28T20:39:27.266Z
 sectionCount: 25
 ---
 

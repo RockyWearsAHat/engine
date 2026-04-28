@@ -898,6 +898,14 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		}
 		cmd := exec.Command(shell, "-l", "-c", command)
 		cmd.Dir = cwd
+		// Scaffold repos live under .engine/projects/ and have no go.mod.
+		// Without GOWORK=off Go walks up and finds Engine's go.work, then
+		// rejects every go command because the module is not listed there.
+		if strings.Contains(cwd, ".engine/projects/") || strings.Contains(ctx.ProjectPath, ".engine/projects/") {
+			env := os.Environ()
+			env = append(env, "GOWORK=off")
+			cmd.Env = env
+		}
 		out, err := cmd.CombinedOutput()
 		result := strings.TrimSpace(string(out))
 		if result == "" {

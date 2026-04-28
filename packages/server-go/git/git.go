@@ -142,7 +142,9 @@ func Commit(cwd, message string) (string, error) {
 	if out, err := run(cwd, "add", "-A"); err != nil {
 		return "", fmt.Errorf("git add: %w\n%s", err, out)
 	}
-	if out, err := run(cwd, "commit", "-m", message); err != nil {
+	// Pass -c commit.gpgsign=false so the commit succeeds in environments
+	// where GPG signing is enabled globally but gpg is not available.
+	if out, err := run(cwd, "-c", "commit.gpgsign=false", "commit", "-m", message); err != nil {
 		return "", fmt.Errorf("git commit: %w\n%s", err, out)
 	}
 	hash, _ := run(cwd, "rev-parse", "--short", "HEAD")
