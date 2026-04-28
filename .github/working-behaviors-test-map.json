@@ -78,5 +78,8 @@
   "App Shell": [
     "packages/client/src/test/commandpalette.test.tsx",
     "packages/client/src/test/preferences.test.tsx"
+  ],
+  "Persistent Background Service": [
+    "packages/server-go/main_test.go"
   ]
 }

@@ -289,6 +289,17 @@ type Message struct {
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
 
+// InsertSessionWithTimestamps inserts a session row with explicit timestamp
+// strings (may be empty or non-RFC3339 for testing edge cases).
+func InsertSessionWithTimestamps(id, projectPath, branchName, createdAt, updatedAt string) error {
+	_, err := globalDB.Exec(
+		`INSERT INTO sessions (id, project_path, branch_name, summary, created_at, updated_at) VALUES (?,?,?,'',?,?)`,
+		id, projectPath, branchName, createdAt, updatedAt,
+	)
+	return err
+}
+
+
 func CreateSession(id, projectPath, branchName string) error {
 	t := now()
 	_, err := globalDB.Exec(

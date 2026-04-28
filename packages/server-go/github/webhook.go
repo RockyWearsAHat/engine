@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // WebhookEvent is a parsed GitHub webhook event.
@@ -29,6 +30,7 @@ type WebhookHandler func(event *WebhookEvent)
 
 // WebhookReceiver receives and validates GitHub webhook deliveries.
 type WebhookReceiver struct {
+	mu       sync.RWMutex
 	secret   []byte
 	handlers []WebhookHandler
 }
@@ -39,8 +41,17 @@ func NewWebhookReceiver(secret string) *WebhookReceiver {
 	return &WebhookReceiver{secret: []byte(secret)}
 }
 
+// SetSecret updates the webhook signature secret without recreating the receiver.
+func (wr *WebhookReceiver) SetSecret(secret string) {
+	wr.mu.Lock()
+	wr.secret = []byte(strings.TrimSpace(secret))
+	wr.mu.Unlock()
+}
+
 // AddHandler registers a handler to be called for every validated event.
 func (wr *WebhookReceiver) AddHandler(h WebhookHandler) {
+	wr.mu.Lock()
+	defer wr.mu.Unlock()
 	wr.handlers = append(wr.handlers, h)
 }
 
@@ -58,12 +69,10 @@ func (wr *WebhookReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(wr.secret) > 0 {
-		sig := r.Header.Get("X-Hub-Signature-256")
-		if !wr.validSignature(body, sig) {
-			http.Error(w, "invalid signature", http.StatusUnauthorized)
-			return
-		}
+	sig := r.Header.Get("X-Hub-Signature-256")
+	if !wr.validSignature(body, sig) {
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
 	}
 
 	event := &WebhookEvent{
@@ -72,7 +81,10 @@ func (wr *WebhookReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Payload:  json.RawMessage(body),
 	}
 
-	for _, h := range wr.handlers {
+	wr.mu.RLock()
+	handlers := append([]WebhookHandler(nil), wr.handlers...)
+	wr.mu.RUnlock()
+	for _, h := range handlers {
 		h(event)
 	}
 
@@ -82,6 +94,14 @@ func (wr *WebhookReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // validSignature returns true if sig matches the HMAC-SHA256 of body under wr.secret.
 // sig must be in the format "sha256=<hex>".
 func (wr *WebhookReceiver) validSignature(body []byte, sig string) bool {
+	wr.mu.RLock()
+	secret := append([]byte(nil), wr.secret...)
+	wr.mu.RUnlock()
+
+	if len(secret) == 0 {
+		return true
+	}
+
 	if !strings.HasPrefix(sig, "sha256=") {
 		return false
 	}
@@ -91,7 +111,7 @@ func (wr *WebhookReceiver) validSignature(body []byte, sig string) bool {
 		return false
 	}
 
-	mac := hmac.New(sha256.New, wr.secret)
+	mac := hmac.New(sha256.New, secret)
 	mac.Write(body)
 	computed := mac.Sum(nil)
 	return hmac.Equal(computed, expected)

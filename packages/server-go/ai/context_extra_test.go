@@ -4470,3 +4470,133 @@ func TestGetMachineCredStore_ReturnsNonNil(t *testing.T) {
 		t.Fatal("getMachineCredStore returned different instances (singleton broken)")
 	}
 }
+
+// ── signal_done in aiExecuteTool (lines 967-972) ─────────────────────────────
+
+func TestExecuteToolForTest_SignalDone_EmptySummary(t *testing.T) {
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("signal_done", map[string]any{"summary": ""}, ctx)
+	if isErr {
+		t.Errorf("signal_done should not error, got: %s", result)
+	}
+	if result != "done" {
+		t.Errorf("expected 'done' for empty summary, got: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_SignalDone_WithSummary(t *testing.T) {
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("signal_done", map[string]any{"summary": "task complete"}, ctx)
+	if isErr {
+		t.Errorf("signal_done should not error, got: %s", result)
+	}
+	if result != "task complete" {
+		t.Errorf("expected 'task complete', got: %q", result)
+	}
+}
+
+// ── runAnthropicLoop: MaxTurns break (lines 1838-1841) ───────────────────────
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestRunAnthropicLoop_MaxTurnsBreaks(t *testing.T) {
+	ctx := makeChatCtx(t)
+	ctx.MaxTurns = 1
+	ctx.Usage = &SessionUsage{}
+	ctx.Quarantine = NewToolQuarantine()
+
+	anthropicSSE := strings.Join([]string{
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01","name":"signal_done"}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"summary\":\"done\"}"}}`,
+		`data: {"type":"content_block_stop","index":0}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":5,"output_tokens":3}}`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+
+	callCount := 0
+	old := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		callCount++
+		return &http.Response{
+			Status:     "200 OK",
+			StatusCode: 200,
+			Body:       io.NopCloser(strings.NewReader(anthropicSSE)),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = old })
+
+	var calls []ToolCall
+	var text strings.Builder
+	runAnthropicLoop(ctx, "claude-3-5-sonnet-20241022", "fake-key", "system", nil, &calls, &text)
+
+	// MaxTurns=1: iteration 1 makes one HTTP call; iteration 2 breaks before calling HTTP.
+	if callCount != 1 {
+		t.Fatalf("expected 1 HTTP call with MaxTurns=1, got %d", callCount)
+	}
+}
+
+// ── runOpenAICompatibleLoop: MaxTurns break + toolChoice=required (lines 2216-2219, 2236-2238) ──
+
+func TestRunOpenAICompatibleLoop_MaxTurnsBreaks(t *testing.T) {
+	ctx := makeChatCtx(t)
+	ctx.MaxTurns = 1
+	ctx.Usage = &SessionUsage{}
+
+	// Use get_system_info as the tool call so execution doesn't fail.
+	oaiToolCallSSE := strings.Join([]string{
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"get_system_info","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, oaiToolCallSSE)
+	}))
+	t.Cleanup(server.Close)
+
+	var calls []ToolCall
+	var text strings.Builder
+	runOpenAICompatibleLoop(ctx, "openai", "gpt-4o", server.URL, "fake-key", true, "system", nil, &calls, &text)
+
+	// MaxTurns=1: iteration 1 makes 1 HTTP call; iteration 2 breaks before HTTP.
+	if callCount != 1 {
+		t.Fatalf("expected 1 HTTP call with MaxTurns=1, got %d", callCount)
+	}
+}
+
+// ── runOpenAICompatibleLoop: signal_done early return (lines 2415-2429) ──────
+
+func TestRunOpenAICompatibleLoop_SignalDoneReturnsEarly(t *testing.T) {
+	ctx := makeChatCtx(t)
+	ctx.Usage = &SessionUsage{}
+
+	signalDoneSSE := strings.Join([]string{
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_sd1","function":{"name":"signal_done","arguments":"{\"summary\":\"all done\"}"}}]},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, signalDoneSSE)
+	}))
+	t.Cleanup(server.Close)
+
+	var calls []ToolCall
+	var text strings.Builder
+	runOpenAICompatibleLoop(ctx, "openai", "gpt-4o", server.URL, "fake-key", true, "system", nil, &calls, &text)
+
+	// signal_done should be recorded in allToolCalls
+	if len(calls) != 1 || calls[0].Name != "signal_done" {
+		t.Fatalf("expected signal_done in ToolCalls, got: %v", calls)
+	}
+	if calls[0].Result != "done" {
+		t.Errorf("expected Result 'done', got: %q", calls[0].Result)
+	}
+}

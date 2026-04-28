@@ -55,6 +55,10 @@ coverage.out
 .github/session-memory/
 .engine/discord.json
 .engine/discord-state.json
+.engine/state.db
+.engine/state.db-shm
+.engine/state.db-wal
+.engine/projects/
 .myeditor/state.db
 .myeditor/state.db-shm
 .myeditor/state.db-wal

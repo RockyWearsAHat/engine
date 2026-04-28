@@ -545,3 +545,22 @@ func TestHandleDiscordConfigSet_WithBridge_ReloadSuccess(t *testing.T) {
 		t.Errorf("expected config field in discord.config.saved response, got %+v", response)
 	}
 }
+
+// ── GetDiscordBridge ──────────────────────────────────────────────────────────
+
+func TestGetDiscordBridge_NilByDefault(t *testing.T) {
+	SetDiscordBridge(nil)
+	t.Cleanup(func() { SetDiscordBridge(nil) })
+	if got := GetDiscordBridge(); got != nil {
+		t.Fatalf("expected nil bridge, got %v", got)
+	}
+}
+
+func TestGetDiscordBridge_ReturnsRegistered(t *testing.T) {
+	stub := &stubDiscordBridge{}
+	SetDiscordBridge(stub)
+	t.Cleanup(func() { SetDiscordBridge(nil) })
+	if got := GetDiscordBridge(); got != stub {
+		t.Fatalf("expected registered bridge, got %v", got)
+	}
+}

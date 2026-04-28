@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -83,6 +84,7 @@ type Service struct {
 	state           persistedState
 	activeMu        sync.Mutex
 	active          map[string]bool
+	activeByChannel map[string]bool
 	cloneProjectFn  func(url, dest string) error
 }
 
@@ -213,7 +215,8 @@ func NewService(cfg Config, projectPath string) (*Service, error) {
 		state: persistedState{
 			Projects: make(map[string]ProjectBinding),
 		},
-		active: make(map[string]bool),
+		active:          make(map[string]bool),
+		activeByChannel: make(map[string]bool),
 		cloneProjectFn: func(url, dest string) error {
 			cmd := exec.Command("git", "clone", url, dest)
 			if out, err := cmd.CombinedOutput(); err != nil {
@@ -301,6 +304,9 @@ func (s *Service) onMessage(_ *discordgo.Session, m *discordgo.MessageCreate) {
 
 	cmd, args, ok := parseCommand(m.Content, s.cfg.CommandPrefix)
 	if !ok {
+		if binding, found := s.resolveProjectByChannel(m.ChannelID); found {
+			s.handleDirectChatMessage(m, binding)
+		}
 		return
 	}
 
@@ -372,19 +378,27 @@ func (s *Service) addProject(replyChannelID string, inputPath string) error {
 	// Support GitHub/git URLs: clone them to a local directory first.
 	isURL := strings.HasPrefix(clean, "https://") || strings.HasPrefix(clean, "http://") || strings.HasPrefix(clean, "git@")
 	if isURL {
-		repoName := strings.TrimSuffix(filepath.Base(clean), ".git")
-		clonesDir := os.Getenv("ENGINE_CLONES_DIR")
-		if clonesDir == "" {
-			home, _ := os.UserHomeDir()
-			clonesDir = filepath.Join(home, ".engine", "projects")
+		clonesDir := resolveClonesDir(s.project)
+		if err := os.MkdirAll(clonesDir, 0o755); err != nil {
+			return fmt.Errorf("create clones directory: %w", err)
 		}
-		dest := filepath.Join(clonesDir, repoName)
-		if _, err := os.Stat(dest); os.IsNotExist(err) {
-			if err := s.cloneProjectFn(clean, dest); err != nil {
-				return fmt.Errorf("clone %s: %w", clean, err)
+
+		candidates, primary := cloneDirNameCandidates(clean)
+		if existingPath, ok := findExistingClonePath(clonesDir, candidates); ok {
+			clean = existingPath
+		} else {
+			dest := filepath.Join(clonesDir, primary)
+			if destInfo, err := os.Stat(dest); err == nil && destInfo.IsDir() {
+				if _, gitErr := os.Stat(filepath.Join(dest, ".git")); gitErr != nil {
+					return fmt.Errorf("clone destination exists but is not a git repository: %s", dest)
+				}
+			} else {
+				if err := s.cloneProjectFn(clean, dest); err != nil {
+					return fmt.Errorf("clone %s: %w", clean, err)
+				}
 			}
+			clean = dest
 		}
-		clean = dest
 	}
 
 	abs, _ := filepath.Abs(clean)
@@ -411,8 +425,116 @@ func (s *Service) addProject(replyChannelID string, inputPath string) error {
 
 	branch, _ := gogit.GetCurrentBranch(abs)
 	s.send(replyChannelID, fmt.Sprintf("Project enrolled: %s\\nChannel: <#%s>\\nBranch: %s", abs, ch.ID, branch))
-	s.send(ch.ID, "Engine linked to this project channel. Commands: !status !sessions !lastcommit !pause !resume !ask <prompt>")
+	s.send(ch.ID, "Engine linked to this project channel. Just chat normally to run the agent. Commands still available: !status !sessions !lastcommit !pause !resume !search !history")
 	return nil
+}
+
+func resolveClonesDir(projectPath string) string {
+	if clonesDir := strings.TrimSpace(os.Getenv("ENGINE_CLONES_DIR")); clonesDir != "" {
+		return clonesDir
+	}
+	if strings.TrimSpace(projectPath) != "" {
+		return filepath.Join(projectPath, ".engine", "projects")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".engine", "projects")
+}
+
+func cloneDirNameCandidates(rawURL string) ([]string, string) {
+	owner, repo, ok := parseGitHubOwnerRepo(rawURL)
+	baseName := strings.TrimSuffix(filepath.Base(rawURL), ".git")
+	if !ok || repo == "" {
+		return []string{baseName}, baseName
+	}
+	ownerRepo := owner + "-" + repo
+	return []string{ownerRepo, repo}, ownerRepo
+}
+
+func parseGitHubOwnerRepo(rawURL string) (string, string, bool) {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return "", "", false
+	}
+
+	if pathPart, ok := strings.CutPrefix(trimmed, "git@github.com:"); ok {
+		pathPart = strings.TrimSuffix(pathPart, ".git")
+		parts := strings.SplitN(pathPart, "/", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			return "", "", false
+		}
+		return parts[0], parts[1], true
+	}
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return "", "", false
+	}
+	if !strings.EqualFold(parsed.Hostname(), "github.com") {
+		return "", "", false
+	}
+	pathPart := strings.Trim(strings.TrimSuffix(parsed.Path, ".git"), "/")
+	parts := strings.SplitN(pathPart, "/", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func findExistingClonePath(clonesDir string, candidates []string) (string, bool) {
+	seen := make(map[string]bool)
+	for _, name := range candidates {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		candidatePath := filepath.Join(clonesDir, trimmed)
+		if _, err := os.Stat(filepath.Join(candidatePath, ".git")); err == nil {
+			return candidatePath, true
+		}
+	}
+	return "", false
+}
+
+// AutoEnrollProject enrolls an already-cloned repo into Discord and announces
+// it in the control channel. Used by the scaffold pipeline.
+func (s *Service) AutoEnrollProject(projectPath, owner, repo string) error {
+	absPath, _ := filepath.Abs(strings.TrimSpace(projectPath))
+
+	s.stateMu.RLock()
+	_, alreadyEnrolled := s.state.Projects[absPath]
+	s.stateMu.RUnlock()
+
+	if !alreadyEnrolled {
+		if err := s.addProject("", absPath); err != nil {
+			return err
+		}
+	}
+
+	if alreadyEnrolled {
+		return nil
+	}
+
+	controlID, err := s.ensureControlChannel()
+	if err != nil {
+		return err
+	}
+	s.send(controlID, fmt.Sprintf("🤖 Picked up **%s/%s** — working autonomously.", owner, repo))
+	return nil
+}
+
+// NotifyProjectProgress posts a status update to the enrolled project channel.
+func (s *Service) NotifyProjectProgress(projectPath, message string) {
+	if strings.TrimSpace(message) == "" {
+		return
+	}
+	s.stateMu.RLock()
+	binding, ok := s.state.Projects[projectPath]
+	s.stateMu.RUnlock()
+	if !ok {
+		return
+	}
+	s.sendTagged(binding.ChannelID, message, "status", "")
 }
 
 func (s *Service) removeProject(replyChannelID, name string) error {
@@ -540,7 +662,7 @@ func (s *Service) handleSessionsCommand(m *discordgo.MessageCreate, args []strin
 	limit := min(len(sessions), 5)
 	var b strings.Builder
 	b.WriteString("Recent sessions:\n")
-	for i := 0; i < limit; i++ {
+	for i := range limit {
 		sess := sessions[i]
 		summary := strings.TrimSpace(sess.Summary)
 		if summary == "" {
@@ -606,36 +728,58 @@ func (s *Service) handleAskCommand(m *discordgo.MessageCreate, args []string) {
 		s.send(m.ChannelID, "Prompt is required.")
 		return
 	}
+	s.runAgentChat(m, binding, prompt)
+}
+
+func (s *Service) handleDirectChatMessage(m *discordgo.MessageCreate, binding ProjectBinding) {
+	prompt := strings.TrimSpace(m.Content)
+	if prompt == "" {
+		return
+	}
+	s.runAgentChat(m, binding, prompt)
+}
+
+func (s *Service) runAgentChat(m *discordgo.MessageCreate, binding ProjectBinding, prompt string) {
 	if binding.Paused {
 		s.send(m.ChannelID, "Project is paused. Run !resume first.")
 		return
 	}
 
-	// Thread routing: every !ask spawns (or reuses) a dedicated thread under
-	// the project channel, giving each chat session its own searchable
-	// transcript. If the user is already inside a thread, reuse it so
-	// follow-up messages stay in the same session.
-	threadID, sessionID, err := s.acquireChatThread(m, binding, prompt)
+	// Channel routing: keep each project's communication in the project channel.
+	replyChannelID, sessionID, err := s.acquireProjectChatSession(m, binding, prompt)
 	if err != nil {
-		s.send(m.ChannelID, "Could not start chat thread: "+err.Error())
+		s.send(m.ChannelID, "Could not start project chat: "+err.Error())
 		return
 	}
-	replyChannelID := threadID
 
 	s.activeMu.Lock()
+	if s.active == nil {
+		s.active = make(map[string]bool)
+	}
+	if s.activeByChannel == nil {
+		s.activeByChannel = make(map[string]bool)
+	}
+	if s.activeByChannel[binding.ChannelID] {
+		s.activeMu.Unlock()
+		s.send(replyChannelID, "A task is already running for this project channel. Wait for it to finish.")
+		return
+	}
 	if s.active[sessionID] {
 		s.activeMu.Unlock()
 		s.send(replyChannelID, "A task is already running for this session. Wait for it to finish.")
 		return
 	}
 	s.active[sessionID] = true
+	s.activeByChannel[binding.ChannelID] = true
 	s.activeMu.Unlock()
 
 	s.send(replyChannelID, "Running agent request...")
+	channelID := binding.ChannelID
 	go func() {
 		defer func() {
 			s.activeMu.Lock()
 			delete(s.active, sessionID)
+			delete(s.activeByChannel, channelID)
 			s.activeMu.Unlock()
 		}()
 
@@ -687,6 +831,32 @@ func (s *Service) handleAskCommand(m *discordgo.MessageCreate, args []string) {
 			s.sendTagged(replyChannelID, part, "agent", sessionID)
 		}
 	}()
+}
+
+func channelSessionKey(channelID string) string {
+	return "channel:" + strings.TrimSpace(channelID)
+}
+
+// acquireProjectChatSession returns the project channel ID and chat session ID
+// for a !ask request. The session is bound to the project channel so all
+// conversation stays in one place.
+func (s *Service) acquireProjectChatSession(m *discordgo.MessageCreate, binding ProjectBinding, prompt string) (string, string, error) {
+	if strings.TrimSpace(binding.ChannelID) == "" {
+		return "", "", fmt.Errorf("project channel is not configured")
+	}
+
+	key := channelSessionKey(binding.ChannelID)
+	if existing, _ := db.DiscordGetSessionByThread(key); existing != nil && strings.TrimSpace(existing.SessionID) != "" {
+		return binding.ChannelID, existing.SessionID, nil
+	}
+
+	sessionID := s.newSessionForThread(binding.ProjectPath, key, binding.ChannelID)
+	author := "user"
+	if m != nil && m.Author != nil && strings.TrimSpace(m.Author.Username) != "" {
+		author = m.Author.Username
+	}
+	s.sendTagged(binding.ChannelID, "Chat started by "+author+":\n> "+truncate(prompt, 600), "message", sessionID)
+	return binding.ChannelID, sessionID, nil
 }
 
 // acquireChatThread returns the thread ID the chat should post to and the
@@ -1096,10 +1266,11 @@ func (s *Service) sendHelp(channelID string) {
 		"- !lastcommit [project]",
 		"- !pause [project]",
 		"- !resume [project]",
-		"- !ask <prompt> (opens a new chat thread inside the project channel)",
+		"- Chat normally in a project channel to run the agent",
+		"- !ask <prompt> (explicit prompt command, optional)",
 		"- !ask <project> <prompt> (from control channel)",
 		"- !search <query> — full-text search across this project's history",
-		"- !history [hours] — recent messages in this thread (default 24h)",
+		"- !history [hours] — recent messages in this project channel (default 24h)",
 	}, "\n")
 	s.send(channelID, help)
 }

@@ -98,6 +98,44 @@ func TestWebhookReceiver_BadHexSig(t *testing.T) {
 	}
 }
 
+func TestWebhookReceiver_SetSecret_ReplacesSignatureKey(t *testing.T) {
+	wr := NewWebhookReceiver("old-secret")
+	body := []byte(`{"action":"opened"}`)
+
+	wr.SetSecret("new-secret")
+
+	oldMac := hmac.New(sha256.New, []byte("old-secret"))
+	oldMac.Write(body)
+	oldSig := "sha256=" + hex.EncodeToString(oldMac.Sum(nil))
+	oldReq := httptest.NewRequest("POST", "/webhook", bytes.NewReader(body))
+	oldReq.Header.Set("X-Hub-Signature-256", oldSig)
+	oldReq.Header.Set("X-GitHub-Event", "issues")
+	oldReq.Header.Set("X-GitHub-Delivery", "old")
+	oldRR := httptest.NewRecorder()
+	wr.ServeHTTP(oldRR, oldReq)
+	if oldRR.Code != http.StatusUnauthorized {
+		t.Fatalf("old signature status = %d, want 401", oldRR.Code)
+	}
+
+	dispatched := false
+	wr.AddHandler(func(_ *WebhookEvent) { dispatched = true })
+	newMac := hmac.New(sha256.New, []byte("new-secret"))
+	newMac.Write(body)
+	newSig := "sha256=" + hex.EncodeToString(newMac.Sum(nil))
+	newReq := httptest.NewRequest("POST", "/webhook", bytes.NewReader(body))
+	newReq.Header.Set("X-Hub-Signature-256", newSig)
+	newReq.Header.Set("X-GitHub-Event", "issues")
+	newReq.Header.Set("X-GitHub-Delivery", "new")
+	newRR := httptest.NewRecorder()
+	wr.ServeHTTP(newRR, newReq)
+	if newRR.Code != http.StatusNoContent {
+		t.Fatalf("new signature status = %d, want 204", newRR.Code)
+	}
+	if !dispatched {
+		t.Fatal("expected handler to be called with new secret")
+	}
+}
+
 // ── ParsePush / TouchesReadme ─────────────────────────────────────────────────
 
 func TestParsePush_TouchesReadme(t *testing.T) {
@@ -899,11 +937,11 @@ func TestPollForToken_HTTPError(t *testing.T) {
 }
 
 func TestGetAuthenticatedUser_TransportError(t *testing.T) {
-	old := oauthHTTPClient
-	oauthHTTPClient = &http.Client{Transport: roundTripFuncGH(func(req *http.Request) (*http.Response, error) {
+	old := OAuthHTTPClient
+	OAuthHTTPClient = &http.Client{Transport: roundTripFuncGH(func(req *http.Request) (*http.Response, error) {
 		return nil, errors.New("transport error")
 	})}
-	defer func() { oauthHTTPClient = old }()
+	defer func() { OAuthHTTPClient = old }()
 	_, err := GetAuthenticatedUser("tok")
 	if err == nil {
 		t.Fatal("expected transport error")
@@ -911,11 +949,11 @@ func TestGetAuthenticatedUser_TransportError(t *testing.T) {
 }
 
 func TestRevokeToken_TransportError(t *testing.T) {
-	old := oauthHTTPClient
-	oauthHTTPClient = &http.Client{Transport: roundTripFuncGH(func(req *http.Request) (*http.Response, error) {
+	old := OAuthHTTPClient
+	OAuthHTTPClient = &http.Client{Transport: roundTripFuncGH(func(req *http.Request) (*http.Response, error) {
 		return nil, errors.New("transport error")
 	})}
-	defer func() { oauthHTTPClient = old }()
+	defer func() { OAuthHTTPClient = old }()
 	err := RevokeToken("client-id", "secret", "token")
 	if err == nil {
 		t.Fatal("expected transport error")
@@ -1352,5 +1390,64 @@ func TestWebhookReceiver_MethodNotAllowed(t *testing.T) {
 	wr.ServeHTTP(rr, req)
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", rr.Code)
+	}
+}
+
+// ── profileHTTPGet coverage ───────────────────────────────────────────────────
+
+func TestProfileHTTPGet_InvalidURL(t *testing.T) {
+	_, err := profileHTTPGet("://bad-url", "tok")
+	if err == nil {
+		t.Fatal("expected error for invalid URL")
+	}
+}
+
+func TestProfileHTTPGet_RequestError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.Close() // shut down immediately so the request fails
+	_, err := profileHTTPGet(srv.URL, "tok")
+	if err == nil {
+		t.Fatal("expected error when server is closed")
+	}
+}
+
+func TestProfileHTTPGet_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	data, err := profileHTTPGet(srv.URL, "tok")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if data != nil {
+		t.Fatalf("expected nil data for 404, got %q", data)
+	}
+}
+
+func TestProfileHTTPGet_BadStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	_, err := profileHTTPGet(srv.URL, "tok")
+	if err == nil {
+		t.Fatal("expected error for 5xx status")
+	}
+}
+
+func TestProfileHTTPGet_Success(t *testing.T) {
+	const body = "@engine is awesome"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	data, err := profileHTTPGet(srv.URL, "tok")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(data) != body {
+		t.Fatalf("expected %q, got %q", body, string(data))
 	}
 }

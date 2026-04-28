@@ -19,6 +19,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -72,10 +73,44 @@ func NewEventsWatcher(token string, monitor *RepoMonitor) *EventsWatcher {
 	}
 }
 
-// NewEventsWatcherFromEnv creates an EventsWatcher from GITHUB_TOKEN.
-// Returns nil when the token is absent (watcher disabled).
+// ghCLITokenFn is injectable for tests.
+var ghCLITokenFn = ghTokenFromCLI
+
+// ghCandidatePaths lists well-known locations for the gh binary in order of
+// preference. launchd processes run with a bare PATH (/usr/bin:/bin) so the
+// Homebrew and MacPorts locations would not be found via plain PATH lookup.
+var ghCandidatePaths = []string{
+	"gh", // works when PATH is extended (e.g. from a shell or with EnvironmentVariables)
+	"/opt/homebrew/bin/gh",  // Apple-Silicon Homebrew
+	"/usr/local/bin/gh",     // Intel Homebrew / manual install
+	"/opt/local/bin/gh",     // MacPorts
+	"/usr/bin/gh",           // system install
+}
+
+// ghTokenFromCLI tries `gh auth token` at each candidate path and returns the
+// first non-empty trimmed token, or "" when gh is not found / not authenticated.
+func ghTokenFromCLI() string {
+	for _, candidate := range ghCandidatePaths {
+		out, err := exec.Command(candidate, "auth", "token").Output()
+		if err != nil {
+			continue
+		}
+		if tok := strings.TrimSpace(string(out)); tok != "" {
+			return tok
+		}
+	}
+	return ""
+}
+
+// NewEventsWatcherFromEnv creates an EventsWatcher from GITHUB_TOKEN env var,
+// falling back to `gh auth token` when the env var is absent so that users who
+// are already logged in via the gh CLI do not need to set anything extra.
+// Returns nil when no token can be resolved (watcher disabled).
 func NewEventsWatcherFromEnv(monitor *RepoMonitor) *EventsWatcher {
 	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		token = ghCLITokenFn()
+	}
 	if token == "" {
 		return nil
 	}

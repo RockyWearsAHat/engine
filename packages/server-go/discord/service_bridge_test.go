@@ -1118,7 +1118,14 @@ func waitForActiveSession(t *testing.T, svc *Service, sessionID string) {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		svc.activeMu.Lock()
-		_, running := svc.active[sessionID]
+		_, tracked := svc.active[sessionID]
+		running := tracked
+		if !running {
+			// Some tests pre-bind a session id but the command may still run under
+			// a different active session key. Drain all active work to avoid
+			// background DB writes racing with TempDir cleanup.
+			running = len(svc.active) > 0 || len(svc.activeByChannel) > 0
+		}
 		svc.activeMu.Unlock()
 		if !running {
 			return
@@ -2552,11 +2559,11 @@ func TestAddProject_WithURL_ClonesAndEnrolls(t *testing.T) {
         cleanup, _ := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
         defer cleanup()
 
-        cloneTarget := filepath.Join(t.TempDir(), "my-repo")
+		cloneTarget := filepath.Join(t.TempDir(), "example-my-repo")
         orig := svc.cloneProjectFn
         t.Cleanup(func() { svc.cloneProjectFn = orig })
         svc.cloneProjectFn = func(url, dest string) error {
-                return os.MkdirAll(dest, 0o755)
+			return os.MkdirAll(filepath.Join(dest, ".git"), 0o755)
         }
 
         // Override ENGINE_CLONES_DIR so the default dest lands in cloneTarget's parent.
@@ -2575,6 +2582,86 @@ func TestAddProject_WithURL_ClonesAndEnrolls(t *testing.T) {
         }
 }
 
+func TestAddProject_WithGitHubURL_UsesCanonicalOwnerRepoDir(t *testing.T) {
+	svc, stateRoot := newDisabledSvc(t)
+	svc.project = stateRoot
+	svc.cfg.GuildID = "guild-canonical"
+	svc.dg = makeDiscordRESTSession(t)
+
+	channels := map[string]*discordgo.Channel{}
+	cleanup, _ := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
+	defer cleanup()
+
+	cloneBase := t.TempDir()
+	t.Setenv("ENGINE_CLONES_DIR", cloneBase)
+
+	cloneCalled := false
+	orig := svc.cloneProjectFn
+	t.Cleanup(func() { svc.cloneProjectFn = orig })
+	svc.cloneProjectFn = func(url, dest string) error {
+		cloneCalled = true
+		return os.MkdirAll(filepath.Join(dest, ".git"), 0o755)
+	}
+
+	err := svc.addProject("reply-ch", "https://github.com/example/my-repo.git")
+	if err != nil {
+		t.Fatalf("addProject with URL: %v", err)
+	}
+	if !cloneCalled {
+		t.Fatal("expected cloneProjectFn to be called")
+	}
+
+	wantPath := filepath.Join(cloneBase, "example-my-repo")
+	svc.stateMu.RLock()
+	_, enrolled := svc.state.Projects[wantPath]
+	svc.stateMu.RUnlock()
+	if !enrolled {
+		t.Fatalf("expected project to be enrolled at %s", wantPath)
+	}
+}
+
+func TestAddProject_WithGitHubURL_ReusesLegacyRepoDir(t *testing.T) {
+	svc, stateRoot := newDisabledSvc(t)
+	svc.project = stateRoot
+	svc.cfg.GuildID = "guild-legacy"
+	svc.dg = makeDiscordRESTSession(t)
+
+	channels := map[string]*discordgo.Channel{}
+	cleanup, _ := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
+	defer cleanup()
+
+	cloneBase := t.TempDir()
+	t.Setenv("ENGINE_CLONES_DIR", cloneBase)
+
+	legacyPath := filepath.Join(cloneBase, "my-repo")
+	if err := os.MkdirAll(filepath.Join(legacyPath, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir legacy path: %v", err)
+	}
+
+	cloneCalled := false
+	orig := svc.cloneProjectFn
+	t.Cleanup(func() { svc.cloneProjectFn = orig })
+	svc.cloneProjectFn = func(url, dest string) error {
+		cloneCalled = true
+		return nil
+	}
+
+	err := svc.addProject("reply-ch", "https://github.com/example/my-repo.git")
+	if err != nil {
+		t.Fatalf("addProject with URL: %v", err)
+	}
+	if cloneCalled {
+		t.Fatal("cloneProjectFn should not be called when legacy clone already exists")
+	}
+
+	svc.stateMu.RLock()
+	_, enrolled := svc.state.Projects[legacyPath]
+	svc.stateMu.RUnlock()
+	if !enrolled {
+		t.Fatalf("expected project to be enrolled at legacy path %s", legacyPath)
+	}
+}
+
 func TestAddProject_WithURL_AlreadyCloned_SkipsClone(t *testing.T) {
         svc, stateRoot := newDisabledSvc(t)
         svc.project = stateRoot
@@ -2585,9 +2672,9 @@ func TestAddProject_WithURL_AlreadyCloned_SkipsClone(t *testing.T) {
         cleanup, _ := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
         defer cleanup()
 
-        // Pre-create the destination directory to simulate an already-cloned repo.
+		// Pre-create a legacy destination with .git to simulate an already-cloned repo.
         cloneTarget := filepath.Join(t.TempDir(), "existing-repo")
-        if err := os.MkdirAll(cloneTarget, 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(cloneTarget, ".git"), 0o755); err != nil {
                 t.Fatal(err)
         }
         t.Setenv("ENGINE_CLONES_DIR", filepath.Dir(cloneTarget))
@@ -2607,6 +2694,12 @@ func TestAddProject_WithURL_AlreadyCloned_SkipsClone(t *testing.T) {
         if cloneCalled {
                 t.Error("cloneProjectFn should not be called when dest already exists")
         }
+		svc.stateMu.RLock()
+		_, enrolled := svc.state.Projects[cloneTarget]
+		svc.stateMu.RUnlock()
+		if !enrolled {
+			t.Fatalf("expected legacy clone path to be enrolled at %s", cloneTarget)
+		}
 }
 
 func TestAddProject_WithURL_CloneError_ReturnsError(t *testing.T) {

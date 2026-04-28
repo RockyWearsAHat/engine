@@ -287,6 +287,9 @@ type ChatContext struct {
 	ProjectTools []projectToolDef
 	// DiscordDM sends a direct message to the project owner via Discord. Nil when Discord is not configured.
 	DiscordDM func(message string) error
+	// MaxTurns, when > 0, limits the number of provider loop iterations for this
+	// Chat invocation so the caller can orchestrate work step-by-step from Go.
+	MaxTurns int
 }
 
 // isCancelled returns true if the context's cancel channel has been closed.
@@ -468,6 +471,14 @@ var toolRegistry = []anthropicTool{
 		Description: "Stage all changes and create a git commit.",
 		InputSchema: objSchema([]string{"message"}, map[string]any{
 			"message": strProp("Commit message"),
+		}),
+	},
+	// ── Autonomous session control ───────────────────────────────────────────
+	{
+		Name:        "signal_done",
+		Description: "Signal that the autonomous build session is complete. Call this ONLY after committing all code with git_commit. Passing a summary is optional.",
+		InputSchema: objSchema(nil, map[string]any{
+			"summary": strProp("Brief summary of what was built and committed"),
 		}),
 	},
 	// ── Editor UI ────────────────────────────────────────────────────────────
@@ -952,6 +963,13 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 			return err.Error(), true
 		}
 		return "Committed: " + hash, false
+
+	case "signal_done":
+		summary := strings.TrimSpace(str("summary"))
+		if summary == "" {
+			summary = "done"
+		}
+		return summary, false
 
 	case "open_file":
 		path, err := resolveWorkspacePath(ctx.ProjectPath, str("path"))
@@ -1798,6 +1816,7 @@ func runAnthropicLoop(
 	finalText *strings.Builder,
 ) {
 	messages := history
+	turns := 0
 
 	historyRef := &messages
 	ctx.MarkVital = func(n int) {
@@ -1815,6 +1834,12 @@ func runAnthropicLoop(
 	for {
 		if ctx.isCancelled() {
 			return
+		}
+		if ctx.MaxTurns > 0 {
+			turns++
+			if turns > ctx.MaxTurns {
+				break
+			}
 		}
 
 		windowed := windowByVitality(messages, 20)
@@ -2130,11 +2155,12 @@ type openAIMessage struct {
 }
 
 type openAIRequest struct {
-	Model     string          `json:"model"`
-	Messages  []openAIMessage `json:"messages"`
-	Tools     []openAITool    `json:"tools,omitempty"`
-	Stream    bool            `json:"stream"`
-	KeepAlive string          `json:"keep_alive,omitempty"` // Ollama only — extends model TTL
+	Model      string          `json:"model"`
+	Messages   []openAIMessage `json:"messages"`
+	Tools      []openAITool    `json:"tools,omitempty"`
+	ToolChoice string          `json:"tool_choice,omitempty"` // "auto" | "required" | "none"
+	Stream     bool            `json:"stream"`
+	KeepAlive  string          `json:"keep_alive,omitempty"` // Ollama only — extends model TTL
 }
 
 // openAIToolsFrom converts the Anthropic tool definitions to OpenAI format.
@@ -2181,10 +2207,17 @@ func runOpenAICompatibleLoop(
 	}
 
 	oaiTools := openAIToolsFrom(ctx.ActiveTools)
+	turns := 0
 
 	for {
 		if ctx.isCancelled() {
 			return
+		}
+		if ctx.MaxTurns > 0 {
+			turns++
+			if turns > ctx.MaxTurns {
+				break
+			}
 		}
 
 		// Rebuild OAI tools each iteration — search_tools may have added new ones.
@@ -2195,12 +2228,22 @@ func runOpenAICompatibleLoop(
 			windowed = append(msgs[:1:1], msgs[len(msgs)-40:]...)
 		}
 
+		// When the caller bounds the loop with MaxTurns, require a tool call so a
+		// single turn cannot be spent on narration instead of action.
+		toolChoice := ""
+		if len(oaiTools) > 0 {
+			toolChoice = "auto"
+			if ctx.MaxTurns > 0 {
+				toolChoice = "required"
+			}
+		}
 		req := openAIRequest{
-			Model:     model,
-			Messages:  windowed,
-			Tools:     oaiTools,
-			Stream:    true,
-			KeepAlive: keepAlive,
+			Model:      model,
+			Messages:   windowed,
+			Tools:      oaiTools,
+			ToolChoice: toolChoice,
+			Stream:     true,
+			KeepAlive:  keepAlive,
 		}
 
 		body, _ := json.Marshal(req)
@@ -2368,13 +2411,45 @@ func runOpenAICompatibleLoop(
 			break
 		}
 
+		for _, tcd := range toolCallMap {
+			if tcd != nil && tcd.name == "signal_done" {
+				summary := strings.TrimSpace(tcd.args.String())
+				if ctx.OnToolCall != nil {
+					ctx.OnToolCall(tcd.name, map[string]any{"summary": summary})
+				}
+				if ctx.OnToolResult != nil {
+					ctx.OnToolResult(tcd.name, "done", false)
+				}
+				*allToolCalls = append(*allToolCalls, ToolCall{
+					ID:     tcd.id,
+					Name:   tcd.name,
+					Input:  map[string]any{"summary": summary},
+					Result: "done",
+				})
+				return
+			}
+		}
+
 		// Execute tools and add results.
+		// If the model called a tool that exists in the registry but was not yet
+		// in ActiveTools (deferred discovery), promote it silently so it shows
+		// up in the tools list for the next iteration and can be called again.
 		// Tool call error codes (compact, to avoid clogging context):
-		//   E1 = bad JSON arguments   E2 = unknown tool   E3 = execution error
+		//   E1 = bad JSON arguments   E3 = execution error
+		activeByName := make(map[string]bool, len(ctx.ActiveTools))
+		for _, t := range ctx.ActiveTools {
+			activeByName[t.Name] = true
+		}
 		for i := 0; i < len(toolCallMap); i++ {
 			tcd := toolCallMap[i]
 			if tcd == nil {
 				continue
+			}
+			if !activeByName[tcd.name] {
+				if t, ok := toolRegistryIndex[tcd.name]; ok {
+					ctx.ActiveTools = append(ctx.ActiveTools, t)
+					activeByName[tcd.name] = true
+				}
 			}
 
 			var inputMap map[string]any
@@ -2385,19 +2460,27 @@ func runOpenAICompatibleLoop(
 			if err := json.Unmarshal([]byte(argsStr), &inputMap); err != nil || inputMap == nil {
 				// E1: malformed args — feed compact error back, skip execution
 				errMsg := fmt.Sprintf("E1: invalid JSON arguments for %s. Correct the arguments and retry.", tcd.name)
-				ctx.OnToolCall(tcd.name, map[string]any{"_raw": argsStr})
-				ctx.OnToolResult(tcd.name, errMsg, true)
+				if ctx.OnToolCall != nil {
+					ctx.OnToolCall(tcd.name, map[string]any{"_raw": argsStr})
+				}
+				if ctx.OnToolResult != nil {
+					ctx.OnToolResult(tcd.name, errMsg, true)
+				}
 				msgs = append(msgs, openAIMessage{Role: "tool", ToolCallID: tcd.id, Content: errMsg})
 				continue
 			}
 
-			ctx.OnToolCall(tcd.name, inputMap)
+			if ctx.OnToolCall != nil {
+				ctx.OnToolCall(tcd.name, inputMap)
+			}
 			start := time.Now()
 			result, isError := executeTool(tcd.name, inputMap, ctx)
 			durationMs := time.Since(start).Milliseconds()
 
 			db.LogToolCall(newID(), ctx.SessionID, tcd.name, inputMap, result, isError, durationMs) //nolint:errcheck
-			ctx.OnToolResult(tcd.name, result, isError)
+			if ctx.OnToolResult != nil {
+				ctx.OnToolResult(tcd.name, result, isError)
+			}
 
 			*allToolCalls = append(*allToolCalls, ToolCall{
 				ID: tcd.id, Name: tcd.name, Input: inputMap,

@@ -16,8 +16,8 @@ import (
 var (
 	deviceCodeURL = "https://github.com/login/device/code"
 	oauthTokenURL = "https://github.com/login/oauth/access_token"
-	// oauthHTTPClient is used for all OAuth HTTP calls; exposed for testing.
-	oauthHTTPClient = &http.Client{Timeout: 15 * time.Second}
+	// OAuthHTTPClient is used for all OAuth HTTP calls; exposed for testing.
+	OAuthHTTPClient = &http.Client{Timeout: 15 * time.Second}
 	// Minimum required scopes. Engine adds scopes only when a feature needs them.
 	defaultScopes = "repo read:user"
 )
@@ -52,7 +52,7 @@ func StartDeviceFlow(clientID, scopes string) (*DeviceCodeResponse, error) {
 		scopes = defaultScopes
 	}
 
-	resp, err := oauthHTTPClient.PostForm(deviceCodeURL, url.Values{
+	resp, err := OAuthHTTPClient.PostForm(deviceCodeURL, url.Values{
 		"client_id": {clientID},
 		"scope":     {scopes},
 	})
@@ -109,7 +109,7 @@ func PollForToken(clientID string, dcr *DeviceCodeResponse, onStatus func(string
 	for time.Now().Before(deadline) {
 		time.Sleep(interval)
 
-		resp, err := oauthHTTPClient.PostForm(oauthTokenURL, url.Values{
+		resp, err := OAuthHTTPClient.PostForm(oauthTokenURL, url.Values{
 			"client_id":   {clientID},
 			"device_code": {dcr.DeviceCode},
 			"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
@@ -173,7 +173,7 @@ func GetAuthenticatedUser(token string) (string, error) {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 
-	client := oauthHTTPClient
+	client := OAuthHTTPClient
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -204,7 +204,7 @@ func RevokeToken(clientID, clientSecret, token string) error {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Content-Type", "application/json")
 
-	client := oauthHTTPClient
+	client := OAuthHTTPClient
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

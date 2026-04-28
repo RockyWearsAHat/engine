@@ -71,6 +71,7 @@ export interface RuntimeConfig {
   modelProvider?: string | null;
   ollamaBaseUrl?: string | null;
   model?: string | null;
+  clonesDir?: string | null;
 }
 
 // Discord control plane types (kept separate from RuntimeConfig because
