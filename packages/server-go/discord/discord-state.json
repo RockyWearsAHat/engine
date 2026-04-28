@@ -1,8 +1,8 @@
 {
   "controlChannelId": "",
   "projects": {
-    "/var/folders/5f/4h6tgvh971b_978284101_b00000gn/T/TestAutoEnrollProject_ControlChannelFails_ReturnsError3664198344/001": {
-      "projectPath": "/var/folders/5f/4h6tgvh971b_978284101_b00000gn/T/TestAutoEnrollProject_ControlChannelFails_ReturnsError3664198344/001",
+    "/var/folders/5f/4h6tgvh971b_978284101_b00000gn/T/TestAutoEnrollProject_ControlChannelFails_ReturnsError2029081342/001": {
+      "projectPath": "/var/folders/5f/4h6tgvh971b_978284101_b00000gn/T/TestAutoEnrollProject_ControlChannelFails_ReturnsError2029081342/001",
       "repoName": "001",
       "channelId": "ch-proj",
       "paused": false
