@@ -139,11 +139,11 @@ func GetLog(cwd string, limit int) ([]GitCommit, error) {
 // Commit stages all changes and creates a commit with the given message.
 // Returns the short commit hash.
 func Commit(cwd, message string) (string, error) {
-	if _, err := run(cwd, "add", "-A"); err != nil {
-		return "", fmt.Errorf("git add: %w", err)
+	if out, err := run(cwd, "add", "-A"); err != nil {
+		return "", fmt.Errorf("git add: %w\n%s", err, out)
 	}
-	if _, err := run(cwd, "commit", "-m", message); err != nil {
-		return "", fmt.Errorf("git commit: %w", err)
+	if out, err := run(cwd, "commit", "-m", message); err != nil {
+		return "", fmt.Errorf("git commit: %w\n%s", err, out)
 	}
 	hash, _ := run(cwd, "rev-parse", "--short", "HEAD")
 	return hash, nil

@@ -287,6 +287,9 @@ type ChatContext struct {
 	ProjectTools []projectToolDef
 	// DiscordDM sends a direct message to the project owner via Discord. Nil when Discord is not configured.
 	DiscordDM func(message string) error
+	// DiscordProgress posts a progress/milestone/completion update to the project's Discord channel.
+	// Nil when Discord is not configured or the project has no channel.
+	DiscordProgress func(message string) error
 	// MaxTurns, when > 0, limits the number of provider loop iterations for this
 	// Chat invocation so the caller can orchestrate work step-by-step from Go.
 	MaxTurns int
@@ -688,6 +691,13 @@ var toolRegistry = []anthropicTool{
 		Description: "Send a direct message to the project owner via Discord. Use when you need credentials, approval, or human input that cannot be obtained autonomously.",
 		InputSchema: objSchema([]string{"message"}, map[string]any{
 			"message": strProp("Message to send to the project owner"),
+		}),
+	},
+	{
+		Name:        "discord_post_progress",
+		Description: "Post a progress update, milestone completion, or work summary to the project's Discord channel. Use for: task completion, milestone reached, autonomous session summary, or any update the user should see asynchronously. Keep messages concise — one to three sentences.",
+		InputSchema: objSchema([]string{"message"}, map[string]any{
+			"message": strProp("Progress update message to post to the project Discord channel"),
 		}),
 	},
 }
@@ -1437,6 +1447,19 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 			return err.Error(), true
 		}
 		return "DM sent", false
+
+	case "discord_post_progress":
+		message := str("message")
+		if message == "" {
+			return "discord_post_progress: message is required", true
+		}
+		if ctx.DiscordProgress == nil {
+			return "discord_post_progress: Discord not configured", true
+		}
+		if err := ctx.DiscordProgress(message); err != nil {
+			return err.Error(), true
+		}
+		return "Progress posted", false
 
 	default:
 		if result, isError, found := executeProjectTool(name, input, ctx); found {

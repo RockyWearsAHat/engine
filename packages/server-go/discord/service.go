@@ -1228,6 +1228,9 @@ func (s *Service) ensureControlChannel() (string, error) {
 }
 
 func (s *Service) ensureProjectChannel(name string) (*discordgo.Channel, error) {
+	if s.dg == nil {
+		return nil, fmt.Errorf("discord session not ready")
+	}
 	channels, err := s.dg.GuildChannels(s.cfg.GuildID)
 	if err != nil {
 		return nil, err

@@ -116,6 +116,7 @@ func ensureGitHubWebhookSecret() (string, error) {
 // Kept narrow so tests can stub it.
 type DiscordBridge interface {
 	SendDMToOwner(message string) error
+	NotifyProjectProgress(projectPath, message string)
 	CurrentConfig() discord.Config
 	Reload(cfg discord.Config) error
 	SearchHistory(projectPath, query, since string, limit int) ([]db.DiscordSearchHit, error)
@@ -629,6 +630,13 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 						return fmt.Errorf("Discord not configured")
 					}
 					return discordBridge.SendDMToOwner(message)
+				},
+				DiscordProgress: func(message string) error {
+					if discordBridge == nil {
+						return fmt.Errorf("Discord not configured")
+					}
+					discordBridge.NotifyProjectProgress(projectPath, message)
+					return nil
 				},
 			}, msg.Content)
 		}()

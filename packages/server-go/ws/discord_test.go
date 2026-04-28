@@ -564,3 +564,15 @@ func TestGetDiscordBridge_ReturnsRegistered(t *testing.T) {
 		t.Fatalf("expected registered bridge, got %v", got)
 	}
 }
+
+// TestDiscordServiceStartFn_Default exercises the default discordServiceStartFn
+// which calls s.Start(). Uses a disabled Service so Start() returns nil immediately.
+func TestDiscordServiceStartFn_Default(t *testing.T) {
+	svc, err := discord.NewService(discord.Config{Enabled: false}, t.TempDir())
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if err := discordServiceStartFn(svc); err != nil {
+		t.Fatalf("expected nil from disabled service Start, got %v", err)
+	}
+}

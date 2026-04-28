@@ -4458,6 +4458,59 @@ func TestExecuteToolForTest_DiscordDM_Error(t *testing.T) {
 	}
 }
 
+// ── Discord post_progress tests ───────────────────────────────────────────────
+
+func TestExecuteToolForTest_DiscordPostProgress_MissingMessage(t *testing.T) {
+	ctx := makeChatCtx(t)
+	result, isErr := ExecuteToolForTest("discord_post_progress", map[string]any{}, ctx)
+	if !isErr {
+		t.Fatal("expected error for missing message")
+	}
+	if result != "discord_post_progress: message is required" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_DiscordPostProgress_NilDiscordProgress(t *testing.T) {
+	ctx := makeChatCtx(t)
+	ctx.DiscordProgress = nil
+	result, isErr := ExecuteToolForTest("discord_post_progress", map[string]any{"message": "done"}, ctx)
+	if !isErr {
+		t.Fatal("expected error when DiscordProgress is nil")
+	}
+	if result != "discord_post_progress: Discord not configured" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
+func TestExecuteToolForTest_DiscordPostProgress_Success(t *testing.T) {
+	ctx := makeChatCtx(t)
+	var sent string
+	ctx.DiscordProgress = func(msg string) error { sent = msg; return nil }
+	result, isErr := ExecuteToolForTest("discord_post_progress", map[string]any{"message": "scaffold complete"}, ctx)
+	if isErr {
+		t.Fatalf("unexpected error: %s", result)
+	}
+	if result != "Progress posted" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+	if sent != "scaffold complete" {
+		t.Fatalf("sent = %q", sent)
+	}
+}
+
+func TestExecuteToolForTest_DiscordPostProgress_Error(t *testing.T) {
+	ctx := makeChatCtx(t)
+	ctx.DiscordProgress = func(msg string) error { return fmt.Errorf("channel not found") }
+	result, isErr := ExecuteToolForTest("discord_post_progress", map[string]any{"message": "update"}, ctx)
+	if !isErr {
+		t.Fatal("expected error")
+	}
+	if result != "channel not found" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+}
+
 // ── getMachineCredStore singleton ─────────────────────────────────────────────
 
 func TestGetMachineCredStore_ReturnsNonNil(t *testing.T) {

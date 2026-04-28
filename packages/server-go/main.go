@@ -31,6 +31,7 @@ type discordRuntime interface {
 	SearchHistory(projectPath, query, since string, limit int) ([]db.DiscordSearchHit, error)
 	RecentHistory(projectPath, threadID, since string, limit int) ([]db.DiscordMessage, error)
 	SendDMToOwner(message string) error
+	NotifyProjectProgress(projectPath, message string)
 }
 
 var (
@@ -73,6 +74,8 @@ var (
 )
 
 const scaffoldTriggerCooldown = 2 * time.Minute
+
+var scaffoldAttemptTimeout = 15 * time.Minute
 
 // osGetwdFn and osUserHomeDirFn are injectable for tests.
 var (
@@ -253,6 +256,9 @@ func ensureAutonomousRepoWorkspace(baseProjectPath, owner, repo string) (string,
 		if out, cmdErr := runCommandCombinedOutputFn("git", "-C", dest, "fetch", "origin", "--prune"); cmdErr != nil {
 			return "", fmt.Errorf("fetch repo update: %v: %s", cmdErr, strings.TrimSpace(string(out)))
 		}
+		// Remove untracked/ignored files (e.g. engine state from a prior scaffold run)
+		// that would block a fast-forward merge now that they are .gitignore'd on origin.
+		runCommandCombinedOutputFn("git", "-C", dest, "clean", "-fdx") //nolint:errcheck — best-effort
 		if out, cmdErr := runCommandCombinedOutputFn("git", "-C", dest, "pull", "--ff-only", "origin", "HEAD"); cmdErr != nil {
 			return "", fmt.Errorf("pull repo update: %v: %s", cmdErr, strings.TrimSpace(string(out)))
 		}
@@ -336,12 +342,36 @@ func hasRepoProgress(before, after repoActivitySnapshot) bool {
 	return false
 }
 
+// hasCommitProgress returns true only when new git commits were made.
+// Used for scaffold "finished" decisions so that merely creating untracked
+// metadata files (e.g. .cache/, .engine/, PROJECT_GOAL.md) does not
+// falsely report success before real code has been committed.
+func hasCommitProgress(before, after repoActivitySnapshot) bool {
+	return strings.TrimSpace(before.head) != strings.TrimSpace(after.head)
+}
+
 func scaffoldNoopRetryPrompt(owner, repo string) string {
 	return fmt.Sprintf(
-		"Previous attempt made no repository changes for %s/%s. Retry now and do not stop at planning. " +
-			"You must execute tools, write or modify files, run project checks, and report concrete changed files and command results.",
+		"Previous attempt made no committed repository changes for %s/%s. "+
+			"Writing planning documents (e.g. PROJECT_GOAL.md) is NOT sufficient — you must now implement the code described in the README. "+
+			"Do not stop at planning. You must: write actual source files, run build/test commands, commit all created files with git_commit, and report the committed file list.",
 		owner,
 		repo,
+	)
+}
+
+func scaffoldErrorRetryPrompt(owner, repo, reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "unknown failure"
+	}
+	return fmt.Sprintf(
+		"IMPORTANT: The previous scaffold attempt for %s/%s did not complete cleanly (%s). "+
+			"Resume from current repository state, verify with build/tests, and continue iteratively until done. "+
+			"Do not stop at planning or partial edits.",
+		owner,
+		repo,
+		reason,
 	)
 }
 
@@ -510,18 +540,28 @@ func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
 			log.Printf("[scaffold %s/%s] create session: %v", owner, repo, err)
 		}
 		scaffoldPolicy := ai.ResolveAutonomousPolicy(targetProjectPath)
+		// Scaffold is headless — always allow auto-commit and auto-push.
+		scaffoldPolicy.AutoCommit = true
+		scaffoldPolicy.AutoPush = true
 
+		overallBefore := captureRepoActivity(targetProjectPath)
 		prompt := buildReadmeAutonomousBuildPrompt(owner, repo, targetProjectPath)
+		lastFailureReason := ""
 		for attempt := 1; attempt <= 2; attempt++ {
 			before := captureRepoActivity(targetProjectPath)
 
 			var outputMu sync.Mutex
 			var output strings.Builder
 			hadError := false
+			attemptFailureReason := ""
+			cancel := make(chan struct{})
+			closeCancel := sync.OnceFunc(func() { close(cancel) })
 			ctx := &ai.ChatContext{
 				ProjectPath:      targetProjectPath,
 				SessionID:        sessionID,
+				Role:             ai.RoleAutonomousBuilder,
 				AutonomousPolicy: &scaffoldPolicy,
+				Cancel:           cancel,
 				OnChunk: func(content string, done bool) {
 					_ = done
 					if content == "" {
@@ -534,16 +574,35 @@ func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
 				},
 				OnError: func(msg string) {
 					hadError = true
+					attemptFailureReason = strings.TrimSpace(msg)
 					log.Printf("[scaffold error %s/%s] %s", owner, repo, msg)
-					notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("❌ Scaffold blocked for **%s/%s**: %s", owner, repo, msg))
 				},
 			}
 
 			attemptPrompt := prompt
-			if attempt > 1 {
+			if attempt == 2 {
+				if strings.TrimSpace(lastFailureReason) != "" {
+					attemptPrompt = strings.TrimSpace(prompt + "\n\n" + scaffoldErrorRetryPrompt(owner, repo, lastFailureReason))
+				} else {
 				attemptPrompt = strings.TrimSpace(prompt + "\n\n" + scaffoldNoopRetryPrompt(owner, repo))
+				}
 			}
-			aiChatFn(ctx, attemptPrompt)
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				aiChatFn(ctx, attemptPrompt)
+			}()
+
+			select {
+			case <-done:
+				closeCancel()
+			case <-time.After(scaffoldAttemptTimeout):
+				hadError = true
+				attemptFailureReason = fmt.Sprintf("attempt timed out after %s", scaffoldAttemptTimeout)
+				log.Printf("[scaffold error %s/%s] %s", owner, repo, attemptFailureReason)
+				closeCancel()
+			}
 
 			outputMu.Lock()
 			assistantOutput := strings.TrimSpace(output.String())
@@ -556,11 +615,26 @@ func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
 			}
 
 			if hadError {
+				if strings.TrimSpace(attemptFailureReason) == "" {
+					attemptFailureReason = "unknown failure"
+				}
+				lastFailureReason = attemptFailureReason
+				if attempt == 1 {
+					notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("⚠️ Scaffold attempt %d for **%s/%s** did not complete (%s); retrying automatically.", attempt, owner, repo, attemptFailureReason))
+					continue
+				}
+
+				afterAll := captureRepoActivity(targetProjectPath)
+				if hasRepoProgress(overallBefore, afterAll) {
+					notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("❌ Scaffold session %s stopped before completion for **%s/%s**. Progress exists, but the iterative build did not finish.", sessionID, owner, repo))
+				} else {
+					notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("❌ Scaffold blocked for **%s/%s**: %s", owner, repo, attemptFailureReason))
+				}
 				return nil
 			}
 
 			after := captureRepoActivity(targetProjectPath)
-			if hasRepoProgress(before, after) {
+			if hasCommitProgress(before, after) {
 				if attempt == 1 {
 					notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("✅ Scaffold session %s finished for **%s/%s**.", sessionID, owner, repo))
 				} else {

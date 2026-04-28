@@ -365,6 +365,16 @@ fn configure_server_command(
     if let Some(team) = &cfg.active_team {
         cmd.env("ENGINE_ACTIVE_TEAM", team);
     }
+    // Explicitly control ENGINE_CLONES_DIR so the child never inherits a stale
+    // value from the parent process (e.g. a LaunchAgent plist override).
+    match &cfg.clones_dir {
+        Some(dir) if !dir.trim().is_empty() => {
+            cmd.env("ENGINE_CLONES_DIR", dir);
+        }
+        _ => {
+            cmd.env_remove("ENGINE_CLONES_DIR");
+        }
+    }
 }
 
 fn start_go_server(

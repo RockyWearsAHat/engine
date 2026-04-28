@@ -56,6 +56,11 @@
     "packages/server-go/discord/service_test.go",
     "packages/server-go/discord/service_bridge_test.go"
   ],
+  "Discord as Primary Progress Channel": [
+    "packages/server-go/ai/context_extra_test.go",
+    "packages/server-go/ai/roles_test.go",
+    "packages/server-go/ws/handler_extra_test.go"
+  ],
   "Repository Registry": [
     "packages/server-go/workspace/registry_test.go"
   ],
