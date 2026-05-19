@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # discord-screenshot.sh — captures Discord (app or browser tab) non-interactively on macOS
 # Usage: bash scripts/discord-screenshot.sh [output.png]
-# Output defaults to /tmp/discord-snap-<timestamp>.png
+# Output defaults to ~/.engine/screenshots/discord-snap-<timestamp>.png
 
 set -euo pipefail
 
 PYTHON=/Users/alexwaldmann/Desktop/MyEditor/.venv/bin/python
-OUT="${1:-/tmp/discord-snap-$(date +%s).png}"
+DEFAULT_OUT_DIR="${HOME}/.engine/screenshots"
+mkdir -p "$DEFAULT_OUT_DIR"
+OUT="${1:-$DEFAULT_OUT_DIR/discord-snap-$(date +%s).png}"
 
 # ── Step 1: Try native Discord app (all spaces, not just current) ────────────
 WID=$("$PYTHON" - <<'EOF' 2>/dev/null

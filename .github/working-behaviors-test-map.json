@@ -12,7 +12,9 @@
   ],
   "AI Tools (what the AI can do autonomously)": [
     "packages/server-go/ws/handler_test.go",
-    "packages/server-go/main_test.go"
+    "packages/server-go/main_test.go",
+    "packages/server-go/ai/safety_test.go",
+    "packages/server-go/ai/agent_comms_test.go"
   ],
   "AI Provider Support": [
     "packages/server-go/ai/provider_test.go",
@@ -28,7 +30,9 @@
   ],
   "Autonomous Development Loop": [
     "packages/server-go/ai/test_loop_test.go",
-    "packages/server-go/ai/test_orchestrator_test.go"
+    "packages/server-go/ai/test_orchestrator_test.go",
+    "packages/server-go/ai/team_dispatcher_test.go",
+    "packages/server-go/ai/roles_test.go"
   ],
   "File Tree": [
     "packages/client/src/test/filetree.test.tsx",
@@ -54,7 +58,8 @@
   ],
   "Discord Control Plane": [
     "packages/server-go/discord/service_test.go",
-    "packages/server-go/discord/service_bridge_test.go"
+    "packages/server-go/discord/service_bridge_test.go",
+    "packages/server-go/discord/issues_identity_test.go"
   ],
   "Discord as Primary Progress Channel": [
     "packages/server-go/ai/context_extra_test.go",
@@ -66,7 +71,10 @@
   ],
   "Autonomous Work Trigger": [
     "packages/server-go/github/github_test.go",
-    "packages/server-go/main_test.go"
+    "packages/server-go/github/engagement_test.go",
+    "packages/server-go/github/projects_test.go",
+    "packages/server-go/main_test.go",
+    "packages/server-go/ai/autonomous_intent_test.go"
   ],
   "Configurable Autonomous Commit and Push": [
     "packages/server-go/ai/team_config_test.go",
@@ -86,5 +94,13 @@
   ],
   "Persistent Background Service": [
     "packages/server-go/main_test.go"
+  ],
+  "LAN Compute Mesh": [
+    "packages/server-go/mesh/mesh_test.go",
+    "packages/server-go/mesh/inference_test.go",
+    "packages/server-go/mesh/client_server_extra_test.go"
+  ],
+  "Local-LLM-First Cost Router": [
+    "packages/server-go/ai/role_routing_test.go"
   ]
 }

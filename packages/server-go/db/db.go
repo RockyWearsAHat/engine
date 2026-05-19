@@ -267,24 +267,24 @@ func migrate() error {
 
 // Session mirrors the TypeScript Session type.
 type Session struct {
-	ID           string `json:"id"`
-	ProjectPath  string `json:"projectPath"`
-	BranchName   string `json:"branchName"`
+	ID               string `json:"id"`
+	ProjectPath      string `json:"projectPath"`
+	BranchName       string `json:"branchName"`
 	ProjectDirection string `json:"projectDirection,omitempty"`
-	Summary      string `json:"summary"`
-	CreatedAt    string `json:"createdAt"`
-	UpdatedAt    string `json:"updatedAt"`
-	MessageCount int    `json:"messageCount"`
+	Summary          string `json:"summary"`
+	CreatedAt        string `json:"createdAt"`
+	UpdatedAt        string `json:"updatedAt"`
+	MessageCount     int    `json:"messageCount"`
 }
 
 // Message mirrors the TypeScript Message type.
 type Message struct {
-	ID        string      `json:"id"`
-	SessionID string      `json:"sessionId"`
-	Role      string      `json:"role"`
-	Content   string      `json:"content"`
-	ToolCalls any `json:"toolCalls,omitempty"`
-	CreatedAt string      `json:"createdAt"`
+	ID        string `json:"id"`
+	SessionID string `json:"sessionId"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	ToolCalls any    `json:"toolCalls,omitempty"`
+	CreatedAt string `json:"createdAt"`
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
@@ -298,7 +298,6 @@ func InsertSessionWithTimestamps(id, projectPath, branchName, createdAt, updated
 	)
 	return err
 }
-
 
 func CreateSession(id, projectPath, branchName string) error {
 	t := now()
@@ -425,6 +424,9 @@ func GetMessages(sessionId string) ([]Message, error) {
 }
 
 func LogToolCall(id, sessionId, name string, input any, result string, isError bool, durationMs int64) error {
+	if globalDB == nil {
+		return fmt.Errorf("database not initialized")
+	}
 	inputJSON, _ := json.Marshal(input)
 	errInt := 0
 	if isError {

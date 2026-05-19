@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -134,32 +135,17 @@ func TestRoleBootstrapTools_Planner_IncludesReadAndHistory(t *testing.T) {
 	if tools == nil {
 		t.Fatal("expected non-nil tool list for RolePlanner")
 	}
-	has := func(name string) bool {
-		for _, n := range tools {
-			if n == name {
-				return true
-			}
-		}
-		return false
-	}
-	if !has("read_file") {
+	if !slices.Contains(tools, "read_file") {
 		t.Errorf("expected read_file in planner tools, got %v", tools)
 	}
-	if !has("list_directory") {
+	if !slices.Contains(tools, "list_directory") {
 		t.Errorf("expected list_directory in planner tools, got %v", tools)
 	}
 }
 
 func TestRoleBootstrapTools_Tester_IncludesShell(t *testing.T) {
 	tools := roleBootstrapTools(RoleTester)
-	found := false
-	for _, n := range tools {
-		if n == "shell" {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.Contains(tools, "shell") {
 		t.Errorf("expected shell in tester tools, got %v", tools)
 	}
 }
@@ -169,16 +155,8 @@ func TestRoleBootstrapTools_Reviewer_RuntimeCapable(t *testing.T) {
 	if tools == nil {
 		t.Fatal("expected non-nil tool list for RoleReviewer")
 	}
-	has := func(name string) bool {
-		for _, n := range tools {
-			if n == name {
-				return true
-			}
-		}
-		return false
-	}
 	for _, required := range []string{"read_file", "write_file", "shell", "test.run", "screenshot", "git_diff"} {
-		if !has(required) {
+		if !slices.Contains(tools, required) {
 			t.Errorf("RoleReviewer missing required tool %q, got %v", required, tools)
 		}
 	}
@@ -201,14 +179,7 @@ func TestRoleBootstrapTools_AllNonInteractiveRoles_HaveAtLeastOneReadTool(t *tes
 			t.Errorf("role %d has no pre-granted tools", r)
 			continue
 		}
-		found := false
-		for _, n := range tools {
-			if n == "read_file" {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !slices.Contains(tools, "read_file") {
 			t.Errorf("role %d missing read_file in pre-granted tools: %v", r, tools)
 		}
 	}
@@ -219,16 +190,8 @@ func TestRoleBootstrapTools_AutonomousBuilder_HasWriteAndShellAndGit(t *testing.
 	if tools == nil {
 		t.Fatal("expected non-nil tool list for RoleAutonomousBuilder")
 	}
-	has := func(name string) bool {
-		for _, n := range tools {
-			if n == name {
-				return true
-			}
-		}
-		return false
-	}
 	for _, required := range []string{"write_file", "shell", "git_commit", "read_file", "list_directory"} {
-		if !has(required) {
+		if !slices.Contains(tools, required) {
 			t.Errorf("RoleAutonomousBuilder missing required tool %q, got %v", required, tools)
 		}
 	}
@@ -257,23 +220,24 @@ func TestBuildRoleSystemPrompt_Interactive_ContainsTerseRule(t *testing.T) {
 	}
 }
 
+func TestBuildRoleSystemPrompt_Interactive_ContainsLeadDelegationRule(t *testing.T) {
+	p := buildRoleSystemPrompt(RoleInteractive, "/proj", "main", "")
+	for _, required := range []string{"user-facing lead agent", "agent_send", "synthesize one clear report"} {
+		if !strings.Contains(p, required) {
+			t.Errorf("expected interactive prompt to contain %q, got %q", required, p)
+		}
+	}
+}
+
 func TestRoleBootstrapTools_AutonomousBuilder_HasDiscordProgressAndDM(t *testing.T) {
 	tools := roleBootstrapTools(RoleAutonomousBuilder)
 	if tools == nil {
 		t.Fatal("expected non-nil tool list for RoleAutonomousBuilder")
 	}
-	has := func(name string) bool {
-		for _, n := range tools {
-			if n == name {
-				return true
-			}
-		}
-		return false
-	}
-	if !has("discord_post_progress") {
+	if !slices.Contains(tools, "discord_post_progress") {
 		t.Errorf("RoleAutonomousBuilder missing discord_post_progress, got %v", tools)
 	}
-	if !has("discord_dm") {
+	if !slices.Contains(tools, "discord_dm") {
 		t.Errorf("RoleAutonomousBuilder missing discord_dm, got %v", tools)
 	}
 }
@@ -282,5 +246,50 @@ func TestBuildRoleSystemPrompt_AutonomousBuilder_ContainsDiscordProgressRule(t *
 	p := buildRoleSystemPrompt(RoleAutonomousBuilder, "/proj", "main", "")
 	if !strings.Contains(p, "discord_post_progress") {
 		t.Errorf("expected discord_post_progress rule in autonomous builder prompt, got %q", p)
+	}
+}
+
+func TestRoleBootstrapTools_AutonomousBuilder_HasAgentCommunication(t *testing.T) {
+	tools := roleBootstrapTools(RoleAutonomousBuilder)
+	for _, required := range []string{"agent_list", "agent_send", "agent_inbox", "agent_await"} {
+		if !slices.Contains(tools, required) {
+			t.Errorf("RoleAutonomousBuilder missing %q, got %v", required, tools)
+		}
+	}
+}
+
+func TestBuildRoleSystemPrompt_AutonomousBuilder_ContainsTeamCommunicationRules(t *testing.T) {
+	p := buildRoleSystemPrompt(RoleAutonomousBuilder, "/proj", "main", "")
+	for _, required := range []string{"TEAM COMMUNICATION RULES", "agent_list", "agent_await", "clean context window"} {
+		if !strings.Contains(p, required) {
+			t.Errorf("expected autonomous builder prompt to contain %q, got %q", required, p)
+		}
+	}
+}
+
+func TestBuildRoleSystemPrompt_AutonomousBuilder_RequiresObserveAfterWrite(t *testing.T) {
+	p := buildRoleSystemPrompt(RoleAutonomousBuilder, "/proj", "main", "")
+	for _, required := range []string{
+		"After every write_file",
+		"inspect the actual output",
+		"Development means changing code AND seeing the result",
+		"If verification fails, fix it instead of reporting completion",
+	} {
+		if !strings.Contains(p, required) {
+			t.Errorf("expected autonomous builder prompt to contain %q, got %q", required, p)
+		}
+	}
+}
+
+func TestBuildRoleSystemPrompt_AutonomousBuilder_BansWorkspaceProjectMirrors(t *testing.T) {
+	p := buildRoleSystemPrompt(RoleAutonomousBuilder, "/proj", "main", "")
+	for _, required := range []string{
+		"<engine>/.engine/projects/...",
+		"packages/server-go/.engine/projects/...",
+		"never create symlinks back into the Engine workspace",
+	} {
+		if !strings.Contains(p, required) {
+			t.Errorf("expected autonomous builder prompt to contain %q, got %q", required, p)
+		}
 	}
 }

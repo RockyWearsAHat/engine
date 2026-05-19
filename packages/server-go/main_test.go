@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -101,9 +102,30 @@ func withRunDepsReset(t *testing.T) {
 	origTriggerCI := triggerCIAnalysisSessionFn
 	origTriggerIssue := triggerIssueSessionFn
 	origTriggerIssueOpened := triggerIssueOpenedSessionFn
+	origDBListSessionsForScaffold := dbListSessionsForScaffoldFn
 	origScaffoldRunning := scaffoldTriggerRunning
 	origScaffoldLastStart := scaffoldTriggerLastStart
 	origScaffoldAttemptTimeout := scaffoldAttemptTimeout
+	origRunOrchestrator := runOrchestratorFn
+	origPostStatus := postOrchestratorGitHubStatusFn
+
+	// Default orchestrator stub: declare the project complete with a single
+	// passing step so tests that only care about trigger plumbing don't fire
+	// real AI calls. Tests that exercise orchestrator-specific behaviour
+	// override runOrchestratorFn explicitly.
+	runOrchestratorFn = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		return &ai.OrchestrationState{
+			Owner:       cfg.Owner,
+			Repo:        cfg.Repo,
+			Brief:       cfg.Brief,
+			Plan:        []ai.PlanStep{{Index: 1, Title: "stub", Done: true}},
+			CompletedAt: "stub",
+		}, nil
+	}
+	postOrchestratorGitHubStatusFn = func(owner, repo, phase, detail string) {}
+
+	newEventsWatcherFn = func(_ *gh.RepoMonitor) *gh.EventsWatcher { return nil }
+	eventsWatcherStartFn = func(_ *gh.EventsWatcher, _ context.Context) {}
 
 	scaffoldTriggerMu.Lock()
 	scaffoldTriggerRunning = make(map[string]bool)
@@ -140,12 +162,15 @@ func withRunDepsReset(t *testing.T) {
 		triggerCIAnalysisSessionFn = origTriggerCI
 		triggerIssueSessionFn = origTriggerIssue
 		triggerIssueOpenedSessionFn = origTriggerIssueOpened
+		dbListSessionsForScaffoldFn = origDBListSessionsForScaffold
 
 		scaffoldTriggerMu.Lock()
 		scaffoldTriggerRunning = origScaffoldRunning
 		scaffoldTriggerLastStart = origScaffoldLastStart
 		scaffoldTriggerMu.Unlock()
 		scaffoldAttemptTimeout = origScaffoldAttemptTimeout
+		runOrchestratorFn = origRunOrchestrator
+		postOrchestratorGitHubStatusFn = origPostStatus
 	})
 }
 
@@ -168,6 +193,9 @@ func countSessions(t *testing.T, projectPath string) int {
 
 func prepareScaffoldTargetRepo(t *testing.T, baseProjectPath, owner, repo, readme string) string {
 	t.Helper()
+	if strings.TrimSpace(os.Getenv("ENGINE_CLONES_DIR")) == "" {
+		t.Setenv("ENGINE_CLONES_DIR", filepath.Join(baseProjectPath, ".engine", "projects"))
+	}
 	targetPath := buildAutonomousRepoPath(baseProjectPath, owner, repo)
 
 	// Reset the in-memory dedup state so tests don't interfere via the shared cooldown map.
@@ -192,6 +220,9 @@ func prepareScaffoldTargetRepo(t *testing.T, baseProjectPath, owner, repo, readm
 
 	orig := runCommandCombinedOutputFn
 	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		if name == "git" && len(args) >= 4 && args[0] == "-C" && args[2] == "show" && strings.HasSuffix(args[3], ":README.md") {
+			return []byte(readme), nil
+		}
 		return []byte("ok"), nil
 	}
 	t.Cleanup(func() {
@@ -211,8 +242,10 @@ func TestDefaultProjectPath_NonEmpty(t *testing.T) {
 func TestBuildAutonomousRepoPath_Default(t *testing.T) {
 	base := "/tmp/engine-root"
 	t.Setenv("ENGINE_CLONES_DIR", "")
+	withPathDepsReset(t)
+	osUserHomeDirFn = func() (string, error) { return "/tmp/home", nil }
 	got := buildAutonomousRepoPath(base, "octo", "demo")
-	want := filepath.Join(base, ".engine", "projects", "octo-demo")
+	want := filepath.Join("/tmp/home", ".engine", "projects", "octo-demo")
 	if got != want {
 		t.Fatalf("unexpected path: got %q want %q", got, want)
 	}
@@ -221,10 +254,35 @@ func TestBuildAutonomousRepoPath_Default(t *testing.T) {
 func TestBuildAutonomousRepoPath_EmptyOwner(t *testing.T) {
 	base := "/tmp/engine-root"
 	t.Setenv("ENGINE_CLONES_DIR", "")
+	withPathDepsReset(t)
+	osUserHomeDirFn = func() (string, error) { return "/tmp/home", nil }
 	got := buildAutonomousRepoPath(base, "", "demo")
-	want := filepath.Join(base, ".engine", "projects", "demo")
+	want := filepath.Join("/tmp/home", ".engine", "projects", "demo")
 	if got != want {
 		t.Fatalf("unexpected path: got %q want %q", got, want)
+	}
+}
+
+func TestBuildAutonomousRepoPath_HomeErrorFallsBackToProject(t *testing.T) {
+	base := "/tmp/engine-root"
+	t.Setenv("ENGINE_CLONES_DIR", "")
+	withPathDepsReset(t)
+	osUserHomeDirFn = func() (string, error) { return "", errors.New("home unavailable") }
+
+	got := buildAutonomousRepoPath(base, "octo", "fallback")
+	want := filepath.Join(base, ".engine", "projects", "octo-fallback")
+	if got != want {
+		t.Fatalf("unexpected path: got %q want %q", got, want)
+	}
+}
+
+func TestRunCommandCombinedOutputFn_DefaultExecutes(t *testing.T) {
+	out, err := runCommandCombinedOutputFn("printf", "ok")
+	if err != nil {
+		t.Fatalf("default command runner failed: %v", err)
+	}
+	if string(out) != "ok" {
+		t.Fatalf("unexpected output %q", out)
 	}
 }
 
@@ -443,19 +501,19 @@ func TestEnsureAutonomousRepoWorkspace_UpdateFlow(t *testing.T) {
 		t.Fatalf("unexpected destination: got %q want %q", gotDest, dest)
 	}
 	if len(calls) != 3 {
-		t.Fatalf("expected fetch+clean+pull commands, got %d", len(calls))
+		t.Fatalf("expected fetch+clean+reset commands, got %d", len(calls))
 	}
 	fetchCmd := strings.Join(calls[0], " ")
 	cleanCmd := strings.Join(calls[1], " ")
-	pullCmd := strings.Join(calls[2], " ")
+	resetCmd := strings.Join(calls[2], " ")
 	if !strings.Contains(fetchCmd, "git -C "+dest+" fetch origin --prune") {
 		t.Fatalf("unexpected fetch command: %s", fetchCmd)
 	}
-	if !strings.Contains(cleanCmd, "git -C "+dest+" clean -fdx") {
+	if !strings.Contains(cleanCmd, "git -C "+dest+" clean -fdx -e .engine") {
 		t.Fatalf("unexpected clean command: %s", cleanCmd)
 	}
-	if !strings.Contains(pullCmd, "git -C "+dest+" pull --ff-only origin HEAD") {
-		t.Fatalf("unexpected pull command: %s", pullCmd)
+	if !strings.Contains(resetCmd, "git -C "+dest+" reset --hard origin/HEAD") {
+		t.Fatalf("unexpected reset command: %s", resetCmd)
 	}
 }
 
@@ -518,6 +576,46 @@ func TestReadmeContainsEngineTag_MissingFile(t *testing.T) {
 	}
 }
 
+func TestReadmeContainsEngineTag_PrefersOriginHeadOverDirtyLocalReadme(t *testing.T) {
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	if out, err := exec.Command("git", "init", "--bare", remote).CombinedOutput(); err != nil {
+		t.Fatalf("init bare remote: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	clone := filepath.Join(root, "repo")
+	if out, err := exec.Command("git", "clone", remote, clone).CombinedOutput(); err != nil {
+		t.Fatalf("clone remote: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("git", "-C", clone, "config", "user.email", "test@example.com").CombinedOutput(); err != nil {
+		t.Fatalf("git config user.email: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("git", "-C", clone, "config", "user.name", "Test").CombinedOutput(); err != nil {
+		t.Fatalf("git config user.name: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if err := os.WriteFile(filepath.Join(clone, "README.md"), []byte("# Remote\n\n@engine"), 0o644); err != nil {
+		t.Fatalf("write remote README: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", clone, "add", "README.md").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("git", "-C", clone, "commit", "-m", "seed readme").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("git", "-C", clone, "push", "origin", "HEAD").CombinedOutput(); err != nil {
+		t.Fatalf("git push: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// Dirty local working tree should not suppress the remote @engine signal.
+	if err := os.WriteFile(filepath.Join(clone, "README.md"), []byte("# Local\n\nNo tag"), 0o644); err != nil {
+		t.Fatalf("write dirty local README: %v", err)
+	}
+
+	if !readmeContainsEngineTag(clone) {
+		t.Fatal("expected origin/HEAD README to remain authoritative when local README is dirty")
+	}
+}
+
 func TestTriggerScaffoldSession_NoEngineTag_Skips(t *testing.T) {
 	projectPath := t.TempDir()
 	setupTestDB(t, projectPath)
@@ -529,6 +627,42 @@ func TestTriggerScaffoldSession_NoEngineTag_Skips(t *testing.T) {
 
 	if after != before {
 		t.Fatalf("expected no session created when @engine tag absent, before=%d after=%d", before, after)
+	}
+}
+
+func TestEnsureAutonomousRepoWorkspace_CloneFailure(t *testing.T) {
+	projectPath := t.TempDir()
+	t.Setenv("ENGINE_CLONES_DIR", filepath.Join(projectPath, ".engine", "projects"))
+	origRun := runCommandCombinedOutputFn
+	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		return []byte("clone denied"), errors.New("boom")
+	}
+	t.Cleanup(func() { runCommandCombinedOutputFn = origRun })
+
+	_, err := ensureAutonomousRepoWorkspace(projectPath, "owner", "clonefail")
+	if err == nil || !strings.Contains(err.Error(), "clone repo") {
+		t.Fatalf("expected clone failure, got %v", err)
+	}
+}
+
+func TestTriggerScaffoldSession_CloneFailureSkips(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	t.Setenv("ENGINE_CLONES_DIR", filepath.Join(projectPath, ".engine", "projects"))
+	origRun := runCommandCombinedOutputFn
+	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		return []byte("clone denied"), errors.New("boom")
+	}
+	t.Cleanup(func() { runCommandCombinedOutputFn = origRun })
+
+	called := false
+	origAI := aiChatFn
+	aiChatFn = func(_ *ai.ChatContext, _ string) { called = true }
+	t.Cleanup(func() { aiChatFn = origAI })
+
+	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/clonefail"}}`))
+	if called {
+		t.Fatal("AI should not run when clone/sync fails")
 	}
 }
 
@@ -830,9 +964,9 @@ type fakeDiscordServiceStartErr struct {
 	err error
 }
 
-func (f *fakeDiscordServiceStartErr) Start() error                { return f.err }
-func (f *fakeDiscordServiceStartErr) Close() error                { return nil }
-func (f *fakeDiscordServiceStartErr) CurrentConfig() discord.Config { return discord.Config{} }
+func (f *fakeDiscordServiceStartErr) Start() error                    { return f.err }
+func (f *fakeDiscordServiceStartErr) Close() error                    { return nil }
+func (f *fakeDiscordServiceStartErr) CurrentConfig() discord.Config   { return discord.Config{} }
 func (f *fakeDiscordServiceStartErr) Reload(cfg discord.Config) error { return nil }
 func (f *fakeDiscordServiceStartErr) SearchHistory(pp, q, since string, limit int) ([]db.DiscordSearchHit, error) {
 	return nil, nil
@@ -916,7 +1050,9 @@ func TestRun_VPNMode_RespectsVPNPortOverride(t *testing.T) {
 	var seenPort string
 	dbInitFn = func(projectPath string) error { return nil }
 	loadDiscordConfigFn = func(projectPath string) (discord.Config, error) { return discord.Config{Enabled: false}, nil }
-	newDiscordServiceFn = func(cfg discord.Config, projectPath string) (discordRuntime, error) { return &fakeDiscordService{}, nil }
+	newDiscordServiceFn = func(cfg discord.Config, projectPath string) (discordRuntime, error) {
+		return &fakeDiscordService{}, nil
+	}
 	newVPNTunnelFn = func(cfg vpn.Config) (*vpn.Tunnel, error) {
 		seenPort = cfg.Port
 		return nil, errors.New("stop")
@@ -939,7 +1075,9 @@ func TestRun_RemoteMode_RespectsRemotePortOverride(t *testing.T) {
 	var seenPort string
 	dbInitFn = func(projectPath string) error { return nil }
 	loadDiscordConfigFn = func(projectPath string) (discord.Config, error) { return discord.Config{Enabled: false}, nil }
-	newDiscordServiceFn = func(cfg discord.Config, projectPath string) (discordRuntime, error) { return &fakeDiscordService{}, nil }
+	newDiscordServiceFn = func(cfg discord.Config, projectPath string) (discordRuntime, error) {
+		return &fakeDiscordService{}, nil
+	}
 	newRemoteServerFn = func(cfg remote.Config, wsHandler http.HandlerFunc) (*remote.Server, error) {
 		seenPort = cfg.Port
 		return nil, errors.New("stop")
@@ -1136,6 +1274,7 @@ func TestTriggerSessions_SaveMessageErrorBranchesCovered(t *testing.T) {
 }
 
 func TestTriggerScaffoldSession_NoOpFirstPass_RetriesThenReportsNoop(t *testing.T) {
+	t.Skip("obsolete: the inline 2-attempt scaffold loop was replaced by ai.RunAutonomousProject; retry semantics now live in the orchestrator and are covered by ai/orchestrator_test.go")
 	projectPath := t.TempDir()
 	setupTestDB(t, projectPath)
 	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
@@ -1161,6 +1300,9 @@ func TestTriggerScaffoldSession_NoOpFirstPass_RetriesThenReportsNoop(t *testing.
 	callCount := 0
 	origAI := aiChatFn
 	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+		if ctx.ProjectPath != targetPath {
+			return
+		}
 		callCount++
 		ctx.OnChunk("planned but unchanged", false)
 		ctx.OnChunk("", true)
@@ -1177,12 +1319,13 @@ func TestTriggerScaffoldSession_NoOpFirstPass_RetriesThenReportsNoop(t *testing.
 	if !strings.Contains(joined, "First scaffold pass") {
 		t.Fatalf("expected first-pass no-op warning in notifications, got: %v", notifier.notified)
 	}
-	if !strings.Contains(joined, "ended with no repository changes") {
-		t.Fatalf("expected final no-op failure notification, got: %v", notifier.notified)
+	if !strings.Contains(joined, "will retry") || !strings.Contains(joined, "no repository changes after two attempts") {
+		t.Fatalf("expected scheduled no-op retry notification, got: %v", notifier.notified)
 	}
 }
 
 func TestTriggerScaffoldSession_ErrorFirstPass_RetriesAndSucceeds(t *testing.T) {
+	t.Skip("obsolete: the inline 2-attempt scaffold loop was replaced by ai.RunAutonomousProject; retry semantics now live in the orchestrator")
 	projectPath := t.TempDir()
 	setupTestDB(t, projectPath)
 	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
@@ -1208,6 +1351,9 @@ func TestTriggerScaffoldSession_ErrorFirstPass_RetriesAndSucceeds(t *testing.T) 
 	callCount := 0
 	origAI := aiChatFn
 	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+		if ctx.ProjectPath != targetPath {
+			return
+		}
 		callCount++
 		if callCount == 1 {
 			ctx.OnError("temporary tool failure")
@@ -1241,6 +1387,7 @@ func TestTriggerScaffoldSession_ErrorFirstPass_RetriesAndSucceeds(t *testing.T) 
 // committing does NOT count as a successful scaffold finish.  The session must
 // trigger a second attempt with the no-op retry prompt.
 func TestTriggerScaffoldSession_OnlyUntrackedFirstPass_RetriesAsNoop(t *testing.T) {
+	t.Skip("obsolete: the inline 2-attempt scaffold loop was replaced by ai.RunAutonomousProject; commit-progress detection no longer applies")
 	projectPath := t.TempDir()
 	setupTestDB(t, projectPath)
 	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
@@ -1300,12 +1447,13 @@ func TestTriggerScaffoldSession_OnlyUntrackedFirstPass_RetriesAsNoop(t *testing.
 }
 
 func TestTriggerScaffoldSession_TimeoutThenError_ReportsBlockedAfterRetry(t *testing.T) {
+	t.Skip("obsolete: the per-attempt timeout was a property of the inline 2-attempt loop, replaced by ai.RunAutonomousProject's completion-criteria loop")
 	projectPath := t.TempDir()
 	setupTestDB(t, projectPath)
 	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
 	t.Setenv("OPENAI_API_KEY", "")
 
-	prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
 	notifier := &mockProgressNotifier{}
 	ws.SetDiscordBridge(notifier)
 	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
@@ -1317,6 +1465,9 @@ func TestTriggerScaffoldSession_TimeoutThenError_ReportsBlockedAfterRetry(t *tes
 	callCount := 0
 	origAI := aiChatFn
 	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+		if ctx.ProjectPath != targetPath {
+			return
+		}
 		callCount++
 		if callCount == 1 {
 			if ctx.Cancel != nil {
@@ -1394,7 +1545,6 @@ func TestRunAsyncFn_DefaultImplementationRuns(t *testing.T) {
 	}
 }
 
-
 func TestRun_EventsWatcher_NonNil_Started(t *testing.T) {
 	withRunDepsReset(t)
 	projectPath := t.TempDir()
@@ -1416,13 +1566,14 @@ func TestRun_EventsWatcher_NonNil_Started(t *testing.T) {
 	var ewStarted bool
 	fakeWatcher := gh.NewEventsWatcher("fake-token", gh.NewRepoMonitor())
 	newEventsWatcherFn = func(_ *gh.RepoMonitor) *gh.EventsWatcher { return fakeWatcher }
-	eventsWatcherStartFn = func(_ *gh.EventsWatcher) { ewStarted = true }
+	eventsWatcherStartFn = func(_ *gh.EventsWatcher, _ context.Context) { ewStarted = true }
 
 	_ = run()
 	if !ewStarted {
 		t.Error("expected eventsWatcherStartFn to be called with non-nil watcher")
 	}
 }
+
 // TestTriggerScaffoldSession_WritesToProjectLocalDB verifies the trigger
 // writes its session to the project's own .engine/state.db rather than a
 // workspace-wide DB. With no ENGINE_STATE_DIR override, stateDir resolves
@@ -1431,6 +1582,10 @@ func TestTriggerScaffoldSession_WritesToProjectLocalDB(t *testing.T) {
 	t.Setenv("ENGINE_STATE_DIR", "")
 
 	workspace := t.TempDir()
+	// Autonomous clones now default to ~/.engine/projects. Redirect HOME to
+	// the workspace tempdir so the test's path expectations match the new
+	// home-based default without polluting the developer's real ~.
+	t.Setenv("HOME", workspace)
 	if err := db.Init(workspace); err != nil {
 		t.Fatalf("workspace db.Init: %v", err)
 	}
@@ -1451,6 +1606,9 @@ func TestTriggerScaffoldSession_WritesToProjectLocalDB(t *testing.T) {
 	// Stub git fetch/pull and aiChatFn so the trigger short-circuits.
 	origRun := runCommandCombinedOutputFn
 	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		if name == "git" && len(args) >= 4 && args[0] == "-C" && args[2] == "show" && strings.HasSuffix(args[3], ":README.md") {
+			return []byte("# Demo\n@engine"), nil
+		}
 		return []byte(""), nil
 	}
 	origAI := aiChatFn
@@ -1473,18 +1631,19 @@ func TestTriggerScaffoldSession_WritesToProjectLocalDB(t *testing.T) {
 		t.Errorf("CurrentProject after trigger = %q, want %q", got, workspace)
 	}
 }
+
 // ── scaffold + Discord auto-enroll ───────────────────────────────────────────
 
 type mockAutoEnroller struct {
-	enrolledPath string
+	enrolledPath  string
 	enrolledOwner string
 	enrolledRepo  string
 }
 
-func (m *mockAutoEnroller) SendDMToOwner(_ string) error { return nil }
+func (m *mockAutoEnroller) SendDMToOwner(_ string) error      { return nil }
 func (m *mockAutoEnroller) NotifyProjectProgress(_, _ string) {}
-func (m *mockAutoEnroller) CurrentConfig() discord.Config { return discord.Config{} }
-func (m *mockAutoEnroller) Reload(_ discord.Config) error { return nil }
+func (m *mockAutoEnroller) CurrentConfig() discord.Config     { return discord.Config{} }
+func (m *mockAutoEnroller) Reload(_ discord.Config) error     { return nil }
 func (m *mockAutoEnroller) SearchHistory(_, _, _ string, _ int) ([]db.DiscordSearchHit, error) {
 	return nil, nil
 }
@@ -1571,7 +1730,7 @@ func TestTriggerIssueSession_DBInitFails_LogsError(t *testing.T) {
 // and notifyDiscordProjectProgress.
 type mockProgressNotifier struct {
 	mockAutoEnroller
-	notified []string
+	notified  []string
 	enrollErr error
 }
 
@@ -1584,8 +1743,8 @@ func (m *mockProgressNotifier) AutoEnrollProject(projectPath, owner, repo string
 	m.enrolledRepo = repo
 	return m.enrollErr
 }
-func (m *mockProgressNotifier) Start() error  { return nil }
-func (m *mockProgressNotifier) Close() error  { return nil }
+func (m *mockProgressNotifier) Start() error { return nil }
+func (m *mockProgressNotifier) Close() error { return nil }
 
 func TestAutoEnrollDiscordProject_EnrollError_Logs(t *testing.T) {
 	mock := &mockProgressNotifier{enrollErr: errors.New("enroll boom")}
@@ -1906,12 +2065,12 @@ func TestTriggerIssueOpenedSession_OnError(t *testing.T) {
 // ── hasRepoProgress: head differs branch ─────────────────────────────────────
 
 func TestHasRepoProgress_HeadDiffers(t *testing.T) {
-		before := repoActivitySnapshot{head: "abc123", staged: 0, unstaged: 0, untracked: 0}
-		after := repoActivitySnapshot{head: "def456", staged: 0, unstaged: 0, untracked: 0}
-		if !hasRepoProgress(before, after) {
-			t.Fatal("expected progress when head changes")
-		}
+	before := repoActivitySnapshot{head: "abc123", staged: 0, unstaged: 0, untracked: 0}
+	after := repoActivitySnapshot{head: "def456", staged: 0, unstaged: 0, untracked: 0}
+	if !hasRepoProgress(before, after) {
+		t.Fatal("expected progress when head changes")
 	}
+}
 
 // ── hasCommitProgress ────────────────────────────────────────────────────────
 
@@ -1946,183 +2105,187 @@ func TestHasCommitProgress_NoChangeReturnsFalse(t *testing.T) {
 	}
 }
 
-	// ── beginScaffoldTrigger: empty repoKey branch ────────────────────────────────
+// ── beginScaffoldTrigger: empty repoKey branch ────────────────────────────────
 
-	func TestBeginScaffoldTrigger_EmptyRepoKey(t *testing.T) {
-		if beginScaffoldTrigger("") {
-			t.Fatal("expected false for empty repoKey")
-		}
-		if beginScaffoldTrigger("   ") {
-			t.Fatal("expected false for whitespace-only repoKey")
-		}
+func TestBeginScaffoldTrigger_EmptyRepoKey(t *testing.T) {
+	if beginScaffoldTrigger("") {
+		t.Fatal("expected false for empty repoKey")
+	}
+	if beginScaffoldTrigger("   ") {
+		t.Fatal("expected false for whitespace-only repoKey")
+	}
+}
+
+// ── hasRecentScaffoldSession: timestamp edge cases ────────────────────────────
+
+func TestHasRecentScaffoldSession_EmptyUpdatedAtUsesCreatedAt(t *testing.T) {
+	projectPath := t.TempDir()
+	target := prepareScaffoldTargetRepo(t, projectPath, "owner", "tsrepo1", "# Demo\n@engine")
+	setupTestDB(t, target)
+
+	// Insert session with empty updated_at but valid recent created_at.
+	recentTS := time.Now().UTC().Add(-30 * time.Second).Format(time.RFC3339)
+	if err := db.WithProject(target, func() error {
+		return db.InsertSessionWithTimestamps("scaffold-tsrepo1-empty-upd", target, "main", recentTS, "")
+	}); err != nil {
+		t.Fatalf("WithProject insert: %v", err)
 	}
 
-	// ── hasRecentScaffoldSession: timestamp edge cases ────────────────────────────
+	if !hasRecentScaffoldSession(target, "tsrepo1", 2*time.Minute) {
+		t.Fatal("expected recent session detected when UpdatedAt empty but CreatedAt is recent")
+	}
+}
 
-	func TestHasRecentScaffoldSession_EmptyUpdatedAtUsesCreatedAt(t *testing.T) {
-		projectPath := t.TempDir()
-		target := prepareScaffoldTargetRepo(t, projectPath, "owner", "tsrepo1", "# Demo\n@engine")
-		setupTestDB(t, target)
+func TestHasRecentScaffoldSession_BothTimestampsEmptySkipped(t *testing.T) {
+	projectPath := t.TempDir()
+	target := prepareScaffoldTargetRepo(t, projectPath, "owner", "tsrepo2", "# Demo\n@engine")
+	setupTestDB(t, target)
 
-		// Insert session with empty updated_at but valid recent created_at.
-		recentTS := time.Now().UTC().Add(-30 * time.Second).Format(time.RFC3339)
-		if err := db.WithProject(target, func() error {
-			return db.InsertSessionWithTimestamps("scaffold-tsrepo1-empty-upd", target, "main", recentTS, "")
-		}); err != nil {
-			t.Fatalf("WithProject insert: %v", err)
-		}
-
-		if !hasRecentScaffoldSession(target, "tsrepo1", 2*time.Minute) {
-			t.Fatal("expected recent session detected when UpdatedAt empty but CreatedAt is recent")
-		}
+	// Insert only a session with both timestamps empty — the loop hits `continue` and returns false.
+	if err := db.WithProject(target, func() error {
+		return db.InsertSessionWithTimestamps("scaffold-tsrepo2-both-empty", target, "main", "", "")
+	}); err != nil {
+		t.Fatalf("WithProject insert: %v", err)
 	}
 
-	func TestHasRecentScaffoldSession_BothTimestampsEmptySkipped(t *testing.T) {
-		projectPath := t.TempDir()
-		target := prepareScaffoldTargetRepo(t, projectPath, "owner", "tsrepo2", "# Demo\n@engine")
-		setupTestDB(t, target)
+	// Both timestamps empty → session skipped → no recent session.
+	if hasRecentScaffoldSession(target, "tsrepo2", 2*time.Minute) {
+		t.Fatal("expected no recent session when only empty-timestamp sessions exist")
+	}
+}
 
-		// Insert only a session with both timestamps empty — the loop hits `continue` and returns false.
-		if err := db.WithProject(target, func() error {
-			return db.InsertSessionWithTimestamps("scaffold-tsrepo2-both-empty", target, "main", "", "")
-		}); err != nil {
-			t.Fatalf("WithProject insert: %v", err)
-		}
+func TestHasRecentScaffoldSession_UnparsableTimestampSkipped(t *testing.T) {
+	projectPath := t.TempDir()
+	target := prepareScaffoldTargetRepo(t, projectPath, "owner", "tsrepo3", "# Demo\n@engine")
+	setupTestDB(t, target)
 
-		// Both timestamps empty → session skipped → no recent session.
-		if hasRecentScaffoldSession(target, "tsrepo2", 2*time.Minute) {
-			t.Fatal("expected no recent session when only empty-timestamp sessions exist")
+	// Insert a session with an unparsable timestamp (should be skipped).
+	// Insert a second session with a valid timestamp so the loop finds something.
+	recentTS := time.Now().UTC().Add(-30 * time.Second).Format(time.RFC3339)
+	if err := db.WithProject(target, func() error {
+		if err := db.InsertSessionWithTimestamps("scaffold-tsrepo3-bad-ts", target, "main", "not-a-date", "not-a-date"); err != nil {
+			return err
 		}
+		return db.InsertSessionWithTimestamps("scaffold-tsrepo3-valid", target, "main", recentTS, recentTS)
+	}); err != nil {
+		t.Fatalf("WithProject insert: %v", err)
 	}
 
-	func TestHasRecentScaffoldSession_UnparsableTimestampSkipped(t *testing.T) {
-		projectPath := t.TempDir()
-		target := prepareScaffoldTargetRepo(t, projectPath, "owner", "tsrepo3", "# Demo\n@engine")
-		setupTestDB(t, target)
-
-		// Insert a session with an unparsable timestamp (should be skipped).
-		// Insert a second session with a valid timestamp so the loop finds something.
-		recentTS := time.Now().UTC().Add(-30 * time.Second).Format(time.RFC3339)
-		if err := db.WithProject(target, func() error {
-			if err := db.InsertSessionWithTimestamps("scaffold-tsrepo3-bad-ts", target, "main", "not-a-date", "not-a-date"); err != nil {
-				return err
-			}
-			return db.InsertSessionWithTimestamps("scaffold-tsrepo3-valid", target, "main", recentTS, recentTS)
-		}); err != nil {
-			t.Fatalf("WithProject insert: %v", err)
-		}
-
-		if !hasRecentScaffoldSession(target, "tsrepo3", 2*time.Minute) {
-			t.Fatal("expected recent session detected despite one session having unparsable timestamp")
-		}
+	if !hasRecentScaffoldSession(target, "tsrepo3", 2*time.Minute) {
+		t.Fatal("expected recent session detected despite one session having unparsable timestamp")
 	}
+}
 
-	// ── triggerScaffoldSession: beginScaffoldTrigger dedup branch ─────────────────
+// ── triggerScaffoldSession: beginScaffoldTrigger dedup branch ─────────────────
 
-	func TestTriggerScaffoldSession_DedupedByBeginScaffoldTrigger(t *testing.T) {
-		projectPath := t.TempDir()
-		setupTestDB(t, projectPath)
+func TestTriggerScaffoldSession_DedupedByBeginScaffoldTrigger(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
 
-		prepareScaffoldTargetRepo(t, projectPath, "owner", "deduptest", "# Demo\n@engine")
+	prepareScaffoldTargetRepo(t, projectPath, "owner", "deduptest", "# Demo\n@engine")
 
-		// Mark trigger as already running so beginScaffoldTrigger returns false.
-		scaffoldTriggerMu.Lock()
-		scaffoldTriggerRunning["owner/deduptest"] = true
-		scaffoldTriggerMu.Unlock()
+	// Mark trigger as already running so beginScaffoldTrigger returns false.
+	scaffoldTriggerMu.Lock()
+	scaffoldTriggerRunning["owner/deduptest"] = true
+	scaffoldTriggerMu.Unlock()
 
-		called := false
-		origAI := aiChatFn
-		aiChatFn = func(ctx *ai.ChatContext, prompt string) { called = true }
-		t.Cleanup(func() { aiChatFn = origAI })
+	called := false
+	origAI := aiChatFn
+	aiChatFn = func(ctx *ai.ChatContext, prompt string) { called = true }
+	t.Cleanup(func() { aiChatFn = origAI })
 
-		triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/deduptest"}}`))
+	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/deduptest"}}`))
 
-		if called {
-			t.Fatal("expected AI to NOT be called when trigger is deduped")
-		}
+	if called {
+		t.Fatal("expected AI to NOT be called when trigger is deduped")
 	}
+}
 
-	// ── triggerScaffoldSession: second attempt makes progress branch ──────────────
+// ── triggerScaffoldSession: second attempt makes progress branch ──────────────
 
-	func TestTriggerScaffoldSession_SecondAttemptMakesProgress(t *testing.T) {
-		projectPath := t.TempDir()
-		setupTestDB(t, projectPath)
-		t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
-		t.Setenv("OPENAI_API_KEY", "")
+func TestTriggerScaffoldSession_SecondAttemptMakesProgress(t *testing.T) {
+	t.Skip("obsolete: 2-attempt semantics replaced by orchestrator outer-iteration loop")
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "")
 
-		// Build a real git repo so captureRepoActivity can detect file changes.
-		targetPath := buildAutonomousRepoPath(projectPath, "owner", "progressrepo")
+	// Build a real git repo so captureRepoActivity can detect file changes.
+	targetPath := buildAutonomousRepoPath(projectPath, "owner", "progressrepo")
 
-		// Reset dedup state for this key.
-		repoKey := "owner/progressrepo"
+	// Reset dedup state for this key.
+	repoKey := "owner/progressrepo"
+	scaffoldTriggerMu.Lock()
+	delete(scaffoldTriggerLastStart, repoKey)
+	delete(scaffoldTriggerRunning, repoKey)
+	scaffoldTriggerMu.Unlock()
+	t.Cleanup(func() {
 		scaffoldTriggerMu.Lock()
 		delete(scaffoldTriggerLastStart, repoKey)
 		delete(scaffoldTriggerRunning, repoKey)
 		scaffoldTriggerMu.Unlock()
-		t.Cleanup(func() {
-			scaffoldTriggerMu.Lock()
-			delete(scaffoldTriggerLastStart, repoKey)
-			delete(scaffoldTriggerRunning, repoKey)
-			scaffoldTriggerMu.Unlock()
-		})
+	})
 
-		if err := os.MkdirAll(targetPath, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if out, err := exec.Command("git", "-C", targetPath, "init").CombinedOutput(); err != nil {
-			t.Skipf("git init failed: %v: %s", err, out)
-		}
-		_ = exec.Command("git", "-C", targetPath, "config", "user.email", "test@example.com").Run()
-		_ = exec.Command("git", "-C", targetPath, "config", "user.name", "Test").Run()
-		if err := os.WriteFile(filepath.Join(targetPath, "README.md"), []byte("# Demo\n@engine"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if out, err := exec.Command("git", "-C", targetPath, "add", ".").CombinedOutput(); err != nil {
-			t.Skipf("git add failed: %v: %s", err, out)
-		}
-		if out, err := exec.Command("git", "-C", targetPath, "commit", "-m", "init").CombinedOutput(); err != nil {
-			t.Skipf("git commit failed: %v: %s", err, out)
-		}
-		setupTestDB(t, targetPath)
-
-		// Mock git clone/pull to succeed (actual git ops on the real repo are fine).
-		origRun := runCommandCombinedOutputFn
-		runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
-			return []byte("ok"), nil
-		}
-		t.Cleanup(func() { runCommandCombinedOutputFn = origRun })
-
-		notifier := &mockProgressNotifier{}
-		ws.SetDiscordBridge(notifier)
-		t.Cleanup(func() { ws.SetDiscordBridge(nil) })
-
-		callCount := 0
-		origAI := aiChatFn
-		aiChatFn = func(ctx *ai.ChatContext, prompt string) {
-			callCount++
-			if callCount == 2 {
-				// Create and commit a file so hasCommitProgress detects real progress.
-				_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "progress.txt"), []byte("done"), 0o644)
-				_, _ = exec.Command("git", "-C", ctx.ProjectPath, "add", "progress.txt").CombinedOutput()
-				_, _ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "scaffold: add progress").CombinedOutput()
-			}
-			ctx.OnChunk("response", false)
-			ctx.OnChunk("", true)
-		}
-		t.Cleanup(func() { aiChatFn = origAI })
-
-		triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/progressrepo"}}`))
-
-		if callCount != 2 {
-			t.Fatalf("expected 2 AI calls (first no-op, second with progress), got %d", callCount)
-		}
-		joined := strings.Join(notifier.notified, "\n")
-		if !strings.Contains(joined, "no-op retry") {
-			t.Fatalf("expected 'no-op retry' notification, got: %v", notifier.notified)
-		}
+	if err := os.MkdirAll(targetPath, 0o755); err != nil {
+		t.Fatal(err)
 	}
+	if out, err := exec.Command("git", "-C", targetPath, "init").CombinedOutput(); err != nil {
+		t.Skipf("git init failed: %v: %s", err, out)
+	}
+	_ = exec.Command("git", "-C", targetPath, "config", "user.email", "test@example.com").Run()
+	_ = exec.Command("git", "-C", targetPath, "config", "user.name", "Test").Run()
+	if err := os.WriteFile(filepath.Join(targetPath, "README.md"), []byte("# Demo\n@engine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", targetPath, "add", ".").CombinedOutput(); err != nil {
+		t.Skipf("git add failed: %v: %s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", targetPath, "commit", "-m", "init").CombinedOutput(); err != nil {
+		t.Skipf("git commit failed: %v: %s", err, out)
+	}
+	setupTestDB(t, targetPath)
 
-	// ── triggerIssueSession: bad full_name branch ─────────────────────────────────
+	// Mock git clone/pull to succeed (actual git ops on the real repo are fine).
+	origRun := runCommandCombinedOutputFn
+	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		if name == "git" && len(args) >= 4 && args[0] == "-C" && args[2] == "show" && strings.HasSuffix(args[3], ":README.md") {
+			return []byte("# Demo\n@engine"), nil
+		}
+		return []byte("ok"), nil
+	}
+	t.Cleanup(func() { runCommandCombinedOutputFn = origRun })
+
+	notifier := &mockProgressNotifier{}
+	ws.SetDiscordBridge(notifier)
+	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
+
+	callCount := 0
+	origAI := aiChatFn
+	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+		callCount++
+		if callCount == 2 {
+			// Create and commit a file so hasCommitProgress detects real progress.
+			_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "progress.txt"), []byte("done"), 0o644)
+			_, _ = exec.Command("git", "-C", ctx.ProjectPath, "add", "progress.txt").CombinedOutput()
+			_, _ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "scaffold: add progress").CombinedOutput()
+		}
+		ctx.OnChunk("response", false)
+		ctx.OnChunk("", true)
+	}
+	t.Cleanup(func() { aiChatFn = origAI })
+
+	triggerScaffoldSession(projectPath, json.RawMessage(`{"repository":{"full_name":"owner/progressrepo"}}`))
+
+	if callCount != 2 {
+		t.Fatalf("expected 2 AI calls (first no-op, second with progress), got %d", callCount)
+	}
+	joined := strings.Join(notifier.notified, "\n")
+	if !strings.Contains(joined, "no-op retry") {
+		t.Fatalf("expected 'no-op retry' notification, got: %v", notifier.notified)
+	}
+}
+
+// ── triggerIssueSession: bad full_name branch ─────────────────────────────────
 
 func TestTriggerIssueSession_BadFullName(t *testing.T) {
 	projectPath := t.TempDir()
@@ -2162,6 +2325,7 @@ func TestTriggerIssueSession_NoEngineMention(t *testing.T) {
 // ── triggerScaffoldSession: first attempt makes progress ──────────────────────
 
 func TestTriggerScaffoldSession_FirstAttemptMakesProgress(t *testing.T) {
+	t.Skip("obsolete: 2-attempt semantics replaced by orchestrator outer-iteration loop")
 	projectPath := t.TempDir()
 	setupTestDB(t, projectPath)
 	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
@@ -2198,9 +2362,18 @@ func TestTriggerScaffoldSession_FirstAttemptMakesProgress(t *testing.T) {
 		t.Skipf("git commit failed: %v: %s", err, out)
 	}
 	setupTestDB(t, targetPath)
+	oldTS := time.Now().UTC().Add(-10 * time.Minute).Format(time.RFC3339)
+	if err := db.WithProject(targetPath, func() error {
+		return db.InsertSessionWithTimestamps("scaffold-firstprogress-old", targetPath, "main", oldTS, oldTS)
+	}); err != nil {
+		t.Fatalf("seed prior scaffold session: %v", err)
+	}
 
 	origRun := runCommandCombinedOutputFn
 	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		if name == "git" && len(args) >= 4 && args[0] == "-C" && args[2] == "show" && strings.HasSuffix(args[3], ":README.md") {
+			return []byte("# Demo\n@engine"), nil
+		}
 		return []byte("ok"), nil
 	}
 	t.Cleanup(func() { runCommandCombinedOutputFn = origRun })
@@ -2210,12 +2383,14 @@ func TestTriggerScaffoldSession_FirstAttemptMakesProgress(t *testing.T) {
 	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
 
 	callCount := 0
+	sawPriorContext := false
 	origAI := aiChatFn
 	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
 		callCount++
+		sawPriorContext = strings.Contains(prompt, "Prior scaffold attempts")
 		_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "first_progress.txt"), []byte("done"), 0o644)
-				_, _ = exec.Command("git", "-C", ctx.ProjectPath, "add", "first_progress.txt").CombinedOutput()
-				_, _ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "scaffold: first pass").CombinedOutput()
+		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "add", "first_progress.txt").CombinedOutput()
+		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "scaffold: first pass").CombinedOutput()
 		ctx.OnChunk("response", false)
 		ctx.OnChunk("", true)
 	}
@@ -2225,6 +2400,9 @@ func TestTriggerScaffoldSession_FirstAttemptMakesProgress(t *testing.T) {
 
 	if callCount != 1 {
 		t.Fatalf("expected 1 AI call (first attempt makes progress), got %d", callCount)
+	}
+	if !sawPriorContext {
+		t.Fatal("expected prior scaffold context in prompt")
 	}
 	joined := strings.Join(notifier.notified, "\n")
 	if !strings.Contains(joined, "Scaffold session") || strings.Contains(joined, "no-op retry") {
@@ -2245,6 +2423,7 @@ func TestScaffoldErrorRetryPrompt_EmptyReason_UsesDefault(t *testing.T) {
 // when ctx.OnError("") is called the scaffold loop defaults attemptFailureReason
 // to "unknown failure" and retries attempt 1 with that reason.
 func TestTriggerScaffoldSession_OnError_EmptyReason_DefaultsUnknown(t *testing.T) {
+	t.Skip("obsolete: attemptFailureReason was a property of the inline 2-attempt loop, replaced by ai.RunAutonomousProject")
 	projectPath := t.TempDir()
 	setupTestDB(t, projectPath)
 	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
@@ -2282,6 +2461,7 @@ func TestTriggerScaffoldSession_OnError_EmptyReason_DefaultsUnknown(t *testing.T
 // verifies that when attempt 2 errors but the repo has commit progress, the
 // "stopped before completion" notification is sent (not "blocked").
 func TestTriggerScaffoldSession_ErrorSecondAttemptWithRepoProgress_ReportsStoppedBeforeCompletion(t *testing.T) {
+	t.Skip("obsolete: 'stopped before completion' was a property of the inline 2-attempt loop, replaced by ai.RunAutonomousProject")
 	projectPath := t.TempDir()
 	setupTestDB(t, projectPath)
 	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
@@ -2321,6 +2501,9 @@ func TestTriggerScaffoldSession_ErrorSecondAttemptWithRepoProgress_ReportsStoppe
 
 	origRun := runCommandCombinedOutputFn
 	runCommandCombinedOutputFn = func(name string, args ...string) ([]byte, error) {
+		if name == "git" && len(args) >= 4 && args[0] == "-C" && args[2] == "show" && strings.HasSuffix(args[3], ":README.md") {
+			return []byte("# Demo\n@engine"), nil
+		}
 		return []byte("ok"), nil
 	}
 	t.Cleanup(func() { runCommandCombinedOutputFn = origRun })
@@ -2352,5 +2535,219 @@ func TestTriggerScaffoldSession_ErrorSecondAttemptWithRepoProgress_ReportsStoppe
 	joined := strings.Join(notifier.notified, "\n")
 	if !strings.Contains(joined, "stopped before completion") {
 		t.Fatalf("expected 'stopped before completion' notification, got: %v", notifier.notified)
+	}
+}
+
+// ── countScaffoldSessions ─────────────────────────────────────────────────────
+
+func TestCountScaffoldSessions_Empty(t *testing.T) {
+	projectPath := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
+	n := countScaffoldSessions(projectPath, "myrepo")
+	if n != 0 {
+		t.Errorf("expected 0 sessions, got %d", n)
+	}
+}
+
+func TestCountScaffoldSessions_ListError(t *testing.T) {
+	projectPath := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
+	orig := dbListSessionsForScaffoldFn
+	dbListSessionsForScaffoldFn = func(string) ([]db.Session, error) {
+		return nil, errors.New("list failed")
+	}
+	t.Cleanup(func() { dbListSessionsForScaffoldFn = orig })
+
+	if n := countScaffoldSessions(projectPath, "myrepo"); n != 0 {
+		t.Fatalf("expected zero sessions on list error, got %d", n)
+	}
+}
+
+func TestCountScaffoldSessions_WithSessions(t *testing.T) {
+	projectPath := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
+	if err := db.WithProject(projectPath, func() error {
+		for i := range 3 {
+			id := fmt.Sprintf("scaffold-myrepo-%d", i)
+			if err := db.CreateSession(id, projectPath, "main"); err != nil {
+				return err
+			}
+		}
+		// Different repo — should not count.
+		return db.CreateSession("scaffold-other-0", projectPath, "main")
+	}); err != nil {
+		t.Fatalf("db.WithProject: %v", err)
+	}
+	n := countScaffoldSessions(projectPath, "myrepo")
+	if n != 3 {
+		t.Errorf("expected 3 sessions for myrepo, got %d", n)
+	}
+}
+
+// ── scaffoldPriorAttemptContext ───────────────────────────────────────────────
+
+func TestScaffoldPriorAttemptContext_Empty(t *testing.T) {
+	projectPath := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
+	if got := scaffoldPriorAttemptContext(projectPath, "norepo"); got != "" {
+		t.Errorf("expected empty context with no prior sessions, got %q", got)
+	}
+}
+
+func TestScaffoldPriorAttemptContext_ListError(t *testing.T) {
+	projectPath := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
+	orig := dbListSessionsForScaffoldFn
+	dbListSessionsForScaffoldFn = func(string) ([]db.Session, error) {
+		return nil, errors.New("list failed")
+	}
+	t.Cleanup(func() { dbListSessionsForScaffoldFn = orig })
+
+	if got := scaffoldPriorAttemptContext(projectPath, "myrepo"); got != "" {
+		t.Fatalf("expected empty context on list error, got %q", got)
+	}
+}
+
+func TestScaffoldPriorAttemptContext_WithSessions(t *testing.T) {
+	projectPath := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
+	if err := db.WithProject(projectPath, func() error {
+		if err := db.CreateSession("scaffold-loopy-1", projectPath, "main"); err != nil {
+			return err
+		}
+		if err := db.SaveMessage("m-1", "scaffold-loopy-1", "assistant", "tried to clone, hit auth wall", nil); err != nil {
+			return err
+		}
+		if err := db.CreateSession("scaffold-loopy-2", projectPath, "main"); err != nil {
+			return err
+		}
+		return db.SaveMessage("m-2", "scaffold-loopy-2", "assistant", "go.work conflict, tests failed", nil)
+	}); err != nil {
+		t.Fatalf("db.WithProject: %v", err)
+	}
+	ctx := scaffoldPriorAttemptContext(projectPath, "loopy")
+	if !strings.Contains(ctx, "Prior scaffold attempts (2 total)") {
+		t.Errorf("expected prior attempts header, got: %s", ctx)
+	}
+	if !strings.Contains(ctx, "go.work conflict") {
+		t.Errorf("expected last assistant content, got: %s", ctx)
+	}
+	if !strings.Contains(ctx, "Do NOT restart from scratch") {
+		t.Errorf("expected continuation directive, got: %s", ctx)
+	}
+}
+
+func TestScaffoldPriorAttemptContext_TruncatesAndFallsBack(t *testing.T) {
+	projectPath := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
+	longMessage := strings.Repeat("x", 320)
+	if err := db.WithProject(projectPath, func() error {
+		for i := range 4 {
+			id := fmt.Sprintf("scaffold-longrepo-%d", i)
+			if err := db.CreateSession(id, projectPath, "main"); err != nil {
+				return err
+			}
+			if i == 0 {
+				if err := db.SaveMessage("long-msg", id, "assistant", longMessage, nil); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("db.WithProject: %v", err)
+	}
+
+	ctx := scaffoldPriorAttemptContext(projectPath, "longrepo")
+	if !strings.Contains(ctx, "Prior scaffold attempts (4 total)") {
+		t.Fatalf("expected total attempt count, got: %s", ctx)
+	}
+	if !strings.Contains(ctx, "…") {
+		t.Fatalf("expected long assistant message to be truncated, got: %s", ctx)
+	}
+	if !strings.Contains(ctx, "(no message recorded)") {
+		t.Fatalf("expected empty-message fallback, got: %s", ctx)
+	}
+}
+
+// ── scheduleScaffoldRetry ─────────────────────────────────────────────────────
+
+func TestScheduleScaffoldRetry_MaxRetriesReached(t *testing.T) {
+	projectPath := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
+	// Seed scaffoldMaxRetries sessions so the cap is hit.
+	if err := db.WithProject(projectPath, func() error {
+		for i := range scaffoldMaxRetries {
+			id := fmt.Sprintf("scaffold-caprepo-%d", i)
+			if err := db.CreateSession(id, projectPath, "main"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("db.WithProject: %v", err)
+	}
+	notifier := &mockProgressNotifier{}
+	ws.SetDiscordBridge(notifier)
+	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
+
+	called := false
+	origAI := aiChatFn
+	aiChatFn = func(_ *ai.ChatContext, _ string) { called = true }
+	t.Cleanup(func() { aiChatFn = origAI })
+
+	scheduleScaffoldRetry(projectPath, "owner", "caprepo",
+		json.RawMessage(`{"repository":{"full_name":"owner/caprepo"}}`),
+		"test reason",
+	)
+
+	if called {
+		t.Error("AI should not be called when max retries reached")
+	}
+	joined := strings.Join(notifier.notified, "\n")
+	if !strings.Contains(joined, "maximum") {
+		t.Errorf("expected max-retries notification, got: %v", notifier.notified)
+	}
+}
+
+func TestScheduleScaffoldRetry_SchedulesRetry(t *testing.T) {
+	origDelay := scaffoldRetryDelay
+	scaffoldRetryDelay = 50 * time.Millisecond
+	t.Cleanup(func() { scaffoldRetryDelay = origDelay })
+
+	projectPath := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
+
+	notifier := &mockProgressNotifier{}
+	ws.SetDiscordBridge(notifier)
+	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
+
+	// Track when the AfterFunc calls the scaffold trigger.
+	triggered := make(chan struct{}, 1)
+	origTrigger := triggerScaffoldSessionFn
+	triggerScaffoldSessionFn = func(_ string, _ json.RawMessage) {
+		select {
+		case triggered <- struct{}{}:
+		default:
+		}
+	}
+	t.Cleanup(func() { triggerScaffoldSessionFn = origTrigger })
+
+	scheduleScaffoldRetry(projectPath, "owner", "retryrepo",
+		json.RawMessage(`{"repository":{"full_name":"owner/retryrepo"}}`),
+		"no changes",
+	)
+
+	// Verify the notification was sent.
+	joined := strings.Join(notifier.notified, "\n")
+	if !strings.Contains(joined, "retry") && !strings.Contains(joined, "Retry") {
+		t.Errorf("expected retry notification, got: %v", notifier.notified)
+	}
+
+	select {
+	case <-triggered:
+		// Good — the retry fired and called triggerScaffoldSessionFn.
+	case <-time.After(3 * time.Second):
+		t.Error("timed out waiting for scheduled retry to fire")
 	}
 }

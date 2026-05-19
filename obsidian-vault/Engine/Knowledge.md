@@ -46,3 +46,27 @@ Add entries here when making non-obvious decisions so future sessions can reason
 **Why:** Keeps the dependency tree lean and avoids config sprawl. The MCP tool provides VS Code diagnostics directly.
 
 ---
+
+## Decision: No workspace mirrors for autonomous project clones
+
+**Decided:** Autonomous project clones must live in `~/.engine/projects` or `ENGINE_CLONES_DIR`, not under the Engine repo as `.engine/projects` or `packages/server-go/.engine/projects`. Workspace symlinks or migrated copies pointing at runtime clones should be removed immediately while preserving the real runtime directory.
+
+**Why:** Workspace mirrors make VS Code and git show fake project state inside the Engine repo, which caused monitoring to inspect the wrong-looking path and hid the real runtime contract. They also risk Go workspace leakage and misleading dirty subproject status.
+
+**Rejected alternatives:** Keeping symlinks for convenience; treating workspace-root `.engine/projects` as an acceptable alias.
+
+**Tradeoffs:** Agents must use the real runtime path or configured clone dir explicitly, but monitoring and validation now reflect the environment Engine actually drives.
+
+---
+
+## Decision: Lead agent plus project-scoped peer communication
+
+**Decided:** Keep one user-facing lead agent responsible for reporting to the user, while worker teams exchange focused messages through a project-scoped agent communication pool with four built-in tools: list peers, send a message, read inbox, and await a reply.
+
+**Why:** The video guidance was correct that information dies when every fact climbs a strict hierarchy, but a completely flat team with no user-facing lead can become noisy. This design keeps the human interface simple while letting specialists ask each other narrow questions and preserve clean context windows.
+
+**Rejected alternatives:** One giant orchestrator prompt with every role's context; isolated sub-agents that only report upward; exposing all peer chatter directly to the user.
+
+**Tradeoffs:** The first implementation is in-process and project-scoped, so cross-device agent communication still needs a transport layer later. The tool contract is intentionally small so it can be backed by a network broker without changing role prompts.
+
+---

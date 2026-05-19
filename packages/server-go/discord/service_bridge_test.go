@@ -287,6 +287,92 @@ func TestHandleStatusCommand_ProjectFound(t *testing.T) {
 	svc.handleStatusCommand(msg("ch-status", ""), nil)
 }
 
+func TestHandleDirectChatMessage_StatusQuestionRoutesToStatus(t *testing.T) {
+	svc, projectPath := newDisabledSvc(t)
+	svc.cfg.GuildID = "guild-status-question"
+	svc.dg = makeDiscordRESTSession(t)
+	channelID := "ch-status-question"
+	cleanup, sent := installDiscordGuildAPIShim(t, svc.cfg.GuildID, map[string]*discordgo.Channel{
+		channelID: {ID: channelID, Name: "proj-status", Type: discordgo.ChannelTypeGuildText},
+	})
+	t.Cleanup(cleanup)
+
+	binding := ProjectBinding{ProjectPath: projectPath, ChannelID: channelID, RepoName: "test-repo"}
+	addProject(svc, projectPath, channelID, binding.RepoName)
+	if err := db.CreateSession("scaffold-test-repo-1", projectPath, "main"); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	svc.handleDirectChatMessage(msg(channelID, "status?"), binding)
+
+	if len(*sent) == 0 {
+		t.Fatal("expected status message to be sent")
+	}
+	combined := strings.Join(*sent, "\n")
+	if strings.Contains(combined, "Running agent request") {
+		t.Fatalf("status? should not start an agent chat, got: %s", combined)
+	}
+	if !strings.Contains(combined, "latest scaffold") {
+		t.Fatalf("expected scaffold status context, got: %s", combined)
+	}
+}
+
+func TestPromptWithProjectStatusContext_IncludesLatestScaffold(t *testing.T) {
+	_, projectPath := newDisabledSvc(t)
+	if err := db.CreateSession("scaffold-context-repo-1", projectPath, "main"); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	binding := ProjectBinding{ProjectPath: projectPath, RepoName: "context-repo"}
+
+	prompt := promptWithProjectStatusContext(binding, "what happened?")
+	if !strings.Contains(prompt, "Discord project context") {
+		t.Fatalf("expected Discord context, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "latest scaffold") {
+		t.Fatalf("expected latest scaffold status, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "what happened?") {
+		t.Fatalf("expected original user message, got: %s", prompt)
+	}
+}
+
+func TestLatestScaffoldStatusLine_UsesCreatedAtWhenUpdatedAtEmpty(t *testing.T) {
+	_, projectPath := newDisabledSvc(t)
+	created := time.Now().UTC().Format(time.RFC3339)
+	if err := db.InsertSessionWithTimestamps("scaffold-created-only-1", projectPath, "main", created, ""); err != nil {
+		t.Fatalf("InsertSessionWithTimestamps: %v", err)
+	}
+
+	line := latestScaffoldStatusLine(projectPath)
+	if !strings.Contains(line, created) {
+		t.Fatalf("expected created timestamp fallback in status line, got %q", line)
+	}
+	if !strings.Contains(line, "no summary yet") {
+		t.Fatalf("expected default summary fallback, got %q", line)
+	}
+}
+
+func TestLatestScaffoldStatusLine_ListErrorReturnsEmpty(t *testing.T) {
+	orig := listSessionsFn
+	listSessionsFn = func(string) ([]db.Session, error) {
+		return nil, fmt.Errorf("list failed")
+	}
+	t.Cleanup(func() { listSessionsFn = orig })
+
+	if got := latestScaffoldStatusLine("/project"); got != "" {
+		t.Fatalf("expected empty status on list error, got %q", got)
+	}
+}
+
+func TestIsStatusLikeDirectMessage(t *testing.T) {
+	if !isStatusLikeDirectMessage("status?") {
+		t.Error("status? should be treated as a status request")
+	}
+	if isStatusLikeDirectMessage("please implement the status page") {
+		t.Error("implementation request should not be treated as a status request")
+	}
+}
+
 func TestAddProject_ValidationErrors(t *testing.T) {
 	svc, _ := newDisabledSvc(t)
 
@@ -575,10 +661,10 @@ func TestSplitChannelThread_WithThreadChannelFromState(t *testing.T) {
 	svc, _ := newDisabledSvc(t)
 	restore := installDiscordChannelAPIShim(t, map[string]*discordgo.Channel{
 		"thread-1": {
-		ID:       "thread-1",
-		GuildID:  "guild-test",
-		ParentID: "channel-parent",
-		Type:     discordgo.ChannelTypeGuildPublicThread,
+			ID:       "thread-1",
+			GuildID:  "guild-test",
+			ParentID: "channel-parent",
+			Type:     discordgo.ChannelTypeGuildPublicThread,
 		},
 	})
 	defer restore()
@@ -595,10 +681,10 @@ func TestResolveProjectByChannel_WithThreadParentLookup(t *testing.T) {
 	addProject(svc, projectPath, "channel-parent", "repo")
 	restore := installDiscordChannelAPIShim(t, map[string]*discordgo.Channel{
 		"thread-2": {
-		ID:       "thread-2",
-		GuildID:  "guild-test",
-		ParentID: "channel-parent",
-		Type:     discordgo.ChannelTypeGuildPublicThread,
+			ID:       "thread-2",
+			GuildID:  "guild-test",
+			ParentID: "channel-parent",
+			Type:     discordgo.ChannelTypeGuildPublicThread,
 		},
 	})
 	defer restore()
@@ -618,10 +704,10 @@ func TestAcquireChatThread_ReusesMappedThreadSession(t *testing.T) {
 	binding := ProjectBinding{ProjectPath: projectPath, RepoName: "repo", ChannelID: "channel-parent"}
 	restore := installDiscordChannelAPIShim(t, map[string]*discordgo.Channel{
 		"thread-3": {
-		ID:       "thread-3",
-		GuildID:  "guild-test",
-		ParentID: "channel-parent",
-		Type:     discordgo.ChannelTypeGuildPublicThread,
+			ID:       "thread-3",
+			GuildID:  "guild-test",
+			ParentID: "channel-parent",
+			Type:     discordgo.ChannelTypeGuildPublicThread,
 		},
 	})
 	defer restore()
@@ -644,10 +730,10 @@ func TestAcquireChatThread_ThreadWithoutMappingCreatesSession(t *testing.T) {
 	binding := ProjectBinding{ProjectPath: projectPath, RepoName: "repo", ChannelID: "channel-parent"}
 	restore := installDiscordChannelAPIShim(t, map[string]*discordgo.Channel{
 		"thread-4": {
-		ID:       "thread-4",
-		GuildID:  "guild-test",
-		ParentID: "channel-parent",
-		Type:     discordgo.ChannelTypeGuildPublicThread,
+			ID:       "thread-4",
+			GuildID:  "guild-test",
+			ParentID: "channel-parent",
+			Type:     discordgo.ChannelTypeGuildPublicThread,
 		},
 	})
 	defer restore()
@@ -677,10 +763,10 @@ func TestRecordOutbound_UsesResolvedThreadSession(t *testing.T) {
 	svc, projectPath := newDisabledSvc(t)
 	restore := installDiscordChannelAPIShim(t, map[string]*discordgo.Channel{
 		"thread-5": {
-		ID:       "thread-5",
-		GuildID:  "guild-test",
-		ParentID: "channel-parent",
-		Type:     discordgo.ChannelTypeGuildPublicThread,
+			ID:       "thread-5",
+			GuildID:  "guild-test",
+			ParentID: "channel-parent",
+			Type:     discordgo.ChannelTypeGuildPublicThread,
 		},
 	})
 	defer restore()
@@ -1801,8 +1887,8 @@ func TestNewService_LoadStateError(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	_, err := NewService(Config{
-		Enabled:     true,
-		StoragePath: stateDir,
+		Enabled:       true,
+		StoragePath:   stateDir,
 		CommandPrefix: "!",
 	}, stateDir)
 	if err == nil {
@@ -2102,7 +2188,6 @@ func TestEnsureProjectChannel_NilSession_ReturnsError(t *testing.T) {
 	}
 }
 
-
 func TestValidate_Success(t *testing.T) {
 	guildID := "guild-validate-ok"
 	controlChannel := &discordgo.Channel{ID: "ctrl-ok", Name: "engine-control", Type: discordgo.ChannelTypeGuildText}
@@ -2189,7 +2274,7 @@ func TestStart_EnabledSuccess(t *testing.T) {
 				"url":    "wss://fake.ws.example.com",
 				"shards": 1,
 				"session_start_limit": map[string]int{
-					"total":      100,
+					"total":     100,
 					"remaining": 100,
 				},
 			})
@@ -2517,81 +2602,81 @@ func TestHandleAskCommand_CallbacksCoverage(t *testing.T) {
 // ── NotifyBlocked ──────────────────────────────────────────────────────────────
 
 func TestService_NotifyBlocked_PostsToProjectChannel(t *testing.T) {
-        svc, stateRoot := newDisabledSvc(t)
-        svc.project = stateRoot
-        svc.cfg.GuildID = "guild-1"
-        svc.dg = makeDiscordRESTSession(t)
+	svc, stateRoot := newDisabledSvc(t)
+	svc.project = stateRoot
+	svc.cfg.GuildID = "guild-1"
+	svc.dg = makeDiscordRESTSession(t)
 
-        channels := map[string]*discordgo.Channel{
-                "ch-blocked": {ID: "ch-blocked", Name: "proj-testrepo", GuildID: "guild-1"},
-        }
-        cleanup, sent := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
-        defer cleanup()
+	channels := map[string]*discordgo.Channel{
+		"ch-blocked": {ID: "ch-blocked", Name: "proj-testrepo", GuildID: "guild-1"},
+	}
+	cleanup, sent := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
+	defer cleanup()
 
-        projectPath := t.TempDir()
-        addProject(svc, projectPath, "ch-blocked", "testrepo")
+	projectPath := t.TempDir()
+	addProject(svc, projectPath, "ch-blocked", "testrepo")
 
-        svc.NotifyBlocked(projectPath, "sess-1", "tool 'shell' quarantined after repeated failures")
+	svc.NotifyBlocked(projectPath, "sess-1", "tool 'shell' quarantined after repeated failures")
 
-        if len(*sent) == 0 {
-                t.Fatal("expected a message to be sent to the project channel")
-        }
-        combined := strings.Join(*sent, " ")
-        if !strings.Contains(combined, "stuck") && !strings.Contains(combined, "quarantined") && !strings.Contains(combined, "blocked") {
-                t.Errorf("expected escalation message to contain status info, got %q", combined)
-        }
+	if len(*sent) == 0 {
+		t.Fatal("expected a message to be sent to the project channel")
+	}
+	combined := strings.Join(*sent, " ")
+	if !strings.Contains(combined, "stuck") && !strings.Contains(combined, "quarantined") && !strings.Contains(combined, "blocked") {
+		t.Errorf("expected escalation message to contain status info, got %q", combined)
+	}
 }
 
 func TestService_NotifyBlocked_UnknownProject_NoOp(t *testing.T) {
-        svc, _ := newDisabledSvc(t)
-        svc.cfg.GuildID = "guild-1"
-        svc.dg = makeDiscordRESTSession(t)
+	svc, _ := newDisabledSvc(t)
+	svc.cfg.GuildID = "guild-1"
+	svc.dg = makeDiscordRESTSession(t)
 
-        channels := map[string]*discordgo.Channel{}
-        cleanup, sent := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
-        defer cleanup()
+	channels := map[string]*discordgo.Channel{}
+	cleanup, sent := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
+	defer cleanup()
 
-        // Call with an unknown project path — should be a no-op, no panic.
-        svc.NotifyBlocked("/nonexistent/path", "sess-x", "some reason")
+	// Call with an unknown project path — should be a no-op, no panic.
+	svc.NotifyBlocked("/nonexistent/path", "sess-x", "some reason")
 
-        if len(*sent) != 0 {
-                t.Errorf("expected no messages for unknown project, got %d", len(*sent))
-        }
+	if len(*sent) != 0 {
+		t.Errorf("expected no messages for unknown project, got %d", len(*sent))
+	}
 }
 
 // ── addProject URL / auto-clone ───────────────────────────────────────────────
 
 func TestAddProject_WithURL_ClonesAndEnrolls(t *testing.T) {
-        svc, stateRoot := newDisabledSvc(t)
-        svc.project = stateRoot
-        svc.cfg.GuildID = "guild-2"
-        svc.dg = makeDiscordRESTSession(t)
+	svc, stateRoot := newDisabledSvc(t)
+	svc.project = stateRoot
+	svc.cfg.GuildID = "guild-2"
+	svc.dg = makeDiscordRESTSession(t)
 
-        channels := map[string]*discordgo.Channel{}
-        cleanup, _ := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
-        defer cleanup()
+	channels := map[string]*discordgo.Channel{}
+	cleanup, _ := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
+	defer cleanup()
 
-		cloneTarget := filepath.Join(t.TempDir(), "example-my-repo")
-        orig := svc.cloneProjectFn
-        t.Cleanup(func() { svc.cloneProjectFn = orig })
-        svc.cloneProjectFn = func(url, dest string) error {
-			return os.MkdirAll(filepath.Join(dest, ".git"), 0o755)
-        }
+	cloneTarget := filepath.Join(t.TempDir(), "example-my-repo")
+	orig := svc.cloneProjectFn
+	t.Cleanup(func() { svc.cloneProjectFn = orig })
+	svc.cloneProjectFn = func(url, dest string) error {
+		return os.MkdirAll(filepath.Join(dest, ".git"), 0o755)
+	}
 
-        // Override ENGINE_CLONES_DIR so the default dest lands in cloneTarget's parent.
-        t.Setenv("ENGINE_CLONES_DIR", filepath.Dir(cloneTarget))
+	// Override ENGINE_CLONES_DIR so the default dest lands in cloneTarget's parent.
+	t.Setenv("ENGINE_CLONES_DIR", filepath.Dir(cloneTarget))
 
-        err := svc.addProject("reply-ch", "https://github.com/example/my-repo.git")
-        if err != nil {
-                t.Fatalf("addProject with URL: %v", err)
-        }
+	err := svc.addProject("reply-ch", "https://github.com/example/my-repo.git")
+	if err != nil {
+		t.Fatalf("addProject with URL: %v", err)
+	}
 
-        svc.stateMu.RLock()
-        _, enrolled := svc.state.Projects[cloneTarget]
-        svc.stateMu.RUnlock()
-        if !enrolled {
-                t.Fatalf("expected project to be enrolled at %s", cloneTarget)
-        }
+	svc.stateMu.RLock()
+	_, enrolled := svc.state.Projects[cloneTarget]
+	svc.stateMu.RUnlock()
+	if !enrolled {
+		t.Fatalf("expected project to be enrolled at %s", cloneTarget)
+	}
 }
 
 func TestAddProject_WithGitHubURL_UsesCanonicalOwnerRepoDir(t *testing.T) {
@@ -2675,72 +2760,73 @@ func TestAddProject_WithGitHubURL_ReusesLegacyRepoDir(t *testing.T) {
 }
 
 func TestAddProject_WithURL_AlreadyCloned_SkipsClone(t *testing.T) {
-        svc, stateRoot := newDisabledSvc(t)
-        svc.project = stateRoot
-        svc.cfg.GuildID = "guild-3"
-        svc.dg = makeDiscordRESTSession(t)
+	svc, stateRoot := newDisabledSvc(t)
+	svc.project = stateRoot
+	svc.cfg.GuildID = "guild-3"
+	svc.dg = makeDiscordRESTSession(t)
 
-        channels := map[string]*discordgo.Channel{}
-        cleanup, _ := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
-        defer cleanup()
+	channels := map[string]*discordgo.Channel{}
+	cleanup, _ := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
+	defer cleanup()
 
-		// Pre-create a legacy destination with .git to simulate an already-cloned repo.
-        cloneTarget := filepath.Join(t.TempDir(), "existing-repo")
-		if err := os.MkdirAll(filepath.Join(cloneTarget, ".git"), 0o755); err != nil {
-                t.Fatal(err)
-        }
-        t.Setenv("ENGINE_CLONES_DIR", filepath.Dir(cloneTarget))
+	// Pre-create a legacy destination with .git to simulate an already-cloned repo.
+	cloneTarget := filepath.Join(t.TempDir(), "existing-repo")
+	if err := os.MkdirAll(filepath.Join(cloneTarget, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ENGINE_CLONES_DIR", filepath.Dir(cloneTarget))
 
-        cloneCalled := false
-        orig := svc.cloneProjectFn
-        t.Cleanup(func() { svc.cloneProjectFn = orig })
-        svc.cloneProjectFn = func(url, dest string) error {
-                cloneCalled = true
-                return nil
-        }
+	cloneCalled := false
+	orig := svc.cloneProjectFn
+	t.Cleanup(func() { svc.cloneProjectFn = orig })
+	svc.cloneProjectFn = func(url, dest string) error {
+		cloneCalled = true
+		return nil
+	}
 
-        err := svc.addProject("reply-ch", "https://github.com/example/existing-repo.git")
-        if err != nil {
-                t.Fatalf("addProject: %v", err)
-        }
-        if cloneCalled {
-                t.Error("cloneProjectFn should not be called when dest already exists")
-        }
-		svc.stateMu.RLock()
-		_, enrolled := svc.state.Projects[cloneTarget]
-		svc.stateMu.RUnlock()
-		if !enrolled {
-			t.Fatalf("expected legacy clone path to be enrolled at %s", cloneTarget)
-		}
+	err := svc.addProject("reply-ch", "https://github.com/example/existing-repo.git")
+	if err != nil {
+		t.Fatalf("addProject: %v", err)
+	}
+	if cloneCalled {
+		t.Error("cloneProjectFn should not be called when dest already exists")
+	}
+	svc.stateMu.RLock()
+	_, enrolled := svc.state.Projects[cloneTarget]
+	svc.stateMu.RUnlock()
+	if !enrolled {
+		t.Fatalf("expected legacy clone path to be enrolled at %s", cloneTarget)
+	}
 }
 
 func TestAddProject_WithURL_CloneError_ReturnsError(t *testing.T) {
-        svc, stateRoot := newDisabledSvc(t)
-        svc.project = stateRoot
-        svc.cfg.GuildID = "guild-4"
-        svc.dg = makeDiscordRESTSession(t)
+	svc, stateRoot := newDisabledSvc(t)
+	svc.project = stateRoot
+	svc.cfg.GuildID = "guild-4"
+	svc.dg = makeDiscordRESTSession(t)
 
-        channels := map[string]*discordgo.Channel{}
-        cleanup, _ := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
-        defer cleanup()
+	channels := map[string]*discordgo.Channel{}
+	cleanup, _ := installDiscordGuildAPIShim(t, svc.cfg.GuildID, channels)
+	defer cleanup()
 
-        cloneBase := t.TempDir()
-        t.Setenv("ENGINE_CLONES_DIR", cloneBase)
+	cloneBase := t.TempDir()
+	t.Setenv("ENGINE_CLONES_DIR", cloneBase)
 
-        orig := svc.cloneProjectFn
-        t.Cleanup(func() { svc.cloneProjectFn = orig })
-        svc.cloneProjectFn = func(url, dest string) error {
-                return fmt.Errorf("authentication failed")
-        }
+	orig := svc.cloneProjectFn
+	t.Cleanup(func() { svc.cloneProjectFn = orig })
+	svc.cloneProjectFn = func(url, dest string) error {
+		return fmt.Errorf("authentication failed")
+	}
 
-        err := svc.addProject("reply-ch", "https://github.com/example/bad-repo.git")
-        if err == nil {
-                t.Fatal("expected error when clone fails")
-        }
-        if !strings.Contains(err.Error(), "authentication failed") {
-                t.Errorf("expected clone error text, got %q", err.Error())
-        }
+	err := svc.addProject("reply-ch", "https://github.com/example/bad-repo.git")
+	if err == nil {
+		t.Fatal("expected error when clone fails")
+	}
+	if !strings.Contains(err.Error(), "authentication failed") {
+		t.Errorf("expected clone error text, got %q", err.Error())
+	}
 }
+
 // TestAddProject_WithURL_DefaultClonesDir verifies that when ENGINE_CLONES_DIR is
 // not set, the clone destination still ends up under the user home directory.
 func TestAddProject_WithURL_DefaultClonesDir(t *testing.T) {
@@ -2755,6 +2841,10 @@ func TestAddProject_WithURL_DefaultClonesDir(t *testing.T) {
 
 	// Explicitly unset so the default path is used.
 	t.Setenv("ENGINE_CLONES_DIR", "")
+	// Redirect HOME so the test does not pollute the developer's real
+	// ~/.engine/projects and prior runs cannot leave stale empty dirs that
+	// fail the "not a git repo" check.
+	t.Setenv("HOME", t.TempDir())
 
 	orig := svc.cloneProjectFn
 	t.Cleanup(func() { svc.cloneProjectFn = orig })

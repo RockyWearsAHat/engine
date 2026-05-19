@@ -79,8 +79,13 @@ func TestResolveClonesDir_EnvOverride(t *testing.T) {
 
 func TestResolveClonesDir_ProjectPath(t *testing.T) {
 	t.Setenv("ENGINE_CLONES_DIR", "")
+	// With no env override and a real home dir, resolveClonesDir always
+	// prefers ~/.engine/projects (autonomous projects live outside of the
+	// workspace repo to avoid go.work / package.json leakage). The
+	// project-local fallback is only used when the home dir is unavailable.
 	got := resolveClonesDir("/home/user/myproject")
-	want := filepath.Join("/home/user/myproject", ".engine", "projects")
+	home, _ := os.UserHomeDir()
+	want := filepath.Join(home, ".engine", "projects")
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

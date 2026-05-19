@@ -105,6 +105,30 @@ func TestAddToRegistry_URL(t *testing.T) {
         }
 }
 
+func TestAddToRegistry_URLFallsBackToProjectRootWhenHomeBlank(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ENGINE_CLONES_DIR", "")
+	t.Setenv("HOME", "   ")
+
+	origClone := cloneRepoFn
+	cloneRepoFn = func(url, dest string) error {
+		want := filepath.Join(dir, ".engine", "projects", "blankhome")
+		if dest != want {
+			return fmt.Errorf("dest = %q, want %q", dest, want)
+		}
+		return os.MkdirAll(dest, 0o755)
+	}
+	t.Cleanup(func() { cloneRepoFn = origClone })
+
+	entry, err := AddToRegistry(dir, "https://github.com/owner/blankhome.git")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(entry.LocalPath, filepath.Join(".engine", "projects", "blankhome")) {
+		t.Fatalf("expected local path under project fallback, got %q", entry.LocalPath)
+	}
+}
+
 func TestAddToRegistry_URLCloneFails(t *testing.T) {
         dir := t.TempDir()
         origClone := cloneRepoFn

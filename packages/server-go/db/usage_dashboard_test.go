@@ -220,6 +220,16 @@ func TestUsageDashboard_ErrorPaths(t *testing.T) {
 	}
 }
 
+func TestLogUsageEvent_DBNotInitialized_ReturnsError(t *testing.T) {
+	old := globalDB
+	globalDB = nil
+	t.Cleanup(func() { globalDB = old })
+
+	if err := LogUsageEvent("u-nil", "s-nil", "/workspace/a", "openai", "gpt-4o", 1, 1, 2, 0.0001, 10); err == nil {
+		t.Fatal("expected error when database is not initialized")
+	}
+}
+
 func TestUsageDashboard_SortTieAndScanErrorPaths(t *testing.T) {
 	initTestDB(t)
 

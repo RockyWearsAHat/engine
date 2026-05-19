@@ -1,7 +1,7 @@
 ---
 source: ../.github/WORKING_BEHAVIORS.md
-generatedAt: 2026-04-28T20:39:27.266Z
-sectionCount: 25
+generatedAt: 2026-05-19T03:19:40.526Z
+sectionCount: 27
 ---
 
 # Working Behaviors
@@ -32,6 +32,8 @@ This note mirrors the repository contract and is regenerated automatically.
 - Per-Project Memory
 - Persistent Background Service
 - Machine Connections (IN PROGRESS)
+- LAN Compute Mesh
+- Local-LLM-First Cost Router
 - Remote / Mobile Access (IN PROGRESS)
 - App Shell
 - Discord as Primary Progress Channel
@@ -68,7 +70,7 @@ The AI agent can use these tools when working on your code:
 
 **File System:** Read files, write files, list directories, search for files by pattern.
 
-**Shell:** Run arbitrary shell commands in the project workspace.
+**Shell:** Run arbitrary shell commands from the project workspace by default. Autonomous commands stay rooted in the project for normal build/test work, automatically avoid parent `go.work` leakage for Go projects, and receive clear awareness notes when they intentionally use paths or working directories outside the project root.
 
 **Editor Integration:** Open a file in the editor, list currently open tabs, close a tab, focus a specific tab.
 
@@ -81,6 +83,8 @@ The AI agent can use these tools when working on your code:
 **System Info:** Query operating system, architecture, CPU, memory, and disk usage.
 
 **Search History:** Search past AI session history for relevant context.
+
+**Agent Team Communication:** The lead agent and autonomous worker teams can discover live project agents, send focused delegation messages, read their inbox, and await replies. The user continues talking to one lead agent while the team exchanges concise context packets behind the scenes.
 
 **Browser Automation:** Open a URL in the default browser (macOS and Linux).
 
@@ -118,6 +122,20 @@ Past AI sessions are stored and searchable. The AI automatically incorporates re
 
 Each AI session starts with an explicit autonomous working baseline in the session summary. As work progresses, Engine continuously cycles through planning, execution, validation, and revision until the request is complete. Session summaries are kept current with the active focus, validation status, weak points, and the next autonomous step so users can understand what Engine is doing and what it will do next.
 
+Tagging `@engine` in a GitHub README starts the orchestrator: **intake → PRD → plan → execute → review → validate**, looping until completion or the safety cap of 200 outer iterations.
+
+The documentation pipeline produces five layered files under `<project>/.engine/`, each owned by a specific role and read only by the roles that need it:
+
+- **`design.md`** — written by `RoleGriller`, which walks the design tree branch-by-branch (Matt Pocock's "grill me", dependency-aware) and labels every decision DECIDED, ASSUMPTION, or OPEN. It splits critical from non-critical modules and lists open risks. No vocabulary table, no PRD — that's the next phase.
+- **`vocabulary.md`** — the ubiquitous-language terms table distilled from the design concept. Used verbatim by planner, builder, and reviewer.
+- **`prd.md`** — the module-aware product requirements document. Names each module the project will contain, its path, public interface, purpose, and whether it is critical (auth, payments, persistence — deeply reviewed) or non-critical (interface-only review).
+- **`modules.md`** — auto-maintained module index, regenerated after every approved plan step. Path → purpose → public interface → critical/non-critical. The planner and reviewer of the next step always start from the current map.
+- **`plan.md`** — TDD-shaped checkbox plan. Each step is a vertical slice: failing test → minimum implementation → refactor for module depth.
+
+Runtime state lives in `orchestration.json` so a laptop restart resumes at the first unchecked step. The reviewer evaluates each step on six axes: acceptance criterion passes, a test was written first, the code uses the ubiquitous-language vocabulary, new modules are deep (small public surface relative to internal complexity, per Ousterhout), the change is *minimal* (no speculative abstractions, no defensive code for impossible cases, no unrelated refactors), and the change landed in the module from the PRD that owns it (not a parallel duplicate). REJECT findings flow back as the next builder turn. When every step is checked, the behavioral validator boots the application (web server, CLI, or API) and verifies the README's acceptance criteria end-to-end; failure reopens the most recent step.
+
+Autonomous teams share a project-scoped communication pool. Worker teams can ask each other narrow questions, hand off findings, and wait for replies without dumping every role's full context into one model window; the lead agent remains the single user-facing reporter.
+
 When direction is sufficient, Engine continues forward autonomously. Before stopping to ask the user anything, Engine classifies the blocker: human-required (missing credentials/secrets, irreversible destructive actions, or product decisions where user preference materially changes the outcome) vs. AI-resolvable (everything else — design choices, naming, ambiguity, missing context, tool errors). For AI-resolvable blockers, Engine picks the safest reasonable option, prefixes the message with "Assumption:", and continues without stopping. Only human-required blockers cause Engine to pause and ask. If style direction is not specified on the first request, Engine sends one short style-assumption notice (with an override invitation) in chat and via Discord DM when configured. Engine treats deploy/publish as explicit-only: deployment and publish actions are blocked by default unless the request contains explicit publish/deploy intent evidence.
 
 ---
@@ -146,7 +164,7 @@ Tabs for Editor, Discord, and GitHub preferences. Control editor font and theme.
 
 Log in to GitHub directly from the Preferences panel using the **Login with GitHub** button — no copy-pasting tokens needed. The button starts the GitHub Device Authorization Flow: Engine displays a short user code and a link to `github.com/login/device`. After the user enters the code on GitHub the token is saved automatically and the login button disappears. While authorization is pending the panel shows a Cancel button to abort the flow. Requires `GITHUB_CLIENT_ID` to be set in the server environment (register an OAuth App on GitHub to get one). On successful login, Engine also auto-provisions a `GITHUB_WEBHOOK_SECRET` when missing so webhook validation is ready without manual secret setup.
 
-Configure where Engine stores autonomously-cloned repositories using the **Autonomous project save path** field in the GitHub section of Preferences. A folder-browse button opens a directory picker for quick selection. The path is persisted and synced to the server as the `ENGINE_CLONES_DIR` environment variable.
+Configure where Engine stores autonomously-cloned repositories using the **Autonomous project save path** field in the GitHub section of Preferences. By default, Engine stores clones in `~/.engine/projects` to avoid nested-repository workspace conflicts. A folder-browse button opens a directory picker for quick selection. The selected path is persisted and synced to the server as the `ENGINE_CLONES_DIR` environment variable.
 
 ---
 
@@ -182,9 +200,9 @@ Connect Engine to a Discord bot for remote control. Once configured, send comman
 
 From Preferences → Discord, testing or saving a Discord config can return a one-click bot invite link with the required scopes/permissions so the bot can be added to the target server quickly. When Discord is enabled but not yet connected to a server, the action row surfaces the invite button directly so the user can link the bot immediately.
 
-Available commands: `help`, `status` (server health), `sessions` (list AI sessions), `lastcommit` (most recent git commit), `pause`/`resume` (halt or resume AI activity), `ask` (send a message to the AI), `search` (search session history), `history` (view recent session history), `project add/list/remove` (manage which projects the bot monitors — accepts a local path or a GitHub/git URL which Engine clones automatically), `projects` (list all monitored projects).
+Available commands: `help`, `status` (server health), `sessions` (list AI sessions), `lastcommit` (most recent git commit), `pause`/`resume` (halt or resume AI activity), `stop` (terminate the active orchestrator for a project), `redirect` (inject a new instruction the orchestrator picks up at the next step), `plan` (print the live `.engine/plan.md` for a project), `orchestrators` (list projects with an active orchestrator), `issues` (list GitHub issues currently assigned to Engine across enrolled projects), `identity` (show Engine's current GitHub login/token/project-board identity state), `ask` (send a message to the AI), `search` (search session history), `history` (view recent session history), `project add/list/remove` (manage which projects the bot monitors — accepts a local path or a GitHub/git URL which Engine clones automatically), `projects` (list all monitored projects).
 
-Configuration lives in `.engine/discord.json` in the project root. Environment variables override file config. The bot only responds to authorized users and channels as configured. Project channels are the primary communication surface: users can chat directly in the project channel (no `!ask` required) and Engine responds there. Command mode is still available for administrative actions (`!status`, `!sessions`, `!pause`, etc.). When Engine is genuinely blocked and cannot proceed autonomously, it posts a help request in the relevant Discord project channel describing what it tried, what failed, and what information it needs — rather than silently stopping.
+Configuration lives in `.engine/discord.json` in the project root. Environment variables override file config. The bot only responds to authorized users and channels as configured. Project channels are the primary communication surface: users can chat directly in the project channel (no `!ask` required) and Engine responds there. Status-like project-channel messages such as `status?` are answered as project status updates instead of starting a new AI task, and status replies include recent scaffold session context when available. Command mode is still available for administrative actions (`!status`, `!sessions`, `!pause`, etc.). When Engine is genuinely blocked and cannot proceed autonomously, it posts a help request in the relevant Discord project channel describing what it tried, what failed, and what information it needs — rather than silently stopping.
 
 ---
 
@@ -204,9 +222,15 @@ When a README or issue in a tracked repo contains instructions like "clone `<url
 
 Opening a GitHub Issue, pushing a README update, or a CI workflow failure causes Engine to automatically pick up the task and begin working — no manual prompt needed. Engine posts kickoff and major progress updates to the relevant Discord project channel as it works.
 
-For README-triggered autonomous scaffold runs, if the first pass produces no repository changes Engine retries once with stricter execution instructions. If the retry still produces no changes, Engine posts an explicit blocked/no-op notice in the project Discord channel instead of reporting a false success.
+For README-triggered autonomous scaffold runs, Engine hands the brief to the orchestrator (`ai.RunAutonomousProject`), which produces a plan, executes each step, runs the reviewer + tests as a gate, and only declares completion after the behavioral validator confirms the application actually works. The plan is persisted to `<project>/.engine/plan.md`; users can inspect it from any project Discord channel with `!plan`. If a step is rejected, the reviewer's findings flow back as the next builder turn — no silent failures. The outer loop is bounded by a 200-iteration safety cap.
+
+When GitHub Project-board settings are configured (`ENGINE_GITHUB_PROJECT_NUMBER` + owner/token identity), Engine links picked-up issues into that Project v2 board and updates issue status field values (for example, "In Progress", "Done", or "Blocked") as orchestration phases change.
 
 Engine also deduplicates repeated README-triggered scaffold starts per repository so duplicate GitHub events do not repeatedly re-enroll the same project channel or spam repeated kickoff messages in Discord.
+
+Autonomous mode is engaged by intent rather than by matching a fixed phrase list. When a user sends a chat message in the Engine app or a Discord project channel, Engine parses the request through its intent classifier — if the message reads as a structural-work directive (build, implement, fix, refactor, scaffold, create, add, write, test, deploy, etc.), that turn switches into autonomous mode. Question-form prompts ("what does build do?", "explain the build process", "why did the test fail") stay in interactive mode even when they contain workflow keywords. Users can also force autonomous mode explicitly with quick commands: prefix any chat message with `/auto`, `/autonomous`, `/build`, or `/ship`, or in Discord use `!auto <prompt>` (aliases: `!autonomous`, `!build`). The shell stops gating commands behind approval modals; instead it surfaces inline awareness notes whenever a command leaves the project root or touches risky paths. A short notice ("Autonomous mode engaged — approvals bypassed, awareness notes will be surfaced inline.") is posted to the channel/chat so the user always knows when they crossed into autonomous control. Conversational and informational prompts remain in interactive mode and continue to use approval modals.
+
+Each scaffold retry inherits a "Prior scaffold attempts" summary at the top of its prompt, including the count of previous attempts and the last assistant message from each, plus an explicit directive to read PROJECT_GOAL.md and existing files before continuing — so retried autonomous sessions resume with awareness of what already happened instead of starting from zero.
 
 ---
 
@@ -246,6 +270,16 @@ Run Engine's Go server as a macOS launchd agent so it stays alive across reboots
 ## Machine Connections (IN PROGRESS)
 
 Connect to remote machines by host and workspace path. Pair a new machine with a code. Save and manage connection profiles. Forget all saved profiles at once.
+
+---
+
+## LAN Compute Mesh
+
+Pair a Mac and a PC on the same network so they can share test-execution and local-model inference load. Start the mesh listener with `ENGINE_MESH=1`; the listener binds to `:24445` by default and exposes three HMAC-signed endpoints: `/mesh/health` (peer capability summary, including the peer's local Ollama URL when configured), `/mesh/exec` (run a shell command on the peer and stream stdout/stderr back), and `/mesh/inference` (proxy an Ollama-compatible request to the peer's local model and return the response). Peers are listed in `~/.engine/mesh.json` with a per-peer shared secret and optional `ollamaURL` / role tags (`tests`, `inference`, `build`). The autonomous builder role has a `mesh_exec` tool that dispatches commands to a named peer or a peer matching a role tag. Requests outside the configured peer set are rejected; the HMAC + timestamp check enforces a 5-minute clock-skew window.
+
+## Local-LLM-First Cost Router
+
+When `ENGINE_LOCAL_FIRST=1` is set, light roles route to a local Ollama model by default while heavy roles stay on the configured cloud provider. Light roles (mechanical work where a 7B–13B model is sufficient): grill interviewer, planner, documenter, intaker. Heavy roles (frontier-model reasoning is justified): architect, implementer, autonomous builder. Per-role environment overrides (`ENGINE_PLANNER_MODEL`, `ENGINE_REVIEWER_MODEL`, etc.) and explicit `ctx.ModelOverride` calls still win over the router, so the routing decision only applies when nothing stronger has been requested. Combined with the mesh inference proxy, this lets a Mac running the orchestrator delegate cheap inference to a PC's beefier local model for zero marginal token cost.
 
 ---
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -89,8 +90,31 @@ func TestResolveClonesDir_PrefersProjectPathByDefault(t *testing.T) {
 	t.Setenv("ENGINE_CLONES_DIR", "")
 
 	got := resolveClonesDir(projectPath)
+	home, _ := os.UserHomeDir()
+	want := filepath.Join(home, ".engine", "projects")
+	if got != want {
+		t.Fatalf("resolveClonesDir() = %q want %q", got, want)
+	}
+}
+
+func TestResolveClonesDir_UsesProjectPathWhenHomeIsWhitespace(t *testing.T) {
+	t.Setenv("ENGINE_CLONES_DIR", "")
+	t.Setenv("HOME", "   ")
+
+	projectPath := "/tmp/fallback-project"
+	got := resolveClonesDir(projectPath)
 	want := filepath.Join(projectPath, ".engine", "projects")
 	if got != want {
+		t.Fatalf("resolveClonesDir() = %q want %q", got, want)
+	}
+}
+
+func TestResolveClonesDir_UsesRelativeFallbackWhenHomeAndProjectMissing(t *testing.T) {
+	t.Setenv("ENGINE_CLONES_DIR", "")
+	t.Setenv("HOME", "   ")
+
+	want := filepath.Join(".engine", "projects")
+	if got := resolveClonesDir(""); got != want {
 		t.Fatalf("resolveClonesDir() = %q want %q", got, want)
 	}
 }
@@ -514,6 +538,142 @@ func TestLoadState_BadJSON(t *testing.T) {
 	}
 }
 
+func TestLoadState_MigratesWorkspaceEngineProjectBinding(t *testing.T) {
+	storageDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	runtimeProjectPath := filepath.Join(home, ".engine", "projects", "demo-repo")
+	if err := os.MkdirAll(runtimeProjectPath, 0755); err != nil {
+		t.Fatalf("mkdir runtime path: %v", err)
+	}
+
+	legacyPath := filepath.Join(workspaceRoot, "engine", "projects", "demo-repo")
+	state := persistedState{
+		ControlChannelID: "ch-ctrl",
+		Projects: map[string]ProjectBinding{
+			legacyPath: {
+				ProjectPath: legacyPath,
+				RepoName:    "demo-repo",
+				ChannelID:   "ch-1",
+				Paused:      false,
+			},
+		},
+	}
+	data, _ := json.Marshal(state)
+	if err := os.WriteFile(filepath.Join(storageDir, defaultStateFileName), data, 0600); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	svc := &Service{
+		cfg:     Config{StoragePath: storageDir},
+		project: workspaceRoot,
+		state: persistedState{
+			Projects: make(map[string]ProjectBinding),
+		},
+	}
+	if err := svc.loadState(); err != nil {
+		t.Fatalf("loadState: %v", err)
+	}
+	binding, ok := svc.state.Projects[runtimeProjectPath]
+	if !ok {
+		t.Fatalf("expected migrated runtime path %q, got keys %v", runtimeProjectPath, keysFromBindings(svc.state.Projects))
+	}
+	if binding.ProjectPath != runtimeProjectPath {
+		t.Fatalf("expected binding path %q, got %q", runtimeProjectPath, binding.ProjectPath)
+	}
+}
+
+func TestLoadState_MigrationPersistsBestEffortWhenStateFileReadOnly(t *testing.T) {
+	storageDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	runtimeProjectPath := filepath.Join(home, ".engine", "projects", "readonly-repo")
+	if err := os.MkdirAll(runtimeProjectPath, 0755); err != nil {
+		t.Fatalf("mkdir runtime path: %v", err)
+	}
+	legacyPath := filepath.Join(workspaceRoot, ".engine", "projects", "readonly-repo")
+	state := persistedState{Projects: map[string]ProjectBinding{
+		legacyPath: {ProjectPath: legacyPath, RepoName: "readonly-repo", ChannelID: "ch-1"},
+	}}
+	data, _ := json.Marshal(state)
+	statePath := filepath.Join(storageDir, defaultStateFileName)
+	if err := os.WriteFile(statePath, data, 0400); err != nil {
+		t.Fatalf("write readonly state: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(statePath, 0600) })
+
+	svc := &Service{cfg: Config{StoragePath: storageDir}, project: workspaceRoot}
+	if err := svc.loadState(); err != nil {
+		t.Fatalf("loadState should keep migrated state in memory even if persistence fails: %v", err)
+	}
+	if _, ok := svc.state.Projects[runtimeProjectPath]; !ok {
+		t.Fatalf("expected in-memory migrated runtime path %q, got keys %v", runtimeProjectPath, keysFromBindings(svc.state.Projects))
+	}
+}
+
+func TestLoadState_DoesNotMigrateWhenRuntimeCloneMissing(t *testing.T) {
+	storageDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	legacyPath := filepath.Join(workspaceRoot, "engine", "projects", "missing-repo")
+	state := persistedState{
+		Projects: map[string]ProjectBinding{
+			legacyPath: {
+				ProjectPath: legacyPath,
+				RepoName:    "missing-repo",
+				ChannelID:   "ch-1",
+				Paused:      false,
+			},
+		},
+	}
+	data, _ := json.Marshal(state)
+	if err := os.WriteFile(filepath.Join(storageDir, defaultStateFileName), data, 0600); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	svc := &Service{
+		cfg:     Config{StoragePath: storageDir},
+		project: workspaceRoot,
+		state: persistedState{
+			Projects: make(map[string]ProjectBinding),
+		},
+	}
+	if err := svc.loadState(); err != nil {
+		t.Fatalf("loadState: %v", err)
+	}
+	binding, ok := svc.state.Projects[legacyPath]
+	if !ok {
+		t.Fatalf("expected legacy path to remain when runtime clone missing; keys %v", keysFromBindings(svc.state.Projects))
+	}
+	if binding.ProjectPath != legacyPath {
+		t.Fatalf("expected legacy binding path %q, got %q", legacyPath, binding.ProjectPath)
+	}
+}
+
+func keysFromBindings(m map[string]ProjectBinding) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func TestMigrateBindingPath_Guards(t *testing.T) {
+	if got, ok := migrateBindingPath("   ", "/tmp/clones", []string{"/tmp/ws/"}); ok || got != "" {
+		t.Fatalf("expected empty path guard to skip migration, got %q %v", got, ok)
+	}
+	if got, ok := migrateBindingPath("/", "/tmp/clones", []string{"/"}); ok || got != "" {
+		t.Fatalf("expected invalid repo guard to skip migration, got %q %v", got, ok)
+	}
+}
+
 func TestIsAllowedUser(t *testing.T) {
 	svc := &Service{
 		cfg: Config{
@@ -880,7 +1040,7 @@ func TestOnMessage_Commands(t *testing.T) {
 	}
 
 	cmds := []string{"!help", "!projects", "!status", "!sessions", "!lastcommit",
-		"!pause", "!resume", "!ask", "!search", "!unknown"}
+		"!pause", "!resume", "!ask", "!auto", "!autonomous", "!build", "!search", "!unknown"}
 
 	for _, content := range cmds {
 		m := &discordgo.MessageCreate{
@@ -894,6 +1054,35 @@ func TestOnMessage_Commands(t *testing.T) {
 		// no panic, dg is nil so send is no-op
 		svc.onMessage(nil, m)
 	}
+}
+
+func TestHandleAutoCommand_Branches(t *testing.T) {
+	svc := &Service{
+		cfg: Config{CommandPrefix: "!"},
+		state: persistedState{
+			Projects: make(map[string]ProjectBinding),
+		},
+	}
+	m := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			ChannelID: "ch-1",
+			GuildID:   "guild-1",
+			Author:    &discordgo.User{ID: "u1"},
+		},
+	}
+
+	// usage
+	svc.handleAutoCommand(m, nil)
+	// control-channel miss
+	m.Message.ChannelID = "ch-ctrl"
+	svc.handleAutoCommand(m, []string{"unknown", "prompt"})
+	// empty prompt in project channel
+	svc.state.Projects["/proj"] = ProjectBinding{ProjectPath: "/proj", RepoName: "proj", ChannelID: "ch-1"}
+	m.Message.ChannelID = "ch-1"
+	svc.handleAutoCommand(m, []string{"   "})
+	// non-empty prompt routes through runAgentChat (paused returns immediately)
+	svc.state.Projects["/proj"] = ProjectBinding{ProjectPath: "/proj", RepoName: "proj", ChannelID: "ch-1", Paused: true}
+	svc.handleAutoCommand(m, []string{"ship", "it"})
 }
 
 // TestSaveState_NilProjectsInit ensures loadState initializes nil Projects map.

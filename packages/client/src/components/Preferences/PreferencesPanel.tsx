@@ -86,7 +86,7 @@ export default function PreferencesPanel() {
   const [ghRepoInput, setGhRepoInput] = useState('');
   const [anthropicInput, setAnthropicInput] = useState('');
   const [openaiInput, setOpenaiInput] = useState('');
-  const [providerInput, setProviderInput] = useState<'auto' | 'anthropic' | 'openai' | 'ollama'>('ollama');
+  const [providerInput, setProviderInput] = useState<'auto' | 'anthropic' | 'openai' | 'ollama' | 'llamacpp'>('ollama');
   const [ollamaBaseUrlInput, setOllamaBaseUrlInput] = useState('');
   const [modelInput, setModelInput] = useState('');
   const [clonesDirInput, setClonesDirInput] = useState('');
@@ -236,7 +236,7 @@ export default function PreferencesPanel() {
     bridge.getAnthropicKey().then(k => { if (k) setAnthropicInput(k); });
     bridge.getOpenAiKey().then(k => { if (k) setOpenaiInput(k); });
     bridge.getModelProvider().then(provider => {
-      if (provider === 'anthropic' || provider === 'openai' || provider === 'ollama') {
+      if (provider === 'anthropic' || provider === 'openai' || provider === 'ollama' || provider === 'llamacpp') {
         setProviderInput(provider);
         return;
       }
@@ -843,13 +843,14 @@ export default function PreferencesPanel() {
                 <span className="preferences-label">Model provider</span>
                 <select
                   value={providerInput}
-                  onChange={event => setProviderInput(event.target.value as 'auto' | 'anthropic' | 'openai' | 'ollama')}
+                  onChange={event => setProviderInput(event.target.value as 'auto' | 'anthropic' | 'openai' | 'ollama' | 'llamacpp')}
                   style={inputStyle}
                 >
                   <option value="auto">Auto</option>
                   <option value="anthropic">Anthropic</option>
                   <option value="openai">OpenAI</option>
                   <option value="ollama">Ollama</option>
+                  <option value="llamacpp">llama.cpp</option>
                 </select>
                 <span className="preferences-muted">Auto now infers Ollama for local model names like gemma, llama, qwen, and tagged models such as gemma4:31b.</span>
               </label>

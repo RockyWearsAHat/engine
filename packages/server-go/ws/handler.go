@@ -223,15 +223,17 @@ type conn struct {
 }
 
 type runtimeConfig struct {
-	GitHubToken   *string `json:"githubToken"`
-	GitHubOwner   *string `json:"githubOwner"`
-	GitHubRepo    *string `json:"githubRepo"`
-	AnthropicKey  *string `json:"anthropicKey"`
-	OpenAIKey     *string `json:"openaiKey"`
-	ModelProvider *string `json:"modelProvider"`
-	OllamaBaseURL *string `json:"ollamaBaseUrl"`
-	Model         *string `json:"model"`
-	ClonesDir     *string `json:"clonesDir"`
+	GitHubToken     *string `json:"githubToken"`
+	GitHubOwner     *string `json:"githubOwner"`
+	GitHubRepo      *string `json:"githubRepo"`
+	AnthropicKey    *string `json:"anthropicKey"`
+	OpenAIKey       *string `json:"openaiKey"`
+	ModelProvider   *string `json:"modelProvider"`
+	OllamaBaseURL   *string `json:"ollamaBaseUrl"`
+	OllamaNumCtx    *string `json:"ollamaNumCtx"`
+	LlamacppBaseURL *string `json:"llamacppBaseUrl"`
+	Model           *string `json:"model"`
+	ClonesDir       *string `json:"clonesDir"`
 }
 
 func (c *conn) resolveChatSession(requestedSessionID string) (*db.Session, error) {
@@ -586,10 +588,27 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 					})
 				}
 			}()
+			// Autonomous intent detection: when the user types "build", "go autonomous",
+			// "/build", etc. switch to the autonomous builder role with awareness-only
+			// safety — no approval modals, awareness notes feed back into the loop.
+			var autonomousPolicy *ai.AutonomousPolicy
+			role := ai.RoleInteractive
+			if ai.DetectAutonomousIntent(msg.Content) {
+				p := ai.ResolveAutonomousPolicy(projectPath)
+				autonomousPolicy = &p
+				role = ai.RoleAutonomousBuilder
+				c.send(map[string]any{
+					"type":      "chat.notice",
+					"sessionId": sessionID,
+					"notice":    "Autonomous mode engaged — approvals bypassed, awareness notes will be surfaced inline.",
+				})
+			}
 			runAIChat(&ai.ChatContext{
-				ProjectPath: projectPath,
-				SessionID:   sessionID,
-				Cancel:      cancelCh,
+				ProjectPath:      projectPath,
+				SessionID:        sessionID,
+				Cancel:           cancelCh,
+				Role:             role,
+				AutonomousPolicy: autonomousPolicy,
 				OnChunk: func(content string, done bool) {
 					c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": content, "done": done})
 				},
@@ -1324,6 +1343,8 @@ func applyRuntimeConfig(cfg runtimeConfig) {
 	setRuntimeEnv("OPENAI_API_KEY", cfg.OpenAIKey)
 	setRuntimeEnv("ENGINE_MODEL_PROVIDER", cfg.ModelProvider)
 	setRuntimeEnv("OLLAMA_BASE_URL", cfg.OllamaBaseURL)
+	setRuntimeEnv("ENGINE_OLLAMA_NUM_CTX", cfg.OllamaNumCtx)
+	setRuntimeEnv("LLAMACPP_BASE_URL", cfg.LlamacppBaseURL)
 	setRuntimeEnv("ENGINE_MODEL", cfg.Model)
 	setRuntimeEnv("ENGINE_CLONES_DIR", cfg.ClonesDir)
 }
