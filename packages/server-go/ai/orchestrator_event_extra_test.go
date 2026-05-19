@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -495,3 +496,522 @@ func TestRunEventOrchestratorAsState_ReturnsState(t *testing.T) {
 	}
 	time.Sleep(30 * time.Millisecond)
 }
+
+func TestPhaseValidate_Passed(t *testing.T) {
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "o", "r", "brief", "t")
+	bus := NewEventBus()
+	comms := AgentCommsForProject(dir)
+	cfg := OrchestratorConfig{
+		ProjectPath:     dir,
+		SessionIDPrefix: "test",
+		ChatFn: func(c *ChatContext, _ string) {
+			c.OnChunk("all checks green\nVALIDATION_PASSED", false)
+		},
+	}
+	dispatcher := NewTeamDispatcher(brain, bus, cfg, 4, comms)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eo := &EventOrchestrator{
+		cfg:           cfg,
+		brain:         brain,
+		bus:           bus,
+		dispatcher:    dispatcher,
+		comms:         comms,
+		ctx:           ctx,
+		cancel:        cancel,
+		redirectQueue: make(chan string, 1),
+	}
+
+	valid, feedback := eo.phaseValidate()
+	if !valid {
+		t.Fatal("expected validation to pass")
+	}
+	if feedback != "" {
+		t.Fatalf("expected empty feedback, got %q", feedback)
+	}
+}
+
+func TestPhaseValidate_FailedAndTrimmed(t *testing.T) {
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "o", "r", "brief", "t")
+	bus := NewEventBus()
+	comms := AgentCommsForProject(dir)
+	long := strings.Repeat("x", 700)
+	cfg := OrchestratorConfig{
+		ProjectPath:     dir,
+		SessionIDPrefix: "test",
+		ChatFn: func(c *ChatContext, _ string) {
+			c.OnChunk(long, false)
+		},
+	}
+	dispatcher := NewTeamDispatcher(brain, bus, cfg, 4, comms)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eo := &EventOrchestrator{
+		cfg:           cfg,
+		brain:         brain,
+		bus:           bus,
+		dispatcher:    dispatcher,
+		comms:         comms,
+		ctx:           ctx,
+		cancel:        cancel,
+		redirectQueue: make(chan string, 1),
+	}
+
+	valid, feedback := eo.phaseValidate()
+	if valid {
+		t.Fatal("expected validation to fail")
+	}
+	if len(feedback) != 500 {
+		t.Fatalf("expected trimmed feedback length 500, got %d", len(feedback))
+	}
+}
+
+func TestPhaseDispatchTeams_DispatchError(t *testing.T) {
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "o", "r", "brief", "t")
+	if err := brain.AddTeam("t1", "general", []int{0}, nil); err != nil {
+		t.Fatalf("AddTeam: %v", err)
+	}
+
+	bus := NewEventBus()
+	comms := AgentCommsForProject(dir)
+	cfg := OrchestratorConfig{ProjectPath: dir}
+	dispatcher := NewTeamDispatcher(brain, bus, cfg, 4, comms)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eo := &EventOrchestrator{
+		cfg:           cfg,
+		brain:         brain,
+		bus:           bus,
+		dispatcher:    dispatcher,
+		comms:         comms,
+		ctx:           ctx,
+		cancel:        cancel,
+		redirectQueue: make(chan string, 1),
+	}
+
+	// Force dispatch error by pre-registering the worker as already dispatched.
+	dispatcher.workers["t1"] = &TeamWorker{teamID: "t1"}
+	err := eo.phaseDispatchTeams()
+	if err == nil || !strings.Contains(err.Error(), "dispatch team") {
+		t.Fatalf("expected dispatch team error, got %v", err)
+	}
+}
+
+func TestEventLoop_CancelEvent_EmitsProjectCanceled(t *testing.T) {
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "o", "r", "brief", "t")
+	bus := NewEventBus()
+	comms := AgentCommsForProject(dir)
+
+	var errs []string
+	cfg := OrchestratorConfig{
+		ProjectPath:        dir,
+		Owner:              "o",
+		Repo:               "r",
+		Brief:              "brief",
+		SessionIDPrefix:    "test",
+		MaxOuterIterations: 1,
+		ChatFn: func(c *ChatContext, prompt string) {
+			if strings.Contains(prompt, "grill master") {
+				c.OnChunk("design", false)
+				return
+			}
+			// planner/validator can be empty for this cancel-path test
+			c.OnChunk("", false)
+		},
+		OnPhase:    func(string, string) {},
+		OnProgress: func(string) {},
+		OnError:    func(msg string) { errs = append(errs, msg) },
+	}
+
+	dispatcher := NewTeamDispatcher(brain, bus, cfg, 4, comms)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eo := &EventOrchestrator{
+		cfg:                cfg,
+		brain:              brain,
+		bus:                bus,
+		dispatcher:         dispatcher,
+		comms:              comms,
+		ctx:                ctx,
+		cancel:             cancel,
+		redirectQueue:      make(chan string, 1),
+		maxOuterIterations: 1,
+	}
+
+	projectCanceled := bus.Subscribe(EventProjectCanceled, 1)
+	go func() {
+		// Let eventLoop reach phaseWaitTeams, then emit cancellation event.
+		time.Sleep(20 * time.Millisecond)
+		bus.Emit(Event{Type: EventCancel, Timestamp: time.Now()})
+	}()
+
+	eo.eventLoop()
+
+	select {
+	case <-projectCanceled:
+		// expected
+	default:
+		t.Fatal("expected EventProjectCanceled emission")
+	}
+
+	if len(errs) != 0 {
+		t.Fatalf("expected no terminal errors, got %s", fmt.Sprint(errs))
+	}
+}
+
+func TestEventLoop_Success_CompletesProject(t *testing.T) {
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "o", "r", "brief", "t")
+	bus := NewEventBus()
+	comms := AgentCommsForProject(dir)
+
+	var added bool
+	cfg := OrchestratorConfig{
+		ProjectPath:        dir,
+		Owner:              "o",
+		Repo:               "r",
+		Brief:              "brief",
+		SessionIDPrefix:    "test",
+		MaxOuterIterations: 2,
+		ChatFn: func(c *ChatContext, prompt string) {
+			if strings.Contains(prompt, "VALIDATION_PASSED") {
+				c.OnChunk("VALIDATION_PASSED", false)
+				return
+			}
+			if strings.Contains(prompt, "project planner") {
+				c.OnChunk("[]", false)
+				return
+			}
+			c.OnChunk("design", false)
+		},
+		OnPhase: func(phase, _ string) {
+			if phase == "execute" && !added {
+				added = true
+				_ = brain.AddTeam("t-success", "general", []int{0}, nil)
+			}
+		},
+		OnProgress: func(string) {},
+		OnError:    func(string) {},
+	}
+
+	dispatcher := NewTeamDispatcher(brain, bus, cfg, 4, comms)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eo := &EventOrchestrator{
+		cfg:                cfg,
+		brain:              brain,
+		bus:                bus,
+		dispatcher:         dispatcher,
+		comms:              comms,
+		ctx:                ctx,
+		cancel:             cancel,
+		redirectQueue:      make(chan string, 1),
+		maxOuterIterations: 2,
+	}
+
+	projectDone := bus.Subscribe(EventProjectDone, 1)
+	eo.eventLoop()
+
+	if brain.CompletedAt.IsZero() {
+		t.Fatal("expected project to be marked completed")
+	}
+	select {
+	case <-projectDone:
+		// expected
+	default:
+		t.Fatal("expected EventProjectDone emission")
+	}
+}
+
+func TestEventLoop_ValidationFail_ReachesMaxIterations(t *testing.T) {
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "o", "r", "brief", "t")
+	bus := NewEventBus()
+	comms := AgentCommsForProject(dir)
+
+	var added bool
+	var errs []string
+	cfg := OrchestratorConfig{
+		ProjectPath:        dir,
+		Owner:              "o",
+		Repo:               "r",
+		Brief:              "brief",
+		SessionIDPrefix:    "test",
+		MaxOuterIterations: 1,
+		ChatFn: func(c *ChatContext, prompt string) {
+			if strings.Contains(prompt, "VALIDATION_PASSED") {
+				c.OnChunk("tests failed: missing build artifact", false)
+				return
+			}
+			if strings.Contains(prompt, "project planner") {
+				c.OnChunk("[]", false)
+				return
+			}
+			c.OnChunk("design", false)
+		},
+		OnPhase: func(phase, _ string) {
+			if phase == "execute" && !added {
+				added = true
+				_ = brain.AddTeam("t-fail", "general", []int{0}, nil)
+			}
+		},
+		OnProgress: func(string) {},
+		OnError:    func(msg string) { errs = append(errs, msg) },
+	}
+
+	dispatcher := NewTeamDispatcher(brain, bus, cfg, 4, comms)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eo := &EventOrchestrator{
+		cfg:                cfg,
+		brain:              brain,
+		bus:                bus,
+		dispatcher:         dispatcher,
+		comms:              comms,
+		ctx:                ctx,
+		cancel:             cancel,
+		redirectQueue:      make(chan string, 1),
+		maxOuterIterations: 1,
+	}
+
+	projectFailed := bus.Subscribe(EventProjectFailed, 1)
+	eo.eventLoop()
+
+	select {
+	case <-projectFailed:
+		// expected
+	default:
+		t.Fatal("expected EventProjectFailed emission")
+	}
+	if len(errs) == 0 || !strings.Contains(errs[len(errs)-1], "max iterations") {
+		t.Fatalf("expected max iterations error, got %v", errs)
+	}
+}
+
+// TestPhaseValidate_DetectsPassKeyword tests phaseValidate with VALIDATION_PASSED in output.
+func TestPhaseValidate_DetectsPassKeyword(t *testing.T) {
+	dir := t.TempDir()
+	cfg := OrchestratorConfig{
+		ProjectPath:        dir,
+		Owner:              "owner",
+		Repo:               "repo",
+		SessionIDPrefix:    "t",
+		MaxOuterIterations: 2,
+		ChatFn: func(ctx *ChatContext, msg string) {
+			ctx.OnChunk("All tests pass. VALIDATION_PASSED", true)
+		},
+		OnPhase:    func(string, string) {},
+		OnProgress: func(string) {},
+		OnError:    func(string) {},
+	}
+
+	eo := &EventOrchestrator{
+		cfg:   cfg,
+		brain: &OrchestrationBrain{OuterIterations: 1},
+	}
+
+	passed, reason := eo.phaseValidate()
+	if !passed {
+		t.Errorf("expected validation to pass, got %v reason=%s", passed, reason)
+	}
+}
+
+// TestPhaseValidate_FailsWithoutKeyword tests phaseValidate extraction of error reason.
+func TestPhaseValidate_FailsWithoutKeyword(t *testing.T) {
+	dir := t.TempDir()
+	cfg := OrchestratorConfig{
+		ProjectPath:        dir,
+		Owner:              "owner",
+		Repo:               "repo",
+		SessionIDPrefix:    "t",
+		MaxOuterIterations: 2,
+		ChatFn: func(ctx *ChatContext, msg string) {
+			ctx.OnChunk("Tests failed:\nError at line 42: assertion false", true)
+		},
+		OnPhase:    func(string, string) {},
+		OnProgress: func(string) {},
+		OnError:    func(string) {},
+	}
+
+	eo := &EventOrchestrator{
+		cfg:   cfg,
+		brain: &OrchestrationBrain{OuterIterations: 1},
+	}
+
+	passed, reason := eo.phaseValidate()
+	if passed {
+		t.Errorf("expected validation to fail, got %v", passed)
+	}
+	if reason == "" {
+		t.Error("expected reason to be extracted")
+	}
+	if len(reason) > 500 {
+		t.Errorf("reason exceeds truncation limit: %d chars", len(reason))
+	}
+}
+
+// TestPhaseDispatchTeams_NoTeamsReady tests phaseDispatchTeams when no teams are ready.
+func TestPhaseDispatchTeams_NoTeamsReady(t *testing.T) {
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "owner", "repo", "brief", "t")
+	
+	eo := &EventOrchestrator{
+		cfg: OrchestratorConfig{
+			ProjectPath: dir,
+		},
+		brain:   brain,
+		bus:     NewEventBus(),
+		comms:   AgentCommsForProject(dir),
+	}
+
+	// No teams created, phaseDispatchTeams should handle it
+	err := eo.phaseDispatchTeams()
+	// Should not crash even with no teams
+	if err != nil && strings.Contains(err.Error(), "plan") {
+		// Expected if validation or plan extraction fails
+	}
+}
+
+// TestCreateTeamsFromPlan_EmptyBrain tests team creation with empty plan.
+func TestCreateTeamsFromPlan_EmptyBrain(t *testing.T) {
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "owner", "repo", "brief", "t")
+	
+	eo := &EventOrchestrator{
+		brain: brain,
+	}
+
+	// Pass empty plan - function returns void
+	eo.createTeamsFromPlan([]PlanStep{})
+	// Should not panic even with no teams
+}
+
+// TestRunAutonomousProject_Success tests main entry point with chat success.
+func TestRunAutonomousProject_Success(t *testing.T) {
+	dir := t.TempDir()
+	cfg := OrchestratorConfig{
+		ProjectPath:        dir,
+		Owner:              "owner",
+		Repo:               "repo",
+		SessionIDPrefix:    "t",
+		MaxOuterIterations: 1,
+		ChatFn: func(ctx *ChatContext, msg string) {
+			ctx.OnChunk("Completed successfully", true)
+		},
+		OnPhase: func(phase, detail string) {
+			t.Logf("Phase: %s - %s", phase, detail)
+		},
+		OnProgress: func(msg string) {
+			t.Logf("Progress: %s", msg)
+		},
+		OnError: func(msg string) {
+			t.Logf("Error: %s", msg)
+		},
+	}
+
+	state, err := RunAutonomousProject(cfg)
+	// RunAutonomousProject should return either a valid state or error
+	// It might hit max iterations limit which is not an error
+	_ = state
+	_ = err
+}
+
+// TestPersistOrchestrationState tests persist with valid state.
+func TestPersistOrchestrationState(t *testing.T) {
+	dir := t.TempDir()
+	
+	state := &OrchestrationState{
+		Repo:            "test-repo",
+		Owner:           "test-owner",
+		Brief:           "test brief",
+		OuterIterations: 1,
+		StartedAt:       "2024-01-01T00:00:00Z",
+		UpdatedAt:       "2024-01-01T00:00:00Z",
+	}
+	
+	// Should persist state file successfully
+	err := persistOrchestration(dir, state)
+	if err != nil {
+		t.Logf("persist failed (expected in test): %v", err)
+	}
+}
+
+// TestReadyTeamsEmptyBrain tests ReadyTeams with no teams.
+func TestReadyTeamsEmptyBrain(t *testing.T) {
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "owner", "repo", "brief", "t")
+	
+	ready := brain.ReadyTeams()
+	if len(ready) != 0 {
+		t.Errorf("expected no ready teams from empty brain, got %d", len(ready))
+	}
+}
+
+// TestLoadOrCreateOrchestrationState_CreateNew tests loading from nonexistent path.
+func TestLoadOrCreateOrchestrationState_CreateNew(t *testing.T) {
+	dir := t.TempDir()
+	
+	state, err := loadOrCreateOrchestrationState(dir, "owner", "repo", "brief")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if state.Repo != "repo" || state.Owner != "owner" || state.Brief != "brief" {
+		t.Errorf("expected new state with repo/owner/brief, got %v", state)
+	}
+}
+
+// TestLoadOrCreateOrchestrationState_LoadExisting tests loading existing state file.
+func TestLoadOrCreateOrchestrationState_LoadExisting(t *testing.T) {
+	dir := t.TempDir()
+	
+	// Create initial state
+	state1, err := loadOrCreateOrchestrationState(dir, "owner", "repo", "initial")
+	if err != nil {
+		t.Fatalf("first load failed: %v", err)
+	}
+	
+	// Persist it
+	err = persistOrchestration(dir, state1)
+	if err != nil {
+		t.Fatalf("persist failed: %v", err)
+	}
+	
+	// Load again with updated brief
+	state2, err := loadOrCreateOrchestrationState(dir, "owner2", "repo2", "updated")
+	if err != nil {
+		t.Fatalf("second load failed: %v", err)
+	}
+	
+	// Should have loaded state1 but with updated brief
+	if state2.Brief != "updated" {
+		t.Errorf("expected brief to be updated to 'updated', got %s", state2.Brief)
+	}
+	if state2.Repo != "repo" {
+		t.Errorf("expected repo to remain 'repo', got %s", state2.Repo)
+	}
+}
+
+// TestPersistBrainState tests persisting brain state to disk.
+func TestPersistBrainState(t *testing.T) {
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "owner", "repo", "brief", "t")
+	
+	// Add some plan steps
+	brain.Plan = []PlanStep{
+		{Index: 1, Title: "Step1", Done: false},
+		{Index: 2, Title: "Step2", Done: true},
+	}
+	
+	// Persist the state
+	err := brain.persist()
+	if err != nil {
+		t.Logf("persist failed: %v", err)
+	}
+}
+

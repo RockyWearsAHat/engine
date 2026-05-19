@@ -99,6 +99,15 @@ func TestNewProvider_Ollama(t *testing.T) {
 	}
 }
 
+func TestNewProvider_LlamaCppAliases(t *testing.T) {
+	for _, name := range []string{"llamacpp", "llama.cpp", "llama-cpp"} {
+		p := newProvider(name)
+		if _, ok := p.(*llamacppProvider); !ok {
+			t.Errorf("expected llamacppProvider for %q, got %T", name, p)
+		}
+	}
+}
+
 func TestNewProvider_UnknownFallsBackToAnthropic(t *testing.T) {
 	p := newProvider("unknown")
 	if _, ok := p.(*anthropicProvider); !ok {
@@ -331,4 +340,40 @@ func TestAnthropicProvider_RunLoop_Cancelled(t *testing.T) {
 	var text strings.Builder
 	p := newProvider("anthropic")
 	p.RunLoop(ctx, "claude-3-5-sonnet-20241022", "system", []anthropicMessage{}, &calls, &text)
+}
+
+func TestLlamacppProvider_RunLoop_Cancelled_DefaultBaseURL(t *testing.T) {
+	ch := make(chan struct{})
+	close(ch)
+	ctx := &ChatContext{
+		Cancel:      ch,
+		OnChunk:     func(string, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
+		OnError:     func(string) {},
+		ActiveTools: bootstrapTools(),
+	}
+	t.Setenv("LLAMACPP_BASE_URL", "")
+	var calls []ToolCall
+	var text strings.Builder
+	p := newProvider("llamacpp")
+	p.RunLoop(ctx, "qwen2.5", "system", []anthropicMessage{}, &calls, &text)
+}
+
+func TestLlamacppProvider_RunLoop_Cancelled_CustomBaseURLTrimmed(t *testing.T) {
+	ch := make(chan struct{})
+	close(ch)
+	ctx := &ChatContext{
+		Cancel:      ch,
+		OnChunk:     func(string, bool) {},
+		OnToolCall:  func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
+		OnError:     func(string) {},
+		ActiveTools: bootstrapTools(),
+	}
+	t.Setenv("LLAMACPP_BASE_URL", "  http://127.0.0.1:8081/  ")
+	var calls []ToolCall
+	var text strings.Builder
+	p := newProvider("llama.cpp")
+	p.RunLoop(ctx, "qwen2.5", "system", []anthropicMessage{}, &calls, &text)
 }

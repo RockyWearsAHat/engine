@@ -24,6 +24,12 @@ func SetGitHubIdentityBridge(loginFn func() string, tokenFn func() string, proje
 // defaultGitHubBridge wires default env-var-based implementations so the
 // discord package works out of the box even when main.go skips the call.
 func init() {
+	applyDefaultGitHubBridge()
+}
+
+// applyDefaultGitHubBridge configures env-backed default identity callbacks.
+// Kept separate from init so tests can exercise both env branches deterministically.
+func applyDefaultGitHubBridge() {
 	engineLoginFn = func() string {
 		if v := strings.TrimSpace(os.Getenv("ENGINE_GITHUB_LOGIN")); v != "" {
 			return v

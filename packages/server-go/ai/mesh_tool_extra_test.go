@@ -4,6 +4,7 @@ import (
 	stdctx "context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/engine/server/mesh"
@@ -215,6 +216,69 @@ func TestExecuteMeshExec_PeerByRole_AndExitError(t *testing.T) {
 	}
 	if gotPeer, _ := payload["peer"].(string); gotPeer != "inference-peer" {
 		t.Fatalf("expected role-selected peer, got %q", gotPeer)
+	}
+}
+
+func TestExecuteMeshExec_NamedPeerAndTimeoutMs(t *testing.T) {
+	origLoad := meshLoadConfigFn
+	origFactory := meshClientFactory
+	defer func() {
+		meshLoadConfigFn = origLoad
+		meshClientFactory = origFactory
+	}()
+
+	meshLoadConfigFn = func(path string) (*mesh.Config, error) {
+		return &mesh.Config{
+			SelfName: "self",
+			Peers: []mesh.Peer{
+				{Name: "first", Address: "localhost:24445"},
+				{Name: "target", Address: "localhost:24446"},
+			},
+		}, nil
+	}
+	meshClientFactory = func(selfName string) meshClient {
+		return &fakeMeshClient{resp: &mesh.ExecResponse{ExitCode: 0, DurationMs: 5, Stdout: "ok"}}
+	}
+
+	out, isErr := executeMeshExec(map[string]any{
+		"peer":      "target",
+		"command":   "echo",
+		"timeoutMs": float64(2000),
+	}, &ChatContext{})
+	if isErr {
+		t.Fatalf("expected success, got %s", out)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("invalid json output: %v", err)
+	}
+	if payload["peer"] != "target" {
+		t.Fatalf("expected named peer selection, got %v", payload["peer"])
+	}
+}
+
+func TestExecuteMeshExec_DefaultFactoryDispatchError(t *testing.T) {
+	origLoad := meshLoadConfigFn
+	origFactory := meshClientFactory
+	defer func() {
+		meshLoadConfigFn = origLoad
+		meshClientFactory = origFactory
+	}()
+
+	meshLoadConfigFn = func(path string) (*mesh.Config, error) {
+		return &mesh.Config{
+			SelfName: "self",
+			Peers: []mesh.Peer{{Name: "unreachable", Address: "127.0.0.1:1", Secret: "secret"}},
+		}, nil
+	}
+	meshClientFactory = func(selfName string) meshClient { return mesh.NewClient(selfName) }
+
+	out, isErr := executeMeshExec(map[string]any{"command": "echo", "args": []any{"x"}}, &ChatContext{})
+	if !isErr {
+		t.Fatalf("expected dispatch error, got %s", out)
+	}
+	if !strings.Contains(out, "dispatch to unreachable failed") {
+		t.Fatalf("unexpected error output: %s", out)
 	}
 }
 

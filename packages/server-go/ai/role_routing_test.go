@@ -53,3 +53,20 @@ func TestResolveLocalFirstRouting_UnknownRoleDefers(t *testing.T) {
 		t.Errorf("interactive (not in allowlist) should defer, got %q", provider)
 	}
 }
+
+func TestResolveLocalFirstRouting_DefaultModelFallback(t *testing.T) {
+	prevEnabled := localFirstEnabledFn
+	localFirstEnabledFn = func() bool { return true }
+	t.Cleanup(func() { localFirstEnabledFn = prevEnabled })
+
+	t.Setenv("ENGINE_OLLAMA_MODEL", "")
+	t.Setenv("OLLAMA_BASE_URL", "http://127.0.0.1:1")
+
+	provider, model := ResolveLocalFirstRouting(RolePlanner)
+	if provider != "ollama" {
+		t.Fatalf("provider = %q, want ollama", provider)
+	}
+	if model != defaultOllamaModel {
+		t.Fatalf("model = %q, want default %q", model, defaultOllamaModel)
+	}
+}
