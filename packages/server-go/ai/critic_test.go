@@ -207,6 +207,7 @@ func TestRunCriticGate_NilCancelAndError_DoNotPanic(t *testing.T) {
 		if ctx.OnError == nil {
 			t.Error("expected non-nil OnError")
 		}
+		ctx.OnError("ignored reviewer warning")
 		ctx.OnChunk("APPROVE", true)
 	}
 

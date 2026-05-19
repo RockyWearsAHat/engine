@@ -17,9 +17,16 @@
 #   GITHUB_TOKEN        — GitHub personal access token (or rely on gh CLI auth)
 #
 # Optional:
-#   PROJECT_PATH        — defaults to the repo root
-#   PORT                — defaults to 24444
-#   ENGINE_CLONES_DIR   — where autonomous project clones are stored
+#   PROJECT_PATH            — defaults to the repo root
+#   PORT                    — defaults to 24444
+#   ENGINE_CLONES_DIR       — where autonomous project clones are stored
+#   ENGINE_MODEL_PROVIDER   — anthropic | openai | ollama | llamacpp (default: llamacpp)
+#   ENGINE_MODEL            — model name. For llamacpp this can be any string the server accepts.
+#   LLAMACPP_BASE_URL       — defaults to http://127.0.0.1:8080 (llama-server's default)
+#   OLLAMA_BASE_URL         — defaults to http://127.0.0.1:11434
+#   ENGINE_OLLAMA_NUM_CTX   — Ollama context window (default 32768). Smaller values
+#                             starve the model of the system prompt + tool defs and
+#                             cause tool calling to silently fail.
 
 set -euo pipefail
 
@@ -77,7 +84,17 @@ cmd_install() {
         <key>GITHUB_TOKEN</key>
         <string>${GITHUB_TOKEN:-}</string>
         <key>ENGINE_CLONES_DIR</key>
-        <string>${ENGINE_CLONES_DIR:-$REPO_ROOT/.engine/projects}</string>
+        <string>${ENGINE_CLONES_DIR:-$HOME/.engine/projects}</string>
+        <key>ENGINE_MODEL_PROVIDER</key>
+        <string>${ENGINE_MODEL_PROVIDER:-llamacpp}</string>
+        <key>ENGINE_MODEL</key>
+        <string>${ENGINE_MODEL:-}</string>
+        <key>LLAMACPP_BASE_URL</key>
+        <string>${LLAMACPP_BASE_URL:-http://127.0.0.1:8080}</string>
+        <key>OLLAMA_BASE_URL</key>
+        <string>${OLLAMA_BASE_URL:-http://127.0.0.1:11434}</string>
+        <key>ENGINE_OLLAMA_NUM_CTX</key>
+        <string>${ENGINE_OLLAMA_NUM_CTX:-32768}</string>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>

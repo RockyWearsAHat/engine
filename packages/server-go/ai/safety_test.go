@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -224,5 +225,167 @@ func TestRequiresShellApproval_Messages_Present(t *testing.T) {
 	}
 	if msg == "" {
 		t.Error("expected non-empty message")
+	}
+}
+
+// ── escapesWorkspace ──────────────────────────────────────────────────────────
+
+func TestEscapesWorkspace_SafeRelative(t *testing.T) {
+	if escapesWorkspace("/project", "go test ./...") {
+		t.Error("go test ./... should not be an escape")
+	}
+}
+
+func TestEscapesWorkspace_DotDotSlash(t *testing.T) {
+	if !escapesWorkspace("/project", "cat ../secrets") {
+		t.Error("../ should be an escape")
+	}
+}
+
+func TestEscapesWorkspace_DotDotInPath(t *testing.T) {
+	if !escapesWorkspace("/project", "cat src/../../etc/passwd") {
+		t.Error("src/../../etc should be an escape")
+	}
+}
+
+func TestEscapesWorkspace_CdDotDot(t *testing.T) {
+	if !escapesWorkspace("/project", "cd ..") {
+		t.Error("cd .. should be an escape")
+	}
+}
+
+func TestEscapesWorkspace_BareCd(t *testing.T) {
+	if !escapesWorkspace("/project", "cd ") {
+		t.Error("bare cd should be an escape")
+	}
+}
+
+func TestEscapesWorkspace_CdTilde(t *testing.T) {
+	if !escapesWorkspace("/project", "cd ~") {
+		t.Error("cd ~ should be an escape")
+	}
+}
+
+func TestEscapesWorkspace_CdBareDash(t *testing.T) {
+	if !escapesWorkspace("/project", "cd -") {
+		t.Error("cd - should be an escape")
+	}
+}
+
+func TestEscapesWorkspace_CdAbsoluteExternal(t *testing.T) {
+	if !escapesWorkspace("/project", "cd /etc") {
+		t.Error("cd /etc should be an escape")
+	}
+}
+
+func TestEscapesWorkspace_CdAbsoluteWithinRoot(t *testing.T) {
+	if escapesWorkspace("/project", "cd /project/src") {
+		t.Error("cd /project/src should NOT be an escape")
+	}
+}
+
+func TestEscapesWorkspace_AbsoluteTokenExternal(t *testing.T) {
+	if !escapesWorkspace("/project", "cat /etc/passwd") {
+		t.Error("absolute external path token should be an escape")
+	}
+}
+
+func TestEscapesWorkspace_MultilineEscape(t *testing.T) {
+	cmd := "go build ./...\ncd /etc"
+	if !escapesWorkspace("/project", cmd) {
+		t.Error("multiline command with cd /etc should be an escape")
+	}
+}
+
+func TestEscapesWorkspace_GoWorkOff(t *testing.T) {
+	if escapesWorkspace("/project", "GOWORK=off go test ./...") {
+		t.Error("GOWORK=off go test ./... should NOT be an escape")
+	}
+}
+
+// ── autonomousShellAwareness ──────────────────────────────────────────────────
+
+func TestAutonomousShellAwareness_Safe(t *testing.T) {
+	if note := autonomousShellAwareness("/project", "GOWORK=off go test ./..."); note != "" {
+		t.Errorf("expected empty note for safe command, got %q", note)
+	}
+}
+
+func TestAutonomousShellAwareness_Escape(t *testing.T) {
+	note := autonomousShellAwareness("/project", "cd ..")
+	if note == "" {
+		t.Error("expected non-empty awareness note for cd ..")
+	}
+	if !strings.Contains(note, "AWARENESS") {
+		t.Errorf("expected awareness note, got %q", note)
+	}
+}
+
+func TestAutonomousShellAwareness_Risky(t *testing.T) {
+	note := autonomousShellAwareness("/project", "rm -rf dist/")
+	if note == "" {
+		t.Error("expected non-empty awareness note for rm -rf")
+	}
+	if !strings.Contains(note, "AWARENESS") {
+		t.Errorf("expected awareness note, got %q", note)
+	}
+}
+
+func TestAutonomousShellAwareness_Empty(t *testing.T) {
+	if note := autonomousShellAwareness("/project", ""); note != "" {
+		t.Errorf("expected empty note for empty command, got %q", note)
+	}
+}
+
+// ── resolveAutonomousShellDirectory ───────────────────────────────────────────
+
+func TestResolveAutonomousShellDirectory_DefaultRoot(t *testing.T) {
+	dir, note, err := resolveAutonomousShellDirectory("/project", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dir != "/project" {
+		t.Errorf("expected /project, got %q", dir)
+	}
+	if note != "" {
+		t.Errorf("expected no awareness note, got %q", note)
+	}
+}
+
+func TestResolveAutonomousShellDirectory_AllowsExternalCwdWithAwareness(t *testing.T) {
+	dir, note, err := resolveAutonomousShellDirectory("/project", "/tmp")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dir != "/tmp" {
+		t.Errorf("expected /tmp, got %q", dir)
+	}
+	if !strings.Contains(note, "AWARENESS") {
+		t.Errorf("expected awareness note, got %q", note)
+	}
+}
+
+func TestResolveAutonomousShellDirectory_RelativeEscapeAllowedWithAwareness(t *testing.T) {
+	dir, note, err := resolveAutonomousShellDirectory("/project", "../outside")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dir == "" {
+		t.Error("expected resolved directory")
+	}
+	if !strings.Contains(note, "AWARENESS") {
+		t.Errorf("expected awareness note, got %q", note)
+	}
+}
+
+func TestIsOutsideWorkspace_RelErrorTreatsOutside(t *testing.T) {
+	orig := filepathRelFn
+	filepathRelFn = func(basepath, targpath string) (string, error) {
+		return "", os.ErrInvalid
+	}
+	t.Cleanup(func() { filepathRelFn = orig })
+
+	if !isOutsideWorkspace("/project", "/project/file.go") {
+		t.Fatal("expected rel error to be treated as outside workspace")
 	}
 }

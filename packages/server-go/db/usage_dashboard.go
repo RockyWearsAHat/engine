@@ -63,11 +63,14 @@ type usageEventRow struct {
 	OutputTokens int64
 	TotalTokens  int64
 	CostUSD      float64
-	AIComputeMs int64
+	AIComputeMs  int64
 	CreatedAt    string
 }
 
 func LogUsageEvent(id, sessionID, projectPath, provider, model string, inputTokens, outputTokens, totalTokens int, costUSD float64, aiComputeMs int64) error {
+	if globalDB == nil {
+		return fmt.Errorf("database not initialized")
+	}
 	_, err := globalDB.Exec(
 		`INSERT INTO usage_events (
 			id, session_id, project_path, provider, model,

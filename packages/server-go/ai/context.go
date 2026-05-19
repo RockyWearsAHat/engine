@@ -3,6 +3,7 @@ package ai
 import (
 	"bufio"
 	"bytes"
+	stdctx "context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +31,7 @@ const (
 	defaultAnthropicModel = "claude-opus-4-5"
 	defaultOpenAIModel    = "gpt-4o"
 	defaultOllamaModel    = "llama3.2"
+	defaultLlamacppModel  = "default"
 	defaultOllamaBaseURL  = "http://127.0.0.1:11434"
 )
 
@@ -65,7 +68,6 @@ var cloneRepoFn = func(url, dest string) error {
 	return nil
 }
 
-
 var (
 	machineCredStoreOnce sync.Once
 	machineCredStore     *remote.KeychainStore
@@ -77,12 +79,17 @@ func getMachineCredStore() *remote.KeychainStore {
 }
 
 var credStoreGetFn = func(key string) (string, error) { return getMachineCredStore().Get(key) }
-var credStoreSetFn = func(key, value string) error    { return getMachineCredStore().Set(key, value) }
-var credStoreDelFn = func(key string) error           { return getMachineCredStore().Delete(key) }
+var credStoreSetFn = func(key, value string) error { return getMachineCredStore().Set(key, value) }
+var credStoreDelFn = func(key string) error { return getMachineCredStore().Delete(key) }
 
 // Must be less than OLLAMA_KEEP_ALIVE (default 30m) so the model never expires.
 // Exported as a var so tests can override it to a short duration.
 var ollamaWarmKeepInterval = 20 * time.Minute
+
+// autonomousBuilderMaxTurns bounds headless builder loops so a local model that
+// keeps narrating instead of calling signal_done reports a real failure instead
+// of silently stopping or running forever.
+var autonomousBuilderMaxTurns = 32
 
 func init() {
 	go ollamaWarmKeeper()
@@ -126,6 +133,20 @@ func ollamaPing() {
 	}
 }
 
+// parseIntEnv reads an int from env var `key`, falling back to `def` on missing
+// or non-numeric values. Used for runtime tuning knobs like ENGINE_OLLAMA_NUM_CTX.
+func parseIntEnv(key string, def int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
+}
+
 func inferredProviderForModel(model string) string {
 	lower := strings.ToLower(strings.TrimSpace(model))
 	if lower == "" {
@@ -158,8 +179,10 @@ func looksLikeOllamaModel(lowerModel string) bool {
 
 func resolveProvider(explicitProvider string, model string) string {
 	switch strings.ToLower(strings.TrimSpace(explicitProvider)) {
-	case "anthropic", "openai", "ollama":
+	case "anthropic", "openai", "ollama", "llamacpp":
 		return strings.ToLower(strings.TrimSpace(explicitProvider))
+	case "llama.cpp", "llama-cpp":
+		return "llamacpp"
 	case "", "auto":
 		return inferredProviderForModel(model)
 	default:
@@ -173,6 +196,8 @@ func defaultModelForProvider(provider string) string {
 		return defaultOpenAIModel
 	case "ollama":
 		return defaultOllamaModel
+	case "llamacpp":
+		return defaultLlamacppModel
 	default:
 		return defaultAnthropicModel
 	}
@@ -293,6 +318,10 @@ type ChatContext struct {
 	// MaxTurns, when > 0, limits the number of provider loop iterations for this
 	// Chat invocation so the caller can orchestrate work step-by-step from Go.
 	MaxTurns int
+	// AgentName identifies this ChatContext inside the project agent communication pool.
+	AgentName string
+	// AgentComms is the project-scoped peer message hub used by lead/worker agents.
+	AgentComms *AgentCommsHub
 }
 
 // isCancelled returns true if the context's cancel channel has been closed.
@@ -317,24 +346,24 @@ type TabInfo struct {
 
 // ToolCall is a single tool invocation recorded in the DB.
 type ToolCall struct {
-	ID      string      `json:"id"`
-	Name    string      `json:"name"`
-	Input   any `json:"input"`
-	Result  any `json:"result,omitempty"`
-	IsError bool        `json:"isError,omitempty"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Input   any    `json:"input"`
+	Result  any    `json:"result,omitempty"`
+	IsError bool   `json:"isError,omitempty"`
 }
 
 // --- Anthropic API types (raw HTTP, no official Go SDK) ---
 
 type anthropicTool struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	InputSchema any `json:"input_schema"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	InputSchema any    `json:"input_schema"`
 }
 
 type anthropicMessage struct {
-	Role    string      `json:"role"`
-	Content any `json:"content"` // string | []contentBlock
+	Role    string `json:"role"`
+	Content any    `json:"content"` // string | []contentBlock
 	// Vital marks this message as a key checkpoint. Vital messages are always kept during
 	// context windowing; only non-vital messages are pruned when context grows too large.
 	// Never serialised to the API.
@@ -342,13 +371,13 @@ type anthropicMessage struct {
 }
 
 type contentBlock struct {
-	Type      string      `json:"type"`
-	Text      string      `json:"text,omitempty"`
-	ID        string      `json:"id,omitempty"`
-	Name      string      `json:"name,omitempty"`
-	Input     any `json:"input,omitempty"`
-	ToolUseID string      `json:"tool_use_id,omitempty"`
-	Content   string      `json:"content,omitempty"`
+	Type      string `json:"type"`
+	Text      string `json:"text,omitempty"`
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Input     any    `json:"input,omitempty"`
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	Content   string `json:"content,omitempty"`
 }
 
 type anthropicRequest struct {
@@ -363,6 +392,20 @@ type anthropicRequest struct {
 // strProp is a helper to build simple {"type":"string","description":"..."} JSON.
 func strProp(desc string) any {
 	return map[string]any{"type": "string", "description": desc}
+}
+
+// numProp builds a {"type":"number","description":"..."} schema fragment.
+func numProp(desc string) any {
+	return map[string]any{"type": "number", "description": desc}
+}
+
+// arrProp builds an array-of-strings schema fragment for tool inputs.
+func arrProp(desc string) any {
+	return map[string]any{
+		"type":        "array",
+		"items":       map[string]any{"type": "string"},
+		"description": desc,
+	}
 }
 
 func objSchema(required []string, props map[string]any) any {
@@ -633,6 +676,38 @@ var toolRegistry = []anthropicTool{
 			"n": map[string]any{"type": "number", "description": "Number of recent messages to mark vital (default 1)"},
 		}),
 	},
+	// ── Agent team communication ───────────────────────────────────────────────
+	{
+		Name:        "agent_list",
+		Description: "List the live agents in this project's communication pool. Use before delegating or asking a peer for focused context.",
+		InputSchema: objSchema(nil, map[string]any{}),
+	},
+	{
+		Name:        "agent_send",
+		Description: "Send a focused message or delegation prompt to another project agent. Returns a message id that can be awaited later.",
+		InputSchema: objSchema([]string{"to", "body"}, map[string]any{
+			"to":       strProp("Recipient agent id from agent_list"),
+			"subject":  strProp("Short topic or requested decision"),
+			"body":     strProp("Focused message, prompt, question, or handoff packet"),
+			"reply_to": strProp("Optional message id this responds to"),
+		}),
+	},
+	{
+		Name:        "agent_inbox",
+		Description: "Read messages addressed to this agent. Set consume=true after incorporating the messages into the current work.",
+		InputSchema: objSchema(nil, map[string]any{
+			"consume": map[string]any{"type": "boolean", "description": "Clear returned messages from the inbox"},
+		}),
+	},
+	{
+		Name:        "agent_await",
+		Description: "Wait for a matching peer message addressed to this agent. Use reply_to to await a response to a sent message; timeout_ms=0 checks once without blocking.",
+		InputSchema: objSchema(nil, map[string]any{
+			"message_id": strProp("Optional exact message id to wait for"),
+			"reply_to":   strProp("Optional original message id whose reply should be returned"),
+			"timeout_ms": numProp("Milliseconds to wait; 0 checks once without blocking"),
+		}),
+	},
 
 	// ── Browser automation ───────────────────────────────────────────────────────
 	{
@@ -698,6 +773,20 @@ var toolRegistry = []anthropicTool{
 		Description: "Post a progress update, milestone completion, or work summary to the project's Discord channel. Use for: task completion, milestone reached, autonomous session summary, or any update the user should see asynchronously. Keep messages concise — one to three sentences.",
 		InputSchema: objSchema([]string{"message"}, map[string]any{
 			"message": strProp("Progress update message to post to the project Discord channel"),
+		}),
+	},
+	// ── LAN compute mesh ──────────────────────────────────────────────────────────
+	{
+		Name:        "mesh_exec",
+		Description: "Run a shell command on a paired mesh peer (Mac↔PC) to dispatch heavy work like test suites or local-model inference. Returns the captured stdout/stderr/exitCode. The peer must be configured in ~/.engine/mesh.json.",
+		InputSchema: objSchema([]string{"command"}, map[string]any{
+			"peer":      strProp("Peer name (case-insensitive) or role (e.g. 'inference', 'tests'). Empty = first peer with matching role."),
+			"role":      strProp("Optional role to dispatch by when peer name is empty."),
+			"cwd":       strProp("Working directory on the peer."),
+			"command":   strProp("Executable to run on the peer."),
+			"args":      arrProp("Command arguments (array of strings)."),
+			"env":       arrProp("Extra environment variables (each entry of the form KEY=VALUE)."),
+			"timeoutMs": numProp("Optional timeout in milliseconds. 0 = peer-default."),
 		}),
 	},
 }
@@ -829,6 +918,14 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 	switch name {
 	case "search_tools":
 		return executeSearchTools(str("query"), ctx), false
+	case "agent_list":
+		return executeAgentListTool(ctx)
+	case "agent_send":
+		return executeAgentSendTool(input, ctx)
+	case "agent_inbox":
+		return executeAgentInboxTool(input, ctx)
+	case "agent_await":
+		return executeAgentAwaitTool(input, ctx)
 
 	case "read_file":
 		path, err := resolveWorkspacePath(ctx.ProjectPath, str("path"))
@@ -870,7 +967,10 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		if intentErr := ValidatePublishIntentForAction(ctx.ProjectPath, command); intentErr != nil {
 			return intentErr.Error(), true
 		}
-		if title, message, needsApproval := requiresShellApproval(ctx.ProjectPath, command); needsApproval {
+		autonomousAwareness := ""
+		if ctx.AutonomousPolicy != nil {
+			autonomousAwareness = autonomousShellAwareness(ctx.ProjectPath, command)
+		} else if title, message, needsApproval := requiresShellApproval(ctx.ProjectPath, command); needsApproval {
 			if ctx.RequestApproval == nil {
 				return "This shell command requires explicit approval, but no approval handler is available.", true
 			}
@@ -886,9 +986,25 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		if cwd == "" {
 			cwd = ctx.ProjectPath
 		}
-		cwd, err := resolveWorkspaceDirectory(ctx.ProjectPath, cwd)
-		if err != nil {
-			return err.Error(), true
+		var err error
+		if ctx.AutonomousPolicy != nil {
+			var cwdAwareness string
+			cwd, cwdAwareness, err = resolveAutonomousShellDirectory(ctx.ProjectPath, cwd)
+			if err != nil {
+				return err.Error(), true
+			}
+			if cwdAwareness != "" {
+				if autonomousAwareness != "" {
+					autonomousAwareness += "\n" + cwdAwareness
+				} else {
+					autonomousAwareness = cwdAwareness
+				}
+			}
+		} else {
+			cwd, err = resolveWorkspaceDirectory(ctx.ProjectPath, cwd)
+			if err != nil {
+				return err.Error(), true
+			}
 		}
 		// Use the user's login shell so the AI has the full PATH (Homebrew, nvm,
 		// cargo, etc.). The -l flag sources login scripts (.zprofile, .bash_profile).
@@ -896,17 +1012,32 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		if shell == "" {
 			shell = "/bin/bash"
 		}
-		cmd := exec.Command(shell, "-l", "-c", command)
+		shellTimeout := 2 * time.Minute
+		if ctx.AutonomousPolicy != nil {
+			shellTimeout = 5 * time.Minute
+		}
+		shellCtx, shellCancel := stdctx.WithTimeout(stdctx.Background(), shellTimeout)
+		defer shellCancel()
+		cmd := exec.CommandContext(shellCtx, shell, "-l", "-c", command)
 		cmd.Dir = cwd
-		// Scaffold repos live under .engine/projects/ and have no go.mod.
-		// Without GOWORK=off Go walks up and finds Engine's go.work, then
-		// rejects every go command because the module is not listed there.
-		if strings.Contains(cwd, ".engine/projects/") || strings.Contains(ctx.ProjectPath, ".engine/projects/") {
+		// Autonomous sessions always work inside an isolated project directory.
+		// Setting GOWORK=off prevents Go from walking up to a parent go.work file
+		// and rejecting module commands for unlisted projects. We apply this
+		// unconditionally for all autonomous sessions regardless of path, because
+		// any parent-workspace leakage is always wrong in a sandboxed build.
+		if ctx.AutonomousPolicy != nil ||
+			strings.Contains(cwd, ".engine/projects/") ||
+			strings.Contains(ctx.ProjectPath, ".engine/projects/") ||
+			strings.Contains(cwd, "/engine/projects/") ||
+			strings.Contains(ctx.ProjectPath, "/engine/projects/") {
 			env := os.Environ()
 			env = append(env, "GOWORK=off")
 			cmd.Env = env
 		}
 		out, err := cmd.CombinedOutput()
+		if shellCtx.Err() == stdctx.DeadlineExceeded {
+			err = fmt.Errorf("command timed out after %v", shellTimeout)
+		}
 		result := strings.TrimSpace(string(out))
 		if result == "" {
 			result = "(no output)"
@@ -914,7 +1045,10 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		if len(result) > 4*1024*1024 {
 			result = result[:4*1024*1024] + "\n...(truncated)"
 		}
-		return result, err != nil && len(out) == 0
+		if autonomousAwareness != "" {
+			result = autonomousAwareness + "\n\n" + result
+		}
+		return result, err != nil
 
 	case "search_files":
 		dir := str("directory")
@@ -988,6 +1122,9 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 			summary = "done"
 		}
 		return summary, false
+
+	case "mesh_exec":
+		return executeMeshExec(input, ctx)
 
 	case "open_file":
 		path, err := resolveWorkspacePath(ctx.ProjectPath, str("path"))
@@ -1476,6 +1613,7 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		return "Unknown tool: " + name, true
 	}
 }
+
 // getSystemInfo returns a formatted string with current memory, CPU, and disk usage.
 func getSystemInfo(projectPath string) string {
 	var sb strings.Builder
@@ -1514,6 +1652,8 @@ func formatTree(node *gofs.FileNode, depth int) string {
 
 // Chat runs the full agentic loop for a user message, streaming results via ctx callbacks.
 func Chat(ctx *ChatContext, userMessage string) {
+	registerChatAgent(ctx)
+
 	explicitProvider := strings.TrimSpace(os.Getenv("ENGINE_MODEL_PROVIDER"))
 	model := strings.TrimSpace(os.Getenv("ENGINE_MODEL"))
 	if resolvedTeam, teamProvider, teamModel, ok := ResolveTeamOrchestratorModel(ctx.ProjectPath, os.Getenv("ENGINE_ACTIVE_TEAM")); ok {
@@ -1534,6 +1674,15 @@ func Chat(ctx *ChatContext, userMessage string) {
 			explicitProvider = roleProvider
 		}
 	}
+	// Local-first cost router: when ENGINE_LOCAL_FIRST=1 and the role is on
+	// the cheap-roles allowlist, downshift to local Ollama unless the caller
+	// (env or ctx) has already pinned a specific model.
+	if strings.TrimSpace(model) == "" && strings.TrimSpace(explicitProvider) == "" {
+		if lp, lm := ResolveLocalFirstRouting(ctx.Role); lm != "" {
+			model = lm
+			explicitProvider = lp
+		}
+	}
 	if ctx != nil {
 		if strings.TrimSpace(ctx.ModelOverride) != "" {
 			model = strings.TrimSpace(ctx.ModelOverride)
@@ -1546,7 +1695,11 @@ func Chat(ctx *ChatContext, userMessage string) {
 	provider := resolveProvider(explicitProvider, model)
 	ollamaBaseURL := os.Getenv("OLLAMA_BASE_URL")
 	if provider == "ollama" && model == "" {
-		model = detectOllamaModel(ollamaBaseURL)
+		if forced := strings.TrimSpace(os.Getenv("ENGINE_OLLAMA_MODEL")); forced != "" {
+			model = forced
+		} else {
+			model = detectOllamaModel(ollamaBaseURL)
+		}
 	}
 	if model == "" {
 		model = defaultModelForProvider(provider)
@@ -1737,7 +1890,11 @@ func runPlannerPrePass(ctx *ChatContext, provider, model, userMessage, branch st
 	}
 	resolvedProvider = resolveProvider(resolvedProvider, resolvedModel)
 	if resolvedProvider == "ollama" && resolvedModel == "" {
-		resolvedModel = detectOllamaModel(os.Getenv("OLLAMA_BASE_URL"))
+		if forced := strings.TrimSpace(os.Getenv("ENGINE_OLLAMA_MODEL")); forced != "" {
+			resolvedModel = forced
+		} else {
+			resolvedModel = detectOllamaModel(os.Getenv("OLLAMA_BASE_URL"))
+		}
 	}
 	if resolvedModel == "" {
 		resolvedModel = defaultModelForProvider(resolvedProvider)
@@ -1753,7 +1910,7 @@ func runPlannerPrePass(ctx *ChatContext, provider, model, userMessage, branch st
 		Quarantine:       ctx.Quarantine,
 		Cancel:           cancelChan,
 		GetOpenTabs:      ctx.GetOpenTabs,
-		OnError:          func(string) {}, // suppress planner errors from reaching the user
+		OnError:          func(string) {},       // suppress planner errors from reaching the user
 		OnChunk:          func(string, bool) {}, // no-op: output captured via finalText
 		OnToolCall:       func(string, any) {},
 		OnToolResult:     func(string, any, bool) {},
@@ -1866,11 +2023,17 @@ func runAnthropicLoop(
 		if ctx.isCancelled() {
 			return
 		}
-		if ctx.MaxTurns > 0 {
-			turns++
-			if turns > ctx.MaxTurns {
-				break
+		turns++
+		turnLimit := ctx.MaxTurns
+		if turnLimit <= 0 && ctx.Role == RoleAutonomousBuilder {
+			turnLimit = autonomousBuilderMaxTurns
+		}
+		if turnLimit > 0 && turns > turnLimit {
+			if ctx.Role == RoleAutonomousBuilder {
+				ctx.OnError(fmt.Sprintf("autonomous builder stopped after %d turns without signal_done", turnLimit))
+				return
 			}
+			break
 		}
 
 		windowed := windowByVitality(messages, 20)
@@ -2034,8 +2197,10 @@ func streamRequest(
 ) ([]contentBlock, string, usageSnapshot, int64, error) {
 	body, _ := json.Marshal(req)
 	requestStart := time.Now()
+	reqCtx, cancelReq := providerRequestContext(ctx)
+	defer cancelReq()
 
-	httpReq, _ := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(body))
+	httpReq, _ := http.NewRequestWithContext(reqCtx, "POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(body))
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", apiKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
@@ -2165,12 +2330,43 @@ func newID() string {
 	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Nanosecond()%1000)
 }
 
+func providerRequestContext(ctx *ChatContext) (stdctx.Context, stdctx.CancelFunc) {
+	// 20-minute hard cap per API call so a slow/frozen local model can't stall the orchestrator forever.
+	reqCtx, cancel := stdctx.WithTimeout(stdctx.Background(), 20*time.Minute)
+	if ctx == nil || ctx.Cancel == nil {
+		return reqCtx, cancel
+	}
+	go func() {
+		select {
+		case <-ctx.Cancel:
+			cancel()
+		case <-reqCtx.Done():
+		}
+	}()
+	return reqCtx, cancel
+}
+
+func autonomousBuilderContinuePrompt(lastText, finishReason string) string {
+	parts := []string{
+		"Continue autonomously. You stopped without calling a tool or signal_done.",
+		"Use tools now: inspect files, write required changes, run verification from the project root, commit completed work, and call signal_done only when the project is actually complete.",
+		"Do not answer with narration or readiness text.",
+	}
+	if trimmed := strings.TrimSpace(lastText); trimmed != "" {
+		parts = append(parts, "Last text response without tool use: "+trimmed)
+	}
+	if trimmed := strings.TrimSpace(finishReason); trimmed != "" {
+		parts = append(parts, "Provider finish reason: "+trimmed)
+	}
+	return strings.Join(parts, "\n")
+}
+
 // ── OpenAI types and agentic loop ─────────────────────────────────────────────
 
 type openAIFunction struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	Parameters  any `json:"parameters"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Parameters  any    `json:"parameters"`
 }
 
 type openAITool struct {
@@ -2179,10 +2375,10 @@ type openAITool struct {
 }
 
 type openAIMessage struct {
-	Role       string      `json:"role"`
-	Content    any `json:"content,omitempty"` // string or nil
-	ToolCallID string      `json:"tool_call_id,omitempty"`
-	ToolCalls  any `json:"tool_calls,omitempty"`
+	Role       string `json:"role"`
+	Content    any    `json:"content,omitempty"` // string or nil
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	ToolCalls  any    `json:"tool_calls,omitempty"`
 }
 
 type openAIRequest struct {
@@ -2192,6 +2388,12 @@ type openAIRequest struct {
 	ToolChoice string          `json:"tool_choice,omitempty"` // "auto" | "required" | "none"
 	Stream     bool            `json:"stream"`
 	KeepAlive  string          `json:"keep_alive,omitempty"` // Ollama only — extends model TTL
+	// Options carries Ollama-specific knobs (num_ctx, temperature, etc.). Ollama's
+	// /v1/chat/completions accepts an `options` extension; OpenAI ignores unknown
+	// fields. Critical for local tool-calling: by default Ollama uses num_ctx=2048
+	// which is far too small to fit our system prompt + tool definitions, so the
+	// model never sees its tools and falls back to narrating instead of calling.
+	Options map[string]any `json:"options,omitempty"`
 }
 
 // openAIToolsFrom converts the Anthropic tool definitions to OpenAI format.
@@ -2229,6 +2431,19 @@ func runOpenAICompatibleLoop(
 			keepAlive = "30m"
 		}
 	}
+	// extraOptions carries Ollama's `options` extension. The most important one is
+	// num_ctx: Ollama's default of 2048 truncates everything past the first ~1500
+	// tokens, which is well short of our system prompt + tool definitions. Without
+	// raising it, the model literally cannot see the tools — that's the root cause
+	// of "qwen3 just emits XML instead of calling tools". 32k matches what most
+	// modern local models can handle comfortably; users override via env.
+	var extraOptions map[string]any
+	if providerName == "ollama" {
+		numCtx := parseIntEnv("ENGINE_OLLAMA_NUM_CTX", 32768)
+		if numCtx > 0 {
+			extraOptions = map[string]any{"num_ctx": numCtx}
+		}
+	}
 	// Convert history to OpenAI message format
 	windowedHistory := windowByVitality(history, 20)
 	msgs := []openAIMessage{{Role: "system", Content: systemPrompt}}
@@ -2244,11 +2459,17 @@ func runOpenAICompatibleLoop(
 		if ctx.isCancelled() {
 			return
 		}
-		if ctx.MaxTurns > 0 {
-			turns++
-			if turns > ctx.MaxTurns {
-				break
+		turns++
+		turnLimit := ctx.MaxTurns
+		if turnLimit <= 0 && ctx.Role == RoleAutonomousBuilder {
+			turnLimit = autonomousBuilderMaxTurns
+		}
+		if turnLimit > 0 && turns > turnLimit {
+			if ctx.Role == RoleAutonomousBuilder {
+				ctx.OnError(fmt.Sprintf("autonomous builder stopped after %d turns without signal_done", turnLimit))
+				return
 			}
+			break
 		}
 
 		// Rebuild OAI tools each iteration — search_tools may have added new ones.
@@ -2259,12 +2480,13 @@ func runOpenAICompatibleLoop(
 			windowed = append(msgs[:1:1], msgs[len(msgs)-40:]...)
 		}
 
-		// When the caller bounds the loop with MaxTurns, require a tool call so a
-		// single turn cannot be spent on narration instead of action.
+		// Autonomous builder turns must act through tools. Bounded test/review
+		// loops also require a tool call so a single turn cannot be spent on
+		// narration instead of action.
 		toolChoice := ""
 		if len(oaiTools) > 0 {
 			toolChoice = "auto"
-			if ctx.MaxTurns > 0 {
+			if ctx.MaxTurns > 0 || ctx.Role == RoleAutonomousBuilder {
 				toolChoice = "required"
 			}
 		}
@@ -2275,11 +2497,14 @@ func runOpenAICompatibleLoop(
 			ToolChoice: toolChoice,
 			Stream:     true,
 			KeepAlive:  keepAlive,
+			Options:    extraOptions,
 		}
 
 		body, _ := json.Marshal(req)
-		httpReq, err := http.NewRequest("POST", endpointURL, bytes.NewReader(body))
+		reqCtx, cancelReq := providerRequestContext(ctx)
+		httpReq, err := http.NewRequestWithContext(reqCtx, "POST", endpointURL, bytes.NewReader(body))
 		if err != nil {
+			cancelReq()
 			ctx.OnError(providerName + " request build: " + err.Error())
 			return
 		}
@@ -2290,14 +2515,16 @@ func runOpenAICompatibleLoop(
 
 		resp, err := http.DefaultClient.Do(httpReq)
 		if err != nil {
+			cancelReq()
 			ctx.OnError(providerName + " request: " + err.Error())
 			return
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode != 200 {
 			var errBody map[string]any
 			json.NewDecoder(resp.Body).Decode(&errBody) //nolint:errcheck
+			resp.Body.Close()
+			cancelReq()
 			ctx.OnError(fmt.Sprintf("%s error %d: %v", providerName, resp.StatusCode, errBody))
 			return
 		}
@@ -2382,8 +2609,11 @@ func runOpenAICompatibleLoop(
 				}
 			}
 		}
-		if err := scanner.Err(); err != nil {
-			ctx.OnError(providerName + " stream: " + err.Error())
+		scanErr := scanner.Err()
+		resp.Body.Close()
+		cancelReq()
+		if scanErr != nil {
+			ctx.OnError(providerName + " stream: " + scanErr.Error())
 			return
 		}
 
@@ -2404,41 +2634,74 @@ func runOpenAICompatibleLoop(
 			time.Since(requestStart).Milliseconds(),
 		)
 
-		// Build assistant message with tool_calls if any
-		if len(toolCallMap) > 0 {
-		// Assign synthetic IDs to any tool calls that Ollama/Gemma emitted without one.
-		// An empty id in the assistant message causes Ollama to reject the continuation (400).
-		for i, tcd := range toolCallMap {
-			if tcd != nil && tcd.id == "" {
-				toolCallMap[i].id = fmt.Sprintf("call_%s_%d", tcd.name, i)
+		// Fallback: some open models (qwen3.x, hermes, several mistral templates) ignore the
+		// OpenAI `tools` schema and emit tool calls as XML inside the content stream. If we
+		// got no native tool_calls but the text contains parseable tool-call markup, extract
+		// it, synthesise toolCallMap entries, and clean the user-facing text. This keeps the
+		// agent productive on models that can call tools by convention but not by protocol.
+		if len(toolCallMap) == 0 && textBuf.Len() > 0 {
+			parsed := parseToolCallsFromText(textBuf.String())
+			if len(parsed) > 0 {
+				cleanedText := stripToolCallMarkup(textBuf.String())
+				textBuf.Reset()
+				textBuf.WriteString(cleanedText)
+				if before := finalText.String(); before != "" {
+					cleanedFinal := stripToolCallMarkup(before)
+					finalText.Reset()
+					finalText.WriteString(cleanedFinal)
+				}
+				for i, p := range parsed {
+					tcd := &toolCallDelta{
+						index: i,
+						id:    synthesizeToolCallID(p.Name, i),
+						name:  p.Name,
+					}
+					tcd.args.WriteString(p.Arguments)
+					toolCallMap[i] = tcd
+				}
+				finishReason = "tool_calls"
 			}
 		}
 
-		type oaiTC struct {
-			ID       string `json:"id"`
-			Type     string `json:"type"`
-			Function struct {
-				Name      string `json:"name"`
-				Arguments string `json:"arguments"`
-			} `json:"function"`
-		}
-		tcsSlice := make([]oaiTC, 0, len(toolCallMap))
-		for _, tcd := range toolCallMap {
-			tcsSlice = append(tcsSlice, oaiTC{
-				ID:   tcd.id,
-				Type: "function",
-				Function: struct {
+		// Build assistant message with tool_calls if any
+		if len(toolCallMap) > 0 {
+			// Assign synthetic IDs to any tool calls that Ollama/Gemma emitted without one.
+			// An empty id in the assistant message causes Ollama to reject the continuation (400).
+			for i, tcd := range toolCallMap {
+				if tcd != nil && tcd.id == "" {
+					toolCallMap[i].id = fmt.Sprintf("call_%s_%d", tcd.name, i)
+				}
+			}
+
+			type oaiTC struct {
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
 					Name      string `json:"name"`
 					Arguments string `json:"arguments"`
-				}{Name: tcd.name, Arguments: tcd.args.String()},
-			})
-		}
-		msgs = append(msgs, openAIMessage{Role: "assistant", ToolCalls: tcsSlice})
+				} `json:"function"`
+			}
+			tcsSlice := make([]oaiTC, 0, len(toolCallMap))
+			for _, tcd := range toolCallMap {
+				tcsSlice = append(tcsSlice, oaiTC{
+					ID:   tcd.id,
+					Type: "function",
+					Function: struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					}{Name: tcd.name, Arguments: tcd.args.String()},
+				})
+			}
+			msgs = append(msgs, openAIMessage{Role: "assistant", ToolCalls: tcsSlice})
 		} else if textBuf.Len() > 0 {
 			msgs = append(msgs, openAIMessage{Role: "assistant", Content: textBuf.String()})
 		}
 
 		if finishReason != "tool_calls" || len(toolCallMap) == 0 {
+			if ctx.Role == RoleAutonomousBuilder {
+				msgs = append(msgs, openAIMessage{Role: "user", Content: autonomousBuilderContinuePrompt(textBuf.String(), finishReason)})
+				continue
+			}
 			break
 		}
 

@@ -12,7 +12,7 @@ Update this when structural changes land. Do not let it drift from reality.
 | Desktop shell | Tauri (Rust, `packages/desktop-tauri`) |
 | Shared types | TypeScript (`packages/shared`) |
 | Database | SQLite via Go (`server-go/db/`) |
-| AI routing | Go (`server-go/ai/`) — Anthropic, OpenAI-compat, Ollama |
+| AI routing | Go (`server-go/ai/`) — Anthropic, OpenAI-compat, Ollama, agent communication |
 | Secret scanning | Go (`server-go/ai/`) — blocks secrets before send |
 
 ## Module Map
@@ -25,7 +25,7 @@ packages/
     src/ws/         WebSocket client (bridge to Go server)
     src/test/       Vitest tests — 100% coverage enforced
   server-go/
-    ai/             AI provider routing, session history, secret scan, harness
+    ai/             AI provider routing, session history, agent comms, secret scan, harness
     db/             SQLite persistence (sessions, usage, project direction)
     discord/        Discord control-plane bot
     fs/             File system tools (read, write, list, search)
@@ -45,6 +45,7 @@ packages/
 - **WebSocket bridge**: every client action sends a JSON message to Go via WS; Go routes to the right handler and streams back events.
 - **AI streaming**: response chunks arrive as partial text events over WS; client renders them incrementally.
 - **Project direction**: Go persists a living project direction summary per-workspace in SQLite; always loaded when a new session starts.
+- **Agent communication pool**: Go maintains a project-scoped in-process pool where the lead agent and worker teams can list peers, send focused messages, read inboxes, and await replies without forcing every role into one context window.
 - **Secret scanning**: Go intercepts every outgoing AI message and blocks if a secret pattern is matched.
 - **Custom tools**: `.engine/tools/<name>.json` defines project-specific agent tools; inputs passed as `INPUT_<NAME>` env vars to prevent injection.
 - **Test coverage**: 100% client (Vitest), 100% Go (go test), Rust (cargo llvm-cov) — all enforced by completion gate.

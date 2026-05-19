@@ -83,6 +83,24 @@ Examples:
 
 If `enabled` is `true` and the config is valid, the Discord service starts automatically.
 
+## Autonomous Clone Location
+
+By default, Engine stores autonomous repository clones in:
+
+- `~/.engine/projects`
+
+This avoids nested-repo issues (for example, Go module/workspace resolution conflicts when cloning a Go repo inside another Go workspace). You can override with `ENGINE_CLONES_DIR`.
+
+## Discord Screenshots
+
+For manual Discord capture on macOS, use:
+
+- `bash scripts/discord-screenshot.sh`
+
+Default screenshot output path is:
+
+- `~/.engine/screenshots/discord-snap-<timestamp>.png`
+
 ## How To Test It
 
 Fast manual test:

@@ -71,7 +71,7 @@ var jsonMarshalFn = func(v any) ([]byte, error) {
 var filepathAbsFn = filepath.Abs
 
 // AddToRegistry adds a repository by local path or remote URL.
-// For URLs the repo is cloned under <projectRoot>/.engine/projects/<name> by default.
+// For URLs the repo is cloned under ~/.engine/projects/<name> by default.
 // Returns the new entry. Duplicate entries (same resolved local path) are skipped.
 func AddToRegistry(projectRoot, urlOrPath string) (*RegistryEntry, error) {
 	clean := strings.TrimSpace(urlOrPath)
@@ -90,7 +90,12 @@ func AddToRegistry(projectRoot, urlOrPath string) (*RegistryEntry, error) {
 		name := strings.TrimSuffix(filepath.Base(clean), ".git")
 		clonesDir := strings.TrimSpace(os.Getenv("ENGINE_CLONES_DIR"))
 		if clonesDir == "" {
-			clonesDir = filepath.Join(projectRoot, ".engine", "projects")
+			home, homeErr := os.UserHomeDir()
+			if homeErr == nil && strings.TrimSpace(home) != "" {
+				clonesDir = filepath.Join(home, ".engine", "projects")
+			} else {
+				clonesDir = filepath.Join(projectRoot, ".engine", "projects")
+			}
 		}
 		dest := filepath.Join(clonesDir, name)
 		if _, err := os.Stat(dest); os.IsNotExist(err) {

@@ -58,7 +58,12 @@ coverage.out
 .engine/state.db
 .engine/state.db-shm
 .engine/state.db-wal
+.engine/projects
 .engine/projects/
+.engine/projects.migrated-*
+packages/server-go/.engine/projects
+packages/server-go/.engine/projects/
+packages/server-go/.engine/projects.migrated-*
 .myeditor/state.db
 .myeditor/state.db-shm
 .myeditor/state.db-wal
@@ -96,3 +101,9 @@ packages/server-go/**/coverage*.html
 coverage-summary.json
 packages/server-go/coverage.out
 engine-45mb-test.ts
+
+# Runtime discord state — must not be tracked. The file is created at
+# <projectPath>/.engine/discord-state.json, but a historical bug allowed empty
+# StoragePath to write it next to the source; keep it gitignored so any future
+# regression doesn't pollute the source tree.
+packages/server-go/discord/discord-state.json

@@ -177,6 +177,86 @@ func (c *Client) CloseIssue(number int, comment string) error {
 	return nil
 }
 
+// AddAssignees assigns the given logins to an issue.
+func (c *Client) AddAssignees(number int, logins []string) error {
+	if len(logins) == 0 {
+		return nil
+	}
+	payload := map[string]any{"assignees": logins}
+	_, err := c.doPost(
+		fmt.Sprintf("%s/repos/%s/%s/issues/%d/assignees", apiBase(), c.owner, c.repo, number),
+		payload,
+	)
+	if err != nil {
+		return fmt.Errorf("add assignees to #%d: %w", number, err)
+	}
+	return nil
+}
+
+// RemoveAssignees removes the given logins from an issue.
+func (c *Client) RemoveAssignees(number int, logins []string) error {
+	if len(logins) == 0 {
+		return nil
+	}
+	payload := struct {
+		Assignees []string `json:"assignees"`
+	}{Assignees: logins}
+	data, _ := json.Marshal(payload)
+	req, err := http.NewRequest("DELETE",
+		fmt.Sprintf("%s/repos/%s/%s/issues/%d/assignees", apiBase(), c.owner, c.repo, number),
+		strings.NewReader(string(data)),
+	)
+	if err != nil {
+		return err
+	}
+	if _, err := c.doRequest(req); err != nil {
+		return fmt.Errorf("remove assignees from #%d: %w", number, err)
+	}
+	return nil
+}
+
+// EditComment edits an existing issue comment by ID.
+func (c *Client) EditComment(commentID int, body string) error {
+	payload := map[string]string{"body": body}
+	_, err := c.doPatch(
+		fmt.Sprintf("%s/repos/%s/%s/issues/comments/%d", apiBase(), c.owner, c.repo, commentID),
+		payload,
+	)
+	if err != nil {
+		return fmt.Errorf("edit comment %d: %w", commentID, err)
+	}
+	return nil
+}
+
+// PullRequest is a minimal representation of a GitHub pull request.
+type PullRequest struct {
+	Number  int    `json:"number"`
+	HTMLURL string `json:"html_url"`
+	State   string `json:"state"`
+}
+
+// CreatePR opens a pull request from head into base.
+func (c *Client) CreatePR(title, body, head, base string) (*PullRequest, error) {
+	payload := map[string]any{
+		"title": title,
+		"body":  body,
+		"head":  head,
+		"base":  base,
+	}
+	respBody, err := c.doPost(
+		fmt.Sprintf("%s/repos/%s/%s/pulls", apiBase(), c.owner, c.repo),
+		payload,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create pr: %w", err)
+	}
+	var pr PullRequest
+	if err := json.Unmarshal(respBody, &pr); err != nil {
+		return nil, fmt.Errorf("parse pr: %w", err)
+	}
+	return &pr, nil
+}
+
 // UpdateIssue updates an issue's title, body, and/or state.
 func (c *Client) UpdateIssue(number int, updates map[string]any) (*Issue, error) {
 	respBody, err := c.doPatch(

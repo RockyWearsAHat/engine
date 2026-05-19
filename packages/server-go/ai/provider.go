@@ -24,15 +24,24 @@ type Provider interface {
 	)
 }
 
-// newProvider returns the Provider for the given backend name.
-// Supported values: "ollama", "openai", "anthropic".
+var newProvider = newProviderForName
+
+// newProviderForName returns the Provider for the given backend name.
+// Supported values: "ollama", "llamacpp", "openai", "anthropic".
 // Any unrecognised name falls back to "anthropic".
-func newProvider(name string) Provider {
+//
+// "llamacpp" hits the llama.cpp server's /v1/chat/completions endpoint directly,
+// which gives lower-latency inference than Ollama's wrapper and supports grammar-
+// constrained tool calling. Use it when you control the runtime; use "ollama" when
+// you want Ollama's model management on top.
+func newProviderForName(name string) Provider {
 	switch name {
 	case "openai":
 		return &openAIProvider{}
 	case "ollama":
 		return &ollamaProvider{}
+	case "llamacpp", "llama.cpp", "llama-cpp":
+		return &llamacppProvider{}
 	default: // "anthropic"
 		return &anthropicProvider{}
 	}
@@ -55,6 +64,39 @@ func (p *ollamaProvider) RunLoop(
 	runOpenAICompatibleLoop(
 		ctx, "ollama", model,
 		ollamaChatCompletionsURL(baseURL),
+		"", false,
+		systemPrompt, history, allToolCalls, finalText,
+	)
+}
+
+// ── llama.cpp ────────────────────────────────────────────────────────────────
+// Uses llama.cpp's `llama-server` /v1/chat/completions endpoint. No API key.
+// Default base URL is http://127.0.0.1:8080 (llama-server's default).
+//
+// Why this exists alongside the ollama provider:
+//   - llama.cpp exposes native function calling on models that support it (Qwen,
+//     Functionary, etc.) and supports a `grammar` parameter for constrained output.
+//   - Ollama wraps llama.cpp but historically lags behind on chat-template fixes
+//     and adds an extra serialisation hop that hurts latency.
+//   - Running llama-server directly avoids the Ollama daemon entirely for users
+//     who already have a model loaded by hand.
+type llamacppProvider struct{}
+
+func (p *llamacppProvider) RunLoop(
+	ctx *ChatContext,
+	model, systemPrompt string,
+	history []anthropicMessage,
+	allToolCalls *[]ToolCall,
+	finalText *strings.Builder,
+) {
+	baseURL := strings.TrimSpace(os.Getenv("LLAMACPP_BASE_URL"))
+	if baseURL == "" {
+		baseURL = "http://127.0.0.1:8080"
+	}
+	endpoint := strings.TrimRight(baseURL, "/") + "/v1/chat/completions"
+	runOpenAICompatibleLoop(
+		ctx, "llamacpp", model,
+		endpoint,
 		"", false,
 		systemPrompt, history, allToolCalls, finalText,
 	)

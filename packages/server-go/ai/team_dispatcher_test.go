@@ -1,0 +1,194 @@
+package ai
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestTeamDispatcher_DispatchesWorkerWithAgentComms(t *testing.T) {
+	projectDir := t.TempDir()
+	brain, err := NewOrchestrationBrain(projectDir, "owner", "repo", "brief", "session")
+	if err != nil {
+		t.Fatalf("brain: %v", err)
+	}
+	if err := brain.UpdatePlan([]PlanStep{{Index: 1, Title: "Add API", Body: "Implement endpoint", Acceptance: "`go test ./...` passes"}}); err != nil {
+		t.Fatalf("update plan: %v", err)
+	}
+	if err := brain.AddTeam("team-api-0", "api", []int{0}, nil); err != nil {
+		t.Fatalf("add team: %v", err)
+	}
+
+	bus := NewEventBus()
+	teamDone := bus.Subscribe(EventTeamDone, 1)
+	comms := NewAgentCommsHub()
+	seenPrompt := make(chan string, 1)
+	cfg := OrchestratorConfig{
+		ProjectPath:     projectDir,
+		SessionIDPrefix: "test",
+		ChatFn: func(ctx *ChatContext, prompt string) {
+			if ctx.AgentName != "team-api-0" {
+				seenPrompt <- "wrong agent: " + ctx.AgentName
+				return
+			}
+			if ctx.AgentComms != comms {
+				seenPrompt <- "missing comms"
+				return
+			}
+			seenPrompt <- prompt
+			ctx.OnChunk("signal_done", false)
+		},
+	}
+
+	dispatcher := NewTeamDispatcher(brain, bus, cfg, 4, comms)
+	if err := dispatcher.DispatchTeam("team-api-0"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	select {
+	case prompt := <-seenPrompt:
+		if !strings.Contains(prompt, "Team communication:") || !strings.Contains(prompt, "team-api-0 (api)") {
+			t.Fatalf("prompt missing communication contract: %s", prompt)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("chat function was not called")
+	}
+
+	select {
+	case <-teamDone:
+	case <-time.After(time.Second):
+		t.Fatal("team did not complete")
+	}
+
+	team, err := brain.GetTeam("team-api-0")
+	if err != nil {
+		t.Fatalf("get team: %v", err)
+	}
+	if team.Status != "done" {
+		t.Fatalf("expected done team, got %q", team.Status)
+	}
+	agents := comms.List()
+	if len(agents) != 1 || agents[0].ID != "team-api-0" || agents[0].Status != "done" {
+		t.Fatalf("team not registered as done in comms: %+v", agents)
+	}
+
+	if err := dispatcher.DispatchTeam("team-api-0"); err == nil {
+		t.Fatal("expected duplicate dispatch to fail")
+	}
+	dispatcher.Wait()
+	dispatcher.Stop()
+	if dispatcher.ActiveTeams() != 0 {
+		t.Fatalf("expected no active teams after stop, got %d", dispatcher.ActiveTeams())
+	}
+}
+
+func TestTeamDispatcher_DispatchErrors(t *testing.T) {
+	projectDir := t.TempDir()
+	brain, err := NewOrchestrationBrain(projectDir, "owner", "repo", "brief", "session")
+	if err != nil {
+		t.Fatalf("brain: %v", err)
+	}
+	if err := brain.AddTeam("blocked", "api", []int{0}, []string{"missing"}); err != nil {
+		t.Fatalf("add blocked team: %v", err)
+	}
+	dispatcher := NewTeamDispatcher(brain, NewEventBus(), OrchestratorConfig{ProjectPath: projectDir}, 4, NewAgentCommsHub())
+	if err := dispatcher.DispatchTeam("missing"); err == nil {
+		t.Fatal("expected missing team error")
+	}
+	if err := dispatcher.DispatchTeam("blocked"); err == nil || !strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("expected blocked team error, got %v", err)
+	}
+}
+
+func TestTeamDispatcher_ActiveTeamsCountsOnlyUncanceledWorkers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	dispatcher := NewTeamDispatcher(nil, NewEventBus(), OrchestratorConfig{}, 4, nil)
+	dispatcher.workers["manual"] = &TeamWorker{ctx: ctx}
+	if got := dispatcher.ActiveTeams(); got != 1 {
+		t.Fatalf("expected one active worker, got %d", got)
+	}
+	cancel()
+	if got := dispatcher.ActiveTeams(); got != 0 {
+		t.Fatalf("expected canceled worker to be inactive, got %d", got)
+	}
+}
+
+func TestTeamWorker_RunHandlesOutOfRangeAndFailure(t *testing.T) {
+	projectDir := t.TempDir()
+	brain, err := NewOrchestrationBrain(projectDir, "owner", "repo", "brief", "session")
+	if err != nil {
+		t.Fatalf("brain: %v", err)
+	}
+	if err := brain.AddTeam("team-general-0", "general", []int{99}, nil); err != nil {
+		t.Fatalf("add team: %v", err)
+	}
+	worker := &TeamWorker{
+		teamID:   "team-general-0",
+		role:     "general",
+		steps:    []int{99},
+		brain:    brain,
+		bus:      NewEventBus(),
+		comms:    NewAgentCommsHub(),
+		cfg:      OrchestratorConfig{ProjectPath: projectDir},
+		ctx:      context.Background(),
+		maxTurns: 1,
+	}
+	worker.run()
+	team, err := brain.GetTeam("team-general-0")
+	if err != nil {
+		t.Fatalf("get team: %v", err)
+	}
+	if team.Status != "done" {
+		t.Fatalf("out-of-range-only worker should finish done, got %q", team.Status)
+	}
+
+	if err := brain.UpdatePlan([]PlanStep{{Index: 1, Title: "Stuck", Body: "No signal", Acceptance: "`go test ./...` passes"}}); err != nil {
+		t.Fatalf("update plan: %v", err)
+	}
+	if err := brain.AddTeam("team-stuck-0", "general", []int{0}, nil); err != nil {
+		t.Fatalf("add stuck team: %v", err)
+	}
+	worker = &TeamWorker{
+		teamID:   "team-stuck-0",
+		role:     "general",
+		steps:    []int{0},
+		brain:    brain,
+		bus:      NewEventBus(),
+		comms:    NewAgentCommsHub(),
+		cfg:      OrchestratorConfig{ProjectPath: projectDir, SessionIDPrefix: "stuck", ChatFn: func(ctx *ChatContext, _ string) { ctx.OnChunk("still working", false) }},
+		ctx:      context.Background(),
+		maxTurns: 2,
+	}
+	worker.run()
+	team, err = brain.GetTeam("team-stuck-0")
+	if err != nil {
+		t.Fatalf("get stuck team: %v", err)
+	}
+	if team.Status != "failed" || !strings.Contains(team.Feedback, "timed out") {
+		t.Fatalf("expected failed stuck team with timeout feedback, got %+v", team)
+	}
+}
+
+func TestTeamWorker_RunStepCancellation(t *testing.T) {
+	projectDir := t.TempDir()
+	brain, err := NewOrchestrationBrain(projectDir, "owner", "repo", "brief", "session")
+	if err != nil {
+		t.Fatalf("brain: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	worker := &TeamWorker{
+		teamID:   "team-canceled-0",
+		role:     "general",
+		brain:    brain,
+		bus:      NewEventBus(),
+		cfg:      OrchestratorConfig{ProjectPath: projectDir, SessionIDPrefix: "cancel"},
+		ctx:      ctx,
+		maxTurns: 1,
+	}
+	err = worker.runStep(&PlanStep{Index: 1, Title: "Canceled"}, 0)
+	if err == nil || !strings.Contains(err.Error(), "canceled") {
+		t.Fatalf("expected canceled runStep, got %v", err)
+	}
+}

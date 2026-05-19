@@ -13,11 +13,18 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/engine/server/db"
 	gofs "github.com/engine/server/fs"
 	goprocess "github.com/shirou/gopsutil/v3/process"
 )
+
+type plannerProviderFunc func(*ChatContext, string, string, []anthropicMessage, *[]ToolCall, *strings.Builder)
+
+func (f plannerProviderFunc) RunLoop(ctx *ChatContext, model, systemPrompt string, history []anthropicMessage, allToolCalls *[]ToolCall, finalText *strings.Builder) {
+	f(ctx, model, systemPrompt, history, allToolCalls, finalText)
+}
 
 // ── isCancelled ───────────────────────────────────────────────────────────────
 
@@ -42,6 +49,25 @@ func TestIsCancelled_ClosedCancel_ReturnsTrue(t *testing.T) {
 	ctx := &ChatContext{Cancel: ch}
 	if !ctx.isCancelled() {
 		t.Error("expected true for closed channel")
+	}
+}
+
+func TestRunPlannerPrePass_ExecutesGuardedCallbacks(t *testing.T) {
+	origProvider := newProvider
+	newProvider = func(string) Provider {
+		return plannerProviderFunc(func(ctx *ChatContext, _ string, _ string, _ []anthropicMessage, _ *[]ToolCall, finalText *strings.Builder) {
+			ctx.OnError("suppressed")
+			ctx.OnChunk("hidden", true)
+			ctx.OnToolCall("read_file", map[string]string{"path": "README.md"})
+			ctx.OnToolResult("read_file", map[string]string{"content": "ok"}, false)
+			finalText.WriteString("plan ready")
+		})
+	}
+	t.Cleanup(func() { newProvider = origProvider })
+
+	ctx := &ChatContext{ProjectPath: t.TempDir(), SessionID: "planner-callbacks"}
+	if got := runPlannerPrePass(ctx, "ollama", "gemma4:e2b", "make a plan", "main"); got != "plan ready" {
+		t.Fatalf("expected captured planner text, got %q", got)
 	}
 }
 
@@ -149,13 +175,13 @@ func makeChatCtx(t *testing.T) *ChatContext {
 	t.Helper()
 	dir := setupHistoryTestProject(t)
 	return &ChatContext{
-		ProjectPath: dir,
-		SessionID:   "ctx-test",
-		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, any) {},
+		ProjectPath:  dir,
+		SessionID:    "ctx-test",
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
-		OnError:     func(string) {},
-		ActiveTools: bootstrapTools(),
+		OnError:      func(string) {},
+		ActiveTools:  bootstrapTools(),
 	}
 }
 
@@ -498,6 +524,78 @@ func TestExecuteToolForTest_Shell_GoworkOff(t *testing.T) {
 	}
 }
 
+func TestExecuteToolForTest_Shell_GoworkOff_EngineProjectsPath(t *testing.T) {
+	base := t.TempDir()
+	projectPath := filepath.Join(base, "engine", "projects", "some-repo")
+	if err := os.MkdirAll(projectPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	ctx := makeChatCtx(t)
+	ctx.ProjectPath = projectPath
+	ctx.ActiveTools = bootstrapTools()
+	result, isErr := ExecuteToolForTest("shell", map[string]any{"command": "go env GOWORK"}, ctx)
+	if isErr {
+		t.Skipf("go not available in test env: %s", result)
+	}
+	if strings.TrimSpace(result) != "off" {
+		t.Errorf("expected GOWORK=off for engine/projects path, got %q", result)
+	}
+}
+
+func TestExecuteToolForTest_Shell_AutonomousExternalCwdAwareness(t *testing.T) {
+	ctx := makeChatCtx(t)
+	policy := AutonomousPolicy{}
+	ctx.AutonomousPolicy = &policy
+	externalDir := t.TempDir()
+
+	result, isErr := ExecuteToolForTest("shell", map[string]any{"command": "pwd", "cwd": externalDir}, ctx)
+	if isErr {
+		t.Fatalf("shell should be allowed with awareness, got error: %s", result)
+	}
+	if !strings.Contains(result, "AWARENESS") {
+		t.Errorf("expected awareness note for external cwd, got %q", result)
+	}
+	if !strings.Contains(result, externalDir) {
+		t.Errorf("expected command to run in external dir %q, got %q", externalDir, result)
+	}
+}
+
+func TestExecuteToolForTest_Shell_AutonomousExternalCdAwareness(t *testing.T) {
+	ctx := makeChatCtx(t)
+	policy := AutonomousPolicy{}
+	ctx.AutonomousPolicy = &policy
+	externalDir := t.TempDir()
+
+	result, isErr := ExecuteToolForTest("shell", map[string]any{"command": "cd " + externalDir + " && pwd"}, ctx)
+	if isErr {
+		t.Fatalf("shell should be allowed with awareness, got error: %s", result)
+	}
+	if !strings.Contains(result, "AWARENESS") {
+		t.Errorf("expected awareness note for external cd, got %q", result)
+	}
+	if !strings.Contains(result, externalDir) {
+		t.Errorf("expected command to reach external dir %q, got %q", externalDir, result)
+	}
+}
+
+func TestExecuteToolForTest_Shell_AutonomousCombinesCommandAndCwdAwareness(t *testing.T) {
+	ctx := makeChatCtx(t)
+	policy := AutonomousPolicy{}
+	ctx.AutonomousPolicy = &policy
+	externalDir := t.TempDir()
+
+	result, isErr := ExecuteToolForTest("shell", map[string]any{
+		"command": "cd " + externalDir + " && pwd",
+		"cwd":     externalDir,
+	}, ctx)
+	if isErr {
+		t.Fatalf("shell should be allowed with awareness, got error: %s", result)
+	}
+	if got := strings.Count(result, "AWARENESS"); got < 2 {
+		t.Fatalf("expected command and cwd awareness notes, got %d in %q", got, result)
+	}
+}
+
 func TestExecuteToolForTest_SearchFiles(t *testing.T) {
 	ctx := makeChatCtx(t)
 	result, isErr := ExecuteToolForTest("search_files", map[string]any{"pattern": "Engine"}, ctx)
@@ -821,12 +919,12 @@ func TestRunOpenAICompatibleLoop_Cancelled(t *testing.T) {
 	ch := make(chan struct{})
 	close(ch)
 	ctx := &ChatContext{
-		Cancel:      ch,
-		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, any) {},
+		Cancel:       ch,
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
-		OnError:     func(string) {},
-		ActiveTools: bootstrapTools(),
+		OnError:      func(string) {},
+		ActiveTools:  bootstrapTools(),
 	}
 	var calls []ToolCall
 	var text strings.Builder
@@ -844,11 +942,11 @@ func TestRunOpenAICompatibleLoop_ServerError(t *testing.T) {
 
 	var errors []string
 	ctx := &ChatContext{
-		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, any) {},
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
-		OnError:     func(err string) { errors = append(errors, err) },
-		ActiveTools: bootstrapTools(),
+		OnError:      func(err string) { errors = append(errors, err) },
+		ActiveTools:  bootstrapTools(),
 	}
 	var calls []ToolCall
 	var text strings.Builder
@@ -874,11 +972,11 @@ func TestRunOpenAICompatibleLoop_TextResponse(t *testing.T) {
 
 	var chunks []string
 	ctx := &ChatContext{
-		OnChunk:     func(content string, done bool) { chunks = append(chunks, content) },
-		OnToolCall:  func(string, any) {},
+		OnChunk:      func(content string, done bool) { chunks = append(chunks, content) },
+		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
-		OnError:     func(string) {},
-		ActiveTools: bootstrapTools(),
+		OnError:      func(string) {},
+		ActiveTools:  bootstrapTools(),
 	}
 	var calls []ToolCall
 	var text strings.Builder
@@ -1034,14 +1132,14 @@ func TestRunAnthropicLoop_Cancelled(t *testing.T) {
 	ch := make(chan struct{})
 	close(ch)
 	ctx := &ChatContext{
-		Cancel:      ch,
-		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, any) {},
+		Cancel:       ch,
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
-		OnError:     func(string) {},
-		ActiveTools: bootstrapTools(),
-		Usage:       &SessionUsage{},
-		Quarantine:  NewToolQuarantine(),
+		OnError:      func(string) {},
+		ActiveTools:  bootstrapTools(),
+		Usage:        &SessionUsage{},
+		Quarantine:   NewToolQuarantine(),
 	}
 	var calls []ToolCall
 	var text strings.Builder
@@ -1061,13 +1159,13 @@ func TestRunAnthropicLoop_ServerError(t *testing.T) {
 
 	var errors []string
 	ctx := &ChatContext{
-		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, any) {},
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
-		OnError:     func(err string) { errors = append(errors, err) },
-		ActiveTools: bootstrapTools(),
-		Usage:       &SessionUsage{},
-		Quarantine:  NewToolQuarantine(),
+		OnError:      func(err string) { errors = append(errors, err) },
+		ActiveTools:  bootstrapTools(),
+		Usage:        &SessionUsage{},
+		Quarantine:   NewToolQuarantine(),
 	}
 	old := http.DefaultClient
 	defer func() { http.DefaultClient = old }()
@@ -1098,13 +1196,13 @@ func TestRunAnthropicLoop_TextResponse(t *testing.T) {
 
 	var chunks []string
 	ctx := &ChatContext{
-		OnChunk:     func(content string, done bool) { chunks = append(chunks, content) },
-		OnToolCall:  func(string, any) {},
+		OnChunk:      func(content string, done bool) { chunks = append(chunks, content) },
+		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
-		OnError:     func(string) {},
-		ActiveTools: bootstrapTools(),
-		Usage:       &SessionUsage{},
-		Quarantine:  NewToolQuarantine(),
+		OnError:      func(string) {},
+		ActiveTools:  bootstrapTools(),
+		Usage:        &SessionUsage{},
+		Quarantine:   NewToolQuarantine(),
 	}
 	old := http.DefaultClient
 	defer func() { http.DefaultClient = old }()
@@ -1508,6 +1606,7 @@ func TestRunAnthropicLoop_QuarantinedTool(t *testing.T) {
 		t.Errorf("expected 'quarantine-done' in output, got %q", text.String())
 	}
 }
+
 // ── aiExecuteTool additional paths ──────────────────────────────────────────
 
 func TestExecuteToolForTest_Shell_ApprovalError(t *testing.T) {
@@ -1874,12 +1973,12 @@ func TestChat_Anthropic_NoKey(t *testing.T) {
 
 	var gotErr string
 	ctx := &ChatContext{
-		ProjectPath: dir,
-		SessionID:   "sess-anth-nokey",
-		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, any) {},
+		ProjectPath:  dir,
+		SessionID:    "sess-anth-nokey",
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
-		OnError:     func(e string) { gotErr = e },
+		OnError:      func(e string) { gotErr = e },
 	}
 	Chat(ctx, "hello")
 	if !strings.Contains(gotErr, "ANTHROPIC_API_KEY") {
@@ -1898,12 +1997,12 @@ func TestChat_OpenAI_NoKey(t *testing.T) {
 
 	var gotErr string
 	ctx := &ChatContext{
-		ProjectPath: dir,
-		SessionID:   "sess-oai-nokey",
-		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, any) {},
+		ProjectPath:  dir,
+		SessionID:    "sess-oai-nokey",
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
-		OnError:     func(e string) { gotErr = e },
+		OnError:      func(e string) { gotErr = e },
 	}
 	Chat(ctx, "hello")
 	if !strings.Contains(gotErr, "OPENAI_API_KEY") {
@@ -1939,12 +2038,12 @@ func TestChat_Ollama_WithGetOpenTabs(t *testing.T) {
 
 	tabsCalled := false
 	ctx := &ChatContext{
-		ProjectPath: projectDir,
-		SessionID:   "sess-opentabs",
-		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, any) {},
+		ProjectPath:  projectDir,
+		SessionID:    "sess-opentabs",
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
-		OnError:     func(string) {},
+		OnError:      func(string) {},
 		GetOpenTabs: func() []TabInfo {
 			tabsCalled = true
 			return []TabInfo{{Path: "main.go", IsActive: true}}
@@ -2256,6 +2355,14 @@ func TestExecuteToolForTest_Shell_CwdErrorAndNoOutputError(t *testing.T) {
 	if result != "(no output)" {
 		t.Fatalf("expected '(no output)', got %q", result)
 	}
+
+	result, isErr = ExecuteToolForTest("shell", map[string]any{"command": "printf failure-output && exit 17"}, ctx)
+	if !isErr {
+		t.Fatalf("expected command failure even when output is present, got %q", result)
+	}
+	if !strings.Contains(result, "failure-output") {
+		t.Fatalf("expected shell output to be preserved, got %q", result)
+	}
 }
 
 func TestExecuteToolForTest_Shell_TruncatesLargeOutput(t *testing.T) {
@@ -2277,13 +2384,13 @@ func TestExecuteToolForTest_Git_BranchAndPushErrorPaths(t *testing.T) {
 	initGitRepoForContextTests(t, projectDir)
 
 	ctx := &ChatContext{
-		ProjectPath: projectDir,
-		SessionID:   "git-branch-push",
-		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, any) {},
+		ProjectPath:  projectDir,
+		SessionID:    "git-branch-push",
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
-		OnError:     func(string) {},
-		ActiveTools: bootstrapTools(),
+		OnError:      func(string) {},
+		ActiveTools:  bootstrapTools(),
 		RequestApproval: func(kind, title, message, command string) (bool, error) {
 			return true, nil
 		},
@@ -2318,13 +2425,13 @@ func TestExecuteToolForTest_GitCommit_SecretScanBlocked(t *testing.T) {
 	}
 
 	ctx := &ChatContext{
-		ProjectPath: projectDir,
-		SessionID:   "git-secret-scan",
-		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, any) {},
+		ProjectPath:  projectDir,
+		SessionID:    "git-secret-scan",
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
-		OnError:     func(string) {},
-		ActiveTools: bootstrapTools(),
+		OnError:      func(string) {},
+		ActiveTools:  bootstrapTools(),
 		RequestApproval: func(kind, title, message, command string) (bool, error) {
 			return true, nil
 		},
@@ -2712,7 +2819,7 @@ func TestChat_TokenBudgetAndToolCalls(t *testing.T) {
 	}
 
 	// Seed enough messages to exceed DefaultTokenBudget (rough approximation).
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		msg := strings.Repeat(fmt.Sprintf("word%d ", i), 50)
 		if err := db.SaveMessage(fmt.Sprintf("mb%d", i), sessionID, "user", msg, nil); err != nil {
 			t.Fatalf("seed message: %v", err)
@@ -3037,7 +3144,6 @@ func TestRunOpenAICompatibleLoop_CancelAfterTools(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		if callCount == 1 {
 			_, _ = io.WriteString(w, firstSSE)
-			close(cancel)
 			return
 		}
 		_, _ = io.WriteString(w, "data: [DONE]\n\n")
@@ -3048,7 +3154,7 @@ func TestRunOpenAICompatibleLoop_CancelAfterTools(t *testing.T) {
 		Cancel:       cancel,
 		OnChunk:      func(string, bool) {},
 		OnToolCall:   func(string, any) {},
-		OnToolResult: func(string, any, bool) {},
+		OnToolResult: func(string, any, bool) { close(cancel) },
 		OnError:      func(string) {},
 		ActiveTools:  bootstrapTools(),
 		ProjectPath:  setupHistoryTestProject(t),
@@ -3057,7 +3163,11 @@ func TestRunOpenAICompatibleLoop_CancelAfterTools(t *testing.T) {
 	var text strings.Builder
 	runOpenAICompatibleLoop(ctx, "openai", "gpt-4o", srv.URL+"/v1", "key", true,
 		"system", []anthropicMessage{}, &calls, &text)
+	if callCount != 1 {
+		t.Fatalf("expected cancellation after tools to stop second request, got %d calls", callCount)
+	}
 }
+
 // ── search_files directory path error (line 744) ─────────────────────────────
 
 func TestExecuteToolForTest_SearchFiles_PathError(t *testing.T) {
@@ -3541,12 +3651,12 @@ func TestChat_SaveMessage_Error(t *testing.T) {
 	}
 	var gotErr string
 	ctx := &ChatContext{
-		ProjectPath: projectDir,
-		SessionID:   sessionID,
-		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, any) {},
+		ProjectPath:  projectDir,
+		SessionID:    sessionID,
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
-		OnError:     func(msg string) { gotErr = msg },
+		OnError:      func(msg string) { gotErr = msg },
 	}
 	t.Setenv("ENGINE_MODEL_PROVIDER", "ollama")
 	t.Setenv("ENGINE_MODEL", "gemma:2b")
@@ -3570,12 +3680,12 @@ func TestChat_TokenBudgetExceeded(t *testing.T) {
 	}
 	var gotErr string
 	ctx := &ChatContext{
-		ProjectPath: projectDir,
-		SessionID:   sessionID,
-		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, any) {},
+		ProjectPath:  projectDir,
+		SessionID:    sessionID,
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
-		OnError:     func(msg string) { gotErr = msg },
+		OnError:      func(msg string) { gotErr = msg },
 	}
 	t.Setenv("ENGINE_MODEL_PROVIDER", "ollama")
 	t.Setenv("ENGINE_MODEL", "gemma:2b")
@@ -4086,10 +4196,10 @@ func TestStreamRequest_TracksMessageDeltaUsage(t *testing.T) {
 	defer func() { http.DefaultTransport = origTransport }()
 
 	ctx := &ChatContext{
-		OnChunk:     func(string, bool) {},
-		OnToolCall:  func(string, any) {},
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
-		OnError:     func(string) {},
+		OnError:      func(string) {},
 	}
 	var text strings.Builder
 	blocks, stopReason, usage, _, err := streamRequest("key", anthropicRequest{Model: "claude-sonnet-4.6"}, ctx, &text)
@@ -4614,6 +4724,81 @@ func TestRunAnthropicLoop_MaxTurnsBreaks(t *testing.T) {
 	}
 }
 
+func TestRunAnthropicLoop_AutonomousBuilderMaxTurnsReportsError(t *testing.T) {
+	ctx := makeChatCtx(t)
+	ctx.Role = RoleAutonomousBuilder
+	ctx.MaxTurns = 0
+	ctx.Usage = &SessionUsage{}
+	ctx.Quarantine = NewToolQuarantine()
+	origMaxTurns := autonomousBuilderMaxTurns
+	autonomousBuilderMaxTurns = 1
+	t.Cleanup(func() { autonomousBuilderMaxTurns = origMaxTurns })
+	var errors []string
+	ctx.OnError = func(msg string) { errors = append(errors, msg) }
+
+	anthropicSSE := strings.Join([]string{
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_info","name":"get_system_info"}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}`,
+		`data: {"type":"content_block_stop","index":0}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":5,"output_tokens":3}}`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+
+	callCount := 0
+	old := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		callCount++
+		return &http.Response{Status: "200 OK", StatusCode: 200, Body: io.NopCloser(strings.NewReader(anthropicSSE))}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = old })
+
+	var calls []ToolCall
+	var text strings.Builder
+	runAnthropicLoop(ctx, "claude-3-5-sonnet-20241022", "fake-key", "system", nil, &calls, &text)
+
+	if callCount != 1 {
+		t.Fatalf("expected one provider call before max-turns error, got %d", callCount)
+	}
+	if !strings.Contains(strings.Join(errors, "\n"), "autonomous builder stopped after 1 turns without signal_done") {
+		t.Fatalf("expected autonomous max-turns error, got %v", errors)
+	}
+}
+
+func TestRunAnthropicLoop_CancelAfterTools(t *testing.T) {
+	cancel := make(chan struct{})
+	ctx := makeChatCtx(t)
+	ctx.Cancel = cancel
+	ctx.Usage = &SessionUsage{}
+	ctx.Quarantine = NewToolQuarantine()
+	ctx.OnToolResult = func(string, any, bool) { close(cancel) }
+
+	anthropicSSE := strings.Join([]string{
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_info","name":"get_system_info"}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}`,
+		`data: {"type":"content_block_stop","index":0}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":5,"output_tokens":3}}`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n")
+
+	callCount := 0
+	old := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		callCount++
+		return &http.Response{Status: "200 OK", StatusCode: 200, Body: io.NopCloser(strings.NewReader(anthropicSSE))}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = old })
+
+	var calls []ToolCall
+	var text strings.Builder
+	runAnthropicLoop(ctx, "claude-3-5-sonnet-20241022", "fake-key", "system", nil, &calls, &text)
+
+	if callCount != 1 {
+		t.Fatalf("expected cancellation after first tool turn, got %d calls", callCount)
+	}
+}
+
 // ── runOpenAICompatibleLoop: MaxTurns break + toolChoice=required (lines 2216-2219, 2236-2238) ──
 
 func TestRunOpenAICompatibleLoop_MaxTurnsBreaks(t *testing.T) {
@@ -4643,6 +4828,125 @@ func TestRunOpenAICompatibleLoop_MaxTurnsBreaks(t *testing.T) {
 	// MaxTurns=1: iteration 1 makes 1 HTTP call; iteration 2 breaks before HTTP.
 	if callCount != 1 {
 		t.Fatalf("expected 1 HTTP call with MaxTurns=1, got %d", callCount)
+	}
+}
+
+func TestRunOpenAICompatibleLoop_AutonomousBuilderRequiresToolChoice(t *testing.T) {
+	ctx := makeChatCtx(t)
+	ctx.Role = RoleAutonomousBuilder
+	ctx.Usage = &SessionUsage{}
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var req openAIRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.ToolChoice != "required" {
+			t.Fatalf("expected autonomous builder to require tool use, got %q", req.ToolChoice)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_sd","function":{"name":"signal_done","arguments":"{\"summary\":\"done\"}"}}]},"finish_reason":"tool_calls"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(server.Close)
+
+	var calls []ToolCall
+	var text strings.Builder
+	runOpenAICompatibleLoop(ctx, "openai", "gpt-4o", server.URL, "fake-key", true, "system", nil, &calls, &text)
+	if requests != 1 {
+		t.Fatalf("expected a single signal_done request, got %d", requests)
+	}
+}
+
+func TestProviderRequestContext_ChatCancelCancelsRequest(t *testing.T) {
+	cancelChat := make(chan struct{})
+	reqCtx, cancelReq := providerRequestContext(&ChatContext{Cancel: cancelChat})
+	t.Cleanup(cancelReq)
+
+	close(cancelChat)
+	select {
+	case <-reqCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("expected request context to close when chat is canceled")
+	}
+}
+
+func TestRunOpenAICompatibleLoop_AutonomousBuilderContinuesAfterNoToolStop(t *testing.T) {
+	ctx := makeChatCtx(t)
+	ctx.Role = RoleAutonomousBuilder
+	ctx.Usage = &SessionUsage{}
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var req openAIRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if requests == 2 {
+			foundReminder := false
+			for _, msg := range req.Messages {
+				if content, ok := msg.Content.(string); ok && strings.Contains(content, "Continue autonomously") {
+					foundReminder = true
+				}
+			}
+			if !foundReminder {
+				t.Fatalf("second request missing autonomous continuation reminder: %#v", req.Messages)
+			}
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		if requests == 1 {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"I will start."},"finish_reason":"stop"}]}`+"\n\n")
+			fmt.Fprint(w, "data: [DONE]\n\n")
+			return
+		}
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_sd","function":{"name":"signal_done","arguments":"{\"summary\":\"done\"}"}}]},"finish_reason":"tool_calls"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(server.Close)
+
+	var calls []ToolCall
+	var text strings.Builder
+	runOpenAICompatibleLoop(ctx, "openai", "gpt-4o", server.URL, "fake-key", true, "system", nil, &calls, &text)
+
+	if requests != 2 {
+		t.Fatalf("expected one continuation request after no-tool stop, got %d", requests)
+	}
+	if len(calls) != 1 || calls[0].Name != "signal_done" {
+		t.Fatalf("expected signal_done after continuation, got %#v", calls)
+	}
+}
+
+func TestRunOpenAICompatibleLoop_AutonomousBuilderMaxTurnsReportsError(t *testing.T) {
+	ctx := makeChatCtx(t)
+	ctx.Role = RoleAutonomousBuilder
+	ctx.MaxTurns = 1
+	ctx.Usage = &SessionUsage{}
+	var errors []string
+	ctx.OnError = func(msg string) { errors = append(errors, msg) }
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(server.Close)
+
+	var calls []ToolCall
+	var text strings.Builder
+	runOpenAICompatibleLoop(ctx, "openai", "gpt-4o", server.URL, "fake-key", true, "system", nil, &calls, &text)
+
+	if requests != 1 {
+		t.Fatalf("expected loop to stop before a second provider request, got %d", requests)
+	}
+	joined := strings.Join(errors, "\n")
+	if !strings.Contains(joined, "autonomous builder stopped after 1 turns without signal_done") {
+		t.Fatalf("expected max-turns error, got %v", errors)
 	}
 }
 

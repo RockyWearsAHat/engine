@@ -46,9 +46,11 @@ type EventsWatcher struct {
 	token   string
 	monitor *RepoMonitor
 
-	mu   sync.Mutex
-	etag string
-	seen map[string]bool // full_name → README contained @engine last check
+	mu        sync.Mutex
+	etag      string
+	seen      map[string]bool   // full_name → README contained @engine last check
+	processed map[string]bool   // event.ID → already dispatched
+	processedOrder []string     // FIFO of processed IDs (bounded to ~1k)
 
 	// Injectable for tests.
 	// Injectable for tests.
@@ -65,12 +67,39 @@ func NewEventsWatcher(token string, monitor *RepoMonitor) *EventsWatcher {
 		token:         token,
 		monitor:       monitor,
 		seen:          make(map[string]bool),
+		processed:     make(map[string]bool),
 		tickFn:        time.After,
 		loginFn:       defaultEventsLoginFn,
 		listReposFn:   defaultEventsListReposFn,
 		fetchEventsFn: defaultFetchEventsFn,
 		fetchReadmeFn: defaultEventsReadmeFn,
 	}
+}
+
+// maxProcessedEventIDs bounds the dedup set so it doesn't grow unbounded over
+// a long-running watcher session. GitHub's events API returns ~30 events per
+// page; keeping 1024 IDs is well past anything we'd see in one poll burst.
+const maxProcessedEventIDs = 1024
+
+// markEventProcessed atomically reserves an event.ID. Returns false if the ID
+// was already dispatched (so the caller skips the event), true on first sight.
+func (w *EventsWatcher) markEventProcessed(id string) bool {
+	if strings.TrimSpace(id) == "" {
+		return true // events without IDs are processed every time (best-effort)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.processed[id] {
+		return false
+	}
+	w.processed[id] = true
+	w.processedOrder = append(w.processedOrder, id)
+	if len(w.processedOrder) > maxProcessedEventIDs {
+		oldest := w.processedOrder[0]
+		w.processedOrder = w.processedOrder[1:]
+		delete(w.processed, oldest)
+	}
+	return true
 }
 
 // ghCLITokenFn is injectable for tests.
@@ -244,6 +273,11 @@ func (w *EventsWatcher) processEvents(events []eventEntry) {
 	seen := map[string]target{}
 
 	for _, ev := range events {
+		// Skip events we've already dispatched in a prior poll. The events API
+		// returns the same events repeatedly until ETag stabilises.
+		if !w.markEventProcessed(ev.ID) {
+			continue
+		}
 		name := ev.Repo.Name
 		switch ev.Type {
 		case "PushEvent":
@@ -273,6 +307,21 @@ func (w *EventsWatcher) processEvents(events []eventEntry) {
 			if p.RefType == "repository" {
 				seen[name] = target{name, "HEAD"}
 			}
+
+		case "IssuesEvent":
+			// Only act on issues for repos we already know carry @engine.
+			// This keeps Engine focused on its tracked surface and avoids
+			// firing on every issue across the user's entire account.
+			if !w.repoIsTagged(name) {
+				continue
+			}
+			w.dispatchIssueEvent(name, ev.Payload)
+
+		case "IssueCommentEvent":
+			if !w.repoIsTagged(name) {
+				continue
+			}
+			w.dispatchIssueCommentEvent(name, ev.Payload)
 		}
 	}
 
@@ -345,4 +394,113 @@ func (w *EventsWatcher) checkRepo(fullName, branch string) {
 			w.monitor.OnReadmeChange(json.RawMessage(payload))
 		}
 	}
+}
+
+// repoIsTagged reports whether the events watcher has previously seen the
+// given full repository name ("owner/name") as carrying the @engine tag in
+// its README. Used to gate issue/comment dispatch so Engine only acts on
+// issues for repos it is already responsible for.
+func (w *EventsWatcher) repoIsTagged(fullName string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.seen[fullName]
+}
+
+// dispatchIssueEvent reshapes a GitHub Events API IssuesEvent payload into
+// the webhook-shaped payload the RepoMonitor's OnIssueOpened expects, and
+// fires the callback when the action is "opened".
+func (w *EventsWatcher) dispatchIssueEvent(fullName string, payload json.RawMessage) {
+	if w.monitor == nil || w.monitor.OnIssueOpened == nil {
+		return
+	}
+	var p struct {
+		Action string `json:"action"`
+		Issue  struct {
+			User struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		} `json:"issue"`
+	}
+	// Decode twice: once for the user filter, once for raw passthrough.
+	var rawProbe struct {
+		Action string          `json:"action"`
+		Issue  json.RawMessage `json:"issue"`
+	}
+	if err := json.Unmarshal(payload, &rawProbe); err != nil {
+		log.Printf("events-watcher: parse IssuesEvent payload: %v", err)
+		return
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		log.Printf("events-watcher: parse IssuesEvent payload (user filter): %v", err)
+		return
+	}
+	if p.Action != "opened" {
+		return
+	}
+	// Don't react to issues we opened ourselves — same feedback-loop concern as comments.
+	if engineLogin := EngineLogin(); engineLogin != "" && strings.EqualFold(p.Issue.User.Login, engineLogin) {
+		return
+	}
+	repoName := fullName
+	if parts := strings.SplitN(fullName, "/", 2); len(parts) == 2 {
+		repoName = parts[1]
+	}
+	out, _ := json.Marshal(map[string]any{
+		"action": p.Action,
+		"issue":  rawProbe.Issue,
+		"repository": map[string]any{
+			"full_name": fullName,
+			"name":      repoName,
+		},
+	})
+	log.Printf("events-watcher: issue opened in %s — dispatching to monitor", fullName)
+	w.monitor.OnIssueOpened(json.RawMessage(out))
+}
+
+// dispatchIssueCommentEvent reshapes a GitHub Events API IssueCommentEvent
+// payload into the webhook-shaped payload the RepoMonitor's OnIssueComment
+// expects, and fires the callback for newly created comments.
+func (w *EventsWatcher) dispatchIssueCommentEvent(fullName string, payload json.RawMessage) {
+	if w.monitor == nil || w.monitor.OnIssueComment == nil {
+		return
+	}
+	var p struct {
+		Action  string `json:"action"`
+		Issue   json.RawMessage `json:"issue"`
+		Comment struct {
+			Body string `json:"body"`
+			User struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		} `json:"comment"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		log.Printf("events-watcher: parse IssueCommentEvent payload: %v", err)
+		return
+	}
+	if p.Action != "created" {
+		return
+	}
+	// Don't react to our own comments — that creates an infinite feedback loop
+	// where bot narration becomes new events that spawn more bot narration.
+	if engineLogin := EngineLogin(); engineLogin != "" && strings.EqualFold(p.Comment.User.Login, engineLogin) {
+		return
+	}
+	// Re-serialize as the webhook-shaped payload (with body+user inside comment).
+	rawComment, _ := json.Marshal(p.Comment)
+	repoName := fullName
+	if parts := strings.SplitN(fullName, "/", 2); len(parts) == 2 {
+		repoName = parts[1]
+	}
+	out, _ := json.Marshal(map[string]any{
+		"action":  p.Action,
+		"issue":   p.Issue,
+		"comment": json.RawMessage(rawComment),
+		"repository": map[string]any{
+			"full_name": fullName,
+			"name":      repoName,
+		},
+	})
+	log.Printf("events-watcher: issue comment in %s — dispatching to monitor", fullName)
+	w.monitor.OnIssueComment(json.RawMessage(out))
 }

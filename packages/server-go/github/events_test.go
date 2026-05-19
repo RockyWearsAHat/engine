@@ -20,6 +20,7 @@ func makeWatcher(monitor *RepoMonitor) *EventsWatcher {
 		token:   "test",
 		monitor: monitor,
 		seen:    map[string]bool{},
+		processed: map[string]bool{},
 		tickFn:  func(_ time.Duration) <-chan time.Time { ch := make(chan time.Time, 1); ch <- time.Now(); return ch },
 		loginFn: func(_ string) (string, error) { return "testuser", nil },
 		listReposFn: func(_ string, _ int) ([]UserRepo, error) {
@@ -762,5 +763,276 @@ func TestGhTokenFromCLI_EchoPath_ReturnsToken(t *testing.T) {
 	tok := ghTokenFromCLI()
 	if tok == "" {
 		t.Error("expected non-empty token from echo stand-in")
+	}
+}
+
+// ── IssuesEvent / IssueCommentEvent dispatch ─────────────────────────────────
+
+func TestEventsWatcher_IssuesEvent_OpenedOnTaggedRepo_FiresOpenedHandler(t *testing.T) {
+	monitor := NewRepoMonitor()
+	var fired int
+	var got json.RawMessage
+	monitor.OnIssueOpened = func(p json.RawMessage) { fired++; got = p }
+
+	w := makeWatcher(monitor)
+	// Mark the repo as tagged so issues for it are eligible to dispatch.
+	w.mu.Lock()
+	w.seen["alice/myrepo"] = true
+	w.mu.Unlock()
+
+	payload, _ := json.Marshal(map[string]any{
+		"action": "opened",
+		"issue":  map[string]any{"number": 42, "title": "broken"},
+	})
+	w.processEvents([]eventEntry{
+		{Type: "IssuesEvent", Repo: struct {
+			Name string `json:"name"`
+		}{Name: "alice/myrepo"}, Payload: payload},
+	})
+
+	if fired != 1 {
+		t.Fatalf("expected OnIssueOpened to fire once, got %d", fired)
+	}
+	parsed, err := ParseIssue(&WebhookEvent{Type: "issues", Payload: got})
+	if err != nil {
+		t.Fatalf("ParseIssue on dispatched payload: %v", err)
+	}
+	if parsed.Issue.Number != 42 {
+		t.Errorf("expected issue #42, got #%d", parsed.Issue.Number)
+	}
+	if parsed.Repository.FullName != "alice/myrepo" {
+		t.Errorf("expected repository.full_name alice/myrepo, got %q", parsed.Repository.FullName)
+	}
+}
+
+func TestEventsWatcher_IssuesEvent_UntaggedRepo_NoFire(t *testing.T) {
+	monitor := NewRepoMonitor()
+	var fired int
+	monitor.OnIssueOpened = func(_ json.RawMessage) { fired++ }
+
+	w := makeWatcher(monitor)
+	// Do NOT mark the repo as tagged.
+
+	payload, _ := json.Marshal(map[string]any{
+		"action": "opened",
+		"issue":  map[string]any{"number": 1},
+	})
+	w.processEvents([]eventEntry{
+		{Type: "IssuesEvent", Repo: struct {
+			Name string `json:"name"`
+		}{Name: "alice/other"}, Payload: payload},
+	})
+
+	if fired != 0 {
+		t.Fatalf("expected no dispatch for untagged repo, got %d fires", fired)
+	}
+}
+
+func TestEventsWatcher_IssuesEvent_NonOpenedAction_NoFire(t *testing.T) {
+	monitor := NewRepoMonitor()
+	var fired int
+	monitor.OnIssueOpened = func(_ json.RawMessage) { fired++ }
+
+	w := makeWatcher(monitor)
+	w.mu.Lock()
+	w.seen["alice/myrepo"] = true
+	w.mu.Unlock()
+
+	payload, _ := json.Marshal(map[string]any{
+		"action": "edited",
+		"issue":  map[string]any{"number": 7},
+	})
+	w.processEvents([]eventEntry{
+		{Type: "IssuesEvent", Repo: struct {
+			Name string `json:"name"`
+		}{Name: "alice/myrepo"}, Payload: payload},
+	})
+
+	if fired != 0 {
+		t.Fatalf("expected no dispatch for non-opened action, got %d fires", fired)
+	}
+}
+
+func TestEventsWatcher_DispatchIssueEvent_Guards(t *testing.T) {
+	makeWatcher(nil).dispatchIssueEvent("alice/myrepo", json.RawMessage(`{"action":"opened"}`))
+
+	monitor := NewRepoMonitor()
+	makeWatcher(monitor).dispatchIssueEvent("alice/myrepo", json.RawMessage(`{"action":"opened"}`))
+
+	fired := false
+	monitor.OnIssueOpened = func(_ json.RawMessage) { fired = true }
+	makeWatcher(monitor).dispatchIssueEvent("alice/myrepo", json.RawMessage(`{`))
+	if fired {
+		t.Fatal("invalid IssuesEvent payload should not fire handler")
+	}
+
+	makeWatcher(monitor).dispatchIssueEvent("myrepo", json.RawMessage(`{"action":"opened","issue":{"number":1}}`))
+	if !fired {
+		t.Fatal("single-segment repo name should still dispatch")
+	}
+}
+
+func TestEventsWatcher_IssueCommentEvent_CreatedOnTaggedRepo_FiresHandler(t *testing.T) {
+	monitor := NewRepoMonitor()
+	var fired int
+	var got json.RawMessage
+	monitor.OnIssueComment = func(p json.RawMessage) { fired++; got = p }
+
+	w := makeWatcher(monitor)
+	w.mu.Lock()
+	w.seen["alice/myrepo"] = true
+	w.mu.Unlock()
+
+	payload, _ := json.Marshal(map[string]any{
+		"action":  "created",
+		"issue":   map[string]any{"number": 9},
+		"comment": map[string]any{"body": "@engine please look"},
+	})
+	w.processEvents([]eventEntry{
+		{Type: "IssueCommentEvent", Repo: struct {
+			Name string `json:"name"`
+		}{Name: "alice/myrepo"}, Payload: payload},
+	})
+
+	if fired != 1 {
+		t.Fatalf("expected OnIssueComment to fire once, got %d", fired)
+	}
+	if !strings.Contains(string(got), "alice/myrepo") {
+		t.Errorf("expected dispatched payload to include repo full_name, got %s", got)
+	}
+}
+
+func TestEventsWatcher_IssueCommentEvent_UntaggedRepo_NoFire(t *testing.T) {
+	monitor := NewRepoMonitor()
+	var fired int
+	monitor.OnIssueComment = func(_ json.RawMessage) { fired++ }
+
+	w := makeWatcher(monitor)
+	payload, _ := json.Marshal(map[string]any{
+		"action":  "created",
+		"issue":   map[string]any{"number": 1},
+		"comment": map[string]any{"body": "hi"},
+	})
+	w.processEvents([]eventEntry{
+		{Type: "IssueCommentEvent", Repo: struct {
+			Name string `json:"name"`
+		}{Name: "alice/random"}, Payload: payload},
+	})
+
+	if fired != 0 {
+		t.Fatalf("expected no dispatch for untagged repo, got %d fires", fired)
+	}
+}
+
+func TestEventsWatcher_IssueCommentEvent_NonCreatedAction_NoFire(t *testing.T) {
+	monitor := NewRepoMonitor()
+	var fired int
+	monitor.OnIssueComment = func(_ json.RawMessage) { fired++ }
+
+	w := makeWatcher(monitor)
+	w.mu.Lock()
+	w.seen["alice/myrepo"] = true
+	w.mu.Unlock()
+
+	payload, _ := json.Marshal(map[string]any{
+		"action":  "edited",
+		"issue":   map[string]any{"number": 1},
+		"comment": map[string]any{"body": "changed"},
+	})
+	w.processEvents([]eventEntry{{Type: "IssueCommentEvent", Repo: struct {
+		Name string `json:"name"`
+	}{Name: "alice/myrepo"}, Payload: payload}})
+
+	if fired != 0 {
+		t.Fatalf("expected no dispatch for non-created action, got %d", fired)
+	}
+}
+
+func TestEventsWatcher_DispatchIssueCommentEvent_Guards(t *testing.T) {
+	makeWatcher(nil).dispatchIssueCommentEvent("alice/myrepo", json.RawMessage(`{"action":"created"}`))
+
+	monitor := NewRepoMonitor()
+	makeWatcher(monitor).dispatchIssueCommentEvent("alice/myrepo", json.RawMessage(`{"action":"created"}`))
+
+	fired := false
+	monitor.OnIssueComment = func(_ json.RawMessage) { fired = true }
+	makeWatcher(monitor).dispatchIssueCommentEvent("alice/myrepo", json.RawMessage(`{`))
+	if fired {
+		t.Fatal("invalid IssueCommentEvent payload should not fire handler")
+	}
+
+	makeWatcher(monitor).dispatchIssueCommentEvent("myrepo", json.RawMessage(`{"action":"created","issue":{"number":1},"comment":{"body":"ok"}}`))
+	if !fired {
+		t.Fatal("single-segment repo name should still dispatch comment")
+	}
+}
+
+func TestEventsWatcher_ProcessEvents_DuplicateIDInBatch_SkipsSecond(t *testing.T) {
+	monitor := NewRepoMonitor()
+	fired := 0
+	monitor.OnIssueOpened = func(_ json.RawMessage) { fired++ }
+
+	w := makeWatcher(monitor)
+	w.mu.Lock()
+	w.seen["alice/myrepo"] = true
+	w.mu.Unlock()
+
+	payload := json.RawMessage(`{"action":"opened","issue":{"number":1,"user":{"login":"someone"}}}`)
+	w.processEvents([]eventEntry{
+		{ID: "dup-1", Type: "IssuesEvent", Repo: struct {
+			Name string `json:"name"`
+		}{Name: "alice/myrepo"}, Payload: payload},
+		{ID: "dup-1", Type: "IssuesEvent", Repo: struct {
+			Name string `json:"name"`
+		}{Name: "alice/myrepo"}, Payload: payload},
+	})
+
+	if fired != 1 {
+		t.Fatalf("expected one dispatch for duplicate event id, got %d", fired)
+	}
+}
+
+func TestEventsWatcher_DispatchIssueEvent_UserFilterParseError(t *testing.T) {
+	monitor := NewRepoMonitor()
+	fired := false
+	monitor.OnIssueOpened = func(_ json.RawMessage) { fired = true }
+
+	makeWatcher(monitor).dispatchIssueEvent("alice/myrepo", json.RawMessage(`{"action":"opened","issue":{"user":{"login":123}}}`))
+	if fired {
+		t.Fatal("expected no dispatch when user filter decode fails")
+	}
+}
+
+func TestEventsWatcher_DispatchIssueEvent_SelfOpenedIssue_Skips(t *testing.T) {
+	t.Setenv("ENGINE_GITHUB_LOGIN", "engine-bot")
+	engineLoginMu.Lock()
+	engineLoginCached = ""
+	engineLoginAt = time.Time{}
+	engineLoginMu.Unlock()
+
+	monitor := NewRepoMonitor()
+	fired := false
+	monitor.OnIssueOpened = func(_ json.RawMessage) { fired = true }
+
+	makeWatcher(monitor).dispatchIssueEvent("alice/myrepo", json.RawMessage(`{"action":"opened","issue":{"user":{"login":"engine-bot"}}}`))
+	if fired {
+		t.Fatal("expected no dispatch for self-opened issue")
+	}
+}
+
+func TestEventsWatcher_DispatchIssueCommentEvent_SelfComment_Skips(t *testing.T) {
+	t.Setenv("ENGINE_GITHUB_LOGIN", "engine-bot")
+	engineLoginMu.Lock()
+	engineLoginCached = ""
+	engineLoginAt = time.Time{}
+	engineLoginMu.Unlock()
+
+	monitor := NewRepoMonitor()
+	fired := false
+	monitor.OnIssueComment = func(_ json.RawMessage) { fired = true }
+
+	makeWatcher(monitor).dispatchIssueCommentEvent("alice/myrepo", json.RawMessage(`{"action":"created","issue":{"number":1},"comment":{"body":"x","user":{"login":"engine-bot"}}}`))
+	if fired {
+		t.Fatal("expected no dispatch for self-authored comment")
 	}
 }

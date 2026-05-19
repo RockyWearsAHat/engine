@@ -25,6 +25,10 @@ Engine is an AI-native code editor. AI is not bolted onto a text editor — it i
 
 ## LINT POLICY: DO NOT INSTALL OR USE ESLINT/BIOME/OXC IN THIS REPO. USE gsh strict lint ONLY.
 
+## AUTONOMOUS CLONE LOCATION POLICY: default autonomous repo location is ~/.engine/projects (or ENGINE_CLONES_DIR override). Do not clone autonomous project repos under this repository path unless explicitly requested, because nested Go repos inherit parent go.work and fail validation/tooling. Never create or preserve workspace symlinks/mirrors such as `.engine/projects -> ~/.engine/projects` or `packages/server-go/.engine/projects -> ~/.engine/projects`; those make VS Code/git show fake runtime copies. If one appears, remove the symlink entry only and keep the real `~/.engine/projects` directory.
+
+## DISCORD SCREENSHOT POLICY: use scripts/discord-screenshot.sh and default output under ~/.engine/screenshots to keep artifacts outside workspace repo paths.
+
 ## Core Principles
 1. **AI-first, not AI-attached** — The AI autonomously controls the editor (files, terminals, branches, agents) without requiring the human in the loop. Chat and editor are intentionally separate surfaces: the chat panel is the human's communication window with the AI dev lead; the editor is the code surface the AI operates on.
 2. **Persistent context** — Full conversation history, project direction summaries, and session state are maintained and referenced automatically.
@@ -43,6 +47,7 @@ Engine is an AI-native code editor. AI is not bolted onto a text editor — it i
 - The editor wraps AI capabilities as first-class primitives, not extensions
 - Session history and project direction are stored persistently, not just in-memory
 - Agent orchestration is a core subsystem, not a plugin
+- Agent communication is a project-scoped core subsystem: one lead agent reports to the user while worker teams use focused peer messages (`agent_list`, `agent_send`, `agent_inbox`, `agent_await`) to exchange context without bloating a single model window
 - Go server includes a Discord control-plane module for private remote commands with project-local config in `.engine/discord.json` (see `.github/DISCORD_CONTROL_PLANE.md`)
 - Full architecture reference: `obsidian-vault/Engine/Architecture.md`
 

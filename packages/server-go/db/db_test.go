@@ -256,6 +256,16 @@ func TestLogToolCall(t *testing.T) {
 	}
 }
 
+func TestLogToolCall_DBNotInitialized_ReturnsError(t *testing.T) {
+	old := globalDB
+	globalDB = nil
+	t.Cleanup(func() { globalDB = old })
+
+	if err := LogToolCall("tc-nil", "tool-sess", "shell", nil, "", false, 0); err == nil {
+		t.Fatal("expected error when database is not initialized")
+	}
+}
+
 func TestValidationResults(t *testing.T) {
 	initTestDB(t)
 

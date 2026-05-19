@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,7 +29,7 @@ const (
 	maxDiscordMessageChars = 1800
 	// Use Administrator to avoid setup failures caused by missing granular perms
 	// or role hierarchy mismatches during initial bootstrap.
-	requiredInvitePerms    = discordgo.PermissionAdministrator
+	requiredInvitePerms = discordgo.PermissionAdministrator
 )
 
 // Config controls Discord bot behavior.
@@ -69,6 +71,9 @@ type persistedState struct {
 // Tests replace it with a stub to exercise callback coverage without a live LLM.
 var chatFunc = ai.Chat
 
+// listSessionsFn is injectable for status tests without mutating db internals.
+var listSessionsFn = db.ListSessions
+
 // guildLeaveFn is injectable for tests covering LeaveGuild without making
 // outbound Discord API calls.
 var guildLeaveFn = func(dg *discordgo.Session, guildID string) error {
@@ -86,6 +91,10 @@ type Service struct {
 	active          map[string]bool
 	activeByChannel map[string]bool
 	cloneProjectFn  func(url, dest string) error
+	// testSendHook, when non-nil, intercepts send() calls instead of hitting
+	// the live discordgo session. Used by control_test.go to inspect the
+	// messages a handler would have posted.
+	testSendHook func(channelID, msg string)
 }
 
 // LoadConfig reads Discord configuration from a project file first, then env overrides.
@@ -327,12 +336,26 @@ func (s *Service) onMessage(_ *discordgo.Session, m *discordgo.MessageCreate) {
 		s.handlePauseResume(m, true, args)
 	case "resume":
 		s.handlePauseResume(m, false, args)
+	case "stop":
+		s.handleStopCommand(m, args)
+	case "redirect":
+		s.handleRedirectCommand(m, args)
+	case "plan":
+		s.handlePlanCommand(m, args)
+	case "orchestrators", "orch":
+		s.handleOrchestratorsCommand(m, args)
 	case "ask":
 		s.handleAskCommand(m, args)
+	case "auto", "autonomous", "build":
+		s.handleAutoCommand(m, args)
 	case "search":
 		s.handleSearchCommand(m, args)
 	case "history":
 		s.handleHistoryCommand(m, args)
+	case "issues", "assigned":
+		s.handleIssuesCommand(m, args)
+	case "identity":
+		s.handleIdentityCommand(m)
 	default:
 		s.send(m.ChannelID, "Unknown command. Use !help.")
 	}
@@ -433,11 +456,14 @@ func resolveClonesDir(projectPath string) string {
 	if clonesDir := strings.TrimSpace(os.Getenv("ENGINE_CLONES_DIR")); clonesDir != "" {
 		return clonesDir
 	}
+	home, _ := os.UserHomeDir()
+	if strings.TrimSpace(home) != "" {
+		return filepath.Join(home, ".engine", "projects")
+	}
 	if strings.TrimSpace(projectPath) != "" {
 		return filepath.Join(projectPath, ".engine", "projects")
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".engine", "projects")
+	return filepath.Join(".engine", "projects")
 }
 
 func cloneDirNameCandidates(rawURL string) ([]string, string) {
@@ -643,7 +669,32 @@ func (s *Service) handleStatusCommand(m *discordgo.MessageCreate, args []string)
 		len(status.Untracked),
 		ternary(binding.Paused, "paused", "active"),
 	)
+	if scaffold := latestScaffoldStatusLine(binding.ProjectPath); scaffold != "" {
+		msg += "\\n" + scaffold
+	}
 	s.send(m.ChannelID, msg)
+}
+
+func latestScaffoldStatusLine(projectPath string) string {
+	sessions, err := listSessionsFn(projectPath)
+	if err != nil {
+		return ""
+	}
+	for _, sess := range sessions {
+		if !strings.HasPrefix(strings.ToLower(sess.ID), "scaffold-") {
+			continue
+		}
+		updated := strings.TrimSpace(sess.UpdatedAt)
+		if updated == "" {
+			updated = strings.TrimSpace(sess.CreatedAt)
+		}
+		summary := strings.TrimSpace(sess.Summary)
+		if summary == "" {
+			summary = "no summary yet"
+		}
+		return fmt.Sprintf("latest scaffold: %s | updated: %s | messages: %d | %s", shortID(sess.ID), updated, sess.MessageCount, truncate(summary, 160))
+	}
+	return ""
 }
 
 func (s *Service) handleSessionsCommand(m *discordgo.MessageCreate, args []string) {
@@ -706,6 +757,8 @@ func (s *Service) handlePauseResume(m *discordgo.MessageCreate, pause bool, args
 	s.stateMu.Unlock()
 	_ = s.saveState()
 
+	s.applyPauseToOrchestrator(binding.ProjectPath, pause)
+
 	if pause {
 		s.send(m.ChannelID, fmt.Sprintf("Paused project %s.", binding.RepoName))
 	} else {
@@ -731,12 +784,49 @@ func (s *Service) handleAskCommand(m *discordgo.MessageCreate, args []string) {
 	s.runAgentChat(m, binding, prompt)
 }
 
+// handleAutoCommand is the explicit autonomous-mode quick command. Phrasing
+// is `!auto <prompt>`, `!autonomous <prompt>`, or `!build <prompt>`. The
+// prompt is forwarded to the agent prefixed with `/auto` so the autonomous
+// intent detector engages unconditionally — no matter how the user phrased
+// the actual request.
+func (s *Service) handleAutoCommand(m *discordgo.MessageCreate, args []string) {
+	if len(args) == 0 {
+		s.send(m.ChannelID, "Usage: !auto <prompt> (or !autonomous / !build). Engages autonomous mode for that turn.")
+		return
+	}
+	binding, prompt, ok := s.resolveAskTarget(m.ChannelID, args)
+	if !ok {
+		s.send(m.ChannelID, "Project not found. Use a project channel or include project name.")
+		return
+	}
+	if strings.TrimSpace(prompt) == "" {
+		s.send(m.ChannelID, "Prompt is required.")
+		return
+	}
+	s.runAgentChat(m, binding, "/auto "+prompt)
+}
+
 func (s *Service) handleDirectChatMessage(m *discordgo.MessageCreate, binding ProjectBinding) {
 	prompt := strings.TrimSpace(m.Content)
 	if prompt == "" {
 		return
 	}
+	if isStatusLikeDirectMessage(prompt) {
+		s.handleStatusCommand(m, nil)
+		return
+	}
 	s.runAgentChat(m, binding, prompt)
+}
+
+func isStatusLikeDirectMessage(prompt string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(prompt))
+	normalized = strings.Trim(normalized, " \t\n\r?!.")
+	switch normalized {
+	case "status", "update", "progress", "build status", "scaffold status", "what is the status", "whats the status", "what's the status", "how is it going", "where are we", "any update":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) runAgentChat(m *discordgo.MessageCreate, binding ProjectBinding, prompt string) {
@@ -790,10 +880,26 @@ func (s *Service) runAgentChat(m *discordgo.MessageCreate, binding ProjectBindin
 		cancel := make(chan struct{})
 		defer close(cancel)
 
+		chatPrompt := promptWithProjectStatusContext(binding, prompt)
+
+		// Autonomous intent detection: phrases like "build", "go autonomous",
+		// "/build", "@engine build" engage the autonomous builder role with
+		// awareness-only safety (no approval modals, awareness notes inline).
+		var autonomousPolicy *ai.AutonomousPolicy
+		role := ai.RoleInteractive
+		if ai.DetectAutonomousIntent(prompt) {
+			p := ai.ResolveAutonomousPolicy(binding.ProjectPath)
+			autonomousPolicy = &p
+			role = ai.RoleAutonomousBuilder
+			s.send(replyChannelID, "🤖 Autonomous mode engaged — approvals bypassed, awareness notes inline.")
+		}
+
 		chatFunc(&ai.ChatContext{
-			ProjectPath: binding.ProjectPath,
-			SessionID:   sessionID,
-			Cancel:      cancel,
+			ProjectPath:      binding.ProjectPath,
+			SessionID:        sessionID,
+			Cancel:           cancel,
+			Role:             role,
+			AutonomousPolicy: autonomousPolicy,
 			OnChunk: func(content string, done bool) {
 				if done || strings.TrimSpace(content) == "" {
 					return
@@ -813,7 +919,7 @@ func (s *Service) runAgentChat(m *discordgo.MessageCreate, binding ProjectBindin
 				_ = command
 				return false, fmt.Errorf("approval required but unavailable in discord command mode")
 			},
-		}, prompt)
+		}, chatPrompt)
 
 		if strings.TrimSpace(lastErr) != "" {
 			s.send(replyChannelID, "Agent error: "+lastErr)
@@ -831,6 +937,14 @@ func (s *Service) runAgentChat(m *discordgo.MessageCreate, binding ProjectBindin
 			s.sendTagged(replyChannelID, part, "agent", sessionID)
 		}
 	}()
+}
+
+func promptWithProjectStatusContext(binding ProjectBinding, prompt string) string {
+	status := latestScaffoldStatusLine(binding.ProjectPath)
+	if status == "" {
+		return prompt
+	}
+	return strings.TrimSpace(fmt.Sprintf("Discord project context:\n- Project: %s\n- %s\n- This message came from the project channel, so answer with awareness of existing project/session history. Do not claim setup is just starting if scaffold sessions already exist.\n\nUser message:\n%s", binding.RepoName, status, prompt))
 }
 
 func channelSessionKey(channelID string) string {
@@ -1244,10 +1358,14 @@ func (s *Service) ensureProjectChannel(name string) (*discordgo.Channel, error) 
 }
 
 func (s *Service) send(channelID, msg string) {
-	if s.dg == nil || strings.TrimSpace(channelID) == "" {
+	if strings.TrimSpace(channelID) == "" || strings.TrimSpace(msg) == "" {
 		return
 	}
-	if strings.TrimSpace(msg) == "" {
+	if s.testSendHook != nil {
+		s.testSendHook(channelID, msg)
+		return
+	}
+	if s.dg == nil {
 		return
 	}
 	if _, err := s.dg.ChannelMessageSend(channelID, msg); err != nil {
@@ -1255,6 +1373,208 @@ func (s *Service) send(channelID, msg string) {
 		return
 	}
 	s.recordOutbound(channelID, msg, "message", "")
+}
+
+// handleIssuesCommand lists GitHub issues Engine is currently assigned to.
+// Requires GITHUB_TOKEN or ENGINE_GITHUB_BOT_TOKEN to be set.
+func (s *Service) handleIssuesCommand(m *discordgo.MessageCreate, args []string) {
+	login := githubEngineLoginFn()
+	if login == "" {
+		s.send(m.ChannelID, "Engine GitHub identity not configured. Set ENGINE_GITHUB_BOT_TOKEN + ENGINE_GITHUB_LOGIN (or GITHUB_TOKEN).")
+		return
+	}
+
+	s.stateMu.RLock()
+	projects := make([]ProjectBinding, 0, len(s.state.Projects))
+	for _, p := range s.state.Projects {
+		projects = append(projects, p)
+	}
+	s.stateMu.RUnlock()
+
+	if len(projects) == 0 {
+		s.send(m.ChannelID, "No projects enrolled — nothing to show.")
+		return
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Issues assigned to **@%s** across enrolled projects:\n", login)
+	found := false
+	for _, p := range projects {
+		owner, repo, ok := parseGitHubOwnerRepo(extractGitHubURL(p.ProjectPath, p.RepoName))
+		if !ok {
+			owner, repo = "", p.RepoName
+		}
+		if owner == "" {
+			continue
+		}
+		issues, err := githubListAssignedFn(owner, repo, login)
+		if err != nil {
+			fmt.Fprintf(&b, "- **%s/%s**: error fetching issues (%v)\n", owner, repo, err)
+			continue
+		}
+		if len(issues) == 0 {
+			continue
+		}
+		for _, iss := range issues {
+			found = true
+			labels := make([]string, 0, len(iss.Labels))
+			for _, l := range iss.Labels {
+				labels = append(labels, l.Name)
+			}
+			labelStr := ""
+			if len(labels) > 0 {
+				labelStr = " [" + strings.Join(labels, ", ") + "]"
+			}
+			fmt.Fprintf(&b, "- **%s/%s** #%d%s: %s\n  %s\n", owner, repo, iss.Number, labelStr, iss.Title, iss.HTMLURL)
+		}
+	}
+	if !found {
+		b.WriteString("_(none found)_\n")
+	}
+	s.send(m.ChannelID, truncate(b.String(), maxDiscordMessageChars))
+}
+
+// handleIdentityCommand shows Engine's current GitHub persona.
+func (s *Service) handleIdentityCommand(m *discordgo.MessageCreate) {
+	login := githubEngineLoginFn()
+	token := githubEngineTokenFn()
+	tokenStatus := "not set"
+	if token != "" {
+		tokenStatus = "set (" + strconv.Itoa(len(token)) + " chars)"
+	}
+	if login == "" {
+		login = "(not resolved — set ENGINE_GITHUB_LOGIN or ENGINE_GITHUB_BOT_TOKEN)"
+	}
+	projectNum := githubProjectNumberFn()
+	projectLine := ""
+	if projectNum > 0 {
+		projectLine = fmt.Sprintf("\n- **Project board:** #%d", projectNum)
+	}
+	s.send(m.ChannelID, fmt.Sprintf(
+		"Engine GitHub identity:\n- **Login:** @%s\n- **Token:** %s%s",
+		login, tokenStatus, projectLine,
+	))
+}
+
+// injectable shims so tests can mock GitHub API calls.
+var (
+	githubEngineLoginFn    = func() string { return engineLoginFn() }
+	githubEngineTokenFn    = func() string { return engineTokenFn() }
+	githubProjectNumberFn  = func() int { return projectNumberFn() }
+	githubListAssignedFn   = listAssignedIssues
+)
+
+// engineLoginFn / engineTokenFn / projectNumberFn forward to the github package
+// without creating a hard import cycle. They are set via the github package's
+// exported helpers in service_bridge.go.
+var (
+	engineLoginFn     func() string
+	engineTokenFn     func() string
+	projectNumberFn   func() int
+)
+
+// extractGitHubURL tries to derive a "owner/repo" GitHub URL from the local
+// clone path or the repo name hint.
+func extractGitHubURL(projectPath, repoName string) string {
+	// Try to read remote.origin.url from the local clone.
+	out, err := gitRemoteOriginFn(projectPath)
+	if err == nil && strings.TrimSpace(out) != "" {
+		return strings.TrimSpace(out)
+	}
+	return repoName
+}
+
+// gitRemoteOriginFn reads git remote origin url; injectable for tests.
+var gitRemoteOriginFn = func(repoPath string) (string, error) {
+	out, err := exec.Command("git", "-C", repoPath, "remote", "get-url", "origin").Output()
+	return string(out), err
+}
+
+// listAssignedIssues returns open issues in owner/repo assigned to login.
+func listAssignedIssues(owner, repo, login string) ([]githubIssue, error) {
+	c, err := newGitHubClientFn(owner, repo)
+	if err != nil {
+		return nil, err
+	}
+	return c.listIssuesAssignedTo(login)
+}
+
+// githubIssue is a minimal mirror of github.Issue to avoid a package import.
+type githubIssue struct {
+	Number  int
+	Title   string
+	HTMLURL string
+	Labels  []struct{ Name string }
+}
+
+// newGitHubClientFn is injectable; default builds a client via GITHUB_TOKEN.
+var newGitHubClientFn = defaultGitHubClientFn
+
+type issueListClient interface {
+	listIssuesAssignedTo(login string) ([]githubIssue, error)
+}
+
+type defaultIssueClient struct{ owner, repo, token string }
+
+func (c *defaultIssueClient) listIssuesAssignedTo(login string) ([]githubIssue, error) {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues?state=open&assignee=%s&per_page=30",
+		c.owner, c.repo, login)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusForbidden {
+		return nil, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("list issues: %d", resp.StatusCode)
+	}
+
+	var raw []struct {
+		Number  int    `json:"number"`
+		Title   string `json:"title"`
+		HTMLURL string `json:"html_url"`
+		Labels  []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
+		PullRequest *struct{} `json:"pull_request,omitempty"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, err
+	}
+	var out []githubIssue
+	for _, r := range raw {
+		if r.PullRequest != nil {
+			continue // skip PRs
+		}
+		iss := githubIssue{Number: r.Number, Title: r.Title, HTMLURL: r.HTMLURL}
+		for _, l := range r.Labels {
+			iss.Labels = append(iss.Labels, struct{ Name string }{l.Name})
+		}
+		out = append(out, iss)
+	}
+	return out, nil
+}
+
+func defaultGitHubClientFn(owner, repo string) (issueListClient, error) {
+	tok := os.Getenv("ENGINE_GITHUB_BOT_TOKEN")
+	if tok == "" {
+		tok = os.Getenv("GITHUB_TOKEN")
+	}
+	if tok == "" {
+		return nil, fmt.Errorf("no GitHub token configured")
+	}
+	return &defaultIssueClient{owner: owner, repo: repo, token: tok}, nil
 }
 
 func (s *Service) sendHelp(channelID string) {
@@ -1267,11 +1587,18 @@ func (s *Service) sendHelp(channelID string) {
 		"- !status [project]",
 		"- !sessions [project]",
 		"- !lastcommit [project]",
-		"- !pause [project]",
-		"- !resume [project]",
+		"- !pause [project]   — pause active orchestrator at next checkpoint",
+		"- !resume [project]  — resume a paused orchestrator",
+		"- !stop [project]    — stop the active orchestrator entirely",
+		"- !redirect [project] <instruction> — inject a new instruction the orchestrator picks up next step",
+		"- !plan [project]    — show the current orchestration plan (.engine/plan.md)",
+		"- !orchestrators     — list projects with active orchestrators",
+		"- !issues            — list GitHub issues Engine is currently assigned to",
+		"- !identity          — show Engine's GitHub bot persona",
 		"- Chat normally in a project channel to run the agent",
 		"- !ask <prompt> (explicit prompt command, optional)",
 		"- !ask <project> <prompt> (from control channel)",
+		"- !auto <prompt> — engage autonomous mode for that prompt (alias: !autonomous, !build)",
 		"- !search <query> — full-text search across this project's history",
 		"- !history [hours] — recent messages in this project channel (default 24h)",
 	}, "\n")
@@ -1279,11 +1606,22 @@ func (s *Service) sendHelp(channelID string) {
 }
 
 func (s *Service) stateFile() string {
-	return filepath.Join(s.cfg.StoragePath, defaultStateFileName)
+	// Refuse to resolve a relative state-file path. An empty StoragePath would
+	// land the state file in the process cwd — that pollutes source trees
+	// during tests (and any production cwd Engine happens to be launched from),
+	// and the dirty mtime invalidates the Go test cache on every run.
+	storage := strings.TrimSpace(s.cfg.StoragePath)
+	if storage == "" {
+		return ""
+	}
+	return filepath.Join(storage, defaultStateFileName)
 }
 
 func (s *Service) loadState() error {
 	path := s.stateFile()
+	if path == "" {
+		return nil
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1298,15 +1636,89 @@ func (s *Service) loadState() error {
 	if st.Projects == nil {
 		st.Projects = make(map[string]ProjectBinding)
 	}
+	if migrated, changed := s.migrateProjectBindings(st); changed {
+		st = migrated
+		migratedData, _ := json.MarshalIndent(st, "", "  ")
+		if writeErr := os.WriteFile(path, migratedData, 0600); writeErr != nil {
+			log.Printf("discord: failed to persist migrated state %s: %v", path, writeErr)
+		}
+	}
 	s.state = st
 	return nil
 }
 
+func (s *Service) migrateProjectBindings(st persistedState) (persistedState, bool) {
+	if len(st.Projects) == 0 {
+		return st, false
+	}
+	clonesDir := resolveClonesDir(s.project)
+	workspaceRoot := strings.TrimSpace(s.project)
+	if workspaceRoot == "" {
+		workspaceRoot = "."
+	}
+	workspaceRoot = filepath.Clean(workspaceRoot)
+	prefixes := []string{
+		filepath.Join(workspaceRoot, "engine", "projects") + string(os.PathSeparator),
+		filepath.Join(workspaceRoot, ".engine", "projects") + string(os.PathSeparator),
+		filepath.Join(workspaceRoot, "packages", "server-go", ".engine", "projects") + string(os.PathSeparator),
+	}
+
+	next := make(map[string]ProjectBinding, len(st.Projects))
+	changed := false
+	for key, binding := range st.Projects {
+		bindingPath := strings.TrimSpace(binding.ProjectPath)
+		migratedPath, ok := migrateBindingPath(bindingPath, clonesDir, prefixes)
+		if ok {
+			changed = true
+			binding.ProjectPath = migratedPath
+			next[migratedPath] = binding
+			if key != migratedPath {
+				log.Printf("discord: migrated project binding path from %s to %s", key, migratedPath)
+			}
+			continue
+		}
+		next[key] = binding
+	}
+
+	if !changed {
+		return st, false
+	}
+	st.Projects = next
+	return st, true
+}
+
+func migrateBindingPath(pathValue, clonesDir string, workspacePrefixes []string) (string, bool) {
+	if strings.TrimSpace(pathValue) == "" {
+		return "", false
+	}
+	abs := filepath.Clean(pathValue)
+	for _, prefix := range workspacePrefixes {
+		if !strings.HasPrefix(abs, prefix) {
+			continue
+		}
+		repo := filepath.Base(abs)
+		if strings.TrimSpace(repo) == "" || repo == "." || repo == string(os.PathSeparator) {
+			return "", false
+		}
+		candidate := filepath.Join(clonesDir, repo)
+		if st, err := os.Stat(candidate); err == nil && st.IsDir() {
+			return candidate, true
+		}
+		log.Printf("discord: workspace project binding %s detected but runtime clone %s not found; leaving unchanged", abs, candidate)
+		return "", false
+	}
+	return "", false
+}
+
 func (s *Service) saveState() error {
+	path := s.stateFile()
+	if path == "" {
+		return nil
+	}
 	s.stateMu.RLock()
 	data, _ := json.MarshalIndent(s.state, "", "  ")
 	s.stateMu.RUnlock()
-	return os.WriteFile(s.stateFile(), data, 0600)
+	return os.WriteFile(path, data, 0600)
 }
 
 func (s *Service) isAllowedUser(userID string) bool {
