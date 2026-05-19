@@ -79,6 +79,47 @@ func TestHandleRedirectCommand_Success(t *testing.T) {
 	}
 }
 
+func TestHandleRedirectCommand_NoArgs(t *testing.T) {
+	var sent []string
+	svc := newTestServiceForControl(map[string]ProjectBinding{}, &sent)
+
+	svc.handleRedirectCommand(&discordgo.MessageCreate{Message: &discordgo.Message{ChannelID: "ch-1"}}, nil)
+	joined := strings.Join(sent, "\n")
+	if !strings.Contains(joined, "Usage: !redirect") {
+		t.Fatalf("expected usage message, got %v", sent)
+	}
+}
+
+func TestHandleRedirectCommand_ProjectNotFound(t *testing.T) {
+	var sent []string
+	svc := newTestServiceForControl(map[string]ProjectBinding{}, &sent)
+
+	svc.handleRedirectCommand(
+		&discordgo.MessageCreate{Message: &discordgo.Message{ChannelID: "control-ch"}},
+		[]string{"missing-project", "fix", "it"},
+	)
+	joined := strings.Join(sent, "\n")
+	if !strings.Contains(joined, "Project not found") {
+		t.Fatalf("expected project not found message, got %v", sent)
+	}
+}
+
+func TestHandleRedirectCommand_NoActiveOrchestrator_InChannelPath(t *testing.T) {
+	var sent []string
+	svc := newTestServiceForControl(map[string]ProjectBinding{
+		"/proj": {ProjectPath: "/proj", RepoName: "demo", ChannelID: "ch-1"},
+	}, &sent)
+
+	svc.handleRedirectCommand(
+		&discordgo.MessageCreate{Message: &discordgo.Message{ChannelID: "ch-1"}},
+		[]string{"new", "instruction"},
+	)
+	joined := strings.Join(sent, "\n")
+	if !strings.Contains(joined, "No active orchestrator") {
+		t.Fatalf("expected no active orchestrator message, got %v", sent)
+	}
+}
+
 func TestHandlePlanCommand_BindingNotFound(t *testing.T) {
 	var sent []string
 	svc := newTestServiceForControl(map[string]ProjectBinding{

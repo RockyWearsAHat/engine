@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -183,5 +184,81 @@ func TestOrchestrationBrain_MarkCompleted(t *testing.T) {
 	}
 	if len(data) == 0 {
 		t.Error("brain.json is empty")
+	}
+}
+
+func TestOrchestrationBrain_UpdateTeamStatus_TeamNotFound(t *testing.T) {
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "o", "r", "brief", "t")
+	err := brain.UpdateTeamStatus("missing", "running")
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected not found error, got %v", err)
+	}
+}
+
+func TestOrchestrationBrain_UpdateTeamFeedback_TeamNotFound(t *testing.T) {
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "o", "r", "brief", "t")
+	err := brain.UpdateTeamFeedback("missing", "feedback")
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected not found error, got %v", err)
+	}
+}
+
+func TestOrchestrationBrain_TeamBlockedOn_UnknownTeam(t *testing.T) {
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "o", "r", "brief", "t")
+	blocked := brain.TeamBlockedOn("missing")
+	if blocked != nil {
+		t.Fatalf("expected nil blocked list for missing team, got %v", blocked)
+	}
+}
+
+func TestOrchestrationBrain_UpdateTeamStatus_RunningThenDoneSetsTimestamps(t *testing.T) {
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "o", "r", "brief", "t")
+	if err := brain.AddTeam("t1", "general", []int{0}, nil); err != nil {
+		t.Fatalf("AddTeam: %v", err)
+	}
+	if err := brain.UpdateTeamStatus("t1", "running"); err != nil {
+		t.Fatalf("running status: %v", err)
+	}
+	t1, err := brain.GetTeam("t1")
+	if err != nil {
+		t.Fatalf("GetTeam: %v", err)
+	}
+	if t1.StartedAt.IsZero() {
+		t.Fatal("expected StartedAt to be set when running")
+	}
+
+	if err := brain.UpdateTeamStatus("t1", "done"); err != nil {
+		t.Fatalf("done status: %v", err)
+	}
+	t1, err = brain.GetTeam("t1")
+	if err != nil {
+		t.Fatalf("GetTeam: %v", err)
+	}
+	if t1.CompletedAt.IsZero() {
+		t.Fatal("expected CompletedAt to be set when done")
+	}
+}
+
+func TestOrchestrationBrain_PersistWriteError(t *testing.T) {
+	base := t.TempDir()
+	fileProjectPath := filepath.Join(base, "not-a-dir")
+	if err := os.WriteFile(fileProjectPath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("create file project path: %v", err)
+	}
+
+	brain := &OrchestrationBrain{
+		ProjectPath: fileProjectPath,
+		Owner:       "o",
+		Repo:        "r",
+		Brief:       "b",
+		Teams:       map[string]TeamState{},
+	}
+	err := brain.persist()
+	if err == nil {
+		t.Fatal("expected persist write error when project path is a file")
 	}
 }

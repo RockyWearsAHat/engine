@@ -2,10 +2,13 @@ package ai
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/engine/server/mesh"
 )
@@ -190,5 +193,116 @@ func TestDefaultMeshInferencePeer_NoMatchingPeer(t *testing.T) {
 	peer, selfName, ok := defaultMeshInferencePeer()
 	if ok || peer != nil || strings.TrimSpace(selfName) != "" {
 		t.Fatalf("expected no matching peer, got ok=%v peer=%v selfName=%q", ok, peer, selfName)
+	}
+}
+
+func TestDefaultMeshInferencePeer_BadConfigPath(t *testing.T) {
+	t.Setenv("ENGINE_MESH_CONFIG", filepath.Join(t.TempDir(), "missing.json"))
+	peer, selfName, ok := defaultMeshInferencePeer()
+	if ok || peer != nil || selfName != "" {
+		t.Fatalf("expected no peer for bad config path, got ok=%v peer=%v selfName=%q", ok, peer, selfName)
+	}
+}
+
+func TestEnvOrDefault_UsesEnvAndFallback(t *testing.T) {
+	origLookup := osLookupEnv
+	defer func() { osLookupEnv = origLookup }()
+
+	osLookupEnv = func(key string) string {
+		if key == "K" {
+			return "value"
+		}
+		return ""
+	}
+	if got := envOrDefault("K", "fallback"); got != "value" {
+		t.Fatalf("expected env value, got %q", got)
+	}
+	if got := envOrDefault("MISSING", "fallback"); got != "fallback" {
+		t.Fatalf("expected fallback value, got %q", got)
+	}
+}
+
+func TestOSLookupEnv_TrimsWhitespace(t *testing.T) {
+	origGetEnv := getEnv
+	defer func() { getEnv = origGetEnv }()
+
+	getEnv = func(key string) string {
+		if key == "X" {
+			return "  spaced  "
+		}
+		return ""
+	}
+	if got := osLookupEnv("X"); got != "spaced" {
+		t.Fatalf("expected trimmed value, got %q", got)
+	}
+}
+
+func TestCallMeshInference_PeerRequestError(t *testing.T) {
+	peer := &mesh.Peer{Name: "p1", Address: "127.0.0.1:1", Secret: "secret"}
+	_, err := callMeshInference(peer, "self", "/api/chat", []byte("{}"), time.Second)
+	if err == nil {
+		t.Fatal("expected request error")
+	}
+}
+
+func TestCallMeshInference_PeerErrorField(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(mesh.InferenceResponse{StatusCode: 200, Error: "upstream failed"})
+	}))
+	defer ts.Close()
+
+	peer := &mesh.Peer{Name: "p1", Address: strings.TrimPrefix(ts.URL, "http://"), Secret: "secret"}
+	_, err := callMeshInference(peer, "self", "/api/chat", []byte("{}"), time.Second)
+	if err == nil || !strings.Contains(err.Error(), "peer error") {
+		t.Fatalf("expected peer error, got %v", err)
+	}
+}
+
+func TestCallMeshInference_PeerStatusError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(mesh.InferenceResponse{StatusCode: 503})
+	}))
+	defer ts.Close()
+
+	peer := &mesh.Peer{Name: "p1", Address: strings.TrimPrefix(ts.URL, "http://"), Secret: "secret"}
+	_, err := callMeshInference(peer, "self", "/api/chat", []byte("{}"), time.Second)
+	if err == nil || !strings.Contains(err.Error(), "status 503") {
+		t.Fatalf("expected status error, got %v", err)
+	}
+}
+
+func TestCallMeshInference_Success(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(mesh.InferenceResponse{StatusCode: 200, Body: json.RawMessage(`{"ok":true}`)})
+	}))
+	defer ts.Close()
+
+	peer := &mesh.Peer{Name: "p1", Address: strings.TrimPrefix(ts.URL, "http://"), Secret: "secret"}
+	body, err := callMeshInference(peer, "self", "/api/chat", []byte("{}"), time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(body) != `{"ok":true}` {
+		t.Fatalf("unexpected body: %s", string(body))
+	}
+}
+
+func TestCallMeshInference_SuccessWithDefaultTimeout(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(mesh.InferenceResponse{StatusCode: 200, Body: json.RawMessage(`{"ok":true}`)})
+	}))
+	defer ts.Close()
+
+	peer := &mesh.Peer{Name: "p1", Address: strings.TrimPrefix(ts.URL, "http://"), Secret: "secret"}
+	body, err := callMeshInference(peer, "self", "/api/chat", []byte("{}"), 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(body) != `{"ok":true}` {
+		t.Fatalf("unexpected body: %s", string(body))
 	}
 }

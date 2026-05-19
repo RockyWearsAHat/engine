@@ -117,6 +117,52 @@ func TestParseToolCallsFromText_FencedJSONWithoutNameIgnored(t *testing.T) {
 	}
 }
 
+func TestParseToolCallsFromText_EmptyInput(t *testing.T) {
+	if calls := parseToolCallsFromText(""); calls != nil {
+		t.Fatalf("expected nil for empty input, got %+v", calls)
+	}
+}
+
+func TestLooksLikeToolCallJSON_InvalidShapes(t *testing.T) {
+	if looksLikeToolCallJSON("[]") {
+		t.Fatal("expected false for non-object JSON")
+	}
+	if looksLikeToolCallJSON("{bad") {
+		t.Fatal("expected false for invalid JSON")
+	}
+	if looksLikeToolCallJSON("{bad}") {
+		t.Fatal("expected false for malformed object JSON")
+	}
+	if looksLikeToolCallJSON(`{"name":"read_file"}`) {
+		t.Fatal("expected false when name is present but arguments/parameters are missing")
+	}
+}
+
+func TestDecodeToolCallJSON_ErrorBranches(t *testing.T) {
+	if _, ok := decodeToolCallJSON("{not-json"); ok {
+		t.Fatal("expected decode failure for invalid json")
+	}
+	if _, ok := decodeToolCallJSON(`{"name":"   ","arguments":{}}`); ok {
+		t.Fatal("expected decode failure for blank name")
+	}
+}
+
+func TestDecodeToolCallJSON_DefaultsEmptyArgumentsObject(t *testing.T) {
+	call, ok := decodeToolCallJSON(`{"name":"noop"}`)
+	if !ok {
+		t.Fatal("expected decode success")
+	}
+	if call.Arguments != "{}" {
+		t.Fatalf("expected default empty object args, got %q", call.Arguments)
+	}
+}
+
+func TestStripToolCallMarkup_EmptyInput(t *testing.T) {
+	if got := stripToolCallMarkup(""); got != "" {
+		t.Fatalf("expected empty output for empty input, got %q", got)
+	}
+}
+
 func TestStripToolCallMarkup_RemovesXMLAndKeepsProse(t *testing.T) {
 	raw := "I will read the file.\n<tool_call>{\"name\":\"read_file\",\"arguments\":{\"path\":\"x\"}}</tool_call>\nThen continue."
 	cleaned := stripToolCallMarkup(raw)
