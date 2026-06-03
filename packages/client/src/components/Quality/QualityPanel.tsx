@@ -44,6 +44,7 @@ export default function QualityPanel() {
   }, [qualityReport]);
 
   const progressPercent = Math.max(0, Math.min(100, Math.round(qualityProgress?.percent ?? 0)));
+  const hasLoadedReport = qualityReport !== null;
   const hasStartedScan = qualityLoading || qualityProgress !== null;
   const progressText = qualityProgress
     ? `Scanning project - ${qualityProgress.currentFile || 'project'}|${qualityProgress.currentFunction || 'scan'}(//${qualityProgress.section || qualityProgress.phase})`
@@ -53,13 +54,13 @@ export default function QualityPanel() {
 
   return (
     <div className="quality-panel-root">
-      {qualityLoading && qualityCompleted && (
+      {qualityLoading && hasLoadedReport && (
         <div className="quality-scan-topbar" aria-label="quality-scan-topbar">
           <div className="quality-scan-topbar-fill" style={{ width: `${progressPercent}%` }} />
         </div>
       )}
 
-      {!qualityCompleted && (
+      {!hasLoadedReport && (
         <div className="quality-scan-empty-state">
           <div className="quality-scan-description">
             Deterministic codebase index for dead-code candidates, duplicate logic, large uncommented blocks, documentation drift, and CS 2420/3500 contention across the project. Generated-file paths are mapped first so build artifacts stay out of quality findings.

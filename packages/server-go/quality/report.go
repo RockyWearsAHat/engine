@@ -51,6 +51,7 @@ type symbolDef struct {
 	Name string
 	File string
 	Line int
+	Public bool
 }
 
 type chunkLoc struct {
@@ -58,9 +59,37 @@ type chunkLoc struct {
 	Line int
 }
 
+type chunkLocExt struct {
+	File            string
+	Line            int
+	DeclarationLike bool
+}
+
+type duplicatePairKey struct {
+	LeftFile  string
+	RightFile string
+}
+
+type duplicateMatch struct {
+	LeftLine        int
+	RightLine       int
+	DeclarationLike bool
+}
+
+type duplicateRun struct {
+	LeftFile        string
+	RightFile       string
+	LeftLine        int
+	RightLine       int
+	NormalizedLines int
+	DeclarationLike bool
+}
+
 type chunkRecord struct {
-	Hash string `json:"hash"`
-	Line int    `json:"line"`
+	Hash            string `json:"hash"`
+	Line            int    `json:"line"`
+	Size            int    `json:"size"`
+	DeclarationLike bool   `json:"declarationLike,omitempty"`
 }
 
 type fileIndexEntry struct {
@@ -69,7 +98,9 @@ type fileIndexEntry struct {
 	Size             int64          `json:"size"`
 	BaseName         string         `json:"baseName"`
 	IsTest           bool           `json:"isTest"`
+	NormalizedLines  int            `json:"normalizedLines"`
 	Symbols          []symbolDef    `json:"symbols"`
+	InterfaceNames   []string       `json:"interfaceNames,omitempty"`
 	IdentifierCounts map[string]int `json:"identifierCounts"`
 	Chunks           []chunkRecord  `json:"chunks"`
 	BaseIssues       []Issue        `json:"baseIssues"`
@@ -89,15 +120,18 @@ type sourceFileInfo struct {
 	Size            int64
 }
 
-const qualityIndexVersion = 1
+const qualityIndexVersion = 5
+const duplicateChunkMinLines = 1
 
 var (
 	goFuncPattern       = regexp.MustCompile(`^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
-	jsFuncPattern       = regexp.MustCompile(`^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
-	jsConstFuncPattern  = regexp.MustCompile(`^\s*(?:export\s+)?const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s*)?\(`)
+	jsFuncPattern       = regexp.MustCompile(`^\s*(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+	jsConstFuncPattern  = regexp.MustCompile(`^\s*(?:export\s+(?:default\s+)?)?const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s*)?\(`)
 	goIgnoredErrPattern = regexp.MustCompile(`_\s*=\s*[A-Za-z0-9_\.]+\([^\n]*\)`)
 	emptyCatchPattern   = regexp.MustCompile(`catch\s*\([^)]*\)\s*\{\s*\}`)
 	identifierPattern   = regexp.MustCompile(`\b[A-Za-z_][A-Za-z0-9_]*\b`)
+	goInterfacePattern  = regexp.MustCompile(`^\s*type\s+([A-Za-z_][A-Za-z0-9_]*)\s+interface\s*\{`)
+	tsInterfacePattern  = regexp.MustCompile(`^\s*(?:export\s+)?interface\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
 )
 
 func ScanProject(projectPath string, maxIssues int) (Report, error) {
@@ -108,9 +142,7 @@ func ScanProjectWithProgress(projectPath string, maxIssues int, onProgress Progr
 	if strings.TrimSpace(projectPath) == "" {
 		return Report{}, fmt.Errorf("project path required")
 	}
-	if maxIssues <= 0 {
-		maxIssues = 120
-	}
+	// maxIssues <= 0 means uncapped scan.
 	if onProgress != nil {
 		onProgress(ScanProgress{
 			ProjectPath:     projectPath,
@@ -232,8 +264,8 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 	issues := make([]Issue, 0, 128)
 	identifierCounts := make(map[string]int, 512)
 	symbols := make([]symbolDef, 0, 256)
-	chunks := make(map[string]chunkLoc)
-	duplicateHashes := make(map[string]bool)
+	chunks := make(map[string][]chunkLocExt)
+	matchesByPair := make(map[duplicatePairKey][]duplicateMatch)
 
 	paths := make([]string, 0, len(index.Files))
 	for path := range index.Files {
@@ -248,40 +280,81 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 			identifierCounts[token] += count
 		}
 		symbols = append(symbols, entry.Symbols...)
-		if !entry.IsTest && len(entry.BaseName) > 2 && !strings.Contains(docText, entry.BaseName) {
+		hasDocGapIssue := fileHasCategory(entry.BaseIssues, "documentation-gap")
+		if !entry.IsTest && !hasDocGapIssue && fileNeedsDocReference(entry) && !documentationMentionsFile(docText, entry) {
 			issues = append(issues, Issue{
 				ID:         stableID(relPath, 1, "doc-gap"),
 				Severity:   "low",
 				Category:   "documentation-gap",
-				Message:    "File appears missing from user-facing documentation and architecture notes.",
+				Message:    "File is not referenced anywhere in workspace documentation (.md, .mdx, .txt, or .dx).",
 				File:       relPath,
 				Line:       1,
-				Suggestion: "Reference this module in WORKING_BEHAVIORS or architecture notes if it represents shipped behavior.",
+				Suggestion: "Add a short note in behavior, architecture, or module docs if this file is user-visible.",
+			})
+		}
+		missingInterfaces := undocumentedInterfaces(docText, entry.InterfaceNames)
+		if len(missingInterfaces) > 0 {
+			preview := strings.Join(missingInterfaces, ", ")
+			if len(preview) > 180 {
+				preview = preview[:177] + "..."
+			}
+			issues = append(issues, Issue{
+				ID:         stableID(relPath, 1, "interface-doc-gap"),
+				Severity:   "medium",
+				Category:   "documentation-gap",
+				Message:    fmt.Sprintf("%d public interfaces in this file are missing workspace documentation references: %s", len(missingInterfaces), preview),
+				File:       relPath,
+				Line:       1,
+				Suggestion: "Document these interfaces in module-level docs (.md/.mdx/.txt/.dx) with responsibilities and usage expectations.",
 			})
 		}
 		for _, chunk := range entry.Chunks {
-			if first, ok := chunks[chunk.Hash]; ok {
-				if first.File == relPath || duplicateHashes[chunk.Hash] {
+			for _, first := range chunks[chunk.Hash] {
+				if first.File == relPath {
 					continue
 				}
-				duplicateHashes[chunk.Hash] = true
-				issues = append(issues, Issue{
-					ID:         stableID(relPath, chunk.Line, "duplicate"),
-					Severity:   "medium",
-					Category:   "duplicate-content",
-					Message:    fmt.Sprintf("Repeated code chunk matches %s:%d; candidate for DRY extraction.", first.File, first.Line),
-					File:       relPath,
-					Line:       chunk.Line,
-					Suggestion: "Extract shared logic into a helper/module to reduce divergence risk.",
+				pair := duplicatePairKey{LeftFile: first.File, RightFile: relPath}
+				matchesByPair[pair] = append(matchesByPair[pair], duplicateMatch{
+					LeftLine:        first.Line,
+					RightLine:       chunk.Line,
+					DeclarationLike: first.DeclarationLike || chunk.DeclarationLike,
 				})
-				continue
 			}
-			chunks[chunk.Hash] = chunkLoc{File: relPath, Line: chunk.Line}
+			chunks[chunk.Hash] = append(chunks[chunk.Hash], chunkLocExt{File: relPath, Line: chunk.Line, DeclarationLike: chunk.DeclarationLike})
 		}
+	}
+
+	for _, run := range collectLargestDuplicateRuns(matchesByPair) {
+		leftNormalized := index.Files[run.LeftFile].NormalizedLines
+		rightNormalized := index.Files[run.RightFile].NormalizedLines
+		overlapBase := minInt(leftNormalized, rightNormalized)
+		overlapPct := 0.0
+		if overlapBase > 0 {
+			overlapPct = (float64(run.NormalizedLines) / float64(overlapBase)) * 100.0
+		}
+
+		severity := "medium"
+		message := fmt.Sprintf("Largest repeated block spans %d normalized lines (%.1f%% overlap) and matches %s:%d.", run.NormalizedLines, overlapPct, run.LeftFile, run.LeftLine)
+		suggestion := "Extract the shared logic into a helper/module to avoid divergence."
+		if (run.NormalizedLines >= 2 && overlapPct >= 80.0) || (run.NormalizedLines == 1 && overlapPct >= 100.0) || run.DeclarationLike {
+			severity = "high"
+			message = fmt.Sprintf("Largest repeated block spans %d normalized lines (%.1f%% overlap) and matches %s:%d; this should be fixed.", run.NormalizedLines, overlapPct, run.LeftFile, run.LeftLine)
+			suggestion = "Move the shared block into one reusable definition and reference it from both files."
+		}
+		issues = append(issues, Issue{
+			ID:         stableID(run.RightFile, run.RightLine, "duplicate-largest|"+run.LeftFile),
+			Severity:   severity,
+			Category:   "duplicate-content",
+			Message:    message,
+			File:       run.RightFile,
+			Line:       run.RightLine,
+			Suggestion: suggestion,
+		})
 	}
 
 	issues = append(issues, deadCodeHeuristics(symbols, identifierCounts)...)
 	issues = dedupeIssues(issues)
+	issues = compressDocumentationGapIssues(issues)
 	sort.SliceStable(issues, func(i, j int) bool {
 		if severityRank(issues[i].Severity) != severityRank(issues[j].Severity) {
 			return severityRank(issues[i].Severity) < severityRank(issues[j].Severity)
@@ -292,7 +365,9 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 		return issues[i].Line < issues[j].Line
 	})
 	if len(issues) > maxIssues {
-		issues = issues[:maxIssues]
+		if maxIssues > 0 {
+			issues = issues[:maxIssues]
+		}
 	}
 
 	report := Report{
@@ -366,6 +441,7 @@ func analyzeFile(source sourceFileInfo) (fileIndexEntry, error) {
 	funcIssues, defs := functionComplexityIssues(source.RelPath, lines)
 	baseIssues = append(baseIssues, funcIssues...)
 	baseIssues = append(baseIssues, principleViolations(source.RelPath, content)...)
+	normalizedLines, _ := normalizedLinesOnly(lines)
 
 	return fileIndexEntry{
 		Path:             source.RelPath,
@@ -373,7 +449,9 @@ func analyzeFile(source sourceFileInfo) (fileIndexEntry, error) {
 		Size:             source.Size,
 		BaseName:         strings.TrimSuffix(strings.ToLower(filepath.Base(source.RelPath)), strings.ToLower(filepath.Ext(source.RelPath))),
 		IsTest:           strings.Contains(source.RelPath, "/test") || strings.Contains(source.RelPath, "_test."),
+		NormalizedLines:  len(normalizedLines),
 		Symbols:          defs,
+		InterfaceNames:   collectPublicInterfaceNames(lines),
 		IdentifierCounts: countIdentifiers(content),
 		Chunks:           collectChunkRecords(lines),
 		BaseIssues:       baseIssues,
@@ -574,42 +652,246 @@ func countIdentifiers(content string) map[string]int {
 }
 
 func collectChunkRecords(lines []string) []chunkRecord {
-	normalized := make([]string, 0, len(lines))
-	lineMap := make([]int, 0, len(lines))
-	for idx, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "/*") || strings.HasPrefix(trimmed, "*") {
-			continue
-		}
-		normalized = append(normalized, strings.Join(strings.Fields(trimmed), " "))
-		lineMap = append(lineMap, idx+1)
-	}
-	if len(normalized) < 8 {
+	normalized, lineMap := normalizedLinesOnly(lines)
+	if len(normalized) < duplicateChunkMinLines {
 		return nil
 	}
-	records := make([]chunkRecord, 0, len(normalized)-7)
-	for i := 0; i+8 <= len(normalized); i++ {
-		chunk := strings.Join(normalized[i:i+8], "\n")
+	records := make([]chunkRecord, 0, len(normalized)-duplicateChunkMinLines+1)
+	for i := 0; i+duplicateChunkMinLines <= len(normalized); i++ {
+		chunk := strings.Join(normalized[i:i+duplicateChunkMinLines], "\n")
 		hash := sha1.Sum([]byte(chunk))
-		records = append(records, chunkRecord{Hash: hex.EncodeToString(hash[:]), Line: lineMap[i]})
+		records = append(records, chunkRecord{Hash: hex.EncodeToString(hash[:]), Line: lineMap[i], Size: duplicateChunkMinLines, DeclarationLike: chunkContainsDeclarationSignal(normalized[i : i+duplicateChunkMinLines])})
 	}
 	return records
 }
 
+func normalizedLinesOnly(lines []string) ([]string, []int) {
+	return normalizeLinesForDuplicateDetection(lines)
+}
+
+func normalizeLinesForDuplicateDetection(lines []string) ([]string, []int) {
+	normalized := make([]string, 0, len(lines))
+	lineMap := make([]int, 0, len(lines))
+	inBlockComment := false
+
+	for idx, raw := range lines {
+		line := raw
+		if inBlockComment {
+			end := strings.Index(line, "*/")
+			if end == -1 {
+				continue
+			}
+			line = line[end+2:]
+			inBlockComment = false
+		}
+
+		for {
+			start := strings.Index(line, "/*")
+			if start == -1 {
+				break
+			}
+			end := strings.Index(line[start+2:], "*/")
+			if end == -1 {
+				line = line[:start]
+				inBlockComment = true
+				break
+			}
+			line = line[:start] + " " + line[start+2+end+2:]
+		}
+
+		if comment := strings.Index(line, "//"); comment >= 0 {
+			line = line[:comment]
+		}
+
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "*") {
+			continue
+		}
+
+		collapsed := strings.Join(strings.Fields(trimmed), " ")
+		if !containsAlphaNum(collapsed) {
+			continue
+		}
+
+		normalized = append(normalized, collapsed)
+		lineMap = append(lineMap, idx+1)
+	}
+
+	return normalized, lineMap
+}
+
 func readDocs(projectPath string) string {
-	paths := []string{
-		filepath.Join(projectPath, ".github", "WORKING_BEHAVIORS.md"),
-		filepath.Join(projectPath, "obsidian-vault", "Engine", "Architecture.md"),
-		filepath.Join(projectPath, "obsidian-vault", "Engine", "Knowledge.md"),
+	paths, err := gatherDocumentationFiles(projectPath)
+	if err != nil {
+		return ""
 	}
 	parts := make([]string, 0, len(paths))
 	for _, p := range paths {
 		b, err := os.ReadFile(p)
 		if err == nil {
-			parts = append(parts, string(b))
+			parts = append(parts, strings.ToLower(string(b)))
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+func gatherDocumentationFiles(projectPath string) ([]string, error) {
+	files := make([]string, 0, 128)
+	projectRoot := filepath.Clean(projectPath)
+	err := filepath.WalkDir(projectPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "target", "dist", "build", "coverage", "llvm-cov-target", "rust-analyzer", ".cache", ".venv", ".engine":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		switch strings.ToLower(filepath.Ext(d.Name())) {
+		case ".md", ".mdx", ".txt", ".dx":
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	_ = projectRoot
+	return files, nil
+}
+
+func documentationMentionsFile(docText string, entry fileIndexEntry) bool {
+	if docText == "" {
+		return false
+	}
+	relPath := strings.ToLower(filepath.ToSlash(entry.Path))
+	baseName := strings.ToLower(filepath.Base(entry.Path))
+	stem := strings.TrimSuffix(baseName, filepath.Ext(baseName))
+	if strings.Contains(docText, relPath) || strings.Contains(docText, baseName) || strings.Contains(docText, stem) || strings.Contains(docText, entry.BaseName) {
+		return true
+	}
+	for _, sym := range entry.Symbols {
+		if sym.Public && containsWord(docText, strings.ToLower(sym.Name)) {
+			return true
+		}
+	}
+	for _, iface := range entry.InterfaceNames {
+		if containsWord(docText, strings.ToLower(iface)) {
+			return true
+		}
+	}
+	return false
+}
+
+func undocumentedInterfaces(docText string, names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	missing := make([]string, 0, len(names))
+	for _, name := range names {
+		if !containsWord(docText, strings.ToLower(name)) {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
+func collectPublicInterfaceNames(lines []string) []string {
+	names := make([]string, 0, 8)
+	seen := make(map[string]bool)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if m := goInterfacePattern.FindStringSubmatch(trimmed); len(m) == 2 {
+			name := m[1]
+			if len(name) > 0 && strings.ToUpper(name[:1]) == name[:1] && !seen[name] {
+				seen[name] = true
+				names = append(names, name)
+			}
+			continue
+		}
+		if m := tsInterfacePattern.FindStringSubmatch(trimmed); len(m) == 2 {
+			name := m[1]
+			if (strings.HasPrefix(trimmed, "export ") || (len(name) > 0 && strings.ToUpper(name[:1]) == name[:1])) && !seen[name] {
+				seen[name] = true
+				names = append(names, name)
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func fileNeedsDocReference(entry fileIndexEntry) bool {
+	if len(entry.BaseName) <= 2 {
+		return false
+	}
+	if len(entry.InterfaceNames) > 0 {
+		return true
+	}
+	for _, sym := range entry.Symbols {
+		if sym.Public {
+			return true
+		}
+	}
+	return false
+}
+
+func fileHasCategory(issues []Issue, category string) bool {
+	for _, issue := range issues {
+		if issue.Category == category {
+			return true
+		}
+	}
+	return false
+}
+
+func containsWord(text, word string) bool {
+	if word == "" {
+		return false
+	}
+	pattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(word) + `\b`)
+	return pattern.MatchString(text)
+}
+
+func chunkContainsDeclarationSignal(lines []string) bool {
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "func ") || strings.HasPrefix(trimmed, "type ") || strings.HasPrefix(trimmed, "class ") || strings.HasPrefix(trimmed, "export ") || strings.HasPrefix(trimmed, "interface ") || strings.Contains(trimmed, " struct {") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasLeadingDocumentationComment(lines []string, start int) bool {
+	if start <= 0 {
+		return false
+	}
+	i := start - 1
+	for i >= 0 && strings.TrimSpace(lines[i]) == "" {
+		return false
+	}
+	seenComment := false
+	for i >= 0 {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == "" {
+			break
+		}
+		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") || strings.HasPrefix(trimmed, "*") {
+			seenComment = true
+			i--
+			continue
+		}
+		break
+	}
+	return seenComment
 }
 
 func largeUncommentedBlocks(rel string, lines []string) []Issue {
@@ -665,6 +947,7 @@ func largeUncommentedBlocks(rel string, lines []string) []Issue {
 func functionComplexityIssues(rel string, lines []string) ([]Issue, []symbolDef) {
 	issues := make([]Issue, 0, 8)
 	symbols := make([]symbolDef, 0, 16)
+	missingPublicDocs := make([]string, 0, 8)
 	for idx := 0; idx < len(lines); idx++ {
 		line := lines[idx]
 		name := ""
@@ -678,7 +961,11 @@ func functionComplexityIssues(rel string, lines []string) ([]Issue, []symbolDef)
 		if name == "" {
 			continue
 		}
-		symbols = append(symbols, symbolDef{Name: name, File: rel, Line: idx + 1})
+		public := isPublicFunctionSignature(line, name)
+		symbols = append(symbols, symbolDef{Name: name, File: rel, Line: idx + 1, Public: public})
+		if public && !hasLeadingDocumentationComment(lines, idx) {
+			missingPublicDocs = append(missingPublicDocs, name)
+		}
 
 		span := functionSpan(lines, idx)
 		if span >= 85 {
@@ -693,7 +980,34 @@ func functionComplexityIssues(rel string, lines []string) ([]Issue, []symbolDef)
 			})
 		}
 	}
+	if len(missingPublicDocs) > 0 {
+		sort.Strings(missingPublicDocs)
+		preview := strings.Join(missingPublicDocs, ", ")
+		if len(preview) > 180 {
+			preview = preview[:177] + "..."
+		}
+		issues = append(issues, Issue{
+			ID:         stableID(rel, 1, "public-doc"),
+			Severity:   "medium",
+			Category:   "documentation-gap",
+			Message:    fmt.Sprintf("%d public functions in this file lack adjacent doc comments: %s", len(missingPublicDocs), preview),
+			File:       rel,
+			Line:       1,
+			Suggestion: "Add concise contract comments for each exported/public function in this file.",
+		})
+	}
 	return issues, symbols
+}
+
+func isPublicFunctionSignature(line, name string) bool {
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "export ") || strings.Contains(trimmed, " export ") {
+		return true
+	}
+	if name == "main" || name == "init" {
+		return false
+	}
+	return len(name) > 0 && strings.ToUpper(name[:1]) == name[:1]
 }
 
 func functionSpan(lines []string, start int) int {
@@ -806,6 +1120,230 @@ func dedupeIssues(issues []Issue) []Issue {
 		out = append(out, issue)
 	}
 	return out
+}
+
+func compressDocumentationGapIssues(issues []Issue) []Issue {
+	type group struct {
+		Dir            string
+		Severity       string
+		Kind           string
+		TotalCount     int
+		AffectedFiles  map[string]bool
+		Samples        []string
+	}
+
+	const (
+		fileGapPrefix      = "File is not referenced anywhere in workspace documentation"
+		funcGapPrefix      = "public functions in this file lack adjacent doc comments"
+		interfaceGapPrefix = "public interfaces in this file are missing workspace documentation references"
+	)
+
+	grouped := make(map[string]*group)
+	kept := make([]Issue, 0, len(issues))
+
+	for _, issue := range issues {
+		if issue.Category != "documentation-gap" {
+			kept = append(kept, issue)
+			continue
+		}
+
+		kind := ""
+		count := 1
+		switch {
+		case issue.Severity == "low" && strings.HasPrefix(issue.Message, fileGapPrefix):
+			kind = "file-reference"
+		case issue.Severity == "medium" && strings.Contains(issue.Message, funcGapPrefix):
+			kind = "function-comment"
+			count = parseLeadingCount(issue.Message)
+		case issue.Severity == "medium" && strings.Contains(issue.Message, interfaceGapPrefix):
+			kind = "interface-reference"
+			count = parseLeadingCount(issue.Message)
+		}
+
+		if kind == "" {
+			kept = append(kept, issue)
+			continue
+		}
+
+		dir := filepath.ToSlash(filepath.Dir(issue.File))
+		key := issue.Severity + "|" + kind + "|" + dir
+		g := grouped[key]
+		if g == nil {
+			g = &group{
+				Dir:           dir,
+				Severity:      issue.Severity,
+				Kind:          kind,
+				AffectedFiles: make(map[string]bool),
+				Samples:       make([]string, 0, 8),
+			}
+			grouped[key] = g
+		}
+		if count < 1 {
+			count = 1
+		}
+		g.TotalCount += count
+		g.AffectedFiles[issue.File] = true
+		g.Samples = append(g.Samples, filepath.Base(issue.File))
+	}
+
+	keys := make([]string, 0, len(grouped))
+	for key := range grouped {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		g := grouped[key]
+		preview := dedupeSortedPreview(g.Samples, 6)
+		msg := ""
+		suggestion := ""
+		switch g.Kind {
+		case "file-reference":
+			msg = fmt.Sprintf("%d files in %s are missing workspace documentation references: %s", len(g.AffectedFiles), g.Dir, preview)
+			suggestion = "Document exported behavior for these files at the module or directory level."
+		case "function-comment":
+			msg = fmt.Sprintf("%d public functions across %d files in %s are missing adjacent doc comments (files: %s)", g.TotalCount, len(g.AffectedFiles), g.Dir, preview)
+			suggestion = "Add contract comments for exported/public functions in these files."
+		case "interface-reference":
+			msg = fmt.Sprintf("%d public interfaces across %d files in %s are missing workspace documentation references (files: %s)", g.TotalCount, len(g.AffectedFiles), g.Dir, preview)
+			suggestion = "Add module docs for these interfaces in .md/.mdx/.txt/.dx with responsibilities and usage guidance."
+		}
+		kept = append(kept, Issue{
+			ID:         stableID(g.Dir, 1, "doc-gap-group|"+g.Kind+"|"+g.Severity),
+			Severity:   g.Severity,
+			Category:   "documentation-gap",
+			Message:    msg,
+			File:       g.Dir,
+			Line:       1,
+			Suggestion: suggestion,
+		})
+	}
+
+	return kept
+}
+
+func dedupeSortedPreview(items []string, limit int) string {
+	if len(items) == 0 {
+		return ""
+	}
+	seen := make(map[string]bool)
+	uniq := make([]string, 0, len(items))
+	for _, item := range items {
+		if item == "" || seen[item] {
+			continue
+		}
+		seen[item] = true
+		uniq = append(uniq, item)
+	}
+	sort.Strings(uniq)
+	if limit < 1 {
+		limit = 1
+	}
+	previewCount := len(uniq)
+	if previewCount > limit {
+		previewCount = limit
+	}
+	preview := strings.Join(uniq[:previewCount], ", ")
+	if len(uniq) > previewCount {
+		preview += fmt.Sprintf(" (+%d more)", len(uniq)-previewCount)
+	}
+	return preview
+}
+
+func parseLeadingCount(message string) int {
+	count := 0
+	if _, err := fmt.Sscanf(strings.TrimSpace(message), "%d", &count); err != nil {
+		return 1
+	}
+	if count < 1 {
+		return 1
+	}
+	return count
+}
+
+func collectLargestDuplicateRuns(matchesByPair map[duplicatePairKey][]duplicateMatch) []duplicateRun {
+	runs := make([]duplicateRun, 0, len(matchesByPair))
+	keys := make([]duplicatePairKey, 0, len(matchesByPair))
+	for key := range matchesByPair {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].LeftFile != keys[j].LeftFile {
+			return keys[i].LeftFile < keys[j].LeftFile
+		}
+		return keys[i].RightFile < keys[j].RightFile
+	})
+
+	for _, key := range keys {
+		matches := matchesByPair[key]
+		if len(matches) == 0 {
+			continue
+		}
+		sort.Slice(matches, func(i, j int) bool {
+			if matches[i].LeftLine != matches[j].LeftLine {
+				return matches[i].LeftLine < matches[j].LeftLine
+			}
+			return matches[i].RightLine < matches[j].RightLine
+		})
+
+		best := duplicateRun{}
+		runStart := matches[0]
+		runLen := 1
+		runDecl := matches[0].DeclarationLike
+		prev := matches[0]
+
+		flush := func() {
+			lineCount := runLen + duplicateChunkMinLines - 1
+			if lineCount > best.NormalizedLines || (lineCount == best.NormalizedLines && runStart.RightLine < best.RightLine) {
+				best = duplicateRun{
+					LeftFile:        key.LeftFile,
+					RightFile:       key.RightFile,
+					LeftLine:        runStart.LeftLine,
+					RightLine:       runStart.RightLine,
+					NormalizedLines: lineCount,
+					DeclarationLike: runDecl,
+				}
+			}
+		}
+
+		for i := 1; i < len(matches); i++ {
+			cur := matches[i]
+			if cur.LeftLine == prev.LeftLine+1 && cur.RightLine == prev.RightLine+1 {
+				runLen++
+				runDecl = runDecl || cur.DeclarationLike
+				prev = cur
+				continue
+			}
+			flush()
+			runStart = cur
+			runLen = 1
+			runDecl = cur.DeclarationLike
+			prev = cur
+		}
+		flush()
+
+		if best.NormalizedLines > 0 {
+			runs = append(runs, best)
+		}
+	}
+
+	return runs
+}
+
+func containsAlphaNum(line string) bool {
+	for _, r := range line {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			return true
+		}
+	}
+	return false
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func severityRank(severity string) int {

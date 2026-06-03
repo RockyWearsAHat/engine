@@ -416,7 +416,8 @@ export default function App() {
     lastQualityScanProjectRef.current = normalizedPath;
     startQualityScan(normalizedPath);
     setQualityError(null);
-    wsClient.send({ type: 'quality.report.get', projectPath: normalizedPath, maxIssues: 120 });
+    // Send maxIssues=0 explicitly so uncapped mode is unambiguous across client/server versions.
+    wsClient.send({ type: 'quality.report.get', projectPath: normalizedPath, maxIssues: 0 });
   }, [setQualityError, startQualityScan]);
 
   const launchWorkspaceTask = useCallback((task: WorkspaceTask | null) => {
@@ -1128,6 +1129,12 @@ export default function App() {
               finishPendingSaveRequest();
             }
           }
+          {
+            const projectPath = normalizeProjectPath(useStore.getState().activeSession?.projectPath ?? '');
+            if (projectPath) {
+              requestQualityScan(projectPath);
+            }
+          }
           break;
 
         case 'file.tree':
@@ -1273,6 +1280,18 @@ export default function App() {
     }
     requestQualityScan(projectPath);
   }, [activeSession?.projectPath, requestQualityScan]);
+
+  useEffect(() => {
+    if (activityTab !== 'quality' || !showSidebar) {
+      return;
+    }
+    const projectPath = normalizeProjectPath(activeSession?.projectPath ?? '');
+    if (!projectPath) {
+      return;
+    }
+    // Refresh when the Quality tab is opened so the panel does not remain on a stale capped snapshot.
+    requestQualityScan(projectPath);
+  }, [activityTab, showSidebar, activeSession?.projectPath, requestQualityScan]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

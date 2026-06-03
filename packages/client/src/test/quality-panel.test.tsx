@@ -58,6 +58,43 @@ describe('QualityPanel', () => {
     expect(screen.getByLabelText('quality-scan-topbar')).toBeTruthy();
   });
 
+  it('QualityPanel_ScanInProgressWithLoadedReport_UsesTopBarOnly', () => {
+    useStore.setState({
+      qualityLoading: true,
+      qualityCompleted: false,
+      qualityReport: {
+        projectPath: '/tmp/p',
+        generatedAt: new Date().toISOString(),
+        issueCount: 1,
+        highCount: 0,
+        mediumCount: 1,
+        lowCount: 0,
+        issues: [
+          {
+            id: 'q1',
+            severity: 'medium',
+            category: 'docs',
+            message: 'Missing docs',
+            file: 'a.ts',
+            line: 4,
+          },
+        ],
+      },
+      qualityProgress: {
+        projectPath: '/tmp/p',
+        phase: 'scan',
+        current: 2,
+        total: 10,
+        percent: 20,
+      },
+    });
+
+    render(<QualityPanel />);
+
+    expect(screen.getByLabelText('quality-scan-topbar')).toBeTruthy();
+    expect(screen.queryByLabelText('quality-scan-largebar')).toBeNull();
+  });
+
   it('QualityPanel_ReportSuccess_RendersExplorerGroupsAndIssueStats', () => {
     useStore.setState({
       qualityCompleted: true,
@@ -101,6 +138,101 @@ describe('QualityPanel', () => {
     expect(screen.getByText('Missing docs')).toBeTruthy();
     expect(screen.getByText('a.ts')).toBeTruthy();
     expect(screen.getByText('b.ts')).toBeTruthy();
+  });
+
+  it('QualityPanel_ReportSuccess_SortsIssuesBySeverityThenLineWithinFile', () => {
+    useStore.setState({
+      qualityCompleted: true,
+      qualityReport: {
+        projectPath: '/tmp/p',
+        generatedAt: new Date().toISOString(),
+        issueCount: 4,
+        highCount: 1,
+        mediumCount: 1,
+        lowCount: 2,
+        issues: [
+          {
+            id: 'low-late',
+            severity: 'low',
+            category: 'style',
+            message: 'Low line 40',
+            file: 'same.ts',
+            line: 40,
+          },
+          {
+            id: 'medium',
+            severity: 'medium',
+            category: 'docs',
+            message: 'Medium line 30',
+            file: 'same.ts',
+            line: 30,
+          },
+          {
+            id: 'high',
+            severity: 'high',
+            category: 'bug',
+            message: 'High line 50',
+            file: 'same.ts',
+            line: 50,
+          },
+          {
+            id: 'low-early',
+            severity: 'low',
+            category: 'style',
+            message: 'Low line 10',
+            file: 'same.ts',
+            line: 10,
+          },
+        ],
+      },
+    });
+
+    render(<QualityPanel />);
+
+    const messages = screen.getAllByText(/line /).map((node) => node.textContent);
+    expect(messages).toEqual([
+      'High line 50',
+      'Medium line 30',
+      'Low line 10',
+      'Low line 40',
+    ]);
+  });
+
+  it('QualityPanel_CompletedWithNoFindings_ShowsEmptyStateMessage', () => {
+    useStore.setState({
+      qualityCompleted: true,
+      qualityReport: {
+        projectPath: '/tmp/p',
+        generatedAt: new Date().toISOString(),
+        issueCount: 0,
+        highCount: 0,
+        mediumCount: 0,
+        lowCount: 0,
+        issues: [],
+      },
+    });
+
+    render(<QualityPanel />);
+
+    expect(screen.getByText('No quality findings for this project scan.')).toBeTruthy();
+  });
+
+  it('QualityPanel_NoProgressYet_ShowsWaitingCopy', () => {
+    render(<QualityPanel />);
+
+    expect(screen.getByText('Waiting for automatic project scan...')).toBeTruthy();
+  });
+
+  it('QualityPanel_LoadingWithoutProgress_ShowsStartFallbackCopy', () => {
+    useStore.setState({
+      qualityLoading: true,
+      qualityCompleted: false,
+      qualityProgress: null,
+    });
+
+    render(<QualityPanel />);
+
+    expect(screen.getByText('Scanning project - project|scan(//start)')).toBeTruthy();
   });
 
   it('QualityPanel_Error_ShowsErrorMessage', () => {

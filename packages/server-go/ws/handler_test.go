@@ -897,6 +897,48 @@ func TestHandler_Chat_BuildRoute_OnErrorRelaysToClient(t *testing.T) {
 	}
 }
 
+func TestHandler_Chat_InteractiveRoute_EmptyOnErrorIsIgnored(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	origRunAIChat := runAIChat
+	origRunAutonomousProject := runAutonomousProject
+	defer func() {
+		runAIChat = origRunAIChat
+		runAutonomousProject = origRunAutonomousProject
+	}()
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		if cfg.InteractiveChat != nil {
+			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		}
+		return &ai.OrchestrationState{Conversational: true}, nil
+	}
+	runAIChat = func(ctx *ai.ChatContext, _ string) {
+		ctx.OnError("   ")
+		ctx.OnChunk("", true)
+	}
+
+	writeWSMessage(t, conn, map[string]any{"type": "project.open", "path": projectDir})
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sessionID := sessionMsg["session"].(map[string]any)["id"].(string)
+
+	writeWSMessage(t, conn, map[string]any{"type": "chat", "sessionId": sessionID, "content": "hello"})
+	readWSMessageOfType(t, conn, "chat.started")
+	chunk := readWSMessageOfType(t, conn, "chat.chunk")
+	if chunk["done"] != true {
+		t.Fatalf("expected final done chunk, got %+v", chunk)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	_, _, err := conn.ReadMessage()
+	if !errors.Is(err, os.ErrDeadlineExceeded) && !strings.Contains(strings.ToLower(fmt.Sprint(err)), "timeout") {
+		t.Fatalf("expected no extra chat.error after empty OnError, got %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Time{})
+}
+
 func TestHandler_GithubIssues_ResolvesRepo(t *testing.T) {
 	// When no override is configured and project is a git repo, resolves owner/repo from remote.
 	// With non-git dir, the resolve fails and we get github.issues with error.

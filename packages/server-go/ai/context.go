@@ -2197,10 +2197,7 @@ func Chat(ctx *ChatContext, userMessage string) {
 	applyFirstTurnAutonomyContext(ctx, userMessage, projectDirection, isFirstUserMessage)
 	profile := loadProjectProfile(ctx.ProjectPath)
 	if ctx.Role == RoleInteractive {
-		selectiveContext = BuildSelectiveContext(ctx.ProjectPath, session, userMessage, openTabs, residualProfile)
-		deterministicMemoryContext := buildDeterministicMemoryContext(ctx.ProjectPath, ctx.SessionID, userMessage, openTabs, 2200)
-		expansion := BuildPreStartExpansionWithProfile(userMessage, projectDirection, profile)
-		extraContext = strings.TrimSpace(selectiveContext.Prompt + "\n\n" + deterministicMemoryContext + "\n\n" + expansion)
+		extraContext = buildInteractiveExtraContext(session, openTabs)
 	}
 
 	// For workflow requests run a planner pre-pass so the interactive agent
@@ -2418,10 +2415,6 @@ func buildRuntimeIdentityContext(ctx *ChatContext, provider, model, branch strin
 	if resolvedModel == "" {
 		resolvedModel = "unknown"
 	}
-	resolvedBranch := strings.TrimSpace(branch)
-	if resolvedBranch == "" {
-		resolvedBranch = "unknown"
-	}
 	role := agentRoleLabel(ctx.Role)
 	if strings.TrimSpace(role) == "" {
 		role = "unknown"
@@ -2432,10 +2425,23 @@ func buildRuntimeIdentityContext(ctx *ChatContext, provider, model, branch strin
 		"- Agent role: " + role,
 		"- Model provider: " + resolvedProvider,
 		"- Model: " + resolvedModel,
-		"- Session: " + strings.TrimSpace(ctx.SessionID),
-		"- Branch: " + resolvedBranch,
-		"When asked who/what you are or which model is running, answer from this runtime identity block.",
+		"When asked who/what you are, answer: Engine assistant for this workspace.",
+		"When asked which model/provider is running, answer only from this runtime identity block.",
+		"Never claim provider or model capabilities unless they are shown by workspace/tool evidence.",
 	}, "\n"))
+}
+
+func buildInteractiveExtraContext(session *db.Session, openTabs []TabInfo) string {
+	sections := make([]string, 0, 2)
+	if focus := truncateSummary(strings.TrimSpace(buildCurrentFocusContext(openTabs)), 240); focus != "" {
+		sections = append(sections, "Current focus:\n"+focus)
+	}
+	if session != nil {
+		if summary := truncateSummary(strings.TrimSpace(session.Summary), 280); summary != "" {
+			sections = append(sections, "Recent session memory:\n"+summary)
+		}
+	}
+	return strings.Join(sections, "\n\n")
 }
 
 func ensureProjectProfileCache(projectPath, userMessage, projectDirection string) {

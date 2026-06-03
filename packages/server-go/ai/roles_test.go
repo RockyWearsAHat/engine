@@ -57,11 +57,11 @@ func TestBuildRoleSystemPrompt_Interactive_EmptyContextNotLiteral(t *testing.T) 
 
 func TestBuildRoleSystemPrompt_Interactive_ContainsAutonomousBlockerRule(t *testing.T) {
 	p := buildRoleSystemPrompt(RoleInteractive, "/proj", "main", "")
-	if !strings.Contains(p, "Assumption:") {
-		t.Errorf("expected autonomous assumption-prefix rule in interactive prompt, got %q", p)
+	if !strings.Contains(p, "workspace assistant") {
+		t.Errorf("expected workspace assistant identity in interactive prompt, got %q", p)
 	}
-	if !strings.Contains(p, "Human-required") {
-		t.Errorf("expected human-required blocker classification in interactive prompt, got %q", p)
+	if !strings.Contains(p, "Do not invent workspace facts") {
+		t.Errorf("expected factuality guard in interactive prompt, got %q", p)
 	}
 }
 
@@ -212,17 +212,17 @@ func TestBuildRoleSystemPrompt_AutonomousBuilder_ContainsExecutionRules(t *testi
 
 func TestBuildRoleSystemPrompt_Interactive_ContainsTerseRule(t *testing.T) {
 	p := buildRoleSystemPrompt(RoleInteractive, "/proj", "main", "")
-	if !strings.Contains(p, "terse") {
-		t.Errorf("expected terse chat rule in interactive prompt, got %q", p)
+	if !strings.Contains(p, "Keep replies short and direct") {
+		t.Errorf("expected concise chat rule in interactive prompt, got %q", p)
 	}
-	if !strings.Contains(p, "discord_post_progress") {
-		t.Errorf("expected discord_post_progress mention in interactive prompt, got %q", p)
+	if !strings.Contains(p, "search_tools") {
+		t.Errorf("expected search_tools mention in interactive prompt, got %q", p)
 	}
 }
 
 func TestBuildRoleSystemPrompt_Interactive_ContainsLeadDelegationRule(t *testing.T) {
 	p := buildRoleSystemPrompt(RoleInteractive, "/proj", "main", "")
-	for _, required := range []string{"user-facing lead agent", "agent_send", "agent_receive", "synthesize one clear report"} {
+	for _, required := range []string{"workspace assistant", "search_tools", "smallest relevant check"} {
 		if !strings.Contains(p, required) {
 			t.Errorf("expected interactive prompt to contain %q, got %q", required, p)
 		}

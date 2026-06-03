@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/engine/server/db"
@@ -212,5 +213,37 @@ func TestLoadProjectProfile_Missing_ReturnsNil(t *testing.T) {
 	profile := loadProjectProfile(dir)
 	if profile != nil {
 		t.Fatal("expected nil profile when none is stored")
+	}
+}
+
+func TestBuildRuntimeIdentityContext_StaysFactual(t *testing.T) {
+	ctx := &ChatContext{Role: RoleInteractive, SessionID: "session-1"}
+	got := buildRuntimeIdentityContext(ctx, "ollama", "qwen2.5-coder", "main")
+	for _, want := range []string{
+		"Engine assistant for this workspace",
+		"Model provider: ollama",
+		"Model: qwen2.5-coder",
+		"Never claim provider or model capabilities",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in runtime identity block, got %q", want, got)
+		}
+	}
+	if strings.Contains(got, "Session:") || strings.Contains(got, "Branch:") {
+		t.Fatalf("expected minimal runtime identity block, got %q", got)
+	}
+}
+
+func TestBuildInteractiveExtraContext_Minimal(t *testing.T) {
+	session := &db.Session{Summary: "Focus: fix chat confusion\nOutcome: pending"}
+	got := buildInteractiveExtraContext(session, []TabInfo{{Path: "/tmp/project/packages/client/src/App.tsx", IsActive: true}})
+	if !strings.Contains(got, "Current focus:") {
+		t.Fatalf("expected current focus in interactive context, got %q", got)
+	}
+	if !strings.Contains(got, "Recent session memory:") {
+		t.Fatalf("expected recent session memory in interactive context, got %q", got)
+	}
+	if strings.Contains(got, "Pre-start expansion") || strings.Contains(got, "Deterministic memory context") {
+		t.Fatalf("expected minimal interactive context, got %q", got)
 	}
 }
