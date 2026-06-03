@@ -72,7 +72,7 @@ export default function AIChat() {
   }, [activeSession, streamingMessageId]);
 
   // Retry: resend the originating user message and optionally request server-side context replay.
-  const retry = useCallback((failedMsgId: string, reloadContext = false) => {
+  const retry = useCallback((failedMsgId: string, reloadContext: boolean) => {
     /* istanbul ignore start */
     if (!activeSession || streamingMessageId) return;
     const msgs = useStore.getState().chatMessages;

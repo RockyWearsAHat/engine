@@ -21,6 +21,7 @@ import (
 	gofs "github.com/engine/server/fs"
 	gogit "github.com/engine/server/git"
 	gh "github.com/engine/server/github"
+	"github.com/engine/server/quality"
 	"github.com/engine/server/remote"
 	"github.com/engine/server/workspace"
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -69,6 +70,7 @@ var cloneRepoFn = func(url, dest string) error {
 	}
 	return nil
 }
+var qualityScanFn = quality.ScanProject
 
 var (
 	machineCredStoreOnce sync.Once
@@ -530,6 +532,14 @@ var toolRegistry = []anthropicTool{
 			},
 		}),
 	},
+	{
+		Name:        "quality_report",
+		Description: "Run a deterministic codebase quality index scan (no AI reasoning) to find dead-code candidates, duplicate logic chunks, large uncommented blocks, documentation drift, and CS 2420/3500 contention signals.",
+		InputSchema: objSchema(nil, map[string]any{
+			"projectPath": strProp("Optional project-relative directory to scan. Defaults to current project root."),
+			"maxIssues":  numProp("Optional maximum findings to return (default 120)."),
+		}),
+	},
 	// ── Git ──────────────────────────────────────────────────────────────────
 	{
 		Name:        "git_status",
@@ -728,6 +738,25 @@ var toolRegistry = []anthropicTool{
 		Description: "Read messages addressed to this agent. Set consume=true after incorporating the messages into the current work.",
 		InputSchema: objSchema(nil, map[string]any{
 			"consume": map[string]any{"type": "boolean", "description": "Clear returned messages from the inbox"},
+		}),
+	},
+	{
+		Name:        "agent_receive",
+		Description: "Receive one matching peer message when convenient. Non-blocking by default, with optional inline response and optional completion report when no message exists.",
+		InputSchema: objSchema(nil, map[string]any{
+			"message_id":        strProp("Optional exact message id to match"),
+			"reply_to":          strProp("Optional original message id whose reply should be matched"),
+			"timeout_ms":        numProp("Milliseconds to wait; 0 checks once without blocking"),
+			"consume":           map[string]any{"type": "boolean", "description": "Whether to remove the matched message from inbox (default true)"},
+			"response":          strProp("Optional inline response body to send when a message is received"),
+			"response_to":       strProp("Optional recipient for inline response (defaults to message sender)"),
+			"response_subject":  strProp("Optional subject for inline response"),
+			"response_reply_to": strProp("Optional reply_to id for inline response (defaults to matched message id)"),
+			"complete":          map[string]any{"type": "boolean", "description": "When true and no message matched, send completion report"},
+			"complete_to":       strProp("Completion-report recipient when complete=true"),
+			"complete_subject":  strProp("Optional completion-report subject"),
+			"complete_body":     strProp("Optional completion-report body"),
+			"complete_reply_to": strProp("Optional original message id to mark completion as a reply to"),
 		}),
 	},
 	{
@@ -955,6 +984,8 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		return executeAgentSendTool(input, ctx)
 	case "agent_inbox":
 		return executeAgentInboxTool(input, ctx)
+	case "agent_receive":
+		return executeAgentReceiveTool(input, ctx)
 	case "agent_await":
 		return executeAgentAwaitTool(input, ctx)
 
@@ -1095,6 +1126,25 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 	case "git_status":
 		status, _ := gogit.GetStatus(ctx.ProjectPath)
 		b, _ := json.MarshalIndent(status, "", "  ")
+		return string(b), false
+
+	case "quality_report":
+		target := ctx.ProjectPath
+		if p := strings.TrimSpace(str("projectPath")); p != "" {
+			resolved, err := resolveWorkspaceDirectory(ctx.ProjectPath, p)
+			if err != nil {
+				return err.Error(), true
+			}
+			target = resolved
+		}
+		report, err := qualityScanFn(target, int(numVal("maxIssues")))
+		if err != nil {
+			return err.Error(), true
+		}
+		b, err := json.Marshal(report)
+		if err != nil {
+			return err.Error(), true
+		}
 		return string(b), false
 
 	case "git_diff":
@@ -1813,16 +1863,16 @@ func shouldHideEngineDirectory(dir string, state *dirRenderState) bool {
 
 func generatedHintsFromTasks(projectRoot string) map[string]bool {
 	hints := map[string]bool{
-		"node_modules": true,
-		"dist":         true,
-		"build":        true,
-		"target":       true,
-		"coverage":     true,
-		".cache":       true,
-		"out":          true,
-		"tmp":          true,
-		"bin":          true,
-		"vendor":       true,
+		"node_modules":     true,
+		"dist":             true,
+		"build":            true,
+		"target":           true,
+		"coverage":         true,
+		".cache":           true,
+		"out":              true,
+		"tmp":              true,
+		"bin":              true,
+		"vendor":           true,
 		"storybook-static": true,
 	}
 
@@ -2095,6 +2145,10 @@ func Chat(ctx *ChatContext, userMessage string) {
 			ctx.OnError("Failed to save message: " + err.Error())
 			return
 		}
+		_, _ = ingestMemoryEvent(ctx.ProjectPath, ctx.SessionID, "user_message", model, map[string]any{
+			"id":   userMsgID,
+			"text": effectiveUserMessage,
+		})
 		if ctx.OnSessionUpdated != nil {
 			if updatedSession, err := db.GetSession(ctx.SessionID); err == nil && updatedSession != nil {
 				ctx.OnSessionUpdated(updatedSession)
@@ -2144,8 +2198,9 @@ func Chat(ctx *ChatContext, userMessage string) {
 	profile := loadProjectProfile(ctx.ProjectPath)
 	if ctx.Role == RoleInteractive {
 		selectiveContext = BuildSelectiveContext(ctx.ProjectPath, session, userMessage, openTabs, residualProfile)
+		deterministicMemoryContext := buildDeterministicMemoryContext(ctx.ProjectPath, ctx.SessionID, userMessage, openTabs, 2200)
 		expansion := BuildPreStartExpansionWithProfile(userMessage, projectDirection, profile)
-		extraContext = strings.TrimSpace(selectiveContext.Prompt + "\n\n" + expansion)
+		extraContext = strings.TrimSpace(selectiveContext.Prompt + "\n\n" + deterministicMemoryContext + "\n\n" + expansion)
 	}
 
 	// For workflow requests run a planner pre-pass so the interactive agent
@@ -2159,6 +2214,11 @@ func Chat(ctx *ChatContext, userMessage string) {
 			}
 			extraContext = strings.TrimSpace(extraContext + "\n\nIMPLEMENTATION PLAN:\n" + planOutput)
 		}
+	}
+
+	identityContext := buildRuntimeIdentityContext(ctx, provider, model, branch)
+	if identityContext != "" {
+		extraContext = strings.TrimSpace(strings.TrimSpace(extraContext) + "\n\n" + identityContext)
 	}
 
 	_ = WriteAutonomyHandoffCache(ctx.ProjectPath, func() *AutonomyHandoff {
@@ -2206,6 +2266,10 @@ func Chat(ctx *ChatContext, userMessage string) {
 	}
 	assistantMessageID := newID()
 	db.SaveMessage(assistantMessageID, ctx.SessionID, "assistant", finalText.String(), tc) //nolint:errcheck
+	lastLedgerEvent, _ := ingestMemoryEvent(ctx.ProjectPath, ctx.SessionID, "assistant_message", model, map[string]any{
+		"id":   assistantMessageID,
+		"text": finalText.String(),
+	})
 	db.SaveAttentionResiduals(BuildAttentionResidualRecords(                               //nolint:errcheck
 		ctx.SessionID,
 		userMsgID,
@@ -2236,6 +2300,13 @@ func Chat(ctx *ChatContext, userMessage string) {
 			handoff := BuildAutonomyHandoff(assistantMessageID, ctx.SessionID, ctx.ProjectPath, userMessage, summary, profile)
 			return &handoff
 		}())
+	}
+	if compiled := buildDeterministicMemoryContext(ctx.ProjectPath, ctx.SessionID, userMessage, openTabs, 2200); compiled != "" {
+		seq := int64(0)
+		if lastLedgerEvent != nil {
+			seq = lastLedgerEvent.Sequence
+		}
+		persistScribeSnapshot(ctx.ProjectPath, ctx.SessionID, model, compiled, seq)
 	}
 	ctx.OnChunk("", true)
 }
@@ -2333,6 +2404,38 @@ func applyFirstTurnAutonomyContext(ctx *ChatContext, userMessage, projectDirecti
 	if ctx.DiscordDM != nil {
 		_ = ctx.DiscordDM(notice)
 	}
+}
+
+func buildRuntimeIdentityContext(ctx *ChatContext, provider, model, branch string) string {
+	if ctx == nil {
+		return ""
+	}
+	resolvedProvider := strings.TrimSpace(provider)
+	if resolvedProvider == "" {
+		resolvedProvider = "unknown"
+	}
+	resolvedModel := strings.TrimSpace(model)
+	if resolvedModel == "" {
+		resolvedModel = "unknown"
+	}
+	resolvedBranch := strings.TrimSpace(branch)
+	if resolvedBranch == "" {
+		resolvedBranch = "unknown"
+	}
+	role := agentRoleLabel(ctx.Role)
+	if strings.TrimSpace(role) == "" {
+		role = "unknown"
+	}
+
+	return strings.TrimSpace(strings.Join([]string{
+		"Runtime identity (authoritative for this turn):",
+		"- Agent role: " + role,
+		"- Model provider: " + resolvedProvider,
+		"- Model: " + resolvedModel,
+		"- Session: " + strings.TrimSpace(ctx.SessionID),
+		"- Branch: " + resolvedBranch,
+		"When asked who/what you are or which model is running, answer from this runtime identity block.",
+	}, "\n"))
 }
 
 func ensureProjectProfileCache(projectPath, userMessage, projectDirection string) {
@@ -2499,6 +2602,9 @@ func runAnthropicLoop(
 			}
 
 			ctx.OnToolCall(block.Name, inputMap)
+			_, _ = ingestMemoryEvent(ctx.ProjectPath, ctx.SessionID, "tool_call_started", req.Model, map[string]any{
+				"tool": block.Name,
+			})
 
 			start := time.Now()
 			result, isError := executeTool(block.Name, inputMap, ctx)
@@ -2516,6 +2622,12 @@ func runAnthropicLoop(
 			}
 
 			db.LogToolCall(newID(), ctx.SessionID, block.Name, inputMap, result, isError, durationMs) //nolint:errcheck
+			_, _ = ingestMemoryEvent(ctx.ProjectPath, ctx.SessionID, "tool_call_result", req.Model, map[string]any{
+				"tool":       block.Name,
+				"isError":    isError,
+				"durationMs": durationMs,
+				"error":      result,
+			})
 			ctx.OnToolResult(block.Name, result, isError)
 
 			*allToolCalls = append(*allToolCalls, ToolCall{

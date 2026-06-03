@@ -70,6 +70,11 @@ const (
 	// It flags shallow modules (wide public surface vs. shallow internal
 	// complexity) and leaky abstractions. Returns APPROVE or REJECT.
 	RoleArchitect
+
+	// RoleRouter classifies an incoming brief as BUILD or CHAT so the
+	// orchestrator can reason about routing before committing to any work.
+	// It writes nothing, runs no tools, and answers with a single word.
+	RoleRouter
 )
 
 // roleConfig holds the lean system prompt template and tool names pre-granted
@@ -87,7 +92,7 @@ var roleConfigs = map[AgentRole]roleConfig{
 			"Project: {{project}}  Branch: {{branch}}",
 			"{{context}}",
 			"Discover tools with search_tools before using them.",
-			"Lead-agent rule: the user talks to you; delegate through agent_list, agent_send, agent_inbox, and agent_await when peers are available, then synthesize one clear report back to the user. Do not expose raw peer chatter unless it is the requested deliverable.",
+			"Lead-agent rule: the user talks to you; delegate through agent_list, agent_send, agent_receive, and agent_await when peers are available, then synthesize one clear report back to the user. Do not expose raw peer chatter unless it is the requested deliverable.",
 			"Validate changes by running the code. Fix problems completely.",
 			"COMMUNICATION RULES:",
 			"- In-editor chat: be extremely terse — one to three sentences max. Acknowledge the task, state what you're doing, done. No explanations, no summaries, no step-by-step narration.",
@@ -371,7 +376,7 @@ var roleConfigs = map[AgentRole]roleConfig{
 			"TEAM COMMUNICATION RULES:",
 			"- Use agent_list to discover teammates before asking for specialized context.",
 			"- Use agent_send for focused task packets, questions, and review requests; keep messages narrow so each teammate has a clean context window.",
-			"- Use agent_inbox and agent_await to incorporate peer replies before final validation.",
+			"- Use agent_receive for convenient non-blocking inbox checks and use agent_await only when you need a blocking wait.",
 			"- Share conclusions and evidence, not secrets or irrelevant logs.",
 			"NEVER: produce text that says 'I would write ...' or 'planned' or 'ready to start' without calling write_file immediately after.",
 			"ALWAYS: act — write files, run commands, commit, call signal_done when complete.",
@@ -381,10 +386,22 @@ var roleConfigs = map[AgentRole]roleConfig{
 			"shell", "search_files",
 			"git_status", "git_diff", "git_commit",
 			"discord_post_progress", "discord_dm",
-			"agent_list", "agent_send", "agent_inbox", "agent_await",
+			"agent_list", "agent_send", "agent_inbox", "agent_receive", "agent_await",
 			"mesh_exec",
 			"search_tools", "signal_done",
 		},
+	},
+
+	RoleRouter: {
+		// One-shot classifier: BUILD or CHAT. No tools, no discovery loop.
+		prompt: strings.Join([]string{
+			"You are Engine's routing classifier.",
+			"Read the user message and decide whether it is a request to change/build the project (BUILD) or a question/conversation needing no project change (CHAT).",
+			"Respond with exactly one word: BUILD or CHAT.",
+			"Do not use any tools. Do not explain.",
+			"Project: {{project}}  Branch: {{branch}}",
+		}, "\n"),
+		tools: []string{}, // empty (non-nil): no bootstrap discovery
 	},
 }
 

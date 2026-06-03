@@ -63,6 +63,10 @@ type OrchestrationState struct {
 	// Written by the builder via .engine/live-url.txt and lifted into state so
 	// the behavioral validator hits the deployed instance instead of localhost.
 	LiveURL string `json:"liveUrl,omitempty"`
+	// Conversational marks a run that the orchestrator routed to a single
+	// interactive chat turn instead of the build pipeline. It is transient —
+	// never persisted — and tells the caller to suppress the build summary.
+	Conversational bool `json:"-"`
 }
 
 // OrchestratorConfig is the per-run knobs and callbacks.
@@ -85,6 +89,14 @@ type OrchestratorConfig struct {
 	// Wiring it through the config keeps a single injection seam reachable
 	// from main.go so its aiChatFn variable is still the test-stub point.
 	ChatFn func(ctx *ChatContext, userMessage string)
+
+	// InteractiveChat handles a RouteConversational brief. When the orchestrator
+	// triages a brief as conversational, it calls this instead of running the
+	// build pipeline, handing back full control to the caller's interactive
+	// chat surface (streaming tokens, tool calls, approvals straight to the
+	// client). When nil, the orchestrator falls back to runConversationalTurn,
+	// a headless single-turn reply used by tests and non-UI callers.
+	InteractiveChat func(brief string, cancel <-chan struct{})
 
 	// OnProgress is called with human-readable progress lines (Discord-grade).
 	OnProgress func(message string)
@@ -288,6 +300,31 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 	if strings.TrimSpace(cfg.ProjectPath) == "" {
 		return nil, fmt.Errorf("orchestrator: project path is required")
 	}
+
+	// Routing is the orchestrator's first job — and it happens before any
+	// build machinery spins up. Reason about whether this brief is a
+	// conversational turn or a build directive. A conversational route answers
+	// in one interactive chat turn and never registers a handle, loads
+	// orchestration state, or writes to .engine — so a plain "hi" leaves no
+	// build artifacts behind. Empty briefs fall through to the build pipeline
+	// (the historical default), preserving callers that drive state only.
+	if strings.TrimSpace(cfg.Brief) != "" {
+		if orchestratorTriageFn(cfg, cfg.Brief, cfg.Cancel) == RouteConversational {
+			emit(cfg.OnPhase, "chat", "answering conversationally — skipping build pipeline")
+			if cfg.InteractiveChat != nil {
+				cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+			} else {
+				runConversationalTurn(cfg, cfg.Brief, cfg.Cancel)
+			}
+			return &OrchestrationState{
+				Owner:          cfg.Owner,
+				Repo:           cfg.Repo,
+				Brief:          cfg.Brief,
+				Conversational: true,
+			}, nil
+		}
+	}
+
 	if strings.TrimSpace(cfg.Owner) != "" && strings.TrimSpace(cfg.Repo) != "" {
 		activeTeam := strings.TrimSpace(os.Getenv("ENGINE_ACTIVE_TEAM"))
 		resolvedTeam, teamProvider, teamModel, ok := ResolveAutonomousStartupTeam(cfg.ProjectPath, activeTeam)

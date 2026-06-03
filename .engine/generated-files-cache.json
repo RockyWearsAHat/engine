@@ -1,0 +1,20 @@
+{
+  "updatedAt": "2026-06-03T06:27:52Z",
+  "paths": [
+    "/Users/alexwaldmann/Desktop/MyEditor/.cache",
+    "/Users/alexwaldmann/Desktop/MyEditor/.engine",
+    "/Users/alexwaldmann/Desktop/MyEditor/node_modules",
+    "/Users/alexwaldmann/Desktop/MyEditor/packages",
+    "/Users/alexwaldmann/Desktop/MyEditor/packages/.cache",
+    "/Users/alexwaldmann/Desktop/MyEditor/packages/client",
+    "/Users/alexwaldmann/Desktop/MyEditor/packages/client/dist",
+    "/Users/alexwaldmann/Desktop/MyEditor/packages/client/node_modules",
+    "/Users/alexwaldmann/Desktop/MyEditor/packages/server-go",
+    "/Users/alexwaldmann/Desktop/MyEditor/packages/server-go/.agent-go-test.log",
+    "/Users/alexwaldmann/Desktop/MyEditor/packages/server-go/.engine",
+    "/Users/alexwaldmann/Desktop/MyEditor/packages/shared",
+    "/Users/alexwaldmann/Desktop/MyEditor/packages/shared/dist",
+    "/Users/alexwaldmann/Desktop/MyEditor/packages/shared/node_modules",
+    "/Users/alexwaldmann/Desktop/MyEditor/target"
+  ]
+}

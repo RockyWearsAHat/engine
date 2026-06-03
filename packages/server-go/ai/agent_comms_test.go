@@ -155,6 +155,13 @@ func TestAgentCommsTools(t *testing.T) {
 	if isErr || !strings.Contains(inboxResult, "please implement") {
 		t.Fatalf("agent_inbox fallback-name failed: %v %s", isErr, inboxResult)
 	}
+	receiveResult, isErr := ExecuteToolForTest("agent_receive", map[string]any{"consume": true}, &ChatContext{Role: RoleAutonomousBuilder, AgentComms: hub})
+	if isErr || !strings.Contains(receiveResult, "\"found\": true") || !strings.Contains(receiveResult, "please implement") {
+		t.Fatalf("agent_receive did not consume expected message: %v %s", isErr, receiveResult)
+	}
+	if receiveResult, isErr := ExecuteToolForTest("agent_receive", map[string]any{"timeout_ms": float64(0)}, &ChatContext{Role: RoleAutonomousBuilder, AgentComms: hub}); isErr || !strings.Contains(receiveResult, "\"found\": false") {
+		t.Fatalf("agent_receive expected idle state, got err=%v result=%s", isErr, receiveResult)
+	}
 
 	if badResult, badErr := ExecuteToolForTest("agent_send", map[string]any{"to": "missing", "body": "hello"}, ctx); !badErr || !strings.Contains(badResult, "not registered") {
 		t.Fatalf("expected missing recipient error, got err=%v result=%s", badErr, badResult)
@@ -173,10 +180,35 @@ func TestAgentCommsTools(t *testing.T) {
 		t.Fatalf("expected no-match await error, got err=%v result=%s", isErr, awaitResult)
 	}
 
+	_, err = hub.Send("lead", "builder", "next", "ship this", "")
+	if err != nil {
+		t.Fatalf("send next task: %v", err)
+	}
+	receiveReplyResult, isErr := ExecuteToolForTest("agent_receive", map[string]any{
+		"consume":  true,
+		"response": "completed",
+	}, &ChatContext{Role: RoleAutonomousBuilder, AgentComms: hub})
+	if isErr || !strings.Contains(receiveReplyResult, "response_sent") || !strings.Contains(receiveReplyResult, "completed") {
+		t.Fatalf("agent_receive response failed: %v %s", isErr, receiveReplyResult)
+	}
+	receiveCompleteResult, isErr := ExecuteToolForTest("agent_receive", map[string]any{
+		"complete":          true,
+		"complete_to":       "lead",
+		"complete_subject":  "idle",
+		"complete_body":     "all done",
+		"complete_reply_to": sent.ID,
+	}, &ChatContext{Role: RoleAutonomousBuilder, AgentComms: hub})
+	if isErr || !strings.Contains(receiveCompleteResult, "completion_sent") || !strings.Contains(receiveCompleteResult, "all done") {
+		t.Fatalf("agent_receive completion report failed: %v %s", isErr, receiveCompleteResult)
+	}
+	if completeErrResult, isErr := ExecuteToolForTest("agent_receive", map[string]any{"complete": true}, &ChatContext{Role: RoleAutonomousBuilder, AgentComms: hub}); !isErr || !strings.Contains(completeErrResult, "requires complete_to or complete_reply_to") {
+		t.Fatalf("expected completion target validation error, got err=%v result=%s", isErr, completeErrResult)
+	}
+
 	if unavailable, isErr := ExecuteToolForTest("agent_list", map[string]any{}, &ChatContext{}); !isErr || !strings.Contains(unavailable, "unavailable") {
 		t.Fatalf("expected unavailable comms error, got err=%v result=%s", isErr, unavailable)
 	}
-	for _, toolName := range []string{"agent_send", "agent_inbox", "agent_await"} {
+	for _, toolName := range []string{"agent_send", "agent_inbox", "agent_receive", "agent_await"} {
 		if unavailable, isErr := ExecuteToolForTest(toolName, map[string]any{}, &ChatContext{}); !isErr || !strings.Contains(unavailable, "unavailable") {
 			t.Fatalf("expected unavailable %s error, got err=%v result=%s", toolName, isErr, unavailable)
 		}

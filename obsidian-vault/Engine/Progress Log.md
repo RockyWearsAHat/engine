@@ -35,3 +35,44 @@ The video's strongest lesson was not “more agents,” but better communication
 
 - Related: [[Engine/Knowledge]]
 - Behaviors changed: [[Engine/Working Behaviors]]
+
+---
+
+# Progress Entry — 2026-06-02
+
+## Goal
+
+Implement the Memory OS foundation so meaningful memory is persisted losslessly, residual attention state updates continuously, and context assembly is deterministic with zero manual model bookkeeping.
+
+## Change
+
+Added a new persistence and cognition layer in Go:
+- DB schema + APIs for append-only hash-chained ledger events, residual graph nodes/edges, and memory snapshots.
+- AI ingestion and scoring pipeline to convert chat/tool/validation lifecycle events into residual graph updates.
+- Deterministic memory context compiler injected into interactive prompt assembly.
+- Shared + model-specific scribe snapshots written to DB and `.engine/memory/scribe/` markdown artifacts.
+- Chat lifecycle hooks for user, tool start/result, and assistant completion events.
+
+## Validation
+
+Ran focused passing tests:
+- `go test ./packages/server-go/db -run 'TestMemoryLedgerAppendAndVerify|TestMemoryResidualNodesAndSnapshotsRoundTrip' -count=1`
+- `go test ./packages/server-go/ai -run 'TestIngestMemoryEventAndCompileContext|TestPersistScribeSnapshotWritesSharedAndModelNotes' -count=1`
+- `go test ./packages/server-go/ai -run 'TestBuildSelectiveContextPromptIncludesWeightedHistoryAndFocus' -count=1`
+
+## Decisions
+
+| Decision | Why | Tradeoff |
+| --- | --- | --- |
+| Store memory as immutable event ledger + graph state | Enables replayability and deterministic reconstruction | More schema complexity and ingestion surface |
+| Compile deterministic memory context server-side | Prevents prompt drift and manual memory notes | Requires ongoing scoring calibration |
+| Keep model-specific and shared scribe snapshots | Preserves per-model nuance while maintaining project-wide ground truth | Slight storage overhead |
+
+## Thought Process
+
+The key shift was treating memory as backend state infrastructure instead of model prompt behavior. The model should consume compiled state, not author it by hand each turn. This keeps continuity reliable across long-running sessions and context compaction.
+
+## Links
+
+- Related: [[Engine/Architecture]]
+- Related: [[Engine/Knowledge]]

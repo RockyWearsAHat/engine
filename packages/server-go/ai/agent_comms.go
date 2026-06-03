@@ -39,8 +39,8 @@ import (
 // ── Protocol Flow ─────────────────────────────────────────────────────────
 // 1. Lead agent calls agent_list to discover available specialists
 // 2. Lead calls agent_send(to: "specialist-id", subject: "task", body: brief)
-// 3. Specialist calls agent_inbox(consume: true) to get pending work
-// 4. Specialist processes task, calls agent_send(to: lead, replyTo: msg-N) with result
+// 3. Specialist periodically calls agent_receive(timeout_ms: 0) when convenient
+// 4. If a message arrives, specialist processes task and replies via agent_send(reply_to: msg-N)
 // 5. Lead calls agent_await(replyTo: msg-N, timeout: duration) to get specialist result
 // 6. Lead synthesizes all results into one report back to the user
 //
@@ -193,19 +193,28 @@ func (h *AgentCommsHub) Inbox(agentID string, consume bool) []AgentMessage {
 
 // Await waits for a matching message in an agent inbox until timeout elapses.
 func (h *AgentCommsHub) Await(agentID, messageID, replyTo string, timeout time.Duration) (AgentMessage, error) {
+	if message, ok := h.Receive(agentID, messageID, replyTo, true, timeout); ok {
+		return message, nil
+	}
+	return AgentMessage{}, fmt.Errorf("agent_await: no matching message")
+}
+
+// Receive returns one matching message when available. It can poll until timeout,
+// and supports non-destructive peeks when consume is false.
+func (h *AgentCommsHub) Receive(agentID, messageID, replyTo string, consume bool, timeout time.Duration) (AgentMessage, bool) {
 	deadline := time.Now().Add(timeout)
 	for {
-		if message, ok := h.takeMatching(agentID, messageID, replyTo); ok {
-			return message, nil
+		if message, ok := h.matchingMessage(agentID, messageID, replyTo, consume); ok {
+			return message, true
 		}
 		if timeout <= 0 || time.Now().After(deadline) {
-			return AgentMessage{}, fmt.Errorf("agent_await: no matching message")
+			return AgentMessage{}, false
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 }
 
-func (h *AgentCommsHub) takeMatching(agentID, messageID, replyTo string) (AgentMessage, bool) {
+func (h *AgentCommsHub) matchingMessage(agentID, messageID, replyTo string, consume bool) (AgentMessage, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -221,10 +230,19 @@ func (h *AgentCommsHub) takeMatching(agentID, messageID, replyTo string) (AgentM
 		if replyTo != "" && message.ReplyTo != replyTo {
 			continue
 		}
-		h.inbox[agentID] = append(ids[:i], ids[i+1:]...)
+		if consume {
+			h.inbox[agentID] = append(ids[:i], ids[i+1:]...)
+		}
 		return message, true
 	}
 	return AgentMessage{}, false
+}
+
+func (h *AgentCommsHub) Message(id string) (AgentMessage, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	message, ok := h.messages[strings.TrimSpace(id)]
+	return message, ok
 }
 
 func registerChatAgent(ctx *ChatContext) {
@@ -255,6 +273,7 @@ func agentRoleLabel(role AgentRole) string {
 		RolePRDWriter:         "prd-writer",
 		RoleModuleIndexer:     "module-indexer",
 		RoleArchitect:         "architect",
+		RoleRouter:            "router",
 	}
 	if label, ok := labels[role]; ok {
 		return label
@@ -317,6 +336,78 @@ func executeAgentAwaitTool(input map[string]any, ctx *ChatContext) (string, bool
 	}
 }
 
+func executeAgentReceiveTool(input map[string]any, ctx *ChatContext) (string, bool) {
+	if errMsg, hub, agentID, ok := agentCommsReady(ctx); !ok {
+		return errMsg, true
+	} else {
+		consume := boolInputWithDefault(input, "consume", true)
+		message, found := hub.Receive(
+			agentID,
+			stringInput(input, "message_id"),
+			stringInput(input, "reply_to"),
+			consume,
+			time.Duration(numberInput(input, "timeout_ms"))*time.Millisecond,
+		)
+
+		result := map[string]any{
+			"agent": agentID,
+			"found": found,
+		}
+
+		if found {
+			result["message"] = message
+			if responseBody := strings.TrimSpace(stringInput(input, "response")); responseBody != "" {
+				responseTo := strings.TrimSpace(stringInput(input, "response_to"))
+				if responseTo == "" {
+					responseTo = message.From
+				}
+				replyTo := strings.TrimSpace(stringInput(input, "response_reply_to"))
+				if replyTo == "" {
+					replyTo = message.ID
+				}
+				subject := strings.TrimSpace(stringInput(input, "response_subject"))
+				if subject == "" {
+					subject = "response"
+				}
+				sent, err := hub.Send(agentID, responseTo, subject, responseBody, replyTo)
+				if err != nil {
+					return err.Error(), true
+				}
+				result["response_sent"] = sent
+			}
+		} else {
+			if complete := boolInput(input, "complete"); complete {
+				target := strings.TrimSpace(stringInput(input, "complete_to"))
+				if target == "" {
+					if original, ok := hub.Message(strings.TrimSpace(stringInput(input, "complete_reply_to"))); ok {
+						target = original.From
+					}
+				}
+				if target == "" {
+					return "agent_receive: complete=true requires complete_to or complete_reply_to", true
+				}
+				body := strings.TrimSpace(stringInput(input, "complete_body"))
+				if body == "" {
+					body = "Completed current work and no pending peer messages were found."
+				}
+				subject := strings.TrimSpace(stringInput(input, "complete_subject"))
+				if subject == "" {
+					subject = "complete"
+				}
+				completeReplyTo := strings.TrimSpace(stringInput(input, "complete_reply_to"))
+				sent, err := hub.Send(agentID, target, subject, body, completeReplyTo)
+				if err != nil {
+					return err.Error(), true
+				}
+				result["completion_sent"] = sent
+			}
+		}
+
+		payload, _ := json.MarshalIndent(result, "", "  ")
+		return string(payload), false
+	}
+}
+
 func stringInput(input map[string]any, key string) string {
 	value, _ := input[key].(string)
 	return value
@@ -324,6 +415,14 @@ func stringInput(input map[string]any, key string) string {
 
 func boolInput(input map[string]any, key string) bool {
 	value, _ := input[key].(bool)
+	return value
+}
+
+func boolInputWithDefault(input map[string]any, key string, defaultValue bool) bool {
+	value, ok := input[key].(bool)
+	if !ok {
+		return defaultValue
+	}
 	return value
 }
 

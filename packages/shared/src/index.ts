@@ -194,6 +194,43 @@ export interface UsageDashboard {
   projects: UsageProjectBreakdown[];
 }
 
+export interface QualityIssue {
+  id: string;
+  severity: 'high' | 'medium' | 'low';
+  category:
+    | 'dead-code'
+    | 'large-block-without-comment'
+    | 'documentation-gap'
+    | 'duplicate-content'
+    | 'cs-principle';
+  message: string;
+  file: string;
+  line: number;
+  suggestion?: string;
+}
+
+export interface QualityReport {
+  projectPath: string;
+  generatedAt: string;
+  issueCount: number;
+  highCount: number;
+  mediumCount: number;
+  lowCount: number;
+  issues: QualityIssue[];
+}
+
+export interface QualityScanProgress {
+  projectPath: string;
+  phase: 'generated-map' | 'scan' | 'report';
+  current: number;
+  total: number;
+  percent: number;
+  currentFile?: string;
+  currentFunction?: string;
+  section?: string;
+  message?: string;
+}
+
 // Terminal types
 export interface TerminalInfo {
   id: string;
@@ -243,6 +280,7 @@ export type ClientMessage =
   | { type: 'repo.remove'; name: string }
   | { type: 'remote.pair.code.generate' }
   | { type: 'usage.dashboard.get'; scope: 'project' | 'user'; projectPath?: string; model?: string }
+  | { type: 'quality.report.get'; projectPath?: string; maxIssues?: number }
   | { type: 'github.auth.start' };
 // WebSocket protocol — Server → Client
 export type ServerMessage =
@@ -290,6 +328,8 @@ export type ServerMessage =
   | { type: 'repo.added'; entry: RepositoryEntry }
   | { type: 'repo.removed'; name: string }
   | { type: 'usage.dashboard'; dashboard?: UsageDashboard; error?: string }
+  | { type: 'quality.scan.progress'; progress: QualityScanProgress }
+  | { type: 'quality.report'; report?: QualityReport; error?: string }
   | { type: 'github.auth.code'; userCode: string; verificationUri: string; expiresIn: number }
   | { type: 'github.auth.status'; status: string }
   | { type: 'github.auth.done'; token: string }

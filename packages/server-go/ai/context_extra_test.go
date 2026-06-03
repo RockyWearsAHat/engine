@@ -17,6 +17,7 @@ import (
 
 	"github.com/engine/server/db"
 	gofs "github.com/engine/server/fs"
+	"github.com/engine/server/quality"
 	goprocess "github.com/shirou/gopsutil/v3/process"
 )
 
@@ -401,6 +402,30 @@ func TestExecuteToolForTest_SearchHistory_WithQuery(t *testing.T) {
 		t.Errorf("unexpected error: %s", result)
 	}
 	_ = result
+}
+
+func TestExecuteToolForTest_QualityReport(t *testing.T) {
+	ctx := makeChatCtx(t)
+	original := qualityScanFn
+	qualityScanFn = func(projectPath string, maxIssues int) (quality.Report, error) {
+		return quality.Report{
+			ProjectPath: projectPath,
+			IssueCount:  1,
+			HighCount:   1,
+			Issues: []quality.Issue{
+				{ID: "q1", Severity: "high", Category: "cs-principle", Message: "bad pattern", File: "src/a.go", Line: 7},
+			},
+		}, nil
+	}
+	t.Cleanup(func() { qualityScanFn = original })
+
+	result, isErr := ExecuteToolForTest("quality_report", map[string]any{"maxIssues": float64(5)}, ctx)
+	if isErr {
+		t.Fatalf("unexpected error: %s", result)
+	}
+	if !strings.Contains(result, `"issueCount":1`) {
+		t.Fatalf("expected quality report payload, got %q", result)
+	}
 }
 
 func TestExecuteToolForTest_OpenFile_NilSendToClient(t *testing.T) {

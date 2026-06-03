@@ -204,7 +204,7 @@ Team identity: %s (%s)
 Team communication:
 - Use agent_list to see the lead and peer teams.
 - Use agent_send for narrow questions, handoffs, and review requests.
-- Use agent_inbox or agent_await before finalizing when peer answers may change your implementation.
+- Use agent_receive for convenient inbox checks while working, and use agent_await only when you must block for a specific reply.
 - Keep messages concise and redact secrets or personal data.
 
 Acceptance Criteria:

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Session, Message, FileNode, GitStatus, GitHubUser, GitHubIssue, AgentSession, LiveToolCall, TabInfo, SearchResult } from '@engine/shared';
+import type { Session, Message, FileNode, GitStatus, GitHubUser, GitHubIssue, AgentSession, LiveToolCall, TabInfo, SearchResult, QualityReport, QualityScanProgress } from '@engine/shared';
 import { wsClient } from '../ws/client';
 import {
   DEFAULT_EDITOR_PREFERENCES,
@@ -106,6 +106,17 @@ interface EditorStore {
   setSearchLoading: (loading: boolean) => void;
   setSearchResults: (query: string, results: SearchResult[], error?: string | null) => void;
   clearSearch: () => void;
+
+  // Quality index
+  qualityReport: QualityReport | null;
+  qualityProgress: QualityScanProgress | null;
+  qualityLoading: boolean;
+  qualityCompleted: boolean;
+  qualityError: string | null;
+  startQualityScan: (projectPath: string) => void;
+  setQualityProgress: (progress: QualityScanProgress) => void;
+  setQualityReport: (report: QualityReport) => void;
+  setQualityError: (error: string | null) => void;
 
   // Agent monitor
   agentSessions: AgentSession[];
@@ -473,6 +484,43 @@ export const useStore = create<EditorStore>((set, get) => ({
     searchResults: [],
     searchLoading: false,
     searchError: null,
+  }),
+
+  qualityReport: null,
+  qualityProgress: null,
+  qualityLoading: false,
+  qualityCompleted: false,
+  qualityError: null,
+  startQualityScan: (projectPath) => set((state) => ({
+    qualityLoading: true,
+    qualityError: null,
+    qualityProgress: {
+      projectPath,
+      phase: 'generated-map',
+      current: 0,
+      total: 1,
+      percent: 0,
+      currentFunction: 'ScanProjectWithProgress',
+      section: 'start',
+      message: 'Preparing generated file map',
+    },
+    qualityCompleted: state.qualityReport !== null,
+  })),
+  setQualityProgress: (progress) => set({
+    qualityProgress: progress,
+    qualityLoading: true,
+    qualityError: null,
+  }),
+  setQualityReport: (report) => set({
+    qualityReport: report,
+    qualityLoading: false,
+    qualityCompleted: true,
+    qualityError: null,
+  }),
+  setQualityError: (error) => set({
+    qualityError: error,
+    qualityLoading: false,
+    qualityCompleted: false,
   }),
 
   agentSessions: [],

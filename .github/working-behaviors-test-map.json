@@ -1,7 +1,8 @@
 {
   "AI Chat Panel": [
     "packages/client/src/test/ai-chat.test.tsx",
-    "packages/client/src/test/store-chat.test.ts"
+    "packages/client/src/test/store-chat.test.ts",
+    "packages/server-go/ws/handler_test.go"
   ],
   "Command Palette": [
     "packages/client/src/test/commandpalette.test.tsx"
@@ -77,7 +78,7 @@
     "packages/server-go/github/engagement_test.go",
     "packages/server-go/github/projects_test.go",
     "packages/server-go/main_test.go",
-    "packages/server-go/ai/autonomous_intent_test.go"
+    "packages/server-go/ai/autonomy_handoff_test.go"
   ],
   "Configurable Autonomous Commit and Push": [
     "packages/server-go/ai/team_config_test.go",

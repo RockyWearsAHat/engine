@@ -15,6 +15,7 @@ import (
 	"github.com/engine/server/db"
 	"github.com/engine/server/discord"
 	"github.com/engine/server/github"
+	"github.com/engine/server/quality"
 	"github.com/engine/server/remote"
 	"github.com/engine/server/workspace"
 	"github.com/gorilla/websocket"
@@ -319,6 +320,85 @@ func TestHandler_GitHubUser_MockHTTP_Success(t *testing.T) {
 	}
 }
 
+func TestHandler_QualityReportGet_Success(t *testing.T) {
+	original := qualityScanWithProgressFn
+	qualityScanWithProgressFn = func(projectPath string, maxIssues int, _ quality.ProgressCallback) (quality.Report, error) {
+		return quality.Report{
+			ProjectPath: projectPath,
+			IssueCount:  1,
+			HighCount:   1,
+			Issues: []quality.Issue{
+				{ID: "i1", Severity: "high", Category: "cs-principle", Message: "bad", File: "a.go", Line: 7},
+			},
+		}, nil
+	}
+	defer func() { qualityScanWithProgressFn = original }()
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{"type": "quality.report.get", "maxIssues": 42})
+	msg := readWSMessageOfType(t, conn, "quality.report")
+	report, ok := msg["report"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected report payload, got %+v", msg)
+	}
+	if int(report["issueCount"].(float64)) != 1 {
+		t.Fatalf("expected issueCount=1, got %+v", report)
+	}
+}
+
+func TestHandler_QualityReportGet_Error(t *testing.T) {
+	original := qualityScanWithProgressFn
+	qualityScanWithProgressFn = func(_ string, _ int, _ quality.ProgressCallback) (quality.Report, error) {
+		return quality.Report{}, fmt.Errorf("scan failed")
+	}
+	defer func() { qualityScanWithProgressFn = original }()
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{"type": "quality.report.get"})
+	msg := readWSMessageOfType(t, conn, "quality.report")
+	if msg["error"] == nil {
+		t.Fatalf("expected quality.report error, got %+v", msg)
+	}
+}
+
+func TestHandler_QualityReportGet_ProgressEvent(t *testing.T) {
+	original := qualityScanWithProgressFn
+	qualityScanWithProgressFn = func(projectPath string, _ int, onProgress quality.ProgressCallback) (quality.Report, error) {
+		onProgress(quality.ScanProgress{
+			ProjectPath:     projectPath,
+			Phase:           "scan",
+			Current:         1,
+			Total:           2,
+			Percent:         50,
+			CurrentFile:     "packages/demo/demo.go",
+			CurrentFunction: "analyzeFile",
+			Section:         "scan",
+		})
+		return quality.Report{ProjectPath: projectPath, IssueCount: 0, Issues: []quality.Issue{}}, nil
+	}
+	defer func() { qualityScanWithProgressFn = original }()
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{"type": "quality.report.get"})
+	progressMsg := readWSMessageOfType(t, conn, "quality.scan.progress")
+	if progressMsg["progress"] == nil {
+		t.Fatalf("expected progress payload, got %+v", progressMsg)
+	}
+	reportMsg := readWSMessageOfType(t, conn, "quality.report")
+	if reportMsg["report"] == nil {
+		t.Fatalf("expected quality report payload, got %+v", reportMsg)
+	}
+}
+
 func TestHandler_GitHubUser_MockHTTP_APIError(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-token")
 
@@ -481,16 +561,26 @@ func TestHandler_RequestApproval_Timeout(t *testing.T) {
 	defer cleanup()
 
 	origRunAIChat := runAIChat
-	defer func() { runAIChat = origRunAIChat }()
+	origRunAutonomousProject := runAutonomousProject
+	defer func() {
+		runAIChat = origRunAIChat
+		runAutonomousProject = origRunAutonomousProject
+	}()
 
+	result := make(chan error, 1)
 	runAIChat = func(ctx *ai.ChatContext, _ string) {
 		allowed, err := ctx.RequestApproval("shell", "Run command", "execute ls", "ls -la")
 		if err == nil || allowed {
-			ctx.OnError("expected timeout error, got: allowed=" + fmt.Sprintf("%v", allowed))
+			result <- fmt.Errorf("expected timeout error, got allowed=%v err=%v", allowed, err)
 			return
 		}
-		ctx.OnChunk("timed-out", false)
-		ctx.OnChunk("", true)
+		result <- nil
+	}
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		if cfg.InteractiveChat != nil {
+			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		}
+		return &ai.OrchestrationState{Conversational: true}, nil
 	}
 
 	writeWSMessage(t, conn, map[string]any{
@@ -504,11 +594,9 @@ func TestHandler_RequestApproval_Timeout(t *testing.T) {
 		"content": "run command",
 	})
 	readWSMessageOfType(t, conn, "chat.started")
-	// The approval request is sent, we don't respond → timeout fires.
-	// After timeout the mock sends chunk "timed-out".
-	msg := readWSMessageOfType(t, conn, "chat.chunk")
-	if msg["content"] != "timed-out" {
-		t.Fatalf("expected timed-out chunk after approval timeout, got %+v", msg)
+	readWSMessageOfType(t, conn, "approval.request")
+	if err := <-result; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -520,20 +608,28 @@ func TestHandler_RequestApproval_Allow(t *testing.T) {
 	defer cleanup()
 
 	origRunAIChat := runAIChat
-	defer func() { runAIChat = origRunAIChat }()
+	origRunAutonomousProject := runAutonomousProject
+	defer func() {
+		runAIChat = origRunAIChat
+		runAutonomousProject = origRunAutonomousProject
+	}()
 
+	allowedResult := make(chan bool, 1)
+	errResult := make(chan error, 1)
 	runAIChat = func(ctx *ai.ChatContext, _ string) {
 		allowed, err := ctx.RequestApproval("shell", "Run command", "exec ls", "ls")
 		if err != nil {
-			ctx.OnError("approval error: " + err.Error())
+			errResult <- err
 			return
 		}
-		if allowed {
-			ctx.OnChunk("approved", false)
-		} else {
-			ctx.OnChunk("denied", false)
+		allowedResult <- allowed
+		errResult <- nil
+	}
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		if cfg.InteractiveChat != nil {
+			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
 		}
-		ctx.OnChunk("", true)
+		return &ai.OrchestrationState{Conversational: true}, nil
 	}
 
 	writeWSMessage(t, conn, map[string]any{
@@ -563,9 +659,11 @@ func TestHandler_RequestApproval_Allow(t *testing.T) {
 		"allow": true,
 	})
 
-	chunk := readWSMessageOfType(t, conn, "chat.chunk")
-	if chunk["content"] != "approved" {
-		t.Fatalf("expected approved chunk, got %+v", chunk)
+	if err := <-errResult; err != nil {
+		t.Fatalf("approval error: %v", err)
+	}
+	if !<-allowedResult {
+		t.Fatal("expected allow=true")
 	}
 }
 
@@ -575,20 +673,28 @@ func TestHandler_RequestApproval_Deny(t *testing.T) {
 	defer cleanup()
 
 	origRunAIChat := runAIChat
-	defer func() { runAIChat = origRunAIChat }()
+	origRunAutonomousProject := runAutonomousProject
+	defer func() {
+		runAIChat = origRunAIChat
+		runAutonomousProject = origRunAutonomousProject
+	}()
 
+	allowedResult := make(chan bool, 1)
+	errResult := make(chan error, 1)
 	runAIChat = func(ctx *ai.ChatContext, _ string) {
 		allowed, err := ctx.RequestApproval("shell", "Run", "exec", "rm")
 		if err != nil {
-			ctx.OnError(err.Error())
+			errResult <- err
 			return
 		}
-		if allowed {
-			ctx.OnChunk("approved", false)
-		} else {
-			ctx.OnChunk("denied", false)
+		allowedResult <- allowed
+		errResult <- nil
+	}
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		if cfg.InteractiveChat != nil {
+			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
 		}
-		ctx.OnChunk("", true)
+		return &ai.OrchestrationState{Conversational: true}, nil
 	}
 
 	writeWSMessage(t, conn, map[string]any{
@@ -613,9 +719,11 @@ func TestHandler_RequestApproval_Deny(t *testing.T) {
 		"allow": false,
 	})
 
-	chunk := readWSMessageOfType(t, conn, "chat.chunk")
-	if chunk["content"] != "denied" {
-		t.Fatalf("expected denied chunk, got %+v", chunk)
+	if err := <-errResult; err != nil {
+		t.Fatalf("approval error: %v", err)
+	}
+	if <-allowedResult {
+		t.Fatal("expected allow=false")
 	}
 }
 
@@ -737,6 +845,37 @@ func TestHandler_FileSave(t *testing.T) {
 	}
 }
 
+func TestHandler_FileSave_RefreshesQualityIndex(t *testing.T) {
+	projectDir := setupWSProject(t)
+	refreshCalled := make(chan string, 1)
+	prevRefresh := qualityRefreshFn
+	qualityRefreshFn = func(projectPath string) error {
+		refreshCalled <- projectPath
+		return nil
+	}
+	defer func() { qualityRefreshFn = prevRefresh }()
+
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	filePath := projectDir + "/save-refresh-test.txt"
+	writeWSMessage(t, conn, map[string]any{
+		"type":    "file.save",
+		"path":    filePath,
+		"content": "cave content",
+	})
+	_ = readWSMessageOfType(t, conn, "file.saved")
+
+	select {
+	case got := <-refreshCalled:
+		if got != projectDir {
+			t.Fatalf("expected refresh for %s, got %s", projectDir, got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected quality index refresh after file.save")
+	}
+}
+
 func TestHandler_FileCreate(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
@@ -750,6 +889,36 @@ func TestHandler_FileCreate(t *testing.T) {
 	msg := readWSMessageOfType(t, conn, "file.created")
 	if msg["path"] != filePath {
 		t.Fatalf("expected file.created with path, got %+v", msg)
+	}
+}
+
+func TestHandler_FileCreate_RefreshesQualityIndex(t *testing.T) {
+	projectDir := setupWSProject(t)
+	refreshCalled := make(chan string, 1)
+	prevRefresh := qualityRefreshFn
+	qualityRefreshFn = func(projectPath string) error {
+		refreshCalled <- projectPath
+		return nil
+	}
+	defer func() { qualityRefreshFn = prevRefresh }()
+
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	filePath := projectDir + "/create-refresh-test.txt"
+	writeWSMessage(t, conn, map[string]any{
+		"type": "file.create",
+		"path": filePath,
+	})
+	_ = readWSMessageOfType(t, conn, "file.created")
+
+	select {
+	case got := <-refreshCalled:
+		if got != projectDir {
+			t.Fatalf("expected refresh for %s, got %s", projectDir, got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected quality index refresh after file.create")
 	}
 }
 
@@ -917,13 +1086,22 @@ func TestHandler_ResolveAllApprovals_OnConnectionClose(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 
 	origRunAIChat := runAIChat
-	defer func() { runAIChat = origRunAIChat }()
+	origRunAutonomousProject := runAutonomousProject
+	defer func() {
+		runAIChat = origRunAIChat
+		runAutonomousProject = origRunAutonomousProject
+	}()
 
 	resolved := make(chan bool, 1)
 	runAIChat = func(ctx *ai.ChatContext, _ string) {
 		allowed, _ := ctx.RequestApproval("shell", "T", "m", "c")
 		resolved <- allowed
-		ctx.OnChunk("", true)
+	}
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		if cfg.InteractiveChat != nil {
+			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		}
+		return &ai.OrchestrationState{Conversational: true}, nil
 	}
 
 	writeWSMessage(t, conn, map[string]any{
@@ -1353,11 +1531,14 @@ func TestHandler_ChatStop_CancelsRunningChat(t *testing.T) {
 	defer cleanup()
 
 	origRunAIChat := runAIChat
-	defer func() { runAIChat = origRunAIChat }()
-	runAIChat = func(ctx *ai.ChatContext, _ string) {
-		<-ctx.Cancel
-		ctx.OnChunk("cancelled", false)
-		ctx.OnChunk("", true)
+	origRunAutonomousProject := runAutonomousProject
+	defer func() {
+		runAIChat = origRunAIChat
+		runAutonomousProject = origRunAutonomousProject
+	}()
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		<-cfg.Cancel
+		return nil, fmt.Errorf("cancelled")
 	}
 
 	writeWSMessage(t, conn, map[string]any{"type": "project.open", "path": projectDir})
@@ -1376,9 +1557,9 @@ func TestHandler_ChatStop_CancelsRunningChat(t *testing.T) {
 		"type":      "chat.stop",
 		"sessionId": sessionID,
 	})
-	chunk := readWSMessageOfType(t, conn, "chat.chunk")
-	if chunk["content"] != "cancelled" {
-		t.Fatalf("expected cancelled chunk, got %+v", chunk)
+	notice := readWSMessageOfType(t, conn, "chat.notice")
+	if !strings.Contains(fmt.Sprint(notice["notice"]), "cancelled") {
+		t.Fatalf("expected cancellation notice, got %+v", notice)
 	}
 }
 
@@ -1698,13 +1879,22 @@ func TestHandler_DiscordDM_NilBridge_ReturnsError(t *testing.T) {
 	SetDiscordBridge(nil)
 
 	origRunAIChat := runAIChat
-	defer func() { runAIChat = origRunAIChat }()
+	origRunAutonomousProject := runAutonomousProject
+	defer func() {
+		runAIChat = origRunAIChat
+		runAutonomousProject = origRunAutonomousProject
+	}()
 	var dmErr error
 	done := make(chan struct{})
 	runAIChat = func(ctx *ai.ChatContext, _ string) {
 		dmErr = ctx.DiscordDM("hello owner")
 		close(done)
-		ctx.OnChunk("ok", true)
+	}
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		if cfg.InteractiveChat != nil {
+			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		}
+		return &ai.OrchestrationState{Conversational: true}, nil
 	}
 
 	testSendChatAndWaitForRunAIChat(t, conn, projectDir)
@@ -1723,12 +1913,21 @@ func TestHandler_DiscordDM_WithBridge_CallsSendDMToOwner(t *testing.T) {
 	SetDiscordBridge(&stubDiscordBridgeWithDM{captureMsg: &capturedMsg})
 
 	origRunAIChat := runAIChat
-	defer func() { runAIChat = origRunAIChat }()
+	origRunAutonomousProject := runAutonomousProject
+	defer func() {
+		runAIChat = origRunAIChat
+		runAutonomousProject = origRunAutonomousProject
+	}()
 	done := make(chan struct{})
 	runAIChat = func(ctx *ai.ChatContext, _ string) {
 		_ = ctx.DiscordDM("hello from agent")
 		close(done)
-		ctx.OnChunk("ok", true)
+	}
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		if cfg.InteractiveChat != nil {
+			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		}
+		return &ai.OrchestrationState{Conversational: true}, nil
 	}
 
 	testSendChatAndWaitForRunAIChat(t, conn, projectDir)
@@ -1768,13 +1967,23 @@ func TestHandler_DiscordProgress_NilBridge_ReturnsError(t *testing.T) {
 	SetDiscordBridge(nil)
 
 	origRunAIChat := runAIChat
-	defer func() { runAIChat = origRunAIChat }()
+	origRunAutonomousProject := runAutonomousProject
+	defer func() {
+		runAIChat = origRunAIChat
+		runAutonomousProject = origRunAutonomousProject
+	}()
 	var progressErr error
 	done := make(chan struct{})
 	runAIChat = func(ctx *ai.ChatContext, _ string) {
 		progressErr = ctx.DiscordProgress("milestone reached")
 		close(done)
 		ctx.OnChunk("ok", true)
+	}
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		if cfg.InteractiveChat != nil {
+			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		}
+		return &ai.OrchestrationState{Conversational: true}, nil
 	}
 
 	testSendChatAndWaitForRunAIChat(t, conn, projectDir)
@@ -1797,12 +2006,22 @@ func TestHandler_DiscordProgress_WithBridge_CallsNotifyProjectProgress(t *testin
 	defer SetDiscordBridge(nil)
 
 	origRunAIChat := runAIChat
-	defer func() { runAIChat = origRunAIChat }()
+	origRunAutonomousProject := runAutonomousProject
+	defer func() {
+		runAIChat = origRunAIChat
+		runAutonomousProject = origRunAutonomousProject
+	}()
 	done := make(chan struct{})
 	runAIChat = func(ctx *ai.ChatContext, _ string) {
 		_ = ctx.DiscordProgress("scaffold complete")
 		close(done)
 		ctx.OnChunk("ok", true)
+	}
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		if cfg.InteractiveChat != nil {
+			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		}
+		return &ai.OrchestrationState{Conversational: true}, nil
 	}
 
 	testSendChatAndWaitForRunAIChat(t, conn, projectDir)

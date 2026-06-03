@@ -1453,6 +1453,15 @@ func TestHandleAskCommand_GoroutineError(t *testing.T) {
 	t.Setenv("ENGINE_MODEL_PROVIDER", "anthropic")
 	t.Setenv("ANTHROPIC_API_KEY", "")
 
+	// Discord is a remote chat window: route through the conversational
+	// executor so this exercises the relay path, not the build pipeline.
+	origRun := runAutonomousProject
+	t.Cleanup(func() { runAutonomousProject = origRun })
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		return &ai.OrchestrationState{Conversational: true}, nil
+	}
+
 	svc.handleAskCommand(msg("thread-gor-err", ""), []string{"error path test"})
 	waitForActiveSession(t, svc, "sess-gor-err")
 }
@@ -1509,6 +1518,13 @@ func TestHandleAskCommand_GoroutineSuccessEmpty(t *testing.T) {
 	t.Setenv("ENGINE_MODEL_PROVIDER", "ollama")
 	t.Setenv("ENGINE_MODEL", "")
 	t.Setenv("OLLAMA_BASE_URL", ollamaSrv.URL)
+
+	origRun := runAutonomousProject
+	t.Cleanup(func() { runAutonomousProject = origRun })
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		return &ai.OrchestrationState{Conversational: true}, nil
+	}
 
 	svc.handleAskCommand(msg("thread-gor-empty", ""), []string{"reasoning only"})
 	waitForActiveSession(t, svc, "sess-gor-empty")
@@ -1788,6 +1804,13 @@ func TestHandleAskCommand_GoroutineWithContent(t *testing.T) {
 	t.Setenv("ENGINE_MODEL_PROVIDER", "ollama")
 	t.Setenv("ENGINE_MODEL", "")
 	t.Setenv("OLLAMA_BASE_URL", ollamaSrv.URL)
+
+	origRun := runAutonomousProject
+	t.Cleanup(func() { runAutonomousProject = origRun })
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		return &ai.OrchestrationState{Conversational: true}, nil
+	}
 
 	svc.handleAskCommand(msg("thread-content-1", ""), []string{"say hello"})
 	waitForActiveSession(t, svc, "sess-content-1")
@@ -2859,6 +2882,14 @@ func TestHandleAskCommand_CallbacksCoverage(t *testing.T) {
 		_, _ = ctx.RequestApproval("shell", "Run script", "run.sh", "bash run.sh")
 	}
 	t.Cleanup(func() { chatFunc = old })
+
+	// Route through the conversational executor (Discord = remote chat window).
+	origRun := runAutonomousProject
+	t.Cleanup(func() { runAutonomousProject = origRun })
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		return &ai.OrchestrationState{Conversational: true}, nil
+	}
 
 	svc.handleAskCommand(msg(threadID, "!ask hello"), []string{"hello"})
 	wg.Wait()

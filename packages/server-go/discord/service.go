@@ -71,6 +71,10 @@ type persistedState struct {
 // Tests replace it with a stub to exercise callback coverage without a live LLM.
 var chatFunc = ai.Chat
 
+// runAutonomousProject is the orchestrator entry point used by runAgentChat.
+// Tests replace it to drive the build/conversational branches without a live LLM.
+var runAutonomousProject = ai.RunAutonomousProject
+
 // listSessionsFn is injectable for status tests without mutating db internals.
 var listSessionsFn = db.ListSessions
 
@@ -905,47 +909,76 @@ func (s *Service) runAgentChat(m *discordgo.MessageCreate, binding ProjectBindin
 
 		chatPrompt := promptWithProjectStatusContext(binding, prompt)
 
-		// Autonomous intent detection: phrases like "build", "go autonomous",
-		// "/build", "@engine build" engage the autonomous builder role with
-		// awareness-only safety (no approval modals, awareness notes inline).
-		var autonomousPolicy *ai.AutonomousPolicy
-		role := ai.RoleInteractive
-		if ai.DetectAutonomousIntent(prompt) {
-			p := ai.ResolveAutonomousPolicy(binding.ProjectPath)
-			autonomousPolicy = &p
-			role = ai.RoleAutonomousBuilder
-			s.send(replyChannelID, "🤖 Autonomous mode engaged — approvals bypassed, awareness notes inline.")
-		}
-
-		chatFunc(&ai.ChatContext{
-			ProjectPath:      binding.ProjectPath,
-			SessionID:        sessionID,
-			Cancel:           cancel,
-			Role:             role,
-			AutonomousPolicy: autonomousPolicy,
-			OnChunk: func(content string, done bool) {
-				if done || strings.TrimSpace(content) == "" {
-					return
+		// One door: Discord is just an external chat window. The orchestrator
+		// triages this brief and picks the autonomy level itself — answer in
+		// chat, or drive the full plan → execute → review → validate build
+		// pipeline — exactly like the editor chat window. No keyword gate here;
+		// routing is the orchestrator's job.
+		state, runErr := runAutonomousProject(ai.OrchestratorConfig{
+			ProjectPath:     binding.ProjectPath,
+			Brief:           chatPrompt,
+			SessionIDPrefix: fmt.Sprintf("discord-%s", sessionID),
+			Cancel:          cancel,
+			ChatFn:          chatFunc,
+			// InteractiveChat is the conversational executor. When the
+			// orchestrator triages this brief as chat (not a build), it streams
+			// the reply here; we accumulate it and relay to the channel.
+			InteractiveChat: func(brief string, cxl <-chan struct{}) {
+				chatFunc(&ai.ChatContext{
+					ProjectPath: binding.ProjectPath,
+					SessionID:   sessionID,
+					Cancel:      cxl,
+					Role:        ai.RoleInteractive,
+					OnChunk: func(content string, done bool) {
+						if done || strings.TrimSpace(content) == "" {
+							return
+						}
+						outMu.Lock()
+						output.WriteString(content)
+						outMu.Unlock()
+					},
+					OnToolCall:       func(_ string, _ any) {},
+					OnToolResult:     func(_ string, _ any, _ bool) {},
+					OnError:          func(err string) { lastErr = strings.TrimSpace(err) },
+					OnSessionUpdated: func(_ *db.Session) {},
+					RequestApproval: func(kind, title, message, command string) (bool, error) {
+						_ = kind
+						_ = title
+						_ = message
+						_ = command
+						return false, fmt.Errorf("approval required but unavailable in discord command mode")
+					},
+				}, brief)
+			},
+			OnPhase: func(phase, detail string) {
+				s.send(replyChannelID, fmt.Sprintf("Orchestrator %s: %s", phase, detail))
+			},
+			OnProgress: func(message string) {
+				if strings.TrimSpace(message) != "" {
+					s.send(replyChannelID, message)
 				}
-				outMu.Lock()
-				output.WriteString(content)
-				outMu.Unlock()
 			},
-			OnToolCall:       func(_ string, _ any) {},
-			OnToolResult:     func(_ string, _ any, _ bool) {},
-			OnError:          func(err string) { lastErr = strings.TrimSpace(err) },
-			OnSessionUpdated: func(_ *db.Session) {},
-			RequestApproval: func(kind, title, message, command string) (bool, error) {
-				_ = kind
-				_ = title
-				_ = message
-				_ = command
-				return false, fmt.Errorf("approval required but unavailable in discord command mode")
+			OnError: func(err string) {
+				if strings.TrimSpace(err) != "" {
+					lastErr = strings.TrimSpace(err)
+				}
 			},
-		}, chatPrompt)
+		})
 
 		if strings.TrimSpace(lastErr) != "" {
 			s.send(replyChannelID, "Agent error: "+lastErr)
+			return
+		}
+		if runErr != nil {
+			s.send(replyChannelID, "Agent error: "+runErr.Error())
+			return
+		}
+
+		// A build route already streamed progress through OnPhase/OnProgress;
+		// post a completion summary instead of relaying chat text. Only a
+		// conversational route has a text answer to send back.
+		if state != nil && !state.Conversational {
+			s.send(replyChannelID, fmt.Sprintf("Orchestrator completed (%d steps, %d iterations).", len(state.Plan), state.OuterIterations))
 			return
 		}
 

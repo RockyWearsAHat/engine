@@ -38,11 +38,8 @@ vi.mock('../bridge.js', () => ({
     getModelProvider: vi.fn().mockResolvedValue(null),
     getOllamaBaseUrl: vi.fn().mockResolvedValue(null),
     getModel: vi.fn().mockResolvedValue(null),
-    getContextMaxTokens: vi.fn().mockResolvedValue(null),
-    getContextRecentWindow: vi.fn().mockResolvedValue(null),
-    getListDirectoryMaxChars: vi.fn().mockResolvedValue(null),
     getEditorPreferences: vi.fn().mockResolvedValue({ fontFamily: 'monospace', fontSize: 13, lineHeight: 1.5, tabSize: 2, markdownViewMode: 'text', wordWrap: false }),
-    agentServiceStatus: vi.fn().mockResolvedValue({ platform: 'web', installed: false, running: false, startupTarget: 'none' }),
+    agentServiceStatus: vi.fn().mockResolvedValue({ installed: false, running: false }),
     setEditorPreferences: vi.fn().mockResolvedValue(true),
     installAgentService: vi.fn().mockResolvedValue(''),
     uninstallAgentService: vi.fn().mockResolvedValue(''),
@@ -54,9 +51,6 @@ vi.mock('../bridge.js', () => ({
     setAnthropicKey: vi.fn().mockResolvedValue(true),
     setOpenAiKey: vi.fn().mockResolvedValue(true),
     setOllamaBaseUrl: vi.fn().mockResolvedValue(true),
-    setContextMaxTokens: vi.fn().mockResolvedValue(true),
-    setContextRecentWindow: vi.fn().mockResolvedValue(true),
-    setListDirectoryMaxChars: vi.fn().mockResolvedValue(true),
     setActiveTeam: vi.fn().mockResolvedValue(undefined),
     getActiveTeam: vi.fn().mockResolvedValue(null),
     setLastProjectPath: vi.fn().mockResolvedValue(undefined),
@@ -633,7 +627,7 @@ describe('PreferencesPanel — bridge.get* with values', () => {
     vi.mocked(bridge.getModelProvider).mockResolvedValueOnce('anthropic');
     vi.mocked(bridge.getOllamaBaseUrl).mockResolvedValueOnce('http://localhost:11434');
     vi.mocked(bridge.getModel).mockResolvedValueOnce('claude-sonnet');
-    vi.mocked(bridge.agentServiceStatus).mockResolvedValueOnce({ platform: 'macOS', installed: true, running: true, startupTarget: 'launchd' });
+    vi.mocked(bridge.agentServiceStatus).mockResolvedValueOnce({ installed: true, running: true, platform: 'darwin', startupTarget: 'launchd' });
 
     render(<PreferencesPanel />);
     await act(async () => { await new Promise(r => setTimeout(r, 50)); });
@@ -802,7 +796,7 @@ describe('PreferencesPanel — Desktop service install/uninstall', () => {
   });
 
   it('RunningAndUninstallButtonClicked_ServiceUninstalled', async () => {
-    vi.mocked(bridge.agentServiceStatus).mockResolvedValue({ platform: 'macOS', installed: true, running: true, startupTarget: 'launchd' });
+    vi.mocked(bridge.agentServiceStatus).mockResolvedValue({ installed: true, running: true, platform: 'darwin', startupTarget: 'launchd' });
     vi.mocked(bridge.uninstallAgentService).mockResolvedValue('Service removed');
     render(<PreferencesPanel />);
     await act(async () => { await new Promise(r => setTimeout(r, 50)); });
