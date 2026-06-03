@@ -995,7 +995,6 @@ export default function App() {
 
         case 'session.created':
           setActiveSession(msg.session);
-          requestQualityScan(msg.session.projectPath);
           setMessages([]);
           pendingToolCallsRef.current[msg.session.id] = [];
           setSessions(prev => {
@@ -1019,7 +1018,6 @@ export default function App() {
 
         case 'session.loaded':
           setActiveSession(msg.session);
-          requestQualityScan(msg.session.projectPath);
           setMessages(msg.messages);
           pendingToolCallsRef.current[msg.session.id] = [];
           if (streamingRef.current?.sessionId === msg.session.id) {
@@ -1280,18 +1278,6 @@ export default function App() {
     }
     requestQualityScan(projectPath);
   }, [activeSession?.projectPath, requestQualityScan]);
-
-  useEffect(() => {
-    if (activityTab !== 'quality' || !showSidebar) {
-      return;
-    }
-    const projectPath = normalizeProjectPath(activeSession?.projectPath ?? '');
-    if (!projectPath) {
-      return;
-    }
-    // Refresh when the Quality tab is opened so the panel does not remain on a stale capped snapshot.
-    requestQualityScan(projectPath);
-  }, [activityTab, showSidebar, activeSession?.projectPath, requestQualityScan]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

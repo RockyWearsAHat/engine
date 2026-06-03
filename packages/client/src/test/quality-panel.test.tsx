@@ -1,7 +1,17 @@
-import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import QualityPanel from '../components/Quality/QualityPanel.js';
 import { useStore } from '../store/index.js';
+
+const { wsSendMock } = vi.hoisted(() => ({
+  wsSendMock: vi.fn(),
+}));
+
+vi.mock('../ws/client.js', () => ({
+  wsClient: {
+    send: wsSendMock,
+  },
+}));
 
 function resetQualityState() {
   useStore.setState({
@@ -15,10 +25,11 @@ function resetQualityState() {
 
 describe('QualityPanel', () => {
   beforeEach(() => {
+    wsSendMock.mockReset();
     resetQualityState();
   });
 
-  it('QualityPanel_ScanNotCompleted_ShowsCenteredProgressAndDescription', () => {
+  it('QualityPanel_ScanNotCompleted_ShowsTopProgressBarAndCentralizedDescription', () => {
     useStore.setState({
       qualityLoading: true,
       qualityCompleted: false,
@@ -36,8 +47,9 @@ describe('QualityPanel', () => {
 
     render(<QualityPanel />);
 
-    expect(screen.getByLabelText('quality-scan-largebar')).toBeTruthy();
-    expect(screen.getByText(/Scanning project - packages\/server-go\/quality\/report.go\|analyzeFile\(\/\/scan\)/)).toBeTruthy();
+    expect(screen.getByLabelText('quality-scan-topbar')).toBeTruthy();
+    expect(screen.getByText('Centralized quality index')).toBeTruthy();
+    expect(screen.getAllByText(/Scanning project - packages\/server-go\/quality\/report.go\|analyzeFile\(\/\/scan\)/)).toHaveLength(2);
   });
 
   it('QualityPanel_ScanInProgressAfterCompletion_ShowsTinyTopBar', () => {
@@ -92,10 +104,22 @@ describe('QualityPanel', () => {
     render(<QualityPanel />);
 
     expect(screen.getByLabelText('quality-scan-topbar')).toBeTruthy();
-    expect(screen.queryByLabelText('quality-scan-largebar')).toBeNull();
   });
 
   it('QualityPanel_ReportSuccess_RendersExplorerGroupsAndIssueStats', () => {
+    useStore.setState({
+      openFiles: [
+        {
+          path: 'a.ts',
+          content: 'export const a = 1',
+          language: 'typescript',
+          size: 20,
+          largeFile: false,
+          dirty: true,
+        },
+      ],
+      activeFilePath: 'a.ts',
+    });
     useStore.setState({
       qualityCompleted: true,
       qualityReport: {
@@ -136,8 +160,10 @@ describe('QualityPanel', () => {
     expect(screen.getByText('Unused function')).toBeTruthy();
     expect(screen.getByText('Delete it')).toBeTruthy();
     expect(screen.getByText('Missing docs')).toBeTruthy();
-    expect(screen.getByText('a.ts')).toBeTruthy();
+    expect(screen.getAllByText('a.ts').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('b.ts')).toBeTruthy();
+    expect(screen.getByText('Open Editors')).toBeTruthy();
+    expect(screen.getByText('unsaved')).toBeTruthy();
   });
 
   it('QualityPanel_ReportSuccess_SortsIssuesBySeverityThenLineWithinFile', () => {
@@ -220,7 +246,7 @@ describe('QualityPanel', () => {
   it('QualityPanel_NoProgressYet_ShowsWaitingCopy', () => {
     render(<QualityPanel />);
 
-    expect(screen.getByText('Waiting for automatic project scan...')).toBeTruthy();
+    expect(screen.getAllByText('Waiting for automatic project scan...').length).toBeGreaterThanOrEqual(1);
   });
 
   it('QualityPanel_LoadingWithoutProgress_ShowsStartFallbackCopy', () => {
@@ -232,12 +258,46 @@ describe('QualityPanel', () => {
 
     render(<QualityPanel />);
 
-    expect(screen.getByText('Scanning project - project|scan(//start)')).toBeTruthy();
+    expect(screen.getAllByText('Scanning project - project|scan(//start)').length).toBeGreaterThanOrEqual(1);
   });
 
   it('QualityPanel_Error_ShowsErrorMessage', () => {
     useStore.setState({ qualityError: 'scan failed' });
     render(<QualityPanel />);
     expect(screen.getByText('scan failed')).toBeTruthy();
+  });
+
+  it('QualityPanel_ClickingIssue_OpensFileInEditorAtIssueLine', () => {
+    useStore.setState({
+      qualityCompleted: true,
+      qualityReport: {
+        projectPath: '/tmp/project',
+        generatedAt: new Date().toISOString(),
+        issueCount: 1,
+        highCount: 1,
+        mediumCount: 0,
+        lowCount: 0,
+        issues: [
+          {
+            id: 'q-open',
+            severity: 'high',
+            category: 'duplicate-content',
+            message: 'Duplicate code detected',
+            file: 'packages/client/src/App.tsx',
+            line: 42,
+          },
+        ],
+      },
+    });
+
+    render(<QualityPanel />);
+
+    const issueButton = screen.getByTitle('Open packages/client/src/App.tsx:42');
+    fireEvent.click(issueButton);
+
+    expect(wsSendMock).toHaveBeenCalledWith({
+      type: 'file.read',
+      path: '/tmp/project/packages/client/src/App.tsx',
+    });
   });
 });
