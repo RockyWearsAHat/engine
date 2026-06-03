@@ -138,12 +138,6 @@ export interface BackgroundServiceStatus {
   startupTarget: string;
 }
 
-type WorkspaceOpenTarget = {
-  workspacePath: string;
-  initialFilePath?: string;
-  label: string;
-};
-
 export const bridge = {
   async getProjectPath(): Promise<string> {
     if (isTauri()) {
