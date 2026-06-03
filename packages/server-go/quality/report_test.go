@@ -340,11 +340,14 @@ func TestScanProject_DuplicateDetection_IgnoresCommentsAndUsesLargestRunSeverity
 	if target.Severity != "high" && target.Severity != "medium" {
 		t.Fatalf("expected overlap-scored duplicate severity (medium/high), got %+v", target)
 	}
-	if !strings.Contains(target.Message, "Largest repeated block spans") {
-		t.Fatalf("expected largest-block duplicate message, got %+v", target)
+	if !strings.Contains(target.Message, "Duplicate code") && !strings.Contains(target.Message, "High-risk duplicate code") {
+		t.Fatalf("expected explicit duplicate-code wording in message, got %+v", target)
 	}
-	if !strings.Contains(target.Message, "% overlap") {
+	if !strings.Contains(target.Message, "overlap") {
 		t.Fatalf("expected overlap percentage in duplicate message, got %+v", target)
+	}
+	if !strings.Contains(target.Message, "helper/module") && !strings.Contains(target.Message, "source of truth") {
+		t.Fatalf("expected actionable fix guidance in duplicate message, got %+v", target)
 	}
 }
 

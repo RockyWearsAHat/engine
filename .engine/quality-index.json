@@ -1,7 +1,7 @@
 {
   "version": 5,
   "projectPath": "/Users/alexwaldmann/Desktop/MyEditor",
-  "updatedAt": "2026-06-03T20:16:57Z",
+  "updatedAt": "2026-06-03T20:20:12Z",
   "files": {
     "packages/client/postcss.config.js": {
       "path": "packages/client/postcss.config.js",
@@ -10709,11 +10709,11 @@
     },
     "packages/client/src/bridge.ts": {
       "path": "packages/client/src/bridge.ts",
-      "modTimeUnixNano": 1780473879383605872,
-      "size": 15574,
+      "modTimeUnixNano": 1780517856027132786,
+      "size": 15471,
       "baseName": "bridge",
       "isTest": false,
-      "normalizedLines": 305,
+      "normalizedLines": 301,
       "symbols": [
         {
           "Name": "isTauri",
@@ -10781,7 +10781,6 @@
         "Vite": 1,
         "We": 1,
         "Window": 2,
-        "WorkspaceOpenTarget": 1,
         "__TAURI__": 44,
         "_blank": 1,
         "a": 1,
@@ -10893,7 +10892,6 @@
         "import": 4,
         "in": 3,
         "includes": 1,
-        "initialFilePath": 1,
         "injected": 2,
         "inspectPath": 1,
         "inspect_path": 1,
@@ -10912,7 +10910,6 @@
         "js": 2,
         "key": 15,
         "kind": 2,
-        "label": 1,
         "lastProjectPath": 4,
         "lastProjectPathStorageKey": 3,
         "listDirectoryMaxChars": 1,
@@ -11020,7 +11017,7 @@
         "startWindowDrag": 1,
         "startupTarget": 2,
         "stored": 2,
-        "string": 76,
+        "string": 73,
         "stringify": 1,
         "supported": 2,
         "tauri": 1,
@@ -11035,7 +11032,7 @@
         "trim": 4,
         "true": 2,
         "try": 7,
-        "type": 2,
+        "type": 1,
         "typeof": 8,
         "undefined": 7,
         "uninstallAgentService": 1,
@@ -11056,7 +11053,7 @@
         "window_start_drag": 2,
         "window_toggle_fullscreen": 1,
         "window_toggle_maximize": 1,
-        "workspacePath": 2
+        "workspacePath": 1
       },
       "chunks": [
         {
@@ -11519,859 +11516,853 @@
           "size": 1
         },
         {
-          "hash": "86e5cc4e876b8d74b1c20227813374b6e8861ca5",
+          "hash": "845a68a92179104bdb0a54639b421166da9a55ac",
           "line": 141,
           "size": 1,
           "declarationLike": true
         },
         {
-          "hash": "269132b698af50bce231adff4fee1e3c49687566",
+          "hash": "563089b9afb672856f69f5d5f186ae5896457a8a",
           "line": 142,
           "size": 1
         },
         {
-          "hash": "37c17c2b5b58a7a8bb1cf0e04eb432c8807adad8",
+          "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
           "line": 143,
           "size": 1
         },
         {
-          "hash": "eaec9185ddf4ca91ae65545a1a11133cab43f5cc",
+          "hash": "4bd8467c4b47bab55b0d07415c3bd3f3ae3bd16c",
           "line": 144,
           "size": 1
         },
         {
-          "hash": "845a68a92179104bdb0a54639b421166da9a55ac",
-          "line": 147,
-          "size": 1,
-          "declarationLike": true
-        },
-        {
-          "hash": "563089b9afb672856f69f5d5f186ae5896457a8a",
-          "line": 148,
-          "size": 1
-        },
-        {
-          "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 149,
-          "size": 1
-        },
-        {
-          "hash": "4bd8467c4b47bab55b0d07415c3bd3f3ae3bd16c",
-          "line": 150,
-          "size": 1
-        },
-        {
           "hash": "f2288d4d34a3fe5bdf669d269d995bd40d1bd906",
-          "line": 152,
+          "line": 146,
           "size": 1
         },
         {
           "hash": "e29e09276dac903c3178e02285579379aa6ef05b",
-          "line": 153,
+          "line": 147,
           "size": 1
         },
         {
           "hash": "7e4b6d46e3f7d0eb53862c5509fb37b45cf7ed01",
-          "line": 155,
+          "line": 149,
           "size": 1
         },
         {
           "hash": "3e43f0df102ba28ef83a3619916c21aa5f136cd8",
-          "line": 156,
+          "line": 150,
           "size": 1
         },
         {
           "hash": "2f090374f3c971f8653c74e0e78eef5d7176e150",
-          "line": 157,
+          "line": 151,
           "size": 1
         },
         {
           "hash": "cc51fdeb064440c28b5c1549d7963c1cb2c9feb0",
-          "line": 159,
+          "line": 153,
           "size": 1
         },
         {
           "hash": "b29b181ef49ab2d4b611aac19b5fc277d6c9363c",
-          "line": 160,
+          "line": 154,
           "size": 1
         },
         {
           "hash": "6068bbb2860606de53d8250dce75514e38849b5a",
-          "line": 161,
+          "line": 155,
           "size": 1
         },
         {
           "hash": "ab877ad8cf5e2118bad29189037340a3d31c5b1f",
-          "line": 164,
+          "line": 158,
           "size": 1
         },
         {
           "hash": "0a475adb7054a63e47a577cfd8314bee16b9de79",
-          "line": 167,
+          "line": 161,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 168,
+          "line": 162,
           "size": 1
         },
         {
           "hash": "8a76df09a841c18dc3d82687a8ecc4208a2e7e27",
-          "line": 169,
+          "line": 163,
           "size": 1
         },
         {
           "hash": "f2288d4d34a3fe5bdf669d269d995bd40d1bd906",
-          "line": 171,
+          "line": 165,
           "size": 1
         },
         {
           "hash": "053167eea28a9a1add30c8ca68445840e5568aaa",
-          "line": 172,
+          "line": 166,
           "size": 1
         },
         {
           "hash": "afcc77770f0d20c8ed1bd07e062bc7c5c475d37d",
-          "line": 174,
+          "line": 168,
           "size": 1
         },
         {
           "hash": "91172d0ef3f03e990a7cbfdae35811ebd2304c3a",
-          "line": 177,
+          "line": 171,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 178,
+          "line": 172,
           "size": 1
         },
         {
           "hash": "37117c29443c275ea5baaa5dda9b6cf68c38a900",
-          "line": 179,
+          "line": 173,
           "size": 1
         },
         {
           "hash": "f2288d4d34a3fe5bdf669d269d995bd40d1bd906",
-          "line": 181,
+          "line": 175,
           "size": 1
         },
         {
           "hash": "e488f50ff062588110e05db442e90a89e00e6622",
-          "line": 182,
+          "line": 176,
           "size": 1
         },
         {
           "hash": "3fa97fd8f89f0dc9f93f224890f91e752362785b",
-          "line": 184,
+          "line": 178,
           "size": 1
         },
         {
           "hash": "3b76371751255ab18a61d6e79e2dd9d7696aca78",
-          "line": 187,
+          "line": 181,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 188,
+          "line": 182,
           "size": 1
         },
         {
           "hash": "023dd2446e11dcf0c32f5a98da50d87ad0f0efb9",
-          "line": 189,
+          "line": 183,
           "size": 1
         },
         {
           "hash": "f2288d4d34a3fe5bdf669d269d995bd40d1bd906",
-          "line": 191,
+          "line": 185,
           "size": 1
         },
         {
           "hash": "6993655ebdf31e2d638f983e60d11a35440f35b8",
-          "line": 192,
+          "line": 186,
           "size": 1
         },
         {
           "hash": "3fa97fd8f89f0dc9f93f224890f91e752362785b",
-          "line": 194,
+          "line": 188,
           "size": 1
         },
         {
           "hash": "e71c9a107649001b6b697402b6456982b9a4ac48",
-          "line": 197,
+          "line": 191,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 198,
+          "line": 192,
           "size": 1
         },
         {
           "hash": "0257819897be05498172d2050fe0e1004a0ed346",
-          "line": 199,
+          "line": 193,
           "size": 1
         },
         {
           "hash": "f2288d4d34a3fe5bdf669d269d995bd40d1bd906",
-          "line": 201,
+          "line": 195,
           "size": 1
         },
         {
           "hash": "23873b82b38bc059018126f726e71ad51c9f490f",
-          "line": 202,
+          "line": 196,
           "size": 1
         },
         {
           "hash": "58fd22e29f25466fba0a35e338c54c8b701d7256",
-          "line": 204,
+          "line": 198,
           "size": 1
         },
         {
           "hash": "c5023fe57143c89a0ca0bbe9b67a1296d24f79b7",
-          "line": 207,
+          "line": 201,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 208,
+          "line": 202,
           "size": 1
         },
         {
           "hash": "5b1b439f912f52642c6bd20ba60ebcf39c450773",
-          "line": 209,
+          "line": 203,
           "size": 1
         },
         {
           "hash": "f2288d4d34a3fe5bdf669d269d995bd40d1bd906",
-          "line": 211,
+          "line": 205,
           "size": 1
         },
         {
           "hash": "1066abc0f7e719f68886db998a9f9cdb31b99e6d",
-          "line": 212,
+          "line": 206,
           "size": 1
         },
         {
           "hash": "c08981f5a610ae5271c4dec0540d43bdc0832c65",
-          "line": 214,
+          "line": 208,
           "size": 1
         },
         {
           "hash": "a3422086c074acb5047137fef0e67951e7ad0db4",
-          "line": 217,
+          "line": 211,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 218,
+          "line": 212,
           "size": 1
         },
         {
           "hash": "caf575f45f9cf6cea1c6824cf19e86e88b03890c",
-          "line": 219,
+          "line": 213,
           "size": 1
         },
         {
           "hash": "24b64150770d54712a595a580a8cd1cd938c3940",
-          "line": 221,
+          "line": 215,
           "size": 1
         },
         {
           "hash": "23ae6657faf3656a2e6fbbd9aa3de2d368ec35fa",
-          "line": 224,
+          "line": 218,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 225,
+          "line": 219,
           "size": 1
         },
         {
           "hash": "023c1a78d6a7c6c5da6f1f99a0d44d4441ac3204",
-          "line": 226,
+          "line": 220,
           "size": 1
         },
         {
           "hash": "46ed6d3e32e9a7ca551e8b0dedec690262481b1b",
-          "line": 228,
+          "line": 222,
           "size": 1
         },
         {
           "hash": "27cbba9557c39ba01bcf5b1dfff1ae012e79274b",
-          "line": 231,
+          "line": 225,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 232,
+          "line": 226,
           "size": 1
         },
         {
           "hash": "d795c765a431b369c6584bccb0efd45292093313",
-          "line": 233,
+          "line": 227,
           "size": 1
         },
         {
           "hash": "1050222a9064abf78a02a0e0c92235b0939479c0",
-          "line": 235,
+          "line": 229,
           "size": 1
         },
         {
           "hash": "93aaa1826057df91d131b5baba8a5cca4d32f3e0",
-          "line": 238,
+          "line": 232,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 239,
+          "line": 233,
           "size": 1
         },
         {
           "hash": "fc3b05ea6d11d267fa0edf2a6e2ffd454fae4016",
-          "line": 240,
+          "line": 234,
           "size": 1
         },
         {
           "hash": "6fa5abf1e3bfcfd5c4da7f2e13461cd5a4987948",
-          "line": 242,
+          "line": 236,
           "size": 1
         },
         {
           "hash": "20d83e275dc4d9eab1fdf2697609fbd6015ce489",
-          "line": 245,
+          "line": 239,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 246,
+          "line": 240,
           "size": 1
         },
         {
           "hash": "7f814ccd67716eb095a337835c69142cbb7636d9",
-          "line": 247,
+          "line": 241,
           "size": 1
         },
         {
           "hash": "afcc77770f0d20c8ed1bd07e062bc7c5c475d37d",
-          "line": 249,
+          "line": 243,
           "size": 1
         },
         {
           "hash": "1a3e26a7d0d19bdfa7bc18a4528fa594ba33fb4e",
-          "line": 252,
+          "line": 246,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 253,
+          "line": 247,
           "size": 1
         },
         {
           "hash": "c4625dd901ea9f3cfb1b3925d6ab22114b565d86",
-          "line": 254,
+          "line": 248,
           "size": 1
         },
         {
           "hash": "afcc77770f0d20c8ed1bd07e062bc7c5c475d37d",
-          "line": 256,
+          "line": 250,
           "size": 1
         },
         {
           "hash": "0da95155918fadae96c977b27be43ecbf76cec93",
-          "line": 259,
+          "line": 253,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 260,
+          "line": 254,
           "size": 1
         },
         {
           "hash": "118094606d1bb8c8b831afed34dc2f615d1e2313",
-          "line": 261,
+          "line": 255,
           "size": 1
         },
         {
           "hash": "fc9ec1e3c9d916e38c413c58427dfc8157ee607c",
-          "line": 263,
+          "line": 257,
           "size": 1
         },
         {
           "hash": "b08bc94f555ca2191714f3b0ab35efab027b8529",
-          "line": 266,
+          "line": 260,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 267,
+          "line": 261,
           "size": 1
         },
         {
           "hash": "e0fb3c5696fe178acaef05cbf40a216e8000dfcb",
-          "line": 268,
+          "line": 262,
           "size": 1
         },
         {
           "hash": "12bdae65b75757a1098119f66240fc7d7ad72804",
-          "line": 269,
+          "line": 263,
           "size": 1
         },
         {
           "hash": "41a5cdfaa22c567c5129afc23214519804bbf735",
-          "line": 270,
+          "line": 264,
           "size": 1
         },
         {
           "hash": "6cb507ee8d88ec5b32d2ea02f528262fdfd8bbf2",
-          "line": 271,
+          "line": 265,
           "size": 1
         },
         {
           "hash": "8ed85277ffd4dbe94454c22b369277df3d50ba94",
-          "line": 273,
+          "line": 267,
           "size": 1
         },
         {
           "hash": "f2288d4d34a3fe5bdf669d269d995bd40d1bd906",
-          "line": 275,
+          "line": 269,
           "size": 1
         },
         {
           "hash": "187280cfb4db037643014587996ab648b655df93",
-          "line": 276,
+          "line": 270,
           "size": 1
         },
         {
           "hash": "8d9b2443df98104fa62752416a9470cd6b8228da",
-          "line": 278,
+          "line": 272,
           "size": 1
         },
         {
           "hash": "25d164b753f16a2173396cc5052960b179a077f9",
-          "line": 281,
+          "line": 275,
           "size": 1
         },
         {
           "hash": "11387db4cc0e3ad69ab410262916ccec9aceebd4",
-          "line": 282,
+          "line": 276,
           "size": 1
         },
         {
           "hash": "c14f4ff93370fdaa7d49d636842f89197046610b",
-          "line": 283,
+          "line": 277,
           "size": 1
         },
         {
           "hash": "fd7bf32174bb2d31c00ef3512f97137a0450517f",
-          "line": 286,
+          "line": 280,
           "size": 1
         },
         {
           "hash": "9d904b7e8a1f665a1dee2e2af493a614452737ff",
-          "line": 287,
+          "line": 281,
           "size": 1
         },
         {
           "hash": "6dbb67a35d08bf2b12bfef3a7e39dcf5908796b9",
-          "line": 288,
+          "line": 282,
           "size": 1
         },
         {
           "hash": "924bef659e1b9a7d865ba59248f7034d1a144c4a",
-          "line": 291,
+          "line": 285,
           "size": 1
         },
         {
           "hash": "df149804706b000b66b448ae71fdb5ab03f2e182",
-          "line": 292,
+          "line": 286,
           "size": 1
         },
         {
           "hash": "b6ed96d95a4cacaa278abbf0fd5f5b74f80d9400",
-          "line": 293,
+          "line": 287,
           "size": 1
         },
         {
           "hash": "ef7958d4415395348bdebfb48fd4e007adece735",
-          "line": 296,
+          "line": 290,
           "size": 1
         },
         {
           "hash": "338e7c2ad08a78b17d3dacff67aed8cfd263a59d",
-          "line": 297,
+          "line": 291,
           "size": 1
         },
         {
           "hash": "c23c44e83c80b60785d9d8720391875bed192bea",
-          "line": 298,
+          "line": 292,
           "size": 1
         },
         {
           "hash": "d307f5339bd62199ddc1a1514547d5757611ddd7",
-          "line": 301,
+          "line": 295,
           "size": 1
         },
         {
           "hash": "1c6f54d4aabfc34521bef74e6565364cc8e2057a",
-          "line": 302,
+          "line": 296,
           "size": 1
         },
         {
           "hash": "c78ff76c6f7f9d33ea04810dc4c19ef57362f6c8",
-          "line": 303,
+          "line": 297,
           "size": 1
         },
         {
           "hash": "3fbe2d016586e6e51053a414526443480cb0a58e",
-          "line": 306,
+          "line": 300,
           "size": 1
         },
         {
           "hash": "c19309c86c93f53fc37893dc43fee6b81cba79e1",
-          "line": 307,
+          "line": 301,
           "size": 1
         },
         {
           "hash": "980d9ed1ff467cac38df559ffc6a81b5000d6bb0",
-          "line": 308,
+          "line": 302,
           "size": 1
         },
         {
           "hash": "73400ce1d199103e48462d2dac69292a58c1e458",
-          "line": 311,
+          "line": 305,
           "size": 1
         },
         {
           "hash": "633e1eb6118494a7fe13ef9142f6332b9c37903a",
-          "line": 312,
+          "line": 306,
           "size": 1
         },
         {
           "hash": "122fae07086f37ebfaa98e4b8ba325877c9dd7c9",
-          "line": 313,
+          "line": 307,
           "size": 1
         },
         {
           "hash": "364217d6fbd6b0c77101535b7ad934590ede219e",
-          "line": 316,
+          "line": 310,
           "size": 1
         },
         {
           "hash": "cfbc7f3f07c3ae4ddc049903371f5ee8a09b4c4a",
-          "line": 317,
+          "line": 311,
           "size": 1
         },
         {
           "hash": "1bf2ba76092f643d1d11e6e12bd3cdd15c6ef17b",
-          "line": 318,
+          "line": 312,
           "size": 1
         },
         {
           "hash": "e8bde3c805c2bd4b86e1bc83aba0325597c92347",
-          "line": 321,
+          "line": 315,
           "size": 1
         },
         {
           "hash": "a4a9a4d42de1b44dc6b6d1ad24d6b2a1a12df49e",
-          "line": 322,
+          "line": 316,
           "size": 1
         },
         {
           "hash": "0b75f366487f079a087e44c338aff2b25b755e85",
-          "line": 323,
+          "line": 317,
           "size": 1
         },
         {
           "hash": "add2c2ecc3aa363eb8e1f329607ffe313db8aec9",
-          "line": 326,
+          "line": 320,
           "size": 1
         },
         {
           "hash": "621bc3177e667c6024a500740e829feb3747f0ed",
-          "line": 327,
+          "line": 321,
           "size": 1
         },
         {
           "hash": "3a3f22e16bc0074fcc8f653b06da4cedf1fe4629",
-          "line": 328,
+          "line": 322,
           "size": 1
         },
         {
           "hash": "ba7b0dcea3d8c0c0802a66837c5883adb20022a3",
-          "line": 331,
+          "line": 325,
           "size": 1
         },
         {
           "hash": "e82bfbb08073443e657fdd6d29fffdf1203ed962",
-          "line": 332,
+          "line": 326,
           "size": 1
         },
         {
           "hash": "859f4e111d43ec21b75b7497a9a70f3e13911e9b",
-          "line": 333,
+          "line": 327,
           "size": 1
         },
         {
           "hash": "6cb614c8bc86c4399dd0cfad745a0c8d27d7b8e3",
-          "line": 336,
+          "line": 330,
           "size": 1
         },
         {
           "hash": "6266d32a66ec1bd8bc024f8712f0972603d76ddc",
-          "line": 337,
+          "line": 331,
           "size": 1
         },
         {
           "hash": "4a9d4f7b3c9400de81678499c80661511ce12fbe",
-          "line": 338,
+          "line": 332,
           "size": 1
         },
         {
           "hash": "7399ea31c7e356aa8b9009f6d18b246a203cdf1e",
-          "line": 341,
+          "line": 335,
           "size": 1
         },
         {
           "hash": "1fa6b16238ca1dc89e08137f2a96abb3c32923dc",
-          "line": 342,
+          "line": 336,
           "size": 1
         },
         {
           "hash": "cce22b864debdce2f35187b964baa0b10fe5a8db",
-          "line": 345,
+          "line": 339,
           "size": 1
         },
         {
           "hash": "eb646731c9195c2539a8f440db0dee0be64a5c20",
-          "line": 346,
+          "line": 340,
           "size": 1
         },
         {
           "hash": "7caa2305a682e772a70837d719d350d095e93bc2",
-          "line": 349,
+          "line": 343,
           "size": 1
         },
         {
           "hash": "e6c716528168b39bb377ea2ca8fa34e11bcf5568",
-          "line": 350,
+          "line": 344,
           "size": 1
         },
         {
           "hash": "84db1d2a7f18ec75901a5a4a26d75a68033d6c7a",
-          "line": 353,
+          "line": 347,
           "size": 1
         },
         {
           "hash": "4ff8e9066a4491cbe77dd60131b09b2ea7f966ed",
-          "line": 354,
+          "line": 348,
           "size": 1
         },
         {
           "hash": "4cf56a733b79edfe0a0df32e492a9066fdbdb8d0",
-          "line": 357,
+          "line": 351,
           "size": 1
         },
         {
           "hash": "1efdbb75ea1f582a7b223a5c0871f74bc4a82dce",
-          "line": 358,
+          "line": 352,
           "size": 1
         },
         {
           "hash": "7e265ccf2a4f80a0d0e8a39dbe6553d60bfb134f",
-          "line": 361,
+          "line": 355,
           "size": 1
         },
         {
           "hash": "33860bace5bbed78e141626de2c303167a793625",
-          "line": 362,
+          "line": 356,
           "size": 1
         },
         {
           "hash": "51177ec8a8e5ac02cbc4285c1cd7a61e08cb6146",
-          "line": 365,
+          "line": 359,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 366,
+          "line": 360,
           "size": 1
         },
         {
           "hash": "cd82f717678335349eb33acdec6a739b548256a4",
-          "line": 367,
+          "line": 361,
           "size": 1
         },
         {
           "hash": "7f72fc6c3dbc9f2309eefe74cfa6d82daff2d0b7",
-          "line": 368,
+          "line": 362,
           "size": 1
         },
         {
           "hash": "66047c333550d75e98bf3268d7670fa07249e39f",
-          "line": 371,
+          "line": 365,
           "size": 1
         },
         {
           "hash": "1f5b1a4774c58682362f53be9e2284c26089c026",
-          "line": 374,
+          "line": 368,
           "size": 1
         },
         {
           "hash": "533f719e7ef0a2904ccbbcc4c309e067fcf77705",
-          "line": 375,
+          "line": 369,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 376,
+          "line": 370,
           "size": 1
         },
         {
           "hash": "83c4b5023538a697bc9829614075747aeb792cba",
-          "line": 377,
+          "line": 371,
           "size": 1
         },
         {
           "hash": "004250e1fe899bfbe2807c484e85d256da18cf02",
-          "line": 379,
+          "line": 373,
           "size": 1
         },
         {
           "hash": "d44b888b0d260916bca94f80b9b8a74ef57a8d5c",
-          "line": 382,
+          "line": 376,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 383,
+          "line": 377,
           "size": 1
         },
         {
           "hash": "cf0282f48d9789107748ddee1196b35dbcb3cb7a",
-          "line": 384,
+          "line": 378,
           "size": 1
         },
         {
           "hash": "9c50e18584bae0077a67ea7e7c10290828556cdb",
-          "line": 387,
+          "line": 381,
           "size": 1
         },
         {
           "hash": "a27c7207f7253b7ac7679a5e0510aba259b2e5e7",
-          "line": 388,
+          "line": 382,
           "size": 1
         },
         {
           "hash": "72649e824cd3d1ad2f752c4ca354867019ce9128",
-          "line": 389,
+          "line": 383,
           "size": 1
         },
         {
           "hash": "92085cfb07451413bd410db664a8df8d9307ed48",
-          "line": 390,
+          "line": 384,
           "size": 1
         },
         {
           "hash": "58891e489be15c41568473de48371651eca2946d",
-          "line": 391,
+          "line": 385,
           "size": 1
         },
         {
           "hash": "9ec9ba881505eb7b879966f216289120a5f05b41",
-          "line": 392,
+          "line": 386,
           "size": 1
         },
         {
           "hash": "d98a48d4f77b96e6a3bc3deaf8289ee4c35fc07e",
-          "line": 393,
+          "line": 387,
           "size": 1
         },
         {
           "hash": "2e4bcbf0c0b68b1a6f1b2ce4c0f4d5e84d76ca5d",
-          "line": 394,
+          "line": 388,
           "size": 1
         },
         {
           "hash": "fc66efe1fb7a26aff507580d635c6eaf3927bf73",
-          "line": 395,
+          "line": 389,
           "size": 1
         },
         {
           "hash": "e6c091e4cd90a899f17b4e16d8a424158912f852",
-          "line": 396,
+          "line": 390,
           "size": 1
         },
         {
           "hash": "341faadaf69f8c2a560cb57db11e98bb3e404d53",
-          "line": 400,
+          "line": 394,
           "size": 1
         },
         {
           "hash": "1fb0d238e83b5447875fb610122fe08ab6f48c70",
-          "line": 401,
+          "line": 395,
           "size": 1
         },
         {
           "hash": "2b887468a7f8c3d395ef7899656c8baa927d592b",
-          "line": 402,
+          "line": 396,
           "size": 1
         },
         {
           "hash": "7c50791db5f94cebd603217e7240ff505ed5c74b",
-          "line": 405,
+          "line": 399,
           "size": 1
         },
         {
           "hash": "46334196f345386fa89084cf90111645dba3671b",
-          "line": 406,
+          "line": 400,
           "size": 1
         },
         {
           "hash": "2b887468a7f8c3d395ef7899656c8baa927d592b",
-          "line": 407,
+          "line": 401,
           "size": 1
         },
         {
           "hash": "3073de5cbf9b44cbd51327cf47751b63a6fe5d81",
-          "line": 410,
+          "line": 404,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 411,
+          "line": 405,
           "size": 1
         },
         {
           "hash": "fcfb09ceeb8a13db1a0c40a8853e917f00dc4007",
-          "line": 412,
+          "line": 406,
           "size": 1
         },
         {
           "hash": "9ec9ba881505eb7b879966f216289120a5f05b41",
-          "line": 414,
+          "line": 408,
           "size": 1
         },
         {
           "hash": "98dda89cfe227c27c64de87f7896d73552c64e1a",
-          "line": 415,
+          "line": 409,
           "size": 1
         },
         {
           "hash": "9d860a0d90294e45f3e427a4ade7badec90655e4",
-          "line": 416,
+          "line": 410,
           "size": 1
         },
         {
           "hash": "ede57e976f8d60483ed9e17a79245cb7e0ea4a05",
-          "line": 417,
+          "line": 411,
           "size": 1
         },
         {
           "hash": "f13a3fa9b37e865c723e11ad87406c4606989222",
-          "line": 418,
+          "line": 412,
           "size": 1
         },
         {
           "hash": "f89cc84f132eef92a171da6ba9000c90075a9288",
+          "line": 416,
+          "size": 1
+        },
+        {
+          "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
+          "line": 417,
+          "size": 1
+        },
+        {
+          "hash": "07b17caac1f6db780629cfe2c708f0ed3849fd39",
+          "line": 418,
+          "size": 1
+        },
+        {
+          "hash": "bf0ce6434b8bac9b5f5ca9d9732cfa8065b17f02",
           "line": 422,
           "size": 1
         },
@@ -12381,12 +12372,12 @@
           "size": 1
         },
         {
-          "hash": "07b17caac1f6db780629cfe2c708f0ed3849fd39",
+          "hash": "647d2fb689fb556b72c9b7b06d36f337abb3b142",
           "line": 424,
           "size": 1
         },
         {
-          "hash": "bf0ce6434b8bac9b5f5ca9d9732cfa8065b17f02",
+          "hash": "e1741fdab54c4cadc416e5fdb95f509c91712296",
           "line": 428,
           "size": 1
         },
@@ -12396,12 +12387,12 @@
           "size": 1
         },
         {
-          "hash": "647d2fb689fb556b72c9b7b06d36f337abb3b142",
+          "hash": "013d3726dec393420381145d5e92529176fb9373",
           "line": 430,
           "size": 1
         },
         {
-          "hash": "e1741fdab54c4cadc416e5fdb95f509c91712296",
+          "hash": "bf4fab898b9d66dc9e9e4b624ab73d5c166cdd14",
           "line": 434,
           "size": 1
         },
@@ -12411,52 +12402,52 @@
           "size": 1
         },
         {
-          "hash": "013d3726dec393420381145d5e92529176fb9373",
+          "hash": "08a4f7cd38aecbee3bf7f9c987434249315ee681",
           "line": 436,
           "size": 1
         },
         {
-          "hash": "bf4fab898b9d66dc9e9e4b624ab73d5c166cdd14",
-          "line": 440,
-          "size": 1
-        },
-        {
-          "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 441,
-          "size": 1
-        },
-        {
-          "hash": "08a4f7cd38aecbee3bf7f9c987434249315ee681",
-          "line": 442,
-          "size": 1
-        },
-        {
           "hash": "0f14592bc4de67a1f13ea305efcc7d703801befa",
-          "line": 443,
+          "line": 437,
           "size": 1
         },
         {
           "hash": "3feb7a2cbefb6081a253ab2bdf352733102b578f",
-          "line": 444,
+          "line": 438,
           "size": 1
         },
         {
           "hash": "f4c8e5014ae6b2a5756cc9e709d73f2823f484f1",
-          "line": 445,
+          "line": 439,
           "size": 1
         },
         {
           "hash": "3fa97fd8f89f0dc9f93f224890f91e752362785b",
-          "line": 446,
+          "line": 440,
           "size": 1
         },
         {
           "hash": "3fa97fd8f89f0dc9f93f224890f91e752362785b",
-          "line": 449,
+          "line": 443,
           "size": 1
         },
         {
           "hash": "1de4e6e8a70e68674d7bc9370880e6b3015cd596",
+          "line": 446,
+          "size": 1
+        },
+        {
+          "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
+          "line": 447,
+          "size": 1
+        },
+        {
+          "hash": "8fc28906581de6ee5f3d1aa7f983533a41740a4d",
+          "line": 448,
+          "size": 1
+        },
+        {
+          "hash": "63ab8a69efa1f710278c7d5712356009fa08493a",
           "line": 452,
           "size": 1
         },
@@ -12466,128 +12457,113 @@
           "size": 1
         },
         {
-          "hash": "8fc28906581de6ee5f3d1aa7f983533a41740a4d",
+          "hash": "0f14592bc4de67a1f13ea305efcc7d703801befa",
           "line": 454,
           "size": 1
         },
         {
-          "hash": "63ab8a69efa1f710278c7d5712356009fa08493a",
-          "line": 458,
-          "size": 1
-        },
-        {
-          "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 459,
-          "size": 1
-        },
-        {
-          "hash": "0f14592bc4de67a1f13ea305efcc7d703801befa",
-          "line": 460,
-          "size": 1
-        },
-        {
           "hash": "974305ccec7e668969c327d8f061a85a9e3d6c67",
-          "line": 461,
+          "line": 455,
           "size": 1
         },
         {
           "hash": "08a4f7cd38aecbee3bf7f9c987434249315ee681",
-          "line": 462,
+          "line": 456,
           "size": 1
         },
         {
           "hash": "3fbb97bcbb5eb1fe5bc1ab67fa7a299e755a1802",
-          "line": 463,
+          "line": 457,
           "size": 1
         },
         {
           "hash": "8ed85277ffd4dbe94454c22b369277df3d50ba94",
-          "line": 464,
+          "line": 458,
           "size": 1
         },
         {
           "hash": "ee92fd5d0c247718300d74c10799a9e777a6df00",
-          "line": 465,
+          "line": 459,
           "size": 1
         },
         {
           "hash": "08a4f7cd38aecbee3bf7f9c987434249315ee681",
+          "line": 460,
+          "size": 1
+        },
+        {
+          "hash": "597b6435e139e3d2c3efbb778e751ee31b022bae",
+          "line": 461,
+          "size": 1
+        },
+        {
+          "hash": "8ed85277ffd4dbe94454c22b369277df3d50ba94",
+          "line": 462,
+          "size": 1
+        },
+        {
+          "hash": "94cdff75d864818b66630277c34ecfb136dc0c4f",
+          "line": 463,
+          "size": 1
+        },
+        {
+          "hash": "9062923cecea4241fbabae1bbbeb2e38bf873059",
+          "line": 464,
+          "size": 1
+        },
+        {
+          "hash": "c325982107f0c0bb63be037e5c97ec65d5ca2552",
+          "line": 465,
+          "size": 1
+        },
+        {
+          "hash": "1c16a0962702d67fca7f08911b8081a08fbbe5fd",
           "line": 466,
           "size": 1
         },
         {
           "hash": "597b6435e139e3d2c3efbb778e751ee31b022bae",
-          "line": 467,
-          "size": 1
-        },
-        {
-          "hash": "8ed85277ffd4dbe94454c22b369277df3d50ba94",
-          "line": 468,
-          "size": 1
-        },
-        {
-          "hash": "94cdff75d864818b66630277c34ecfb136dc0c4f",
-          "line": 469,
-          "size": 1
-        },
-        {
-          "hash": "9062923cecea4241fbabae1bbbeb2e38bf873059",
           "line": 470,
           "size": 1
         },
         {
-          "hash": "c325982107f0c0bb63be037e5c97ec65d5ca2552",
-          "line": 471,
-          "size": 1
-        },
-        {
-          "hash": "1c16a0962702d67fca7f08911b8081a08fbbe5fd",
-          "line": 472,
-          "size": 1
-        },
-        {
-          "hash": "597b6435e139e3d2c3efbb778e751ee31b022bae",
-          "line": 476,
-          "size": 1
-        },
-        {
           "hash": "19ae8f30112c0f15cb9aa65f9d7a90459a72b1ee",
-          "line": 480,
+          "line": 474,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 481,
+          "line": 475,
           "size": 1
         },
         {
           "hash": "593647805d58e39350491f87154998901f30c455",
-          "line": 482,
+          "line": 476,
           "size": 1
         },
         {
           "hash": "4c7285c6a1a0eb61f3e4e040f0c68d15e8d89869",
-          "line": 484,
+          "line": 478,
           "size": 1
         },
         {
           "hash": "52d066f55bc7c3289d622aa06d8e5af5f04e67ed",
-          "line": 487,
+          "line": 481,
           "size": 1
         },
         {
           "hash": "4b0607ba685681416c8c69e2b51e1c7d9e80d35d",
-          "line": 488,
+          "line": 482,
           "size": 1
         },
         {
           "hash": "e6fae7202d78922be62ffc14883eeed3f2bf8971",
-          "line": 489,
+          "line": 483,
           "size": 1
         },
         {
           "hash": "3df497244fc6a2040d769a1f9dc5a4efbc66a581",
-          "line": 491,
+          "line": 485,
           "size": 1
         }
       ],
@@ -383905,8 +383881,8 @@
     },
     "packages/server-go/quality/report.go": {
       "path": "packages/server-go/quality/report.go",
-      "modTimeUnixNano": 1780517744680511359,
-      "size": 39404,
+      "modTimeUnixNano": 1780517938222800052,
+      "size": 39568,
       "baseName": "report",
       "isTest": false,
       "normalizedLines": 633,
@@ -384207,6 +384183,7 @@
         "Chunks": 3,
         "Clean": 9,
         "Completing": 1,
+        "Consolidate": 1,
         "Contains": 10,
         "Current": 6,
         "CurrentFile": 3,
@@ -384215,6 +384192,7 @@
         "Dir": 8,
         "DirEntry": 3,
         "Document": 2,
+        "Duplicate": 1,
         "Empty": 1,
         "EncodeToString": 2,
         "Errorf": 2,
@@ -384226,6 +384204,7 @@
         "Finalizing": 1,
         "FindAllString": 1,
         "FindStringSubmatch": 5,
+        "Fix": 1,
         "Format": 3,
         "Function": 1,
         "Generated": 1,
@@ -384234,6 +384213,7 @@
         "HasPrefix": 18,
         "HasSuffix": 4,
         "Hash": 5,
+        "High": 1,
         "HighCount": 2,
         "ID": 12,
         "IdentifierCounts": 3,
@@ -384249,7 +384229,6 @@
         "Join": 10,
         "Kind": 4,
         "Large": 2,
-        "Largest": 2,
         "LeftFile": 13,
         "LeftLine": 13,
         "Line": 27,
@@ -384335,7 +384314,7 @@
         "analyzeErr": 2,
         "analyzeFile": 3,
         "analyzer": 4,
-        "and": 8,
+        "and": 6,
         "annotate": 2,
         "anywhere": 2,
         "appears": 1,
@@ -384349,7 +384328,7 @@
         "b": 10,
         "baseIssues": 9,
         "baseName": 5,
-        "be": 2,
+        "be": 1,
         "behavior": 2,
         "best": 7,
         "bin": 2,
@@ -384361,12 +384340,14 @@
         "build": 4,
         "buildProjectIndex": 3,
         "buildReportFromIndex": 3,
+        "by": 1,
         "byte": 2,
         "cache": 12,
         "cached": 4,
         "case": 17,
         "catch": 3,
         "category": 3,
+        "centralizing": 1,
         "ch": 2,
         "changed": 5,
         "chunk": 10,
@@ -384379,7 +384360,7 @@
         "clean": 4,
         "cleanPath": 2,
         "clear": 1,
-        "code": 5,
+        "code": 7,
         "collapsed": 3,
         "collectChunkRecords": 2,
         "collectLargestDuplicateRuns": 2,
@@ -384422,7 +384403,7 @@
         "defs": 2,
         "delete": 2,
         "depth": 5,
-        "detected": 1,
+        "detected": 2,
         "dir": 3,
         "directory": 1,
         "dist": 4,
@@ -384433,7 +384414,7 @@
         "document": 1,
         "documentation": 12,
         "documentationMentionsFile": 2,
-        "duplicate": 2,
+        "duplicate": 3,
         "duplicateChunkMinLines": 8,
         "duplicateMatch": 4,
         "duplicatePairKey": 5,
@@ -384460,7 +384441,7 @@
         "ext": 2,
         "failures": 1,
         "false": 28,
-        "file": 14,
+        "file": 18,
         "fileGapPrefix": 2,
         "fileHasCategory": 2,
         "fileIndexEntry": 10,
@@ -384468,14 +384449,13 @@
         "filepath": 37,
         "files": 20,
         "first": 5,
-        "fixed": 1,
         "float64": 8,
         "flush": 3,
         "fmt": 19,
         "focused": 1,
         "for": 45,
         "found": 1,
-        "from": 1,
+        "from": 3,
         "func": 58,
         "funcGapPrefix": 2,
         "funcIssues": 2,
@@ -384508,7 +384488,7 @@
         "hasDocGapIssue": 2,
         "hasLeadingDocumentationComment": 2,
         "hash": 3,
-        "helper": 1,
+        "helper": 2,
         "helpers": 3,
         "hex": 3,
         "hides": 1,
@@ -384537,7 +384517,7 @@
         "interfaceGapPrefix": 2,
         "interfaceNames": 1,
         "interfaces": 5,
-        "into": 4,
+        "into": 6,
         "is": 5,
         "isGeneratedDirName": 2,
         "isPublicFunctionSignature": 2,
@@ -384569,10 +384549,10 @@
         "level": 2,
         "likely": 1,
         "limit": 5,
-        "line": 36,
+        "line": 38,
         "lineCount": 4,
         "lineMap": 6,
-        "lines": 37,
+        "lines": 35,
         "llvm": 4,
         "loadGeneratedIndex": 2,
         "loadProjectIndex": 2,
@@ -384590,7 +384570,7 @@
         "mapChanged": 2,
         "mapStatus": 3,
         "mapTotal": 4,
-        "matches": 16,
+        "matches": 14,
         "matchesByPair": 9,
         "maxIssues": 9,
         "may": 1,
@@ -384606,7 +384586,7 @@
         "missingInterfaces": 4,
         "missingPublicDocs": 7,
         "modTimeUnixNano": 1,
-        "module": 5,
+        "module": 6,
         "more": 1,
         "msg": 5,
         "n": 4,
@@ -384623,11 +384603,12 @@
         "not": 2,
         "note": 1,
         "obvious": 2,
+        "of": 3,
         "ok": 2,
         "omitempty": 8,
         "onProgress": 15,
         "once": 1,
-        "one": 2,
+        "one": 4,
         "only": 1,
         "or": 6,
         "os": 12,
@@ -384678,7 +384659,8 @@
         "regexp": 11,
         "rel": 18,
         "relPath": 14,
-        "repeated": 2,
+        "repeated": 1,
+        "repeats": 2,
         "report": 8,
         "required": 3,
         "requires": 1,
@@ -384687,8 +384669,9 @@
         "rethrow": 1,
         "return": 118,
         "returned": 1,
-        "reusable": 1,
+        "reusable": 2,
         "rightNormalized": 2,
+        "risk": 1,
         "rs": 1,
         "run": 18,
         "runDecl": 5,
@@ -384696,7 +384679,7 @@
         "runStart": 5,
         "runs": 4,
         "rust": 4,
-        "s": 44,
+        "s": 46,
         "safe": 1,
         "salt": 2,
         "saveGeneratedIndex": 2,
@@ -384710,20 +384693,19 @@
         "severityRank": 5,
         "sh": 1,
         "sha1": 3,
-        "shared": 2,
+        "shared": 3,
         "short": 1,
-        "should": 1,
         "single": 1,
         "size": 2,
         "skipDeadCodeCandidate": 2,
-        "smaller": 2,
+        "smaller": 4,
         "so": 1,
         "sort": 12,
-        "source": 22,
+        "source": 23,
         "sourceFileInfo": 5,
         "sources": 4,
         "span": 3,
-        "spans": 3,
+        "spans": 1,
         "stableID": 12,
         "start": 25,
         "statErr": 2,
@@ -384745,9 +384727,9 @@
         "test": 1,
         "tests": 1,
         "text": 2,
-        "the": 5,
+        "the": 9,
         "these": 4,
-        "this": 7,
+        "this": 8,
         "time": 7,
         "tmp": 3,
         "to": 1,
@@ -384755,6 +384737,7 @@
         "total": 12,
         "trimmed": 31,
         "true": 45,
+        "truth": 1,
         "ts": 1,
         "tsInterfacePattern": 2,
         "tsx": 1,
@@ -386063,7 +386046,7 @@
           "size": 1
         },
         {
-          "hash": "97a397b4d1aa53377fdb4bb8062a097fbf25271b",
+          "hash": "95d3db332bad1adba51144d98f9c7a3d4d9a40e6",
           "line": 337,
           "size": 1
         },
@@ -386083,7 +386066,7 @@
           "size": 1
         },
         {
-          "hash": "c142e3b9740b3bcdfdc5e149f4f3c1124b83679d",
+          "hash": "d282f5349983dc25320126d18c6136dd3fb5823c",
           "line": 341,
           "size": 1
         },
@@ -388037,11 +388020,11 @@
     },
     "packages/server-go/quality/report_test.go": {
       "path": "packages/server-go/quality/report_test.go",
-      "modTimeUnixNano": 1780517744680526567,
-      "size": 17524,
+      "modTimeUnixNano": 1780517961680151790,
+      "size": 17785,
       "baseName": "report_test",
       "isTest": true,
-      "normalizedLines": 376,
+      "normalizedLines": 378,
       "symbols": [
         {
           "Name": "writeQualityTestFile",
@@ -388100,25 +388083,25 @@
         {
           "Name": "TestScanProject_DuplicateSeverity_OneLineExactDuplicateIsHigh",
           "File": "packages/server-go/quality/report_test.go",
-          "Line": 351,
+          "Line": 354,
           "Public": true
         },
         {
           "Name": "TestRefreshProjectIndex_PersistsAndUpdatesChangedFiles",
           "File": "packages/server-go/quality/report_test.go",
-          "Line": 374,
+          "Line": 377,
           "Public": true
         },
         {
           "Name": "TestRefreshProjectIndex_CompletesGeneratedMapBeforeScan",
           "File": "packages/server-go/quality/report_test.go",
-          "Line": 455,
+          "Line": 458,
           "Public": true
         },
         {
           "Name": "TestRefreshProjectIndex_DoesNotExcludeAncestorDirsForNestedGeneratedPaths",
           "File": "packages/server-go/quality/report_test.go",
-          "Line": 510,
+          "Line": 513,
           "Public": true
         }
       ],
@@ -388128,13 +388111,15 @@
         "BuildContract": 1,
         "Category": 7,
         "Config": 1,
-        "Contains": 7,
+        "Contains": 10,
         "Dir": 1,
+        "Duplicate": 1,
         "ExportedSymbol": 2,
-        "Fatalf": 70,
+        "Fatalf": 71,
         "File": 9,
         "Files": 7,
         "Helper": 1,
+        "High": 1,
         "HighCount": 1,
         "IdentifierCounts": 6,
         "Issue": 4,
@@ -388142,10 +388127,9 @@
         "Issues": 8,
         "Join": 51,
         "Keep": 2,
-        "Largest": 1,
         "LowCount": 1,
         "MediumCount": 1,
-        "Message": 7,
+        "Message": 10,
         "Mirror": 2,
         "MissingDocsRef": 2,
         "MkdirAll": 11,
@@ -388177,6 +388161,7 @@
         "_": 14,
         "a": 7,
         "across": 1,
+        "actionable": 1,
         "after": 1,
         "ancestor": 1,
         "append": 2,
@@ -388185,7 +388170,7 @@
         "b": 10,
         "be": 12,
         "behaviors": 8,
-        "block": 7,
+        "block": 5,
         "bool": 2,
         "break": 4,
         "bundle": 3,
@@ -388197,7 +388182,7 @@
         "category": 2,
         "changed": 1,
         "checks": 1,
-        "code": 2,
+        "code": 5,
         "comment": 6,
         "completed": 1,
         "const": 2,
@@ -388217,7 +388202,7 @@
         "documentation": 9,
         "documented": 2,
         "dup": 7,
-        "duplicate": 14,
+        "duplicate": 16,
         "dups": 8,
         "dx": 4,
         "e": 4,
@@ -388228,7 +388213,8 @@
         "err": 123,
         "exact": 3,
         "excluded": 2,
-        "expected": 28,
+        "expected": 29,
+        "explicit": 1,
         "export": 3,
         "f": 4,
         "false": 6,
@@ -388239,6 +388225,7 @@
         "first": 2,
         "firstContent": 2,
         "firstIndex": 4,
+        "fix": 1,
         "flagged": 1,
         "for": 14,
         "formats": 1,
@@ -388257,23 +388244,25 @@
         "gmap": 3,
         "go": 40,
         "goFile": 2,
-        "got": 12,
+        "got": 13,
+        "guidance": 1,
         "guide": 4,
         "h": 4,
         "hasCategory": 6,
         "hasDuplicate": 3,
         "hasHighDeclDuplicate": 3,
         "hasHighSmallDuplicate": 3,
+        "helper": 1,
         "high": 8,
         "i": 7,
         "id": 1,
         "identifier": 3,
         "idx": 6,
-        "if": 78,
+        "if": 79,
         "iface": 2,
         "ignored": 3,
         "import": 1,
-        "in": 5,
+        "in": 7,
         "incomplete": 2,
         "incompleteMap": 2,
         "index": 13,
@@ -388292,7 +388281,6 @@
         "json": 7,
         "keeps": 1,
         "large": 2,
-        "largest": 1,
         "least": 3,
         "left": 3,
         "len": 3,
@@ -388311,9 +388299,10 @@
         "mdx": 4,
         "medium": 2,
         "mentioned": 12,
-        "message": 2,
+        "message": 3,
         "missing": 1,
         "mkdir": 11,
+        "module": 1,
         "must": 1,
         "n": 44,
         "name": 2,
@@ -388325,6 +388314,7 @@
         "note": 4,
         "npackages": 4,
         "nvar": 2,
+        "of": 1,
         "ok": 10,
         "omitted": 1,
         "on": 1,
@@ -388348,10 +388338,11 @@
         "remain": 1,
         "removed": 1,
         "renamedThing": 3,
-        "repeated": 3,
+        "repeated": 2,
         "report": 24,
         "return": 7,
         "right": 5,
+        "risk": 1,
         "s": 2,
         "scan": 7,
         "scored": 1,
@@ -388363,23 +388354,22 @@
         "should": 4,
         "single": 3,
         "small": 3,
-        "source": 7,
+        "source": 8,
         "sourceDir": 3,
-        "spans": 1,
         "src": 2,
         "srcDir": 6,
         "string": 13,
-        "strings": 14,
+        "strings": 17,
         "struct": 1,
         "supported": 1,
         "suppress": 1,
-        "t": 114,
+        "t": 115,
         "tCount": 1,
         "tEnabled": 1,
         "tMode": 1,
         "tName": 1,
         "tRetry": 1,
-        "target": 10,
+        "target": 14,
         "testing": 12,
         "this": 1,
         "timestamp": 1,
@@ -388387,6 +388377,7 @@
         "totals": 1,
         "treturn": 5,
         "true": 8,
+        "truth": 1,
         "ts": 2,
         "txt": 4,
         "type": 1,
@@ -388394,11 +388385,12 @@
         "unmarshal": 3,
         "updated": 7,
         "updatedAt": 2,
-        "v": 57,
+        "v": 58,
         "value": 62,
         "var": 4,
         "with": 2,
         "without": 2,
+        "wording": 1,
         "workspace": 1,
         "write": 13,
         "writeQualityTestFile": 23
@@ -389675,17 +389667,17 @@
           "size": 1
         },
         {
-          "hash": "e8f0cfd54cf147290d7de5db9e6c9c56f3fca35e",
+          "hash": "cdae3db053a3634ef41cd31229afa5430ab3dbe7",
           "line": 343,
           "size": 1
         },
         {
-          "hash": "b695b267376817c6a827150515d0b3d59bc04cad",
+          "hash": "31c0a83f4ec8625fca6f87373caffe3e3711caa5",
           "line": 344,
           "size": 1
         },
         {
-          "hash": "e9d69813582ddb4b6a47b9edd7b4f5c15fa35d23",
+          "hash": "1e46b51485b54b823c87f4aa1b6332e999d785b5",
           "line": 346,
           "size": 1
         },
@@ -389695,607 +389687,617 @@
           "size": 1
         },
         {
+          "hash": "f1df500769aa4e61b47abbd509d1b82e4a95254f",
+          "line": 349,
+          "size": 1
+        },
+        {
+          "hash": "c447bb99193f08ff953f9e8d7f6eaad1838f43c8",
+          "line": 350,
+          "size": 1
+        },
+        {
           "hash": "df148ea7a5eb75c9b1e7bc9a6ec51719d9278843",
-          "line": 351,
+          "line": 354,
           "size": 1,
           "declarationLike": true
         },
         {
           "hash": "45b0c89690212468ad59eab2479d376cd33db344",
-          "line": 352,
-          "size": 1
-        },
-        {
-          "hash": "05b955c13c1edd8824382a5b928abac8997230d8",
-          "line": 353,
-          "size": 1
-        },
-        {
-          "hash": "bc82525bcdf8ec8e9b5a73c68a8fe8bf20f1cac4",
-          "line": 354,
-          "size": 1
-        },
-        {
-          "hash": "fc3e217ef62dde959907c6ba4c0692432bfc10f3",
           "line": 355,
           "size": 1
         },
         {
-          "hash": "df207ecb3bae1f278a687fbd49982f2ca4a38ea4",
+          "hash": "05b955c13c1edd8824382a5b928abac8997230d8",
+          "line": 356,
+          "size": 1
+        },
+        {
+          "hash": "bc82525bcdf8ec8e9b5a73c68a8fe8bf20f1cac4",
           "line": 357,
           "size": 1
         },
         {
-          "hash": "02bf184fcf54bbd665926fac8453239b9a74d163",
+          "hash": "fc3e217ef62dde959907c6ba4c0692432bfc10f3",
           "line": 358,
           "size": 1
         },
         {
-          "hash": "f2b7974dd89a291090f932a80613a81ddb28090a",
-          "line": 359,
+          "hash": "df207ecb3bae1f278a687fbd49982f2ca4a38ea4",
+          "line": 360,
           "size": 1
         },
         {
-          "hash": "a6a561056844c4112d1093361fafa624dfefad75",
+          "hash": "02bf184fcf54bbd665926fac8453239b9a74d163",
+          "line": 361,
+          "size": 1
+        },
+        {
+          "hash": "f2b7974dd89a291090f932a80613a81ddb28090a",
           "line": 362,
           "size": 1
         },
         {
-          "hash": "2d420f41dc2aa87bd8d87ed7469684c05bc0d2d6",
-          "line": 363,
-          "size": 1
-        },
-        {
-          "hash": "6fb8735b0fd1ff421556a427922a614a688bc57a",
-          "line": 364,
-          "size": 1
-        },
-        {
-          "hash": "9f65d8ef246bcbe81ae08bef14afdfe41fa7e7cb",
+          "hash": "a6a561056844c4112d1093361fafa624dfefad75",
           "line": 365,
           "size": 1
         },
         {
-          "hash": "63143b6f8007b98c53ca2149822777b3566f9241",
+          "hash": "2d420f41dc2aa87bd8d87ed7469684c05bc0d2d6",
+          "line": 366,
+          "size": 1
+        },
+        {
+          "hash": "6fb8735b0fd1ff421556a427922a614a688bc57a",
           "line": 367,
           "size": 1
         },
         {
+          "hash": "9f65d8ef246bcbe81ae08bef14afdfe41fa7e7cb",
+          "line": 368,
+          "size": 1
+        },
+        {
+          "hash": "63143b6f8007b98c53ca2149822777b3566f9241",
+          "line": 370,
+          "size": 1
+        },
+        {
           "hash": "fe792b45948c582ab90be5838f0fe40f29cafeef",
-          "line": 371,
+          "line": 374,
           "size": 1
         },
         {
           "hash": "5f8c75e6ec39143d41938d0866960c5987588cf9",
-          "line": 374,
+          "line": 377,
           "size": 1,
           "declarationLike": true
         },
         {
           "hash": "45b0c89690212468ad59eab2479d376cd33db344",
-          "line": 375,
+          "line": 378,
           "size": 1
         },
         {
           "hash": "02d48ed6158b6e2993e918bdbea22b49ab5e782c",
-          "line": 376,
-          "size": 1
-        },
-        {
-          "hash": "f07a4b4fa192add2da0b06630cafa958157aa5a3",
-          "line": 377,
-          "size": 1
-        },
-        {
-          "hash": "69c682c22fdb726b7882d18492f4cd3580c5a294",
           "line": 379,
           "size": 1
         },
         {
-          "hash": "1b03be553221e22cb92b45e4416916016ec5bd6f",
+          "hash": "f07a4b4fa192add2da0b06630cafa958157aa5a3",
           "line": 380,
           "size": 1
         },
         {
-          "hash": "37c7d8bb65264ebf5c63693ce13ced12817ed87f",
+          "hash": "69c682c22fdb726b7882d18492f4cd3580c5a294",
+          "line": 382,
+          "size": 1
+        },
+        {
+          "hash": "1b03be553221e22cb92b45e4416916016ec5bd6f",
           "line": 383,
           "size": 1
         },
         {
+          "hash": "37c7d8bb65264ebf5c63693ce13ced12817ed87f",
+          "line": 386,
+          "size": 1
+        },
+        {
           "hash": "bd6506a3c1eb0afef31bd530c7318b9f1c50226c",
-          "line": 384,
-          "size": 1
-        },
-        {
-          "hash": "81e4143d235051078f3e91948e4ee1599d7515bf",
-          "line": 385,
-          "size": 1
-        },
-        {
-          "hash": "61434e70973be4294b47958b2848aca58bd41651",
           "line": 387,
           "size": 1
         },
         {
-          "hash": "a9a78510a7352d88d9a7edfdaffdfbf80aaa25cd",
+          "hash": "81e4143d235051078f3e91948e4ee1599d7515bf",
           "line": 388,
           "size": 1
         },
         {
-          "hash": "18376b372980148291fb8b3dfdf82d819224055d",
-          "line": 389,
+          "hash": "61434e70973be4294b47958b2848aca58bd41651",
+          "line": 390,
           "size": 1
         },
         {
-          "hash": "4d791699d82c1c1aaa79635ca8677c3f9fdfff8b",
+          "hash": "a9a78510a7352d88d9a7edfdaffdfbf80aaa25cd",
           "line": 391,
           "size": 1
         },
         {
-          "hash": "23ed475fa240728e54037a2021c3096bd3d40c39",
+          "hash": "18376b372980148291fb8b3dfdf82d819224055d",
           "line": 392,
           "size": 1
         },
         {
-          "hash": "f8c1641e42724dfb312a81bf2114c84d708dfaed",
+          "hash": "4d791699d82c1c1aaa79635ca8677c3f9fdfff8b",
+          "line": 394,
+          "size": 1
+        },
+        {
+          "hash": "23ed475fa240728e54037a2021c3096bd3d40c39",
           "line": 395,
           "size": 1
         },
         {
+          "hash": "f8c1641e42724dfb312a81bf2114c84d708dfaed",
+          "line": 398,
+          "size": 1
+        },
+        {
           "hash": "3e8d90d24831dac47b7894de4dc8374e3ae15f5c",
-          "line": 396,
+          "line": 399,
           "size": 1
         },
         {
           "hash": "256766138c9313a942f0c8b0185af8e520469df4",
-          "line": 397,
-          "size": 1
-        },
-        {
-          "hash": "082ec805e58b4cf134126a500d5069fad6d4003c",
           "line": 400,
           "size": 1
         },
         {
-          "hash": "63f3e7a185c25e6e3023d27f585bdea28b13eac3",
-          "line": 401,
+          "hash": "082ec805e58b4cf134126a500d5069fad6d4003c",
+          "line": 403,
           "size": 1
         },
         {
-          "hash": "855c34ec92c361a2452bc96acca6342627e1bdaf",
+          "hash": "63f3e7a185c25e6e3023d27f585bdea28b13eac3",
           "line": 404,
           "size": 1
         },
         {
-          "hash": "82bbe7fdbc077ae6e88f8d0e666ab331a441177b",
-          "line": 405,
-          "size": 1
-        },
-        {
-          "hash": "02bf184fcf54bbd665926fac8453239b9a74d163",
-          "line": 406,
-          "size": 1
-        },
-        {
-          "hash": "26595ea974e50d38de6165f1c6e5d0fba9526abc",
+          "hash": "855c34ec92c361a2452bc96acca6342627e1bdaf",
           "line": 407,
           "size": 1
         },
         {
-          "hash": "cddc3aaa40d9d4a4b17155437dda4c4e04738afe",
+          "hash": "82bbe7fdbc077ae6e88f8d0e666ab331a441177b",
+          "line": 408,
+          "size": 1
+        },
+        {
+          "hash": "02bf184fcf54bbd665926fac8453239b9a74d163",
+          "line": 409,
+          "size": 1
+        },
+        {
+          "hash": "26595ea974e50d38de6165f1c6e5d0fba9526abc",
           "line": 410,
           "size": 1
         },
         {
+          "hash": "cddc3aaa40d9d4a4b17155437dda4c4e04738afe",
+          "line": 413,
+          "size": 1
+        },
+        {
           "hash": "dfc8fd58711c8f1f4cbfb370576915be7276bd35",
-          "line": 411,
-          "size": 1
-        },
-        {
-          "hash": "6d6080ac5f4a4d24fec408eb891e5de04b746e40",
-          "line": 412,
-          "size": 1
-        },
-        {
-          "hash": "463a7e81ed141bfcd4a1db52b0316030539c5204",
           "line": 414,
           "size": 1
         },
         {
-          "hash": "af2e4d0489284ef6a71422d9ddb3dcaf90ecfd61",
+          "hash": "6d6080ac5f4a4d24fec408eb891e5de04b746e40",
           "line": 415,
           "size": 1
         },
         {
-          "hash": "bbafdd05b275debe5fc2e02424cb4fd1e7525ada",
-          "line": 416,
+          "hash": "463a7e81ed141bfcd4a1db52b0316030539c5204",
+          "line": 417,
           "size": 1
         },
         {
-          "hash": "9017113ed5d9e56694565229f76a549ceec96a3a",
+          "hash": "af2e4d0489284ef6a71422d9ddb3dcaf90ecfd61",
           "line": 418,
           "size": 1
         },
         {
-          "hash": "5d301141725bb5a0e4c22b19543a11cd0953cf54",
+          "hash": "bbafdd05b275debe5fc2e02424cb4fd1e7525ada",
           "line": 419,
           "size": 1
         },
         {
-          "hash": "89d08109c4ee9f2a51767a3bb454e0615bc0aa92",
+          "hash": "9017113ed5d9e56694565229f76a549ceec96a3a",
+          "line": 421,
+          "size": 1
+        },
+        {
+          "hash": "5d301141725bb5a0e4c22b19543a11cd0953cf54",
           "line": 422,
           "size": 1
         },
         {
-          "hash": "18376b372980148291fb8b3dfdf82d819224055d",
-          "line": 423,
-          "size": 1
-        },
-        {
-          "hash": "9038fb61551c1e28c38a67b1d217023815d1e9f8",
+          "hash": "89d08109c4ee9f2a51767a3bb454e0615bc0aa92",
           "line": 425,
           "size": 1
         },
         {
-          "hash": "ffb45c456f5f13102cf1bb965ea3591005f56863",
+          "hash": "18376b372980148291fb8b3dfdf82d819224055d",
           "line": 426,
           "size": 1
         },
         {
-          "hash": "f8c1641e42724dfb312a81bf2114c84d708dfaed",
+          "hash": "9038fb61551c1e28c38a67b1d217023815d1e9f8",
+          "line": 428,
+          "size": 1
+        },
+        {
+          "hash": "ffb45c456f5f13102cf1bb965ea3591005f56863",
           "line": 429,
           "size": 1
         },
         {
+          "hash": "f8c1641e42724dfb312a81bf2114c84d708dfaed",
+          "line": 432,
+          "size": 1
+        },
+        {
           "hash": "63be2a6f989adcbcdf5d9d95d1bcbf44d69a625b",
-          "line": 430,
+          "line": 433,
           "size": 1
         },
         {
           "hash": "a4c194661434fbfff786e1766415f2af63885a91",
-          "line": 431,
-          "size": 1
-        },
-        {
-          "hash": "082ec805e58b4cf134126a500d5069fad6d4003c",
           "line": 434,
           "size": 1
         },
         {
-          "hash": "2d3240842f7836452dff8e2646b8da12148a3b4f",
-          "line": 435,
+          "hash": "082ec805e58b4cf134126a500d5069fad6d4003c",
+          "line": 437,
           "size": 1
         },
         {
-          "hash": "e8fbabb15a964add3560727bb2d6181063f72b3a",
+          "hash": "2d3240842f7836452dff8e2646b8da12148a3b4f",
           "line": 438,
           "size": 1
         },
         {
+          "hash": "e8fbabb15a964add3560727bb2d6181063f72b3a",
+          "line": 441,
+          "size": 1
+        },
+        {
           "hash": "02bf184fcf54bbd665926fac8453239b9a74d163",
-          "line": 439,
-          "size": 1
-        },
-        {
-          "hash": "5f361e542640a9e4e3ce1885af1833161fa3fb80",
-          "line": 440,
-          "size": 1
-        },
-        {
-          "hash": "446c148f0c5951b7dec49742c1770e169db40510",
           "line": 442,
           "size": 1
         },
         {
-          "hash": "8a1cff493654bf6c7e43a63cc85ef66b27b39a3e",
+          "hash": "5f361e542640a9e4e3ce1885af1833161fa3fb80",
           "line": 443,
           "size": 1
         },
         {
-          "hash": "d673bb92a616d196e80b0d503bf3bca22f457df4",
-          "line": 444,
+          "hash": "446c148f0c5951b7dec49742c1770e169db40510",
+          "line": 445,
           "size": 1
         },
         {
-          "hash": "a8c012ec8109cffe3548ddd064a89b14292d4c82",
+          "hash": "8a1cff493654bf6c7e43a63cc85ef66b27b39a3e",
           "line": 446,
           "size": 1
         },
         {
-          "hash": "f9c708a17599b62c3a2e81adf2d505366832b3eb",
+          "hash": "d673bb92a616d196e80b0d503bf3bca22f457df4",
           "line": 447,
           "size": 1
         },
         {
-          "hash": "534709b01206d02f60f4841e0dfe1435476bc4b1",
-          "line": 448,
+          "hash": "a8c012ec8109cffe3548ddd064a89b14292d4c82",
+          "line": 449,
           "size": 1
         },
         {
-          "hash": "368332e5cc0c07b11b79ba17b49dd5f62f85c885",
+          "hash": "f9c708a17599b62c3a2e81adf2d505366832b3eb",
           "line": 450,
           "size": 1
         },
         {
-          "hash": "62b119f3f17876611bf1b857d4b002d5df2b5eb1",
+          "hash": "534709b01206d02f60f4841e0dfe1435476bc4b1",
           "line": 451,
           "size": 1
         },
         {
+          "hash": "368332e5cc0c07b11b79ba17b49dd5f62f85c885",
+          "line": 453,
+          "size": 1
+        },
+        {
+          "hash": "62b119f3f17876611bf1b857d4b002d5df2b5eb1",
+          "line": 454,
+          "size": 1
+        },
+        {
           "hash": "29bb3d05ed9db2458ab61fc37951af2680e5b0a9",
-          "line": 455,
+          "line": 458,
           "size": 1,
           "declarationLike": true
         },
         {
           "hash": "45b0c89690212468ad59eab2479d376cd33db344",
-          "line": 456,
+          "line": 459,
           "size": 1
         },
         {
           "hash": "02d48ed6158b6e2993e918bdbea22b49ab5e782c",
-          "line": 457,
-          "size": 1
-        },
-        {
-          "hash": "f07a4b4fa192add2da0b06630cafa958157aa5a3",
-          "line": 458,
-          "size": 1
-        },
-        {
-          "hash": "69c682c22fdb726b7882d18492f4cd3580c5a294",
           "line": 460,
           "size": 1
         },
         {
-          "hash": "1b03be553221e22cb92b45e4416916016ec5bd6f",
+          "hash": "f07a4b4fa192add2da0b06630cafa958157aa5a3",
           "line": 461,
           "size": 1
         },
         {
-          "hash": "6cf874adeeca1aafcbe80fc4794e30043101d8cb",
+          "hash": "69c682c22fdb726b7882d18492f4cd3580c5a294",
+          "line": 463,
+          "size": 1
+        },
+        {
+          "hash": "1b03be553221e22cb92b45e4416916016ec5bd6f",
           "line": 464,
           "size": 1
         },
         {
-          "hash": "9bcd9a54c0cd617ae38500cc5a3f892aa2a3d9d1",
-          "line": 465,
-          "size": 1
-        },
-        {
-          "hash": "65c4b67ab31752d6cdaad9a13d70ced65d85b18d",
+          "hash": "6cf874adeeca1aafcbe80fc4794e30043101d8cb",
           "line": 467,
           "size": 1
         },
         {
-          "hash": "1313d62dc2416c91c8b68107dd37e46fcd46341d",
+          "hash": "9bcd9a54c0cd617ae38500cc5a3f892aa2a3d9d1",
           "line": 468,
           "size": 1
         },
         {
-          "hash": "c6e5e6cd22ac83d58ba588ae9fe1c954cf3efbeb",
+          "hash": "65c4b67ab31752d6cdaad9a13d70ced65d85b18d",
           "line": 470,
           "size": 1
         },
         {
-          "hash": "6bf63348ae1b58c800939ea559e82bc20bfeceb8",
+          "hash": "1313d62dc2416c91c8b68107dd37e46fcd46341d",
           "line": 471,
           "size": 1
         },
         {
-          "hash": "29ded671a9cb5a77203fdf4c3d10fc63d7ce6d4a",
+          "hash": "c6e5e6cd22ac83d58ba588ae9fe1c954cf3efbeb",
           "line": 473,
           "size": 1
         },
         {
-          "hash": "efa1e1f9d4e0627a99ec1f3e35f226b3d3d37a1e",
+          "hash": "6bf63348ae1b58c800939ea559e82bc20bfeceb8",
           "line": 474,
           "size": 1
         },
         {
-          "hash": "7422848a42e8bdb8fa627b270fef840d920df846",
+          "hash": "29ded671a9cb5a77203fdf4c3d10fc63d7ce6d4a",
+          "line": 476,
+          "size": 1
+        },
+        {
+          "hash": "efa1e1f9d4e0627a99ec1f3e35f226b3d3d37a1e",
           "line": 477,
           "size": 1
         },
         {
-          "hash": "43660359cf0877b5b2eb36559fd36193a3386802",
-          "line": 478,
-          "size": 1
-        },
-        {
-          "hash": "aa279d0f0250bf17d5b2df2ec1dec399be982f99",
+          "hash": "7422848a42e8bdb8fa627b270fef840d920df846",
           "line": 480,
           "size": 1
         },
         {
-          "hash": "1aef36e9c49349cd9a2de8190e18e563b43c880f",
+          "hash": "43660359cf0877b5b2eb36559fd36193a3386802",
           "line": 481,
           "size": 1
         },
         {
-          "hash": "46501a40bc7d1c67d6ce3000f77773f5e7d50c19",
-          "line": 482,
+          "hash": "aa279d0f0250bf17d5b2df2ec1dec399be982f99",
+          "line": 483,
           "size": 1
         },
         {
-          "hash": "082ec805e58b4cf134126a500d5069fad6d4003c",
+          "hash": "1aef36e9c49349cd9a2de8190e18e563b43c880f",
+          "line": 484,
+          "size": 1
+        },
+        {
+          "hash": "46501a40bc7d1c67d6ce3000f77773f5e7d50c19",
           "line": 485,
           "size": 1
         },
         {
-          "hash": "886f4831ee50d22ceba4cd1fcd93b3ae56a9718a",
-          "line": 486,
+          "hash": "082ec805e58b4cf134126a500d5069fad6d4003c",
+          "line": 488,
           "size": 1
         },
         {
-          "hash": "5eac97d1a096365cd15148334d583d693848ecc1",
+          "hash": "886f4831ee50d22ceba4cd1fcd93b3ae56a9718a",
           "line": 489,
           "size": 1
         },
         {
+          "hash": "5eac97d1a096365cd15148334d583d693848ecc1",
+          "line": 492,
+          "size": 1
+        },
+        {
           "hash": "02bf184fcf54bbd665926fac8453239b9a74d163",
-          "line": 490,
-          "size": 1
-        },
-        {
-          "hash": "e8d846adb7a153cf8d369487090dfc0279827375",
-          "line": 491,
-          "size": 1
-        },
-        {
-          "hash": "23a74efbf45c71c86ddc9f5e7120d0a67ba85b72",
           "line": 493,
           "size": 1
         },
         {
-          "hash": "51eab7e9637533e36f45f5002c16289a068da2b2",
+          "hash": "e8d846adb7a153cf8d369487090dfc0279827375",
           "line": 494,
           "size": 1
         },
         {
-          "hash": "a16ec28e9bf99e14181e8230b908fd72895eb1f6",
-          "line": 495,
+          "hash": "23a74efbf45c71c86ddc9f5e7120d0a67ba85b72",
+          "line": 496,
           "size": 1
         },
         {
-          "hash": "5b72b3ddfd5308e2345ebd507575a2af6667f284",
+          "hash": "51eab7e9637533e36f45f5002c16289a068da2b2",
           "line": 497,
           "size": 1
         },
         {
-          "hash": "94ff22d3486200dd678375b1b928f3833908c666",
+          "hash": "a16ec28e9bf99e14181e8230b908fd72895eb1f6",
           "line": 498,
           "size": 1
         },
         {
-          "hash": "d037fd2d75f441d3162d11898c606f88079e180f",
+          "hash": "5b72b3ddfd5308e2345ebd507575a2af6667f284",
+          "line": 500,
+          "size": 1
+        },
+        {
+          "hash": "94ff22d3486200dd678375b1b928f3833908c666",
           "line": 501,
           "size": 1
         },
         {
+          "hash": "d037fd2d75f441d3162d11898c606f88079e180f",
+          "line": 504,
+          "size": 1
+        },
+        {
           "hash": "34b60ee7a2603aab49c3c0787902b794913b45d0",
-          "line": 502,
-          "size": 1
-        },
-        {
-          "hash": "7e23e19b83207f882c950f93f598d77d445aafa0",
-          "line": 503,
-          "size": 1
-        },
-        {
-          "hash": "fbac02d325e89661cd394bd6b6ecfe959ecdad87",
           "line": 505,
           "size": 1
         },
         {
-          "hash": "bd80be25eda1ec65d82d8050cd21be30b5c5cb00",
+          "hash": "7e23e19b83207f882c950f93f598d77d445aafa0",
           "line": 506,
           "size": 1
         },
         {
+          "hash": "fbac02d325e89661cd394bd6b6ecfe959ecdad87",
+          "line": 508,
+          "size": 1
+        },
+        {
+          "hash": "bd80be25eda1ec65d82d8050cd21be30b5c5cb00",
+          "line": 509,
+          "size": 1
+        },
+        {
           "hash": "2b3a8c0dbe2c77db5dd4b26272ad7e908d8eca5b",
-          "line": 510,
+          "line": 513,
           "size": 1,
           "declarationLike": true
         },
         {
           "hash": "45b0c89690212468ad59eab2479d376cd33db344",
-          "line": 511,
+          "line": 514,
           "size": 1
         },
         {
           "hash": "02d48ed6158b6e2993e918bdbea22b49ab5e782c",
-          "line": 512,
-          "size": 1
-        },
-        {
-          "hash": "f07a4b4fa192add2da0b06630cafa958157aa5a3",
-          "line": 513,
-          "size": 1
-        },
-        {
-          "hash": "69c682c22fdb726b7882d18492f4cd3580c5a294",
           "line": 515,
           "size": 1
         },
         {
-          "hash": "1b03be553221e22cb92b45e4416916016ec5bd6f",
+          "hash": "f07a4b4fa192add2da0b06630cafa958157aa5a3",
           "line": 516,
           "size": 1
         },
         {
-          "hash": "8eba9dc29518a682b4872417cb89ed487040392c",
+          "hash": "69c682c22fdb726b7882d18492f4cd3580c5a294",
+          "line": 518,
+          "size": 1
+        },
+        {
+          "hash": "1b03be553221e22cb92b45e4416916016ec5bd6f",
           "line": 519,
           "size": 1
         },
         {
-          "hash": "20dde3f579040e1286dcd61966939229af5db5c3",
-          "line": 520,
-          "size": 1
-        },
-        {
-          "hash": "189ed5056d0d860fdb92bb9544a6615b5625549e",
-          "line": 521,
-          "size": 1
-        },
-        {
-          "hash": "6376c506750fd548ae9079e35a8ab6fdb676c669",
+          "hash": "8eba9dc29518a682b4872417cb89ed487040392c",
           "line": 522,
           "size": 1
         },
         {
-          "hash": "ca5cb6735fc4ceab1104787e7b34af409678eedf",
+          "hash": "20dde3f579040e1286dcd61966939229af5db5c3",
+          "line": 523,
+          "size": 1
+        },
+        {
+          "hash": "189ed5056d0d860fdb92bb9544a6615b5625549e",
           "line": 524,
           "size": 1
         },
         {
-          "hash": "6bf63348ae1b58c800939ea559e82bc20bfeceb8",
+          "hash": "6376c506750fd548ae9079e35a8ab6fdb676c669",
           "line": 525,
           "size": 1
         },
         {
-          "hash": "a5a308074a680f2e9774837fceb2faebd17230fa",
+          "hash": "ca5cb6735fc4ceab1104787e7b34af409678eedf",
           "line": 527,
           "size": 1
         },
         {
-          "hash": "a0f58a9e549641a26bae3d83406b7665de249bff",
+          "hash": "6bf63348ae1b58c800939ea559e82bc20bfeceb8",
           "line": 528,
           "size": 1
         },
         {
-          "hash": "082ec805e58b4cf134126a500d5069fad6d4003c",
+          "hash": "a5a308074a680f2e9774837fceb2faebd17230fa",
+          "line": 530,
+          "size": 1
+        },
+        {
+          "hash": "a0f58a9e549641a26bae3d83406b7665de249bff",
           "line": 531,
           "size": 1
         },
         {
-          "hash": "d0e4b3d60b547a5ea7677a69c581b159267be549",
-          "line": 532,
+          "hash": "082ec805e58b4cf134126a500d5069fad6d4003c",
+          "line": 534,
           "size": 1
         },
         {
-          "hash": "d037fd2d75f441d3162d11898c606f88079e180f",
+          "hash": "d0e4b3d60b547a5ea7677a69c581b159267be549",
           "line": 535,
           "size": 1
         },
         {
+          "hash": "d037fd2d75f441d3162d11898c606f88079e180f",
+          "line": 538,
+          "size": 1
+        },
+        {
           "hash": "fbac02d325e89661cd394bd6b6ecfe959ecdad87",
-          "line": 536,
-          "size": 1
-        },
-        {
-          "hash": "b63d346e59af0c9c1f12ec88fd76f5cb89b9fe06",
-          "line": 537,
-          "size": 1
-        },
-        {
-          "hash": "47950aae4caf8f7f62629506d418c32b9215a8ad",
           "line": 539,
           "size": 1
         },
         {
-          "hash": "243091a5af3fe3fa3439ffdf09579246006fe07c",
+          "hash": "b63d346e59af0c9c1f12ec88fd76f5cb89b9fe06",
           "line": 540,
+          "size": 1
+        },
+        {
+          "hash": "47950aae4caf8f7f62629506d418c32b9215a8ad",
+          "line": 542,
+          "size": 1
+        },
+        {
+          "hash": "243091a5af3fe3fa3439ffdf09579246006fe07c",
+          "line": 543,
           "size": 1
         }
       ],

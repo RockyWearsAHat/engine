@@ -334,11 +334,11 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 		}
 
 		severity := "medium"
-		message := fmt.Sprintf("Largest repeated block spans %d normalized lines (%.1f%% overlap) and matches %s:%d.", run.NormalizedLines, overlapPct, run.LeftFile, run.LeftLine)
+		message := fmt.Sprintf("Duplicate code detected: this file repeats %d normalized line(s) from %s:%d (%.1f%% overlap of the smaller file). Consolidate the shared block into one reusable helper/module.", run.NormalizedLines, run.LeftFile, run.LeftLine, overlapPct)
 		suggestion := "Extract the shared logic into a helper/module to avoid divergence."
 		if (run.NormalizedLines >= 2 && overlapPct >= 80.0) || (run.NormalizedLines == 1 && overlapPct >= 100.0) || run.DeclarationLike {
 			severity = "high"
-			message = fmt.Sprintf("Largest repeated block spans %d normalized lines (%.1f%% overlap) and matches %s:%d; this should be fixed.", run.NormalizedLines, overlapPct, run.LeftFile, run.LeftLine)
+			message = fmt.Sprintf("High-risk duplicate code: this file repeats %d normalized line(s) from %s:%d (%.1f%% overlap of the smaller file). Fix by centralizing the repeated block into one source of truth.", run.NormalizedLines, run.LeftFile, run.LeftLine, overlapPct)
 			suggestion = "Move the shared block into one reusable definition and reference it from both files."
 		}
 		issues = append(issues, Issue{
