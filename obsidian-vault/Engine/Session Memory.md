@@ -1,7 +1,7 @@
 ---
 source: ../.github/session-memory/session-log.jsonl
-generatedAt: 2026-06-03T20:39:07.471Z
-eventCount: 818
+generatedAt: 2026-06-03T20:54:45.154Z
+eventCount: 826
 ---
 
 # Session Memory
@@ -12,6 +12,14 @@ Auto-export of session events for Obsidian review.
 
 | Time | Action | Outcome | Surprise |
 | --- | --- | --- | --- |
+| 2026-06-03T20:53:34.659Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/client/src/components/Quality/QualityPanel.tsx. Language: type... | 0.82 |
+| 2026-06-03T20:53:34.660Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/client/src/test/quality-panel.test.tsx. Language: typescriptre... | 0.82 |
+| 2026-06-03T20:53:34.658Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/client/src/index.css. Language: css. strict_lint requires an a... | 0.82 |
+| 2026-06-03T20:49:56.172Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/quality/report_test.go. Language: go. strict_lint re... | 0.82 |
+| 2026-06-03T20:49:56.171Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/quality/report.go. Language: go. strict_lint require... | 0.82 |
+| 2026-06-03T20:46:30.744Z | auto tool call: search_knowledge_index | success - Query: fuzzy matching linter heuristics react css component insights anti-pattern detection Index: 2026-04-01T23:13:53.667Z · 352 candidates · sources: community Results: 1. Rea... | 0.20 |
+| 2026-06-03T20:45:48.723Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/client/src/test/quality-panel.test.tsx. Language: typescriptre... | 0.82 |
+| 2026-06-03T20:45:48.721Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/client/src/components/Editor/Editor.tsx. Language: typescriptr... | 0.82 |
 | 2026-06-03T20:37:17.410Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/client/src/test/app-ws-lifecycle.test.tsx. Language: typescrip... | 0.82 |
 | 2026-06-03T20:37:17.273Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/client/src/App.tsx. Language: typescriptreact. strict_lint req... | 0.82 |
 | 2026-06-03T20:37:17.269Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/client/src/components/Quality/QualityPanel.tsx. Language: type... | 0.82 |
@@ -86,11 +94,3 @@ fatal: failed to write commit object | 0.82 |
 | 2026-06-03T04:20:32.804Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/context.go. Language: go. strict_lint requires an... | 0.82 |
 | 2026-06-03T04:20:32.804Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/team_dispatcher.go. Language: go. strict_lint req... | 0.82 |
 | 2026-06-03T04:20:32.804Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/roles_test.go. Language: go. strict_lint requires... | 0.82 |
-| 2026-06-03T04:20:32.804Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/.github/WORKING_BEHAVIORS.md. Language: markdown. strict_lint requires ... | 0.82 |
-| 2026-06-03T04:20:32.804Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/agent_comms_test.go. Language: go. strict_lint re... | 0.82 |
-| 2026-06-03T04:20:32.804Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/roles.go. Language: go. strict_lint requires an a... | 0.82 |
-| 2026-06-03T04:20:32.782Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ai/agent_comms.go. Language: go. strict_lint require... | 0.82 |
-| 2026-06-03T03:03:46.991Z | simplified websocket chat ingress to orchestrator-first flow and removed interactive/autonomous split branching | success — chat now always enters orchestrator, active orchestrator receives redirected directives, and updated WS tests pass | 0.22 |
-| 2026-06-02T23:48:29.979Z | routed ws autonomous-intent chat through RunAutonomousProject and added websocket coverage test | success — targeted ws chat tests pass | 0.22 |
-| 2026-06-02T23:48:21.955Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ws/handler_test.go. Language: go. strict_lint requir... | 0.82 |
-| 2026-06-02T23:48:15.917Z | auto tool call: strict_lint | success - strict_lint error: No diagnostics provider activity was observed for /Users/alexwaldmann/Desktop/MyEditor/packages/server-go/ws/handler.go. Language: go. strict_lint requires an... | 0.82 |

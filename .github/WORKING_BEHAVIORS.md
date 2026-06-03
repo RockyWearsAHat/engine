@@ -84,17 +84,17 @@ Engine works in a simple loop: intake, plan, build, review, validate, repeat unt
 
 ## File Tree
 
-Six tabs: Explorer, Git, Search, Issues, Open Editors, Usage Dashboard.
+Seven tabs: Explorer, Quality Index, Git, Search, Issues, Open Editors, Usage Dashboard.
 
-**Explorer:** Browse the workspace file tree. Files show live git status badges: modified, staged, untracked, ignored. Toggle hidden files on or off. Expand or collapse folders individually. Right-click in the tree to create a new file or folder in the selected location. Context menus support scoped Expand All and Collapse All (for a selected folder or sibling level) and global Expand All/Collapse All from empty tree space. Folder grouping can be toggled from the context menu and the preference is remembered across sessions.
+**Explorer:** Browse the workspace file tree. Files show live git status badges: modified, staged, untracked, ignored. Toggle hidden files on or off. Expand or collapse folders individually. Right-click in the tree to create a new file or folder in the selected location. Context menus support scoped Expand All and Collapse All (for a selected folder or sibling level) and global Expand All/Collapse All from empty tree space. Folder grouping can be toggled from the context menu and the preference is remembered across sessions. Open editors is a sub-tab that lives at the top of the explorer tab and shows currently open tabs in the editor. Click any file to focus it immediately.
+
+**Quality Index:** View deterministic AI-linter findings in an explorer-style hierarchy (folders, then files, then issue rows), including duplicate logic, dead-code candidates, documentation gaps, large uncommented blocks, React pitfalls (such as unstable list keys and inline JSX handlers), and CSS selector usage drift (selectors with no matching class/className usage). Generated files are filtered out before scan results are produced.
 
 **Git:** See the current branch, staged files, unstaged changes, and untracked files. No repository shows a clear empty state. Type a commit message and commit staged changes. Click any file in the change lists to view its diff.
 
 **Search:** Search across the workspace. Results show file path, line number, and preview. Loading, error, and empty states are each clearly communicated.
 
 **Issues:** Browse open GitHub issues for the project. Click an issue to open it in the browser. Loading, error, and empty states are each clearly communicated.
-
-**Open Editors:** See all open files. Click to switch between them. Collapse or expand the list.
 
 **Usage Dashboard:** View API usage analytics in a dedicated sidebar tab with two scopes: project-wide and user-wide. See total spend, input/output tokens, total tokens, average price per token, active development time, and AI compute time. Filter metrics to a specific model and inspect detailed breakdown tables per project and per model.
 

@@ -102,6 +102,8 @@ type fileIndexEntry struct {
 	Symbols          []symbolDef    `json:"symbols"`
 	InterfaceNames   []string       `json:"interfaceNames,omitempty"`
 	IdentifierCounts map[string]int `json:"identifierCounts"`
+	CSSClassDefs     []string       `json:"cssClassDefs,omitempty"`
+	ClassReferences  map[string]int `json:"classReferences,omitempty"`
 	Chunks           []chunkRecord  `json:"chunks"`
 	BaseIssues       []Issue        `json:"baseIssues"`
 }
@@ -120,8 +122,9 @@ type sourceFileInfo struct {
 	Size            int64
 }
 
-const qualityIndexVersion = 5
+const qualityIndexVersion = 6
 const duplicateChunkMinLines = 1
+const duplicateIssuesPerFileCap = 12
 
 var (
 	goFuncPattern       = regexp.MustCompile(`^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
@@ -132,6 +135,13 @@ var (
 	identifierPattern   = regexp.MustCompile(`\b[A-Za-z_][A-Za-z0-9_]*\b`)
 	goInterfacePattern  = regexp.MustCompile(`^\s*type\s+([A-Za-z_][A-Za-z0-9_]*)\s+interface\s*\{`)
 	tsInterfacePattern  = regexp.MustCompile(`^\s*(?:export\s+)?interface\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
+	cssClassSelectorPattern  = regexp.MustCompile(`(?:^|[\s,{>+~])\.([A-Za-z_-][A-Za-z0-9_-]*)`)
+	classAttrPattern         = regexp.MustCompile(`(?i)\bclass(?:Name)?\s*=\s*(?:"([^"]*)"|'([^']*)')`)
+	classTemplateAttrPattern = regexp.MustCompile("(?i)\\bclass(?:Name)?\\s*=\\s*\\{\\s*`([^`]*)`\\s*\\}")
+	templateExprPattern      = regexp.MustCompile(`\$\{[^}]*\}`)
+	cssModuleRefPattern      = regexp.MustCompile(`\b(?:styles|style)\.([A-Za-z_][A-Za-z0-9_-]*)\b`)
+	reactIndexKeyPattern     = regexp.MustCompile(`(?i)\bkey\s*=\s*\{?\s*(?:index|idx|i)\s*\}?`)
+	reactInlineHandlerPattern = regexp.MustCompile(`(?i)\bon[A-Z][A-Za-z0-9_]*\s*=\s*\{\s*(?:\([^)]*\)|[A-Za-z_][A-Za-z0-9_]*)\s*=>`)
 )
 
 func ScanProject(projectPath string, maxIssues int) (Report, error) {
@@ -263,6 +273,9 @@ func buildProjectIndex(projectPath string, onProgress ProgressCallback) (project
 func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIssues int) Report {
 	issues := make([]Issue, 0, 128)
 	identifierCounts := make(map[string]int, 512)
+	classReferenceCounts := make(map[string]int, 512)
+	duplicateIssueCountByFile := make(map[string]int, 64)
+	duplicateSuppressedByFile := make(map[string]int, 64)
 	symbols := make([]symbolDef, 0, 256)
 	chunks := make(map[string][]chunkLocExt)
 	matchesByPair := make(map[duplicatePairKey][]duplicateMatch)
@@ -278,6 +291,12 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 		issues = append(issues, entry.BaseIssues...)
 		for token, count := range entry.IdentifierCounts {
 			identifierCounts[token] += count
+		}
+		for className, count := range entry.ClassReferences {
+			if className == "" {
+				continue
+			}
+			classReferenceCounts[className] += count
 		}
 		symbols = append(symbols, entry.Symbols...)
 		hasDocGapIssue := fileHasCategory(entry.BaseIssues, "documentation-gap")
@@ -333,15 +352,27 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 			overlapPct = (float64(run.NormalizedLines) / float64(overlapBase)) * 100.0
 		}
 
-		severity := "medium"
+		// One-line and tiny two-line overlaps are usually incidental boilerplate,
+		// not actionable duplication.
+		if run.NormalizedLines <= 1 {
+			continue
+		}
+		if run.NormalizedLines == 2 && overlapPct < 30.0 {
+			continue
+		}
+
+		severity := classifyDuplicateSeverity(run.NormalizedLines, overlapPct, run.DeclarationLike)
 		message := fmt.Sprintf("Duplicate code detected: this file repeats %d normalized line(s) from %s:%d (%.1f%% overlap of the smaller file). Consolidate the shared block into one reusable helper/module.", run.NormalizedLines, run.LeftFile, run.LeftLine, overlapPct)
 		suggestion := "Extract the shared logic into a helper/module to avoid divergence."
-		if (run.NormalizedLines >= 2 && overlapPct >= 80.0) || (run.NormalizedLines == 1 && overlapPct >= 100.0) || run.DeclarationLike {
+		if severity == "high" {
 			severity = "high"
 			message = fmt.Sprintf("High-risk duplicate code: this file repeats %d normalized line(s) from %s:%d (%.1f%% overlap of the smaller file). Fix by centralizing the repeated block into one source of truth.", run.NormalizedLines, run.LeftFile, run.LeftLine, overlapPct)
 			suggestion = "Move the shared block into one reusable definition and reference it from both files."
+		} else if severity == "low" {
+			message = fmt.Sprintf("Low-confidence duplicate snippet: this file repeats %d normalized line(s) from %s:%d (%.1f%% overlap of the smaller file). Verify whether this is shared intent or incidental similarity.", run.NormalizedLines, run.LeftFile, run.LeftLine, overlapPct)
+			suggestion = "If intentional, keep it. If accidental duplication is growing, extract a helper before divergence starts."
 		}
-		issues = append(issues, Issue{
+		issue := Issue{
 			ID:         stableID(run.RightFile, run.RightLine, "duplicate-largest|"+run.LeftFile),
 			Severity:   severity,
 			Category:   "duplicate-content",
@@ -349,7 +380,53 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 			File:       run.RightFile,
 			Line:       run.RightLine,
 			Suggestion: suggestion,
+		}
+		if duplicateIssueCountByFile[run.RightFile] < duplicateIssuesPerFileCap {
+			issues = append(issues, issue)
+			duplicateIssueCountByFile[run.RightFile]++
+		} else {
+			duplicateSuppressedByFile[run.RightFile]++
+		}
+	}
+
+	for file, suppressed := range duplicateSuppressedByFile {
+		if suppressed <= 0 {
+			continue
+		}
+		severity := "low"
+		if suppressed > 100 {
+			severity = "medium"
+		}
+		issues = append(issues, Issue{
+			ID:         stableID(file, 1, "duplicate-compaction"),
+			Severity:   severity,
+			Category:   "duplicate-content",
+			Message:    fmt.Sprintf("%d additional duplicate matches were compacted for this file to keep the report actionable.", suppressed),
+			File:       file,
+			Line:       1,
+			Suggestion: "Review top duplicate findings first; resolve repeated root blocks and re-scan to reduce this compacted count.",
 		})
+	}
+
+	for _, relPath := range paths {
+		entry := index.Files[relPath]
+		if len(entry.CSSClassDefs) == 0 {
+			continue
+		}
+		for _, className := range entry.CSSClassDefs {
+			if className == "" || classReferenceCounts[className] > 0 {
+				continue
+			}
+			issues = append(issues, Issue{
+				ID:         stableID(relPath, 1, "css-unused|"+className),
+				Severity:   "low",
+				Category:   "css-usage",
+				Message:    fmt.Sprintf("CSS selector .%s was not matched by any class/className usage across indexed source files.", className),
+				File:       relPath,
+				Line:       1,
+				Suggestion: "If this selector is intentionally dynamic, keep it; otherwise remove it or align JSX/HTML class names.",
+			})
+		}
 	}
 
 	issues = append(issues, deadCodeHeuristics(symbols, identifierCounts)...)
@@ -413,7 +490,7 @@ func gatherSourceFiles(projectPath string, generatedIndex map[string]bool) ([]so
 		}
 		ext := strings.ToLower(filepath.Ext(d.Name()))
 		switch ext {
-		case ".go", ".ts", ".tsx", ".js", ".jsx", ".rs", ".py", ".sh":
+		case ".go", ".ts", ".tsx", ".js", ".jsx", ".rs", ".py", ".sh", ".css", ".scss", ".sass", ".less":
 			info, statErr := d.Info()
 			if statErr != nil {
 				return nil
@@ -436,11 +513,13 @@ func analyzeFile(source sourceFileInfo) (fileIndexEntry, error) {
 	}
 	content := string(contentBytes)
 	lines := strings.Split(content, "\n")
+	ext := strings.ToLower(filepath.Ext(source.RelPath))
 	baseIssues := make([]Issue, 0, 8)
 	baseIssues = append(baseIssues, largeUncommentedBlocks(source.RelPath, lines)...)
 	funcIssues, defs := functionComplexityIssues(source.RelPath, lines)
 	baseIssues = append(baseIssues, funcIssues...)
 	baseIssues = append(baseIssues, principleViolations(source.RelPath, content)...)
+	baseIssues = append(baseIssues, reactPitfallIssues(source.RelPath, content, ext)...)
 	normalizedLines, _ := normalizedLinesOnly(lines)
 
 	return fileIndexEntry{
@@ -453,9 +532,135 @@ func analyzeFile(source sourceFileInfo) (fileIndexEntry, error) {
 		Symbols:          defs,
 		InterfaceNames:   collectPublicInterfaceNames(lines),
 		IdentifierCounts: countIdentifiers(content),
+		CSSClassDefs:     collectCSSClassDefinitions(content, ext),
+		ClassReferences:  collectClassReferences(content),
 		Chunks:           collectChunkRecords(lines),
 		BaseIssues:       baseIssues,
 	}, nil
+}
+
+func collectCSSClassDefinitions(content, ext string) []string {
+	if ext != ".css" && ext != ".scss" && ext != ".sass" && ext != ".less" {
+		return nil
+	}
+	defs := make([]string, 0, 32)
+	seen := make(map[string]bool)
+	for _, match := range cssClassSelectorPattern.FindAllStringSubmatch(content, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		normalized := normalizeClassToken(match[1])
+		if normalized == "" || seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+		defs = append(defs, normalized)
+	}
+	sort.Strings(defs)
+	return defs
+}
+
+func collectClassReferences(content string) map[string]int {
+	refs := make(map[string]int)
+	for _, match := range classAttrPattern.FindAllStringSubmatch(content, -1) {
+		for i := 1; i < len(match); i++ {
+			addClassTokens(match[i], refs)
+		}
+	}
+	for _, match := range classTemplateAttrPattern.FindAllStringSubmatch(content, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		staticPortion := templateExprPattern.ReplaceAllString(match[1], " ")
+		addClassTokens(staticPortion, refs)
+	}
+	for _, match := range cssModuleRefPattern.FindAllStringSubmatch(content, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		token := normalizeClassToken(match[1])
+		if token == "" {
+			continue
+		}
+		refs[token]++
+	}
+	return refs
+}
+
+func addClassTokens(raw string, refs map[string]int) {
+	for _, token := range strings.Fields(raw) {
+		normalized := normalizeClassToken(token)
+		if normalized == "" {
+			continue
+		}
+		refs[normalized]++
+	}
+}
+
+func normalizeClassToken(token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(token))
+	for _, r := range token {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r + ('a' - 'A'))
+		}
+	}
+	return b.String()
+}
+
+func reactPitfallIssues(rel, content, ext string) []Issue {
+	if ext != ".tsx" && ext != ".jsx" {
+		return nil
+	}
+	issues := make([]Issue, 0, 2)
+	if reactIndexKeyPattern.MatchString(content) {
+		line := firstMatchLine(content, reactIndexKeyPattern)
+		issues = append(issues, Issue{
+			ID:         stableID(rel, line, "react-index-key"),
+			Severity:   "medium",
+			Category:   "react-pitfall",
+			Message:    "React list item uses index as key. This can cause unstable rendering when item order changes.",
+			File:       rel,
+			Line:       line,
+			Suggestion: "Prefer a stable, data-derived key (id/slug) instead of the array index.",
+		})
+	}
+	if reactInlineHandlerPattern.MatchString(content) {
+		line := firstMatchLine(content, reactInlineHandlerPattern)
+		issues = append(issues, Issue{
+			ID:         stableID(rel, line, "react-inline-handler"),
+			Severity:   "low",
+			Category:   "react-pitfall",
+			Message:    "Inline JSX event handler detected. Frequent re-renders can create avoidable allocations/noise.",
+			File:       rel,
+			Line:       line,
+			Suggestion: "Extract a named callback (or memoized handler) when this runs in large or frequently rerendered trees.",
+		})
+	}
+	return issues
+}
+
+func firstMatchLine(content string, pattern *regexp.Regexp) int {
+	loc := pattern.FindStringIndex(content)
+	if len(loc) < 1 {
+		return 1
+	}
+	line := 1
+	for _, r := range content[:loc[0]] {
+		if r == '\n' {
+			line++
+		}
+	}
+	return line
 }
 
 func loadProjectIndex(projectPath string) projectIndex {
@@ -658,11 +863,73 @@ func collectChunkRecords(lines []string) []chunkRecord {
 	}
 	records := make([]chunkRecord, 0, len(normalized)-duplicateChunkMinLines+1)
 	for i := 0; i+duplicateChunkMinLines <= len(normalized); i++ {
+		if chunkLowSignal(normalized[i : i+duplicateChunkMinLines]) {
+			continue
+		}
 		chunk := strings.Join(normalized[i:i+duplicateChunkMinLines], "\n")
 		hash := sha1.Sum([]byte(chunk))
 		records = append(records, chunkRecord{Hash: hex.EncodeToString(hash[:]), Line: lineMap[i], Size: duplicateChunkMinLines, DeclarationLike: chunkContainsDeclarationSignal(normalized[i : i+duplicateChunkMinLines])})
 	}
 	return records
+}
+
+func chunkLowSignal(lines []string) bool {
+	for _, line := range lines {
+		if !lineLowSignal(line) {
+			return false
+		}
+	}
+	return true
+}
+
+func lineLowSignal(line string) bool {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	if lower == "" {
+		return true
+	}
+	if strings.HasPrefix(lower, "package ") || strings.HasPrefix(lower, "import ") || strings.HasPrefix(lower, "export ") {
+		return true
+	}
+	tokens := identifierPattern.FindAllString(lower, -1)
+	if len(tokens) == 0 {
+		return true
+	}
+	nonNoise := 0
+	for _, token := range tokens {
+		if duplicateNoiseToken(token) {
+			continue
+		}
+		nonNoise++
+	}
+	if nonNoise == 0 {
+		return true
+	}
+	return len(lower) < 10 && nonNoise < 2
+}
+
+func duplicateNoiseToken(token string) bool {
+	switch token {
+	case "const", "let", "var", "return", "true", "false", "nil", "null", "if", "for", "while", "switch", "case", "default", "break", "continue", "func", "function", "class", "type", "interface", "struct", "public", "private", "protected", "async", "await", "new":
+		return true
+	default:
+		return false
+	}
+}
+
+func classifyDuplicateSeverity(normalizedLines int, overlapPct float64, declarationLike bool) string {
+	if normalizedLines >= 20 {
+		return "high"
+	}
+	if normalizedLines >= 10 && overlapPct >= 65.0 {
+		return "high"
+	}
+	if declarationLike && normalizedLines >= 6 && overlapPct >= 35.0 {
+		return "high"
+	}
+	if (normalizedLines >= 8 && overlapPct >= 12.0) || (normalizedLines >= 5 && overlapPct >= 20.0) || overlapPct >= 35.0 {
+		return "medium"
+	}
+	return "low"
 }
 
 func normalizedLinesOnly(lines []string) ([]string, []int) {

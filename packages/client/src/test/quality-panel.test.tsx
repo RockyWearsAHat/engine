@@ -157,13 +157,92 @@ describe('QualityPanel', () => {
     expect(screen.getByText('High: 1')).toBeTruthy();
     expect(screen.getByText('Medium: 1')).toBeTruthy();
     expect(screen.getByText('Low: 0')).toBeTruthy();
-    expect(screen.getByText('Unused function')).toBeTruthy();
+    expect(screen.getByText('Task: Unused function')).toBeTruthy();
     expect(screen.getByText('Delete it')).toBeTruthy();
-    expect(screen.getByText('Missing docs')).toBeTruthy();
+    expect(screen.getByText('Task: Missing docs')).toBeTruthy();
     expect(screen.getAllByText('a.ts').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('b.ts')).toBeTruthy();
     expect(screen.getByText('Open Editors')).toBeTruthy();
     expect(screen.getByText('unsaved')).toBeTruthy();
+  });
+
+  it('QualityPanel_ReportSuccess_RendersHierarchicalDirectoriesLikeExplorer', () => {
+    useStore.setState({
+      qualityCompleted: true,
+      qualityReport: {
+        projectPath: '/tmp/project',
+        generatedAt: new Date().toISOString(),
+        issueCount: 1,
+        highCount: 0,
+        mediumCount: 1,
+        lowCount: 0,
+        issues: [
+          {
+            id: 'nested-1',
+            severity: 'medium',
+            category: 'documentation-gap',
+            message: 'Missing contract docs',
+            file: 'packages/client/src/App.tsx',
+            line: 12,
+          },
+        ],
+      },
+    });
+
+    render(<QualityPanel />);
+
+    expect(screen.getByText('packages')).toBeTruthy();
+    expect(screen.getByText('client')).toBeTruthy();
+    expect(screen.getByText('src')).toBeTruthy();
+    expect(screen.getByText('App.tsx')).toBeTruthy();
+    expect(screen.getByText('Task: Missing contract docs')).toBeTruthy();
+  });
+
+  it('QualityPanel_ReportSuccess_GroupsSameSeverityAndCategoryIntoSingleTaskRow', () => {
+    useStore.setState({
+      qualityCompleted: true,
+      qualityReport: {
+        projectPath: '/tmp/project',
+        generatedAt: new Date().toISOString(),
+        issueCount: 3,
+        highCount: 0,
+        mediumCount: 3,
+        lowCount: 0,
+        issues: [
+          {
+            id: 'group-1',
+            severity: 'medium',
+            category: 'large-block-without-comment',
+            message: 'Split into smaller helpers and annotate non-obvious intent.',
+            file: 'packages/client/src/App.tsx',
+            line: 115,
+          },
+          {
+            id: 'group-2',
+            severity: 'medium',
+            category: 'large-block-without-comment',
+            message: 'Split into smaller helpers and annotate non-obvious intent.',
+            file: 'packages/client/src/App.tsx',
+            line: 203,
+          },
+          {
+            id: 'group-3',
+            severity: 'medium',
+            category: 'large-block-without-comment',
+            message: 'Split into smaller helpers and annotate non-obvious intent.',
+            file: 'packages/client/src/App.tsx',
+            line: 411,
+          },
+        ],
+      },
+    });
+
+    render(<QualityPanel />);
+
+    expect(screen.getByText('Total: 3')).toBeTruthy();
+    expect(screen.getAllByText('large-block-without-comment').length).toBe(1);
+    expect(screen.getByText('Task: Split into smaller helpers and annotate non-obvious intent.')).toBeTruthy();
+    expect(screen.getAllByText('3').length).toBeGreaterThan(0);
   });
 
   it('QualityPanel_ReportSuccess_SortsIssuesBySeverityThenLineWithinFile', () => {
@@ -215,12 +294,11 @@ describe('QualityPanel', () => {
 
     render(<QualityPanel />);
 
-    const messages = screen.getAllByText(/line /).map((node) => node.textContent);
+    const messages = screen.getAllByText(/Task: .*line /).map((node) => node.textContent);
     expect(messages).toEqual([
-      'High line 50',
-      'Medium line 30',
-      'Low line 10',
-      'Low line 40',
+      'Task: High line 50',
+      'Task: Medium line 30',
+      'Task: Low line 10',
     ]);
   });
 

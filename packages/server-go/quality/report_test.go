@@ -221,7 +221,7 @@ func TestScanProject_FlagsPublicInterfacesMissingWorkspaceDocs(t *testing.T) {
 	}
 }
 
-func TestScanProject_DuplicateSeverity_UsesOverlapRulesWithoutLengthGate(t *testing.T) {
+func TestScanProject_DuplicateSeverity_PrioritizesSubstantialOverlap(t *testing.T) {
 	project := t.TempDir()
 	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\npackages/demo/dup/\n")
 	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "small-a.go"), "package demo\nvar repeated = 1\n")
@@ -247,7 +247,7 @@ func TestScanProject_DuplicateSeverity_UsesOverlapRulesWithoutLengthGate(t *test
 
 	hasDuplicate := false
 	hasHighDeclDuplicate := false
-	hasHighSmallDuplicate := false
+	hasSmallDuplicate := false
 	for _, issue := range report.Issues {
 		if issue.Category != "duplicate-content" {
 			continue
@@ -256,8 +256,8 @@ func TestScanProject_DuplicateSeverity_UsesOverlapRulesWithoutLengthGate(t *test
 		if issue.File == "packages/demo/decl-b.go" && issue.Severity == "high" {
 			hasHighDeclDuplicate = true
 		}
-		if issue.File == "packages/demo/small-b.go" && issue.Severity == "high" {
-			hasHighSmallDuplicate = true
+		if issue.File == "packages/demo/small-b.go" {
+			hasSmallDuplicate = true
 		}
 	}
 	if !hasDuplicate {
@@ -266,8 +266,8 @@ func TestScanProject_DuplicateSeverity_UsesOverlapRulesWithoutLengthGate(t *test
 	if !hasHighDeclDuplicate {
 		t.Fatalf("expected declaration-like duplicate block to be marked high severity")
 	}
-	if !hasHighSmallDuplicate {
-		t.Fatalf("expected short exact duplicate block to be marked high severity")
+	if hasSmallDuplicate {
+		t.Fatalf("expected short exact two-line duplicate to be filtered as low-signal noise")
 	}
 }
 
@@ -351,7 +351,7 @@ func TestScanProject_DuplicateDetection_IgnoresCommentsAndUsesLargestRunSeverity
 	}
 }
 
-func TestScanProject_DuplicateSeverity_OneLineExactDuplicateIsHigh(t *testing.T) {
+func TestScanProject_DuplicateSeverity_OneLineExactDuplicateIsIgnored(t *testing.T) {
 	project := t.TempDir()
 	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\npackages/demo/\n")
 	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "single-a.go"), "package demo\nconst Mirror = 42\n")
@@ -364,14 +364,9 @@ func TestScanProject_DuplicateSeverity_OneLineExactDuplicateIsHigh(t *testing.T)
 
 	for _, issue := range report.Issues {
 		if issue.Category == "duplicate-content" && issue.File == "packages/demo/single-b.go" {
-			if issue.Severity != "high" {
-				t.Fatalf("expected one-line exact duplicate to be high severity, got %+v", issue)
-			}
-			return
+			t.Fatalf("expected one-line exact duplicate to be ignored as low-signal noise, got %+v", issue)
 		}
 	}
-
-	t.Fatalf("expected duplicate-content issue for one-line exact duplicate")
 }
 
 func TestRefreshProjectIndex_PersistsAndUpdatesChangedFiles(t *testing.T) {
@@ -541,5 +536,87 @@ func TestRefreshProjectIndex_DoesNotExcludeAncestorDirsForNestedGeneratedPaths(t
 	}
 	if _, ok := idx.Files["packages/demo/dist/bundle.js"]; ok {
 		t.Fatalf("expected nested generated file to be excluded from quality index")
+	}
+}
+
+func TestScanProject_ReactPitfallSignals(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "list.tsx"), strings.Join([]string{
+		"import React from 'react'",
+		"",
+		"export function DemoList({ items }: { items: string[] }) {",
+		"  return (",
+		"    <ul>",
+		"      {items.map((item, index) => (",
+		"        <li key={index} onClick={() => console.log(item)}>{item}</li>",
+		"      ))}",
+		"    </ul>",
+		"  )",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	foundIndexKey := false
+	foundInlineHandler := false
+	for _, issue := range report.Issues {
+		if issue.Category != "react-pitfall" {
+			continue
+		}
+		if strings.Contains(issue.Message, "index as key") {
+			foundIndexKey = true
+		}
+		if strings.Contains(issue.Message, "Inline JSX event handler") {
+			foundInlineHandler = true
+		}
+	}
+	if !foundIndexKey {
+		t.Fatalf("expected react index-key pitfall issue, got %+v", report.Issues)
+	}
+	if !foundInlineHandler {
+		t.Fatalf("expected react inline-handler pitfall issue, got %+v", report.Issues)
+	}
+}
+
+func TestScanProject_CSSClassFuzzyMatching(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "panel.css"), strings.Join([]string{
+		".quality-panel-root { display: block; }",
+		".unused-token { color: red; }",
+	}, "\n"))
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "panel.tsx"), strings.Join([]string{
+		"export function Panel() {",
+		"  return <section className=\"quality_panel_root\">ok</section>",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	flaggedUnusedToken := false
+	flaggedUsedToken := false
+	for _, issue := range report.Issues {
+		if issue.Category != "css-usage" {
+			continue
+		}
+		if strings.Contains(issue.Message, ".unusedtoken") {
+			flaggedUnusedToken = true
+		}
+		if strings.Contains(issue.Message, ".qualitypanelroot") {
+			flaggedUsedToken = true
+		}
+	}
+	if !flaggedUnusedToken {
+		t.Fatalf("expected unused css selector to be reported, got %+v", report.Issues)
+	}
+	if flaggedUsedToken {
+		t.Fatalf("expected fuzzy class matching to keep used selector out of css-usage findings, got %+v", report.Issues)
 	}
 }

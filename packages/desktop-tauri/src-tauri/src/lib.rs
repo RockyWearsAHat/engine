@@ -382,32 +382,14 @@ fn start_go_server(
     cfg: &AppConfig,
     local_server_token: &str,
 ) -> ServerLaunch {
-    // In dev mode, always attempt to evict whatever is on the port — even if
-    // the health check is ambiguous — so the new token matches the new server.
+    // In dev mode, prefer reusing an externally watched server process
+    // (build:go-watch) so backend code edits hot-reload without app restarts.
     if cfg!(debug_assertions) {
-        if let Some(pid) = listener_pid(DEFAULT_PORT) {
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
-            let _ = terminate_pid(pid, "-TERM");
-            #[cfg(target_os = "windows")]
-            let _ = terminate_pid(pid, "");
-            // Wait for port to clear (up to 1 s)
-            for _ in 0..10 {
-                if !server_running(DEFAULT_PORT) {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(100));
-            }
-            // Force-kill if still alive
-            if server_running(DEFAULT_PORT) {
-                #[cfg(any(target_os = "macos", target_os = "linux"))]
-                let _ = terminate_pid(pid, "-KILL");
-                for _ in 0..10 {
-                    if !server_running(DEFAULT_PORT) {
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(100));
-                }
-            }
+        if server_running(DEFAULT_PORT) {
+            return ServerLaunch {
+                child: None,
+                managed: false,
+            };
         }
     } else if server_running(DEFAULT_PORT) {
         // If an Engine server is already on this port, stop it so this app
