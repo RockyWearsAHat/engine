@@ -341,6 +341,15 @@ func TestSkipExhaustedSteps_ZeroCapIsNoop(t *testing.T) {
 	}
 }
 
+func TestTriagePrompt_FixAndImproveInstructionsPresent(t *testing.T) {
+	prompt := triagePrompt("Fix this please")
+	for _, required := range []string{"BUILD = the user wants the project changed", "fixed, improved", "CHAT = the user is asking a question"} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("triage prompt missing %q: %s", required, prompt)
+		}
+	}
+}
+
 func TestSummarise_WithinLimit(t *testing.T) {
 	input := "Short message"
 	if got := summarise(input, 100); got != input {

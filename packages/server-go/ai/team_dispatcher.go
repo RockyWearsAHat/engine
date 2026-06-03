@@ -190,32 +190,26 @@ func (w *TeamWorker) runStep(step *PlanStep, stepIdx int) error {
 	// Create a session for this step
 	sessionID := fmt.Sprintf("%s-team-%s-step-%d", w.cfg.SessionIDPrefix, w.teamID, stepIdx)
 
-	// Build step
+	// Build the step using the same shared builder contract as the main
+	// orchestrator path, so team workers inherit the full autonomous loop
+	// instead of a separate hardcoded prompt variant.
 	cc := newChatContextForPhase(w.cfg.ProjectPath, sessionID)
 	cc.Ctx.Role = RoleAutonomousBuilder
-	cc.Ctx.ModelOverride = "" // Use default model for now
+	cc.Ctx.MaxTurns = 0
 	cc.Ctx.AgentName = w.teamID
 	cc.Ctx.AgentComms = w.comms
 
-	prompt := fmt.Sprintf(`You are building step %d: %s
-
-Team identity: %s (%s)
-
-Team communication:
-- Use agent_list to see the lead and peer teams.
-- Use agent_send for narrow questions, handoffs, and review requests.
-- Use agent_receive for convenient inbox checks while working, and use agent_await only when you must block for a specific reply.
-- Keep messages concise and redact secrets or personal data.
-
-Acceptance Criteria:
-%s
-
-Plan:
-%s
-
-Your task: implement this step completely. Use the tools to edit files, run commands, test, and commit.
-When done, call signal_done with a summary of what you built.`,
-		stepIdx, step.Title, w.teamID, w.role, step.Acceptance, step.Body)
+	state := &OrchestrationState{
+		Owner: w.cfg.Owner,
+		Repo:  w.cfg.Repo,
+		Plan:  []PlanStep{*step},
+	}
+	contextDoc := ComposeDocContext(w.cfg.ProjectPath, DocVocabulary, DocPRD, DocModules)
+	if contextDoc == "" {
+		contextDoc = readContextDoc(w.cfg.ProjectPath)
+	}
+	prompt := buildStepPromptWithContext(state, step, "", contextDoc)
+	prompt += fmt.Sprintf("\n\nTEAM IDENTITY:\n- Team: %s (%s)\n- Use agent_list to see the lead and peer teams.\n- Use agent_send for narrow questions, handoffs, and review requests.\n- Use agent_receive for convenient inbox checks while working, and use agent_await only when you must block for a specific reply.\n- Keep messages concise and redact secrets or personal data.\n", w.teamID, w.role)
 
 	// Run with bounded turns
 	for turn := 0; turn < w.maxTurns; turn++ {
@@ -224,10 +218,6 @@ When done, call signal_done with a summary of what you built.`,
 			return w.ctx.Err()
 		default:
 		}
-
-		// This is a simplified version; in reality you'd integrate with the full ChatContext
-		// and tool execution loop from context.go
-		cc.Ctx.MaxTurns = 1 // One turn at a time for now
 
 		w.cfg.chatFnFor()(cc.Ctx, prompt)
 

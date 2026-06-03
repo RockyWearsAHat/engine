@@ -24,6 +24,7 @@ func TestTeamDispatcher_DispatchesWorkerWithAgentComms(t *testing.T) {
 	teamDone := bus.Subscribe(EventTeamDone, 1)
 	comms := NewAgentCommsHub()
 	seenPrompt := make(chan string, 1)
+	seenTurns := make(chan int, 1)
 	cfg := OrchestratorConfig{
 		ProjectPath:     projectDir,
 		SessionIDPrefix: "test",
@@ -36,6 +37,7 @@ func TestTeamDispatcher_DispatchesWorkerWithAgentComms(t *testing.T) {
 				seenPrompt <- "missing comms"
 				return
 			}
+			seenTurns <- ctx.MaxTurns
 			seenPrompt <- prompt
 			ctx.OnChunk("signal_done", false)
 		},
@@ -48,11 +50,23 @@ func TestTeamDispatcher_DispatchesWorkerWithAgentComms(t *testing.T) {
 
 	select {
 	case prompt := <-seenPrompt:
-		if !strings.Contains(prompt, "Team communication:") || !strings.Contains(prompt, "team-api-0 (api)") {
-			t.Fatalf("prompt missing communication contract: %s", prompt)
+		if !strings.Contains(prompt, "TDD discipline") || !strings.Contains(prompt, "TEAM IDENTITY:") {
+			t.Fatalf("prompt missing shared builder contract: %s", prompt)
+		}
+		if !strings.Contains(prompt, "team-api-0 (api)") {
+			t.Fatalf("prompt missing team identity: %s", prompt)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("chat function was not called")
+	}
+
+	select {
+	case turns := <-seenTurns:
+		if turns == 1 {
+			t.Fatal("team worker should not clamp the builder to one turn")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("did not capture max turn budget")
 	}
 
 	select {

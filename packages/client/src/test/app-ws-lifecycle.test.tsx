@@ -235,4 +235,33 @@ describe('App websocket lifecycle', () => {
     fireEvent.click(screen.getByRole('button', { name: /allow/i }));
     expect(wsMocks.send).toHaveBeenCalledWith({ type: 'approval.respond', id: 'approval-1', allow: true });
   });
+
+  it('FileSavedMessage_RequestsQualityRefreshForActiveSession', async () => {
+    useStore.setState({
+      activeSession: {
+        id: 'session-1',
+        projectPath: '/tmp/project',
+        branchName: 'main',
+        createdAt: '',
+        updatedAt: '',
+        summary: '',
+        messageCount: 0,
+      },
+    });
+
+    render(<App />);
+    expect(capturedMessageHandler).not.toBeNull();
+
+    wsMocks.send.mockClear();
+
+    await act(async () => {
+      capturedMessageHandler?.({ type: 'file.saved', path: '/tmp/project/src/example.ts' });
+    });
+
+    expect(wsMocks.send).toHaveBeenCalledWith({
+      type: 'quality.report.get',
+      projectPath: '/tmp/project',
+      maxIssues: 0,
+    });
+  });
 });

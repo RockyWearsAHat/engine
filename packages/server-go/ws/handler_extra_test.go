@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	_ "unsafe"
 
 	"github.com/engine/server/ai"
 	"github.com/engine/server/db"
@@ -57,6 +58,12 @@ func (t *fixedResponseTransport) RoundTrip(_ *http.Request) (*http.Response, err
 		Header:     make(http.Header),
 	}, nil
 }
+
+//go:linkname registerAIOrchestratorHandle github.com/engine/server/ai.registerOrchestratorHandle
+func registerAIOrchestratorHandle(projectPath string, h *ai.OrchestratorHandle)
+
+//go:linkname deregisterAIOrchestratorHandle github.com/engine/server/ai.deregisterOrchestratorHandle
+func deregisterAIOrchestratorHandle(projectPath string)
 
 // ─── Discord config get ───────────────────────────────────────────────────────
 
@@ -396,6 +403,18 @@ func TestHandler_QualityReportGet_ProgressEvent(t *testing.T) {
 	reportMsg := readWSMessageOfType(t, conn, "quality.report")
 	if reportMsg["report"] == nil {
 		t.Fatalf("expected quality report payload, got %+v", reportMsg)
+	}
+}
+
+func TestHandler_QualityReportGet_BadPayload(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{"type": "quality.report.get", "maxIssues": "bad"})
+	msg := readWSMessageOfType(t, conn, "quality.report")
+	if msg["error"] != "Bad payload" {
+		t.Fatalf("expected bad payload error, got %+v", msg)
 	}
 }
 
@@ -830,6 +849,10 @@ func TestHandler_FileRead_NotFound(t *testing.T) {
 
 func TestHandler_FileSave(t *testing.T) {
 	projectDir := setupWSProject(t)
+	prevRefresh := qualityRefreshFn
+	qualityRefreshFn = func(string) error { return nil }
+	defer func() { qualityRefreshFn = prevRefresh }()
+
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
@@ -878,6 +901,10 @@ func TestHandler_FileSave_RefreshesQualityIndex(t *testing.T) {
 
 func TestHandler_FileCreate(t *testing.T) {
 	projectDir := setupWSProject(t)
+	prevRefresh := qualityRefreshFn
+	qualityRefreshFn = func(string) error { return nil }
+	defer func() { qualityRefreshFn = prevRefresh }()
+
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
@@ -924,6 +951,10 @@ func TestHandler_FileCreate_RefreshesQualityIndex(t *testing.T) {
 
 func TestHandler_FolderCreate(t *testing.T) {
 	projectDir := setupWSProject(t)
+	prevRefresh := qualityRefreshFn
+	qualityRefreshFn = func(string) error { return nil }
+	defer func() { qualityRefreshFn = prevRefresh }()
+
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
@@ -1425,6 +1456,204 @@ func TestHandler_EngineTeamSet_ResolveFromConfigWhenProviderAndModelMissing(t *t
 	}
 	if got := os.Getenv("ENGINE_MODEL"); got != "gpt-4o-mini" {
 		t.Fatalf("expected ENGINE_MODEL gpt-4o-mini, got %q", got)
+	}
+}
+
+func TestHandler_EngineTeamSet_PartialProviderModelReturnsError(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{
+		"type":     "engine.team.set",
+		"provider": "ollama",
+	})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "BAD_PAYLOAD" {
+		t.Fatalf("expected BAD_PAYLOAD, got %+v", msg)
+	}
+}
+
+func TestQualityScanWithProgressFn_NoCallbackFallsBackToQualityScan(t *testing.T) {
+	prevScan := qualityScanFn
+	defer func() { qualityScanFn = prevScan }()
+
+	called := false
+	qualityScanFn = func(projectPath string, maxIssues int) (quality.Report, error) {
+		called = true
+		return quality.Report{ProjectPath: projectPath, IssueCount: maxIssues}, nil
+	}
+
+	report, err := qualityScanWithProgressFn("/tmp/project", 7, nil)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !called {
+		t.Fatal("expected qualityScanFn fallback to be called")
+	}
+	if report.IssueCount != 7 {
+		t.Fatalf("expected report issue count 7, got %+v", report)
+	}
+}
+
+func TestQualityScanWithProgressFn_WithCallbackUsesProgressScanner(t *testing.T) {
+	projectDir := setupWSProject(t)
+	called := false
+
+	_, err := qualityScanWithProgressFn(projectDir, 5, func(progress quality.ScanProgress) {
+		called = true
+		if progress.ProjectPath != projectDir {
+			t.Fatalf("expected project path %s, got %+v", projectDir, progress)
+		}
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if !called {
+		t.Fatal("expected progress callback to be invoked")
+	}
+}
+
+func TestLatestScaffoldStatusLine_UsesSummaryAndTimestamps(t *testing.T) {
+	prevListSessions := dbListSessions
+	defer func() { dbListSessions = prevListSessions }()
+
+	dbListSessions = func(string) ([]db.Session, error) {
+		return []db.Session{
+			{ID: "chat-123", Summary: "ignore me"},
+			{ID: "scaffold-abcdef123", CreatedAt: "2026-06-03T00:00:00Z", MessageCount: 4, Summary: "built initial scaffold"},
+		}, nil
+	}
+
+	got := latestScaffoldStatusLine("/tmp/project")
+	if !strings.Contains(got, "latest scaffold: scaffold") {
+		t.Fatalf("expected scaffold summary, got %q", got)
+	}
+	if !strings.Contains(got, "built initial scaffold") {
+		t.Fatalf("expected scaffold summary text, got %q", got)
+	}
+	if !strings.Contains(got, "updated: 2026-06-03T00:00:00Z") {
+		t.Fatalf("expected createdAt fallback in status line, got %q", got)
+	}
+}
+
+func TestLatestScaffoldStatusLine_OnListErrorReturnsEmpty(t *testing.T) {
+	prevListSessions := dbListSessions
+	defer func() { dbListSessions = prevListSessions }()
+
+	dbListSessions = func(string) ([]db.Session, error) {
+		return nil, fmt.Errorf("db down")
+	}
+
+	if got := latestScaffoldStatusLine("/tmp/project"); got != "" {
+		t.Fatalf("expected empty status on error, got %q", got)
+	}
+}
+
+func TestLatestScaffoldStatusLine_EmptySummaryUsesFallback(t *testing.T) {
+	prevListSessions := dbListSessions
+	defer func() { dbListSessions = prevListSessions }()
+
+	dbListSessions = func(string) ([]db.Session, error) {
+		return []db.Session{{ID: "scaffold-abcdefghi", UpdatedAt: "2026-06-03T00:00:00Z", MessageCount: 1, Summary: "   "}}, nil
+	}
+
+	got := latestScaffoldStatusLine("/tmp/project")
+	if !strings.Contains(got, "no summary yet") {
+		t.Fatalf("expected fallback scaffold summary, got %q", got)
+	}
+}
+
+func TestShortIDAndTruncate_HandleEdgeCases(t *testing.T) {
+	if got := shortID("  short  "); got != "short" {
+		t.Fatalf("expected trimmed short id, got %q", got)
+	}
+	if got := shortID("123456789"); got != "12345678" {
+		t.Fatalf("expected truncated id, got %q", got)
+	}
+	if got := truncate(" hello ", 0); got != "" {
+		t.Fatalf("expected empty string for zero budget, got %q", got)
+	}
+	if got := truncate("abcdef", 3); got != "abc" {
+		t.Fatalf("expected hard truncate for small width, got %q", got)
+	}
+	if got := truncate("abcdef", 5); got != "ab..." {
+		t.Fatalf("expected ellipsis truncate, got %q", got)
+	}
+}
+
+func TestPromptWithProjectStatusContext_AddsProjectContextWhenScaffoldExists(t *testing.T) {
+	prevListSessions := dbListSessions
+	defer func() { dbListSessions = prevListSessions }()
+
+	dbListSessions = func(string) ([]db.Session, error) {
+		return []db.Session{{ID: "scaffold-123456789", UpdatedAt: "2026-06-03T00:00:00Z", MessageCount: 2, Summary: "ready"}}, nil
+	}
+
+	got := promptWithProjectStatusContext("/tmp/my-project", "hello")
+	if !strings.Contains(got, "Discord project context:") {
+		t.Fatalf("expected project context header, got %q", got)
+	}
+	if !strings.Contains(got, "Project: my-project") {
+		t.Fatalf("expected repo name in prompt, got %q", got)
+	}
+	if !strings.Contains(got, "User message:\nhello") {
+		t.Fatalf("expected original prompt appended, got %q", got)
+	}
+}
+
+func TestPromptWithProjectStatusContext_WithoutScaffoldLeavesPromptUntouched(t *testing.T) {
+	prevListSessions := dbListSessions
+	defer func() { dbListSessions = prevListSessions }()
+
+	dbListSessions = func(string) ([]db.Session, error) {
+		return []db.Session{{ID: "chat-123"}}, nil
+	}
+
+	if got := promptWithProjectStatusContext("/tmp/project", "hello"); got != "hello" {
+		t.Fatalf("expected original prompt without scaffold context, got %q", got)
+	}
+}
+
+func TestPromptWithProjectStatusContext_DotPathFallsBackToProjectName(t *testing.T) {
+	prevListSessions := dbListSessions
+	defer func() { dbListSessions = prevListSessions }()
+
+	dbListSessions = func(string) ([]db.Session, error) {
+		return []db.Session{{ID: "scaffold-123456789", UpdatedAt: "2026-06-03T00:00:00Z", MessageCount: 2, Summary: "ready"}}, nil
+	}
+
+	got := promptWithProjectStatusContext(".", "hello")
+	if !strings.Contains(got, "Project: project") {
+		t.Fatalf("expected default project label, got %q", got)
+	}
+}
+
+func TestHandler_Chat_WithActiveOrchestrator_QueuesDirective(t *testing.T) {
+	projectDir := setupWSProject(t)
+	handle := ai.NewHandle(projectDir)
+	registerAIOrchestratorHandle(projectDir, handle)
+	defer deregisterAIOrchestratorHandle(projectDir)
+
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{"type": "project.open", "path": projectDir})
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sessionID := sessionMsg["session"].(map[string]any)["id"].(string)
+
+	writeWSMessage(t, conn, map[string]any{"type": "chat", "sessionId": sessionID, "content": "please continue"})
+	started := readWSMessageOfType(t, conn, "chat.started")
+	if started["sessionId"] != sessionID {
+		t.Fatalf("expected chat.started for current session, got %+v", started)
+	}
+	notice := readWSMessageOfType(t, conn, "chat.notice")
+	if !strings.Contains(fmt.Sprint(notice["notice"]), "Directive queued") {
+		t.Fatalf("expected directive queued notice, got %+v", notice)
+	}
+	chunk := readWSMessageOfType(t, conn, "chat.chunk")
+	if chunk["done"] != true {
+		t.Fatalf("expected completed chunk after redirect, got %+v", chunk)
 	}
 }
 

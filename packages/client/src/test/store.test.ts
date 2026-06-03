@@ -204,6 +204,105 @@ describe('syncTabs — closeFile triggers editor.tabs.sync asynchronously', () =
   });
 });
 
+describe('quality scan state', () => {
+  it('StartQualityScan_SeedsGeneratedMapProgress', () => {
+    useStore.getState().startQualityScan('/tmp/project');
+    const state = useStore.getState();
+    expect(state.qualityLoading).toBe(true);
+    expect(state.qualityCompleted).toBe(false);
+    expect(state.qualityError).toBeNull();
+    expect(state.qualityProgress).toMatchObject({
+      projectPath: '/tmp/project',
+      phase: 'generated-map',
+      current: 0,
+      total: 1,
+      percent: 0,
+      currentFunction: 'ScanProjectWithProgress',
+      section: 'start',
+      message: 'Preparing generated file map',
+    });
+  });
+
+  it('StartQualityScan_WithExistingReport_KeepsCompletedTrueWhileRefreshing', () => {
+    useStore.setState({
+      qualityReport: {
+        projectPath: '/tmp/project',
+        generatedAt: new Date().toISOString(),
+        issueCount: 0,
+        highCount: 0,
+        mediumCount: 0,
+        lowCount: 0,
+        issues: [],
+      },
+      qualityCompleted: true,
+    });
+
+    useStore.getState().startQualityScan('/tmp/project');
+
+    expect(useStore.getState().qualityCompleted).toBe(true);
+  });
+
+  it('SetQualityProgress_MarksLoadingAndClearsError', () => {
+    useStore.setState({ qualityError: 'old error', qualityLoading: false });
+
+    useStore.getState().setQualityProgress({
+      projectPath: '/tmp/project',
+      phase: 'scan',
+      current: 2,
+      total: 4,
+      percent: 50,
+      currentFile: 'src/main.ts',
+      currentFunction: 'scanFile',
+      section: 'body',
+    });
+
+    const state = useStore.getState();
+    expect(state.qualityLoading).toBe(true);
+    expect(state.qualityError).toBeNull();
+    expect(state.qualityProgress?.current).toBe(2);
+  });
+
+  it('SetQualityReport_CompletesScanAndStoresReport', () => {
+    const report = {
+      projectPath: '/tmp/project',
+      generatedAt: new Date().toISOString(),
+      issueCount: 1,
+      highCount: 1,
+      mediumCount: 0,
+      lowCount: 0,
+      issues: [
+        {
+          id: 'q1',
+          severity: 'high' as const,
+          category: 'dead-code',
+          message: 'Unused helper',
+          file: 'src/main.ts',
+          line: 7,
+        },
+      ],
+    };
+
+    useStore.getState().setQualityReport(report);
+
+    const state = useStore.getState();
+    expect(state.qualityReport).toEqual(report);
+    expect(state.qualityLoading).toBe(false);
+    expect(state.qualityCompleted).toBe(true);
+    expect(state.qualityError).toBeNull();
+  });
+
+  it('SetQualityError_StopsScanAndClearsCompleted', () => {
+    useStore.setState({ qualityLoading: true, qualityCompleted: true });
+
+    useStore.getState().setQualityError('scan failed');
+
+    const state = useStore.getState();
+    expect(state.qualityError).toBe('scan failed');
+    expect(state.qualityLoading).toBe(false);
+    expect(state.qualityCompleted).toBe(false);
+  });
+});
+
 // ─── Chat state machine ───────────────────────────────────────────────────────
 
 describe('chat state machine', () => {
