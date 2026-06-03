@@ -250,3 +250,37 @@ func TestRefreshProjectIndex_CompletesGeneratedMapBeforeScan(t *testing.T) {
 		t.Fatalf("expected source file to remain in quality index")
 	}
 }
+
+func TestRefreshProjectIndex_DoesNotExcludeAncestorDirsForNestedGeneratedPaths(t *testing.T) {
+	project := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(project, ".github"), 0o755); err != nil {
+		t.Fatalf("mkdir behaviors: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), []byte("# Behaviors\n"), 0o644); err != nil {
+		t.Fatalf("write behaviors: %v", err)
+	}
+
+	sourceDir := filepath.Join(project, "packages", "demo")
+	generatedDir := filepath.Join(sourceDir, "dist")
+	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
+		t.Fatalf("mkdir generated dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "demo.go"), []byte("package demo\nfunc Keep() int { return 1 }\n"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(generatedDir, "bundle.js"), []byte("export const generated = true;\n"), 0o644); err != nil {
+		t.Fatalf("write generated bundle: %v", err)
+	}
+
+	if err := RefreshProjectIndex(project); err != nil {
+		t.Fatalf("refresh index: %v", err)
+	}
+
+	idx := loadProjectIndex(project)
+	if _, ok := idx.Files["packages/demo/demo.go"]; !ok {
+		t.Fatalf("expected nested generated dir to not suppress ancestor source file")
+	}
+	if _, ok := idx.Files["packages/demo/dist/bundle.js"]; ok {
+		t.Fatalf("expected nested generated file to be excluded from quality index")
+	}
+}

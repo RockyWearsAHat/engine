@@ -99,8 +99,8 @@ describe('QualityPanel', () => {
     expect(screen.getByText('Unused function')).toBeTruthy();
     expect(screen.getByText('Delete it')).toBeTruthy();
     expect(screen.getByText('Missing docs')).toBeTruthy();
-    expect(screen.getByText('a.ts (1)')).toBeTruthy();
-    expect(screen.getByText('b.ts (1)')).toBeTruthy();
+    expect(screen.getByText('a.ts')).toBeTruthy();
+    expect(screen.getByText('b.ts')).toBeTruthy();
   });
 
   it('QualityPanel_Error_ShowsErrorMessage', () => {

@@ -479,7 +479,6 @@ func prepareGeneratedIndex(projectPath string, onProgress ProgressCallback) (map
 	for i, absPath := range allPaths {
 		if looksGeneratedPath(absPath) {
 			idx[absPath] = true
-			addGeneratedParents(idx, projectRoot, absPath)
 		}
 		if onProgress != nil {
 			percent := int((float64(i+1) / float64(total)) * 100)
@@ -564,12 +563,6 @@ func looksGeneratedPath(absPath string) bool {
 	}
 	lower := strings.ToLower(absPath)
 	return strings.HasSuffix(lower, ".log") || strings.HasSuffix(lower, ".tmp") || strings.HasSuffix(lower, ".profraw") || strings.HasSuffix(lower, ".profdata")
-}
-
-func addGeneratedParents(idx map[string]bool, projectRoot, absPath string) {
-	for parent := filepath.Clean(absPath); parent != projectRoot && parent != "." && parent != string(filepath.Separator); parent = filepath.Dir(parent) {
-		idx[parent] = true
-	}
 }
 
 func countIdentifiers(content string) map[string]int {

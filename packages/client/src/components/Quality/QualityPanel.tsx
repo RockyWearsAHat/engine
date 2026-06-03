@@ -20,7 +20,27 @@ export default function QualityPanel() {
       group.push(issue);
       groups.set(issue.file, group);
     }
-    return Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    return Array.from(groups.entries())
+      .map(([file, issues]) => [
+        file,
+        [...issues].sort((a, b) => {
+          const severityRank = (severity: string) => {
+            switch (severity) {
+              case 'high':
+                return 0;
+              case 'medium':
+                return 1;
+              default:
+                return 2;
+            }
+          };
+          if (severityRank(a.severity) !== severityRank(b.severity)) {
+            return severityRank(a.severity) - severityRank(b.severity);
+          }
+          return a.line - b.line;
+        }),
+      ] as const)
+      .sort((a, b) => a[0].localeCompare(b[0]));
   }, [qualityReport]);
 
   const progressPercent = Math.max(0, Math.min(100, Math.round(qualityProgress?.percent ?? 0)));
@@ -59,33 +79,43 @@ export default function QualityPanel() {
 
       {qualityReport && (
         <>
-          <div className="preferences-quality-stats">
-            <span>Total: {qualityReport.issueCount}</span>
-            <span>High: {qualityReport.highCount}</span>
-            <span>Medium: {qualityReport.mediumCount}</span>
-            <span>Low: {qualityReport.lowCount}</span>
+          <div className="quality-panel-summary">
+            <div className="preferences-quality-stats">
+              <span>Total: {qualityReport.issueCount}</span>
+              <span>High: {qualityReport.highCount}</span>
+              <span>Medium: {qualityReport.mediumCount}</span>
+              <span>Low: {qualityReport.lowCount}</span>
+            </div>
+            <div className="quality-panel-meta">Grouped by file. Top 3 groups expanded by default.</div>
           </div>
 
-          <div className="quality-explorer-view">
-            {groupedIssues.map(([file, issues]) => (
-              <div key={file} className="quality-explorer-file-group">
-                <div className="quality-explorer-file-header">{file} ({issues.length})</div>
-                <ul className="preferences-quality-list">
-                  {issues.map((issue) => (
-                    <li key={issue.id} className={`preferences-quality-item ${issue.severity}`}>
-                      <div className="preferences-quality-meta">
-                        <strong>{issue.severity.toUpperCase()}</strong>
-                        <span>{issue.category}</span>
-                        <span>{issue.file}:{issue.line}</span>
-                      </div>
-                      <div>{issue.message}</div>
-                      {issue.suggestion && <small>{issue.suggestion}</small>}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
+          {qualityReport.issueCount === 0 ? (
+            <div className="quality-empty">No quality findings for this project scan.</div>
+          ) : (
+            <div className="quality-explorer-view">
+              {groupedIssues.map(([file, issues], index) => (
+                <details key={file} className="quality-explorer-file-group" open={index < 3}>
+                  <summary className="quality-explorer-file-header">
+                    <span className="quality-file-name">{file}</span>
+                    <span className="quality-file-count">{issues.length}</span>
+                  </summary>
+                  <ul className="preferences-quality-list">
+                    {issues.map((issue) => (
+                      <li key={issue.id} className={`preferences-quality-item ${issue.severity}`}>
+                        <div className="preferences-quality-meta">
+                          <span className={`quality-severity-pill ${issue.severity}`}>{issue.severity.toUpperCase()}</span>
+                          <span>{issue.category}</span>
+                          <span>L{issue.line}</span>
+                        </div>
+                        <div className="quality-issue-message">{issue.message}</div>
+                        {issue.suggestion && <small className="quality-issue-suggestion">{issue.suggestion}</small>}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              ))}
+            </div>
+          )}
         </>
       )}
     </div>
