@@ -264,4 +264,35 @@ describe('App websocket lifecycle', () => {
       maxIssues: 0,
     });
   });
+
+  it('SessionLoaded_RequestsQualityOnceForProjectPath', async () => {
+    render(<App />);
+    expect(capturedMessageHandler).not.toBeNull();
+
+    wsMocks.send.mockClear();
+
+    await act(async () => {
+      capturedMessageHandler?.({
+        type: 'session.loaded',
+        session: {
+          id: 'session-1',
+          projectPath: '/tmp/project',
+          branchName: 'main',
+          createdAt: '',
+          updatedAt: '',
+          summary: '',
+          messageCount: 0,
+        },
+        messages: [],
+      });
+    });
+
+    const qualityCalls = wsMocks.send.mock.calls.filter(([msg]) => (msg as { type?: string }).type === 'quality.report.get');
+    expect(qualityCalls).toHaveLength(1);
+    expect(qualityCalls[0][0]).toEqual({
+      type: 'quality.report.get',
+      projectPath: '/tmp/project',
+      maxIssues: 0,
+    });
+  });
 });

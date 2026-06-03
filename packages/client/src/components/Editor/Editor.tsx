@@ -16,10 +16,12 @@ import SyntacticalPreview from './SyntacticalPreview.js';
 import {
   EDITOR_STATUS_EVENT,
   PERFORM_CLOSE_FILE_EVENT,
+  REVEAL_FILE_LOCATION_EVENT,
   REQUEST_CLOSE_FILE_EVENT,
   SAVE_FILES_EVENT,
   type CloseFileEventDetail,
   type EditorStatusDetail,
+  type RevealFileLocationDetail,
   type SaveFilesEventDetail,
 } from '../../editorEvents.js';
 
@@ -670,17 +672,52 @@ function Editor() {
       }
       /* istanbul ignore stop */
     };
+    const revealFileLocationListener = (event: Event) => {
+      const detail = (event as CustomEvent<RevealFileLocationDetail>).detail;
+      if (!detail?.path || !activeFile || activeFile.path !== detail.path || activeFile.size >= LARGE_FILE_OPTIMIZATION_THRESHOLD) {
+        return;
+      }
+      const textarea = textareaRef.current;
+      if (!textarea || textarea.dataset.path !== detail.path) {
+        return;
+      }
+
+      const text = textarea.value;
+      const lineBreaks = ensureLineBreaks(detail.path, text);
+      const maxLine = Math.max(1, lineBreaks.length + 1);
+      const targetLine = Math.max(1, Math.min(maxLine, detail.line));
+      const lineStart = targetLine <= 1 ? 0 : (lineBreaks[targetLine - 2] ?? -1) + 1;
+      const lineEnd = targetLine - 1 < lineBreaks.length ? lineBreaks[targetLine - 1] : text.length;
+      const requestedColumn = Math.max(1, detail.column ?? 1);
+      const cursor = Math.max(lineStart, Math.min(lineStart + requestedColumn - 1, lineEnd));
+      const revealLineHeightPx = Math.round(
+        (activeFile.largeFile ? Math.min(editorPreferences.fontSize, 12) : editorPreferences.fontSize)
+        * (activeFile.largeFile ? Math.max(1.45, editorPreferences.lineHeight - 0.05) : editorPreferences.lineHeight),
+      );
+
+      textarea.focus();
+      textarea.selectionStart = cursor;
+      textarea.selectionEnd = cursor;
+      const nextScrollTop = Math.max(0, (targetLine - 1) * revealLineHeightPx - Math.floor(textarea.clientHeight * 0.35));
+      textarea.scrollTop = nextScrollTop;
+      syncHighlightScroll(textarea);
+      syncGutterScroll(textarea);
+      scheduleEditorScrollTop(nextScrollTop);
+      scheduleCursorInfo(textarea, detail.path);
+    };
     window.addEventListener('engine:save-active-file', saveListener);
     window.addEventListener('engine:save-all-open-files', saveAllListener);
     window.addEventListener(SAVE_FILES_EVENT, saveFilesListener as EventListener);
     window.addEventListener(PERFORM_CLOSE_FILE_EVENT, closeFileListener as EventListener);
+    window.addEventListener(REVEAL_FILE_LOCATION_EVENT, revealFileLocationListener as EventListener);
     return () => {
       window.removeEventListener('engine:save-active-file', saveListener);
       window.removeEventListener('engine:save-all-open-files', saveAllListener);
       window.removeEventListener(SAVE_FILES_EVENT, saveFilesListener as EventListener);
       window.removeEventListener(PERFORM_CLOSE_FILE_EVENT, closeFileListener as EventListener);
+      window.removeEventListener(REVEAL_FILE_LOCATION_EVENT, revealFileLocationListener as EventListener);
     };
-  }, [handleSave, performCloseFile, saveDirtyFiles]);
+  }, [activeFile, editorPreferences.fontSize, editorPreferences.lineHeight, ensureLineBreaks, handleSave, performCloseFile, saveDirtyFiles, scheduleCursorInfo, scheduleEditorScrollTop, syncGutterScroll]);
 
   const syntaxHighlightingEnabled = Boolean(
     activeFile
