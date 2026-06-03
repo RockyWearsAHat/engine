@@ -18,8 +18,8 @@ func TestResolveProviderPrefersExplicitSetting(t *testing.T) {
 }
 
 func TestResolveProviderFallsBackToModelInference(t *testing.T) {
-	if got := resolveProvider("", ""); got != "ollama" {
-		t.Fatalf("expected empty model to default to ollama, got %q", got)
+	if got := resolveProvider("", ""); got != "llamacpp" {
+		t.Fatalf("expected empty model to default to llamacpp, got %q", got)
 	}
 	if got := resolveProvider("", "gpt-4o"); got != "openai" {
 		t.Fatalf("expected gpt model to infer openai, got %q", got)
@@ -144,9 +144,9 @@ func TestInferredProviderForModel_OllamaFamily(t *testing.T) {
 	}
 }
 
-func TestInferredProviderForModel_EmptyFallsToOllama(t *testing.T) {
-	if got := inferredProviderForModel(""); got != "ollama" {
-		t.Errorf("expected ollama for empty model, got %q", got)
+func TestInferredProviderForModel_EmptyFallsToLlamaCpp(t *testing.T) {
+	if got := inferredProviderForModel(""); got != "llamacpp" {
+		t.Errorf("expected llamacpp for empty model, got %q", got)
 	}
 }
 

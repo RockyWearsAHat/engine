@@ -8,11 +8,15 @@ const wsMocks = vi.hoisted(() => ({
   disconnect: vi.fn(),
   send: vi.fn(),
   onMessage: vi.fn(),
-  onOpen: vi.fn(() => () => {}),
+  onOpen: vi.fn((handler: () => void | Promise<void>) => {
+    void handler();
+    return () => {};
+  }),
   onClose: vi.fn(() => () => {}),
 }));
 
 let capturedMessageHandler: ((message: unknown) => void) | null = null;
+let capturedOpenHandler: (() => void) | null = null;
 
 vi.mock('../ws/client.js', () => ({
   wsClient: {
@@ -25,7 +29,12 @@ vi.mock('../ws/client.js', () => ({
         capturedMessageHandler = null;
       };
     }),
-    onOpen: wsMocks.onOpen,
+    onOpen: vi.fn((handler: () => void) => {
+      capturedOpenHandler = handler;
+      return () => {
+        capturedOpenHandler = null;
+      };
+    }),
     onClose: wsMocks.onClose,
   },
 }));
@@ -37,10 +46,15 @@ vi.mock('../bridge.js', () => ({
     getGithubRepoName: vi.fn().mockResolvedValue(null),
     getAnthropicKey: vi.fn().mockResolvedValue(null),
     getOpenAiKey: vi.fn().mockResolvedValue(null),
-    getModelProvider: vi.fn().mockResolvedValue('ollama'),
+    getModelProvider: vi.fn().mockResolvedValue('llamacpp'),
     getOllamaBaseUrl: vi.fn().mockResolvedValue(null),
     getModel: vi.fn().mockResolvedValue('gemma4:31b'),
     getEditorPreferences: vi.fn().mockResolvedValue(null),
+    getClonesDir: vi.fn().mockResolvedValue(null),
+    getActiveTeam: vi.fn().mockResolvedValue('engine'),
+    getContextMaxTokens: vi.fn().mockResolvedValue(null),
+    getContextRecentWindow: vi.fn().mockResolvedValue(null),
+    getListDirectoryMaxChars: vi.fn().mockResolvedValue(null),
     getProjectPath: vi.fn().mockResolvedValue(''),
     getLocalServerToken: vi.fn().mockResolvedValue('desktop-token'),
     setLastProjectPath: vi.fn().mockResolvedValue(undefined),
@@ -100,6 +114,7 @@ describe('App websocket lifecycle', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     capturedMessageHandler = null;
+    capturedOpenHandler = null;
     wsMocks.connect.mockClear();
     wsMocks.disconnect.mockClear();
     wsMocks.send.mockClear();
@@ -136,6 +151,9 @@ describe('App websocket lifecycle', () => {
   it('OpenFileUiStateChanges_WebSocketStaysConnected', async () => {
     render(<App />);
     await vi.advanceTimersByTimeAsync(1100);
+    act(() => {
+      capturedOpenHandler?.();
+    });
 
     expect(wsMocks.connect).toHaveBeenCalledTimes(1);
 
@@ -155,6 +173,23 @@ describe('App websocket lifecycle', () => {
 
     expect(wsMocks.connect).toHaveBeenCalledTimes(1);
     expect(wsMocks.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('StartupSync_SendsSavedActiveTeamWhenWebSocketOpens', async () => {
+    render(<App />);
+    await vi.advanceTimersByTimeAsync(1100);
+
+    await act(async () => {
+      capturedOpenHandler?.();
+      await Promise.resolve();
+    });
+
+    expect(wsMocks.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'config.sync',
+      config: expect.objectContaining({
+        activeTeam: 'engine',
+      }),
+    }));
   });
 
   it('KeyboardShortcut_PreferencesOpened', async () => {

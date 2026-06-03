@@ -47,6 +47,9 @@ const modelStorageKey = 'engine.model';
 const lastProjectPathStorageKey = 'engine.lastProjectPath';
 const editorPreferencesStorageKey = 'engine.editorPreferences';
 const clonesDirStorageKey = 'engine.clonesDir';
+const contextMaxTokensStorageKey = 'engine.contextMaxTokens';
+const contextRecentWindowStorageKey = 'engine.contextRecentWindow';
+const listDirectoryMaxCharsStorageKey = 'engine.listDirectoryMaxChars';
 
 export interface InspectedPath {
   path: string;
@@ -327,6 +330,30 @@ export const bridge = {
   async setClonesDir(path: string): Promise<boolean> {
     if (isTauri()) return window.__TAURI__!.core.invoke<boolean>('set_clones_dir', { path });
     return setBrowserSetting(clonesDirStorageKey, path);
+  },
+
+  async getContextMaxTokens(): Promise<string | null> {
+    return getBrowserSetting(contextMaxTokensStorageKey);
+  },
+
+  async setContextMaxTokens(value: string): Promise<boolean> {
+    return setBrowserSetting(contextMaxTokensStorageKey, value);
+  },
+
+  async getContextRecentWindow(): Promise<string | null> {
+    return getBrowserSetting(contextRecentWindowStorageKey);
+  },
+
+  async setContextRecentWindow(value: string): Promise<boolean> {
+    return setBrowserSetting(contextRecentWindowStorageKey, value);
+  },
+
+  async getListDirectoryMaxChars(): Promise<string | null> {
+    return getBrowserSetting(listDirectoryMaxCharsStorageKey);
+  },
+
+  async setListDirectoryMaxChars(value: string): Promise<boolean> {
+    return setBrowserSetting(listDirectoryMaxCharsStorageKey, value);
   },
 
   async getEditorPreferences(): Promise<EditorPreferences> {

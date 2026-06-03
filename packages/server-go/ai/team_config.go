@@ -6,28 +6,37 @@ import (
 	"strings"
 )
 
+func readEngineConfigText(projectPath string) (string, bool) {
+	if strings.TrimSpace(projectPath) == "" {
+		return "", false
+	}
+	for _, name := range []string{"config.yaml", "config.example.yaml"} {
+		configPath := filepath.Join(projectPath, ".engine", name)
+		content, err := os.ReadFile(configPath)
+		if err == nil {
+			return string(content), true
+		}
+	}
+	return "", false
+}
+
 // ResolveTeamOrchestratorModel reads .engine/config.yaml and resolves the
-// selected team's orchestrator model/provider. When selectedTeam is empty,
-// dev_loop.default_team is used as fallback.
+// selected team's orchestrator model/provider.
 func ResolveTeamOrchestratorModel(projectPath string, selectedTeam string) (resolvedTeam string, provider string, model string, ok bool) {
 	if strings.TrimSpace(projectPath) == "" {
 		return "", "", "", false
 	}
-
-	configPath := filepath.Join(projectPath, ".engine", "config.yaml")
-	content, err := os.ReadFile(configPath)
-	if err != nil {
-		return "", "", "", false
-	}
-
-	teamModels, defaultTeam := parseTeamConfigYAML(string(content))
 	teamName := strings.TrimSpace(selectedTeam)
 	if teamName == "" {
-		teamName = strings.TrimSpace(defaultTeam)
-	}
-	if teamName == "" {
 		return "", "", "", false
 	}
+
+	content, ok := readEngineConfigText(projectPath)
+	if !ok {
+		return "", "", "", false
+	}
+
+	teamModels := parseTeamConfigYAML(content)
 
 	fullModel := strings.TrimSpace(teamModels[teamName])
 	if fullModel == "" {
@@ -42,18 +51,45 @@ func ResolveTeamOrchestratorModel(projectPath string, selectedTeam string) (reso
 	return teamName, teamProvider, teamModel, true
 }
 
-func parseTeamConfigYAML(yaml string) (map[string]string, string) {
+func parseDevLoopDefaultTeam(yaml string) string {
+	if strings.TrimSpace(yaml) == "" {
+		return ""
+	}
+
+	inDevLoop := false
+	for _, rawLine := range strings.Split(yaml, "\n") {
+		trimmedRight := strings.TrimRight(rawLine, " \t")
+		trimmedLeft := strings.TrimLeft(trimmedRight, " \t")
+		if strings.TrimSpace(trimmedLeft) == "" || strings.HasPrefix(trimmedLeft, "#") {
+			continue
+		}
+
+		indent := len(trimmedRight) - len(trimmedLeft)
+		if indent == 0 {
+			inDevLoop = trimmedLeft == "dev_loop:"
+			continue
+		}
+		if !inDevLoop || indent != 2 {
+			continue
+		}
+		if strings.HasPrefix(trimmedLeft, "default_team:") {
+			return parseYAMLValue(trimmedLeft, "default_team:")
+		}
+	}
+
+	return ""
+}
+
+func parseTeamConfigYAML(yaml string) map[string]string {
 	modelsByTeam := make(map[string]string)
 	if strings.TrimSpace(yaml) == "" {
-		return modelsByTeam, ""
+		return modelsByTeam
 	}
 
 	lines := strings.Split(yaml, "\n")
 	inTeams := false
-	inDevLoop := false
 	currentTeam := ""
 	currentRole := ""
-	defaultTeam := ""
 
 	for _, rawLine := range lines {
 		trimmedRight := strings.TrimRight(rawLine, " \t")
@@ -69,14 +105,8 @@ func parseTeamConfigYAML(yaml string) (map[string]string, string) {
 		indent := len(trimmedRight) - len(trimmedLeft)
 		if indent == 0 {
 			inTeams = trimmedLeft == "teams:"
-			inDevLoop = trimmedLeft == "dev_loop:"
 			currentTeam = ""
 			currentRole = ""
-			continue
-		}
-
-		if inDevLoop && indent == 2 && strings.HasPrefix(trimmedLeft, "default_team:") {
-			defaultTeam = parseYAMLValue(trimmedLeft, "default_team:")
 			continue
 		}
 
@@ -104,7 +134,7 @@ func parseTeamConfigYAML(yaml string) (map[string]string, string) {
 		}
 	}
 
-	return modelsByTeam, defaultTeam
+	return modelsByTeam
 }
 
 func parseYAMLValue(line string, key string) string {
@@ -139,6 +169,9 @@ type AutonomousPolicy struct {
 	AutoPush bool
 	// Branch: branch to work on; empty means use the current branch.
 	Branch string
+	// Team is the lead-selected team used to bootstrap autonomous runs.
+	// Must map to teams.<name>.orchestrator.model in .engine/config.yaml.
+	Team string
 	// AssumptionTolerance controls how aggressively the agent resolves ambiguity
 	// autonomously vs escalating to the user.
 	//   "conservative" — ask the user on any meaningful ambiguity.
@@ -166,15 +199,11 @@ func ResolveAutonomousPolicy(projectPath string) AutonomousPolicy {
 		MinimalChatMode:              true,
 		StyleAssumptionNotice:        true,
 	}
-	if strings.TrimSpace(projectPath) == "" {
+	content, ok := readEngineConfigText(projectPath)
+	if !ok {
 		return defaults
 	}
-	configPath := filepath.Join(projectPath, ".engine", "config.yaml")
-	content, err := os.ReadFile(configPath)
-	if err != nil {
-		return defaults
-	}
-	return parseAutonomousPolicy(string(content))
+	return parseAutonomousPolicy(content)
 }
 
 // parseAutonomousPolicy extracts the autonomous: block from raw YAML text.
@@ -207,6 +236,8 @@ func parseAutonomousPolicy(yaml string) AutonomousPolicy {
 			p.AutoPush = strings.TrimSpace(strings.TrimPrefix(trimmedLeft, "auto_push:")) == "true"
 		case strings.HasPrefix(trimmedLeft, "branch:"):
 			p.Branch = parseYAMLValue(trimmedLeft, "branch:")
+		case strings.HasPrefix(trimmedLeft, "team:"):
+			p.Team = parseYAMLValue(trimmedLeft, "team:")
 		case strings.HasPrefix(trimmedLeft, "assumption_tolerance:"):
 			p.AssumptionTolerance = parseYAMLValue(trimmedLeft, "assumption_tolerance:")
 		case strings.HasPrefix(trimmedLeft, "require_explicit_publish_intent:"):
@@ -218,4 +249,41 @@ func parseAutonomousPolicy(yaml string) AutonomousPolicy {
 		}
 	}
 	return p
+}
+
+// ResolveAutonomousStartupTeam resolves the explicit lead-selected team for
+// autonomous startup and returns the orchestrator provider/model for that team.
+//
+// Selection precedence:
+// 1) explicitTeam argument (for example ENGINE_ACTIVE_TEAM when pre-set)
+// 2) autonomous.team from .engine/config.yaml
+// 3) dev_loop.default_team from .engine/config.yaml
+// 4) teams.default when present
+func ResolveAutonomousStartupTeam(projectPath string, explicitTeam string) (resolvedTeam string, provider string, model string, ok bool) {
+	team := strings.TrimSpace(explicitTeam)
+	if team != "" {
+		return ResolveTeamOrchestratorModel(projectPath, team)
+	}
+
+	content, ok := readEngineConfigText(projectPath)
+	if !ok {
+		return "", "", "", false
+	}
+
+	policyTeam := strings.TrimSpace(parseAutonomousPolicy(content).Team)
+	if policyTeam != "" {
+		team = policyTeam
+	} else {
+		team = strings.TrimSpace(parseDevLoopDefaultTeam(content))
+		if team == "" {
+			if _, exists := parseTeamConfigYAML(content)["default"]; exists {
+				team = "default"
+			}
+		}
+	}
+	if team == "" {
+		return "", "", "", false
+	}
+
+	return ResolveTeamOrchestratorModel(projectPath, team)
 }

@@ -1,6 +1,9 @@
 package ai
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // A plan without runnable Acceptance commands fails the structural contract.
 // A chatbot help-menu cannot satisfy this contract because it has no commands.
@@ -45,6 +48,7 @@ func TestValidatePlanQuality_RejectsEmptyPlan(t *testing.T) {
 func TestHasRunnableAcceptance(t *testing.T) {
 	cases := map[string]bool{
 		"`go test ./...` exits 0":                       true,
+		"echo 'done'":                                   true,
 		"npm run build exits cleanly":                   true,
 		"curl /health returns 200":                      true,
 		"./bin/cli --help prints expected usage":        true,
@@ -58,5 +62,35 @@ func TestHasRunnableAcceptance(t *testing.T) {
 		if got := hasRunnableAcceptance(input); got != want {
 			t.Errorf("hasRunnableAcceptance(%q) = %v, want %v", input, got, want)
 		}
+	}
+}
+
+func TestSynthesizeMissingAcceptance_FillsAllSteps(t *testing.T) {
+	steps := []PlanStep{
+		{Index: 1, Title: "Scaffold", Body: "Create project", Acceptance: ""},
+		{Index: 2, Title: "Validate", Body: "Run go test ./...", Acceptance: ""},
+	}
+	synthesizeMissingAcceptance(steps)
+	for i, s := range steps {
+		if s.Acceptance == "" {
+			t.Fatalf("step %d missing synthesized acceptance", i+1)
+		}
+		if !hasRunnableAcceptance(s.Acceptance) {
+			t.Fatalf("step %d synthesized acceptance not runnable: %q", i+1, s.Acceptance)
+		}
+	}
+}
+
+func TestSynthesizeMissingAcceptance_UsesCommandCandidate(t *testing.T) {
+	steps := []PlanStep{
+		{Index: 1, Title: "Build", Body: "Run npm run build in project root", Acceptance: ""},
+		{Index: 2, Title: "Already good", Body: "", Acceptance: "`go test ./...` exits 0"},
+	}
+	synthesizeMissingAcceptance(steps)
+	if !strings.Contains(steps[0].Acceptance, "npm run build") {
+		t.Fatalf("expected candidate command to be used, got %q", steps[0].Acceptance)
+	}
+	if steps[1].Acceptance != "`go test ./...` exits 0" {
+		t.Fatalf("expected existing acceptance to remain unchanged, got %q", steps[1].Acceptance)
 	}
 }

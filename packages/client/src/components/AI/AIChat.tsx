@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, Fragment } from 'react';
 import { useStore } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
 import { randomUUID } from '../../utils.js';
@@ -71,8 +71,8 @@ export default function AIChat() {
     wsClient.send({ type: 'chat.stop', sessionId: activeSession.id });
   }, [activeSession, streamingMessageId]);
 
-  // Retry: find the last user message before a failed assistant message and resend it.
-  const retry = useCallback((failedMsgId: string) => {
+  // Retry: resend the originating user message and optionally request server-side context replay.
+  const retry = useCallback((failedMsgId: string, reloadContext = false) => {
     /* istanbul ignore start */
     if (!activeSession || streamingMessageId) return;
     const msgs = useStore.getState().chatMessages;
@@ -83,12 +83,16 @@ export default function AIChat() {
       if (msgs[i].role === 'user') { userMsg = msgs[i].content; break; }
     }
     if (!userMsg) return;
-    const msgId = randomUUID();
-    addUserMessage(msgId, userMsg);
-    wsClient.send({ type: 'chat', sessionId: activeSession.id, content: userMsg });
+    wsClient.send({
+      type: 'chat',
+      sessionId: activeSession.id,
+      content: userMsg,
+      reloadContext,
+      retryFromMessageId: failedMsgId,
+    });
     forceScrollRef.current = true;
     /* istanbul ignore stop */
-  }, [activeSession, streamingMessageId, addUserMessage]);
+  }, [activeSession, streamingMessageId]);
 
   const handleKey = (e: React.KeyboardEvent) => {
     /* istanbul ignore start */
@@ -181,13 +185,28 @@ export default function AIChat() {
                     />
                   ))}
                   {msg.content && (
+                    <Fragment>
                     <div className="chat-bubble">
                       <MarkdownText text={msg.content} />
                     </div>
+                    <button
+                      onClick={() => retry(msg.id, true)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 5,
+                        marginTop: 6, padding: '4px 10px',
+                        borderRadius: 6, border: '1px solid var(--border)',
+                        background: 'transparent', color: 'var(--tx-3)',
+                        fontSize: 11, cursor: 'pointer',
+                      }}
+                      title="Retry"
+                    >
+                      <RotateCcw size={11} />
+                    </button>
+                    </Fragment>
                   )}
                   {msg.failed && !streamingMessageId && (
                     <button
-                      onClick={() => retry(msg.id)}
+                      onClick={() => retry(msg.id, false)}
                       style={{
                         display: 'flex', alignItems: 'center', gap: 5,
                         marginTop: 6, padding: '4px 10px',

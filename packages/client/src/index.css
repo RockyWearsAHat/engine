@@ -1,44 +1,44 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=JetBrains+Mono:wght@400;500;600&family=Saira:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=VT323&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --font-ui:     'IBM Plex Sans', 'Saira', system-ui, sans-serif;
-  --font-display:'Saira', 'IBM Plex Sans', sans-serif;
+  --font-ui:     'IBM Plex Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --font-display:'VT323', 'IBM Plex Mono', monospace;
   --font-mono:   'IBM Plex Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
 
-  --bg:          #090d11;
-  --surface:     #0e1419;
-  --surface-2:   #131c23;
-  --surface-3:   #18222a;
-  --surface-4:   #1f2b35;
-  --border:      #22303a;
-  --border-2:    #2f414c;
-  --tx:          #e4efe7;
-  --tx-2:        #a1b4aa;
-  --tx-3:        #6a7d74;
-  --accent:      #53cba8;
-  --accent-2:    #8de8c9;
-  --accent-dim:  #122a24;
-  --green:       #46d695;
-  --yellow:      #e7bf6a;
-  --red:         #ef6f7b;
-  --purple:      #93a8ff;
-  --cyan:        #63d3d1;
-  --orange:      #dfac63;
+  --bg:          #070b0f;
+  --surface:     #0d141b;
+  --surface-2:   #111a23;
+  --surface-3:   #15212b;
+  --surface-4:   #1b2934;
+  --border:      #1f313d;
+  --border-2:    #304957;
+  --tx:          #d7ece2;
+  --tx-2:        #9eb9ad;
+  --tx-3:        #688378;
+  --accent:      #49d19f;
+  --accent-2:    #89edca;
+  --accent-dim:  #102820;
+  --green:       #4be3a2;
+  --yellow:      #dfc067;
+  --red:         #ef7a84;
+  --purple:      #8ca9ff;
+  --cyan:        #67d0d5;
+  --orange:      #d7a261;
 
   --terminal-bg:        #0a1110;
   --terminal-fg:        #d8e8de;
   --terminal-cursor:    #8de8c9;
   --terminal-selection: rgba(83, 203, 168, 0.28);
-  --focus-ring:         0 0 0 2px rgba(83, 203, 168, 0.28);
+  --focus-ring:         0 0 0 1px rgba(83, 203, 168, 0.42);
   --grid-line:          rgba(93, 133, 118, 0.1);
   --panel-shadow:       inset 0 1px 0 rgba(201, 230, 215, 0.05);
 
-  --radius:      4px;
-  --radius-lg:   6px;
+  --radius:      0px;
+  --radius-lg:   0px;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -51,8 +51,9 @@ html, body, #root {
   font-family: var(--font-ui);
   font-size: 13px;
   line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: none;
+  text-rendering: geometricPrecision;
+  letter-spacing: 0.01em;
 }
 
 ::selection { background: rgba(83, 203, 168, 0.3); color: var(--tx); }
@@ -123,10 +124,7 @@ html, body, #root {
   flex: 1;
   overflow: hidden;
   align-items: stretch;
-  background:
-    radial-gradient(1300px 600px at 16% -10%, rgba(83, 203, 168, 0.12), transparent 58%),
-    radial-gradient(980px 520px at 86% -14%, rgba(99, 211, 209, 0.08), transparent 60%),
-    var(--bg);
+  background: var(--bg);
 }
 
 .workspace::after {
@@ -134,20 +132,18 @@ html, body, #root {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: repeating-linear-gradient(
-    180deg,
-    transparent,
-    transparent 3px,
-    rgba(130, 160, 146, 0.02) 4px
-  );
-  opacity: 0.3;
+  background:
+    linear-gradient(rgba(101, 136, 120, 0.11) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(101, 136, 120, 0.09) 1px, transparent 1px);
+  background-size: 8px 8px;
+  opacity: 0.14;
 }
 
 /* Titlebar */
 .titlebar {
   height: 38px;
   min-height: 38px;
-  background: linear-gradient(180deg, rgba(106, 162, 138, 0.08), transparent 65%), var(--surface);
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -185,12 +181,13 @@ html, body, #root {
   align-items: center;
   gap: 0;
   padding: 2px 8px 2px 4px;
-  border-radius: var(--radius);
+  border: 1px solid transparent;
   transition: background 120ms ease;
 }
 
 .titlebar-brand:hover {
   background: rgba(83, 203, 168, 0.08);
+  border-color: rgba(83, 203, 168, 0.24);
 }
 
 .titlebar-brand > * {
@@ -263,8 +260,9 @@ html, body, #root {
 
 .titlebar-chip-branch {
   padding: 1px 6px;
-  border-radius: var(--radius);
-  background: rgba(83, 203, 168, 0.1);
+  border-radius: 0;
+  border: 1px solid rgba(83, 203, 168, 0.26);
+  background: rgba(83, 203, 168, 0.08);
   color: var(--accent-2);
   font-size: 11px;
   font-weight: 500;
@@ -294,8 +292,8 @@ html, body, #root {
 .traffic-light {
   width: 12px;
   height: 12px;
-  border-radius: 50%;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.22), 0 0 0 1px rgba(0,0,0,0.18);
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.28);
 }
 
 .traffic-light:hover,
@@ -316,7 +314,7 @@ html, body, #root {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 4px;
+  border-radius: 0;
   background: rgba(97, 140, 120, 0.06);
   color: var(--tx-2);
   box-shadow: none;
@@ -333,7 +331,7 @@ html, body, #root {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border-radius: 3px;
+  border-radius: 0;
   border: 1px solid rgba(101, 141, 124, 0.35);
   background: rgba(97, 140, 120, 0.08);
   color: var(--tx-2);
@@ -377,7 +375,7 @@ html, body, #root {
   z-index: 160;
   max-width: 360px;
   padding: 10px 14px;
-  border-radius: 4px;
+  border-radius: 0;
   border: 1px solid var(--border);
   background: rgba(12,12,16,0.92);
   color: var(--tx);
@@ -408,11 +406,11 @@ html, body, #root {
   max-height: min(76vh, 620px);
   overflow: auto;
   z-index: 100;
-  border-radius: 10px;
+  border-radius: 0;
   border: 1px solid var(--border);
   background: rgba(10, 14, 20, 0.97);
-  box-shadow: 0 22px 42px rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(8px);
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 .shell-menu-divider {
@@ -434,7 +432,7 @@ html, body, #root {
   font-size: 12px;
   color: var(--tx-2);
   border-bottom: 1px solid rgba(255,255,255,0.03);
-  transition: background 100ms ease, color 100ms ease;
+  transition: background 80ms linear, color 80ms linear;
 }
 
 .shell-menu-item:hover {
@@ -476,7 +474,7 @@ html, body, #root {
   z-index: 200;
   max-width: 360px;
   padding: 10px 16px;
-  border-radius: 4px;
+  border-radius: 0;
   border: 1px solid var(--border);
   background: rgba(12, 18, 19, 0.95);
   color: var(--tx-2);
@@ -488,7 +486,7 @@ html, body, #root {
 .activity-bar {
   width: 42px;
   min-width: 42px;
-  background: linear-gradient(180deg, rgba(83, 203, 168, 0.08), transparent 70%), rgba(12, 18, 19, 0.94);
+  background: var(--surface);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -503,7 +501,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius);
+  border-radius: 0;
   cursor: pointer;
   color: var(--tx-3);
   transition: color 120ms, background 120ms;
@@ -530,7 +528,7 @@ html, body, #root {
   width: 240px;
   min-width: 200px;
   max-width: 400px;
-  background: linear-gradient(180deg, rgba(83, 203, 168, 0.06), transparent 65%), rgba(12, 18, 19, 0.94);
+  background: var(--surface);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -563,7 +561,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 4px;
+  border-radius: 0;
   cursor: pointer;
   color: var(--tx-3);
   transition: color 100ms, background 100ms;
@@ -655,7 +653,7 @@ html, body, #root {
   gap: 14px;
   color: var(--tx-2);
   overflow: auto;
-  background: #070c16;
+  background: var(--bg);
 }
 
 .usage-dashboard::before {
@@ -704,8 +702,8 @@ html, body, #root {
 .usage-dashboard-title {
   margin-top: 6px;
   color: var(--tx);
-  font-family: 'Saira', 'IBM Plex Sans', sans-serif;
-  font-size: 22px;
+  font-family: var(--font-display);
+  font-size: 28px;
   font-weight: 600;
   letter-spacing: -0.02em;
 }
@@ -725,7 +723,7 @@ html, body, #root {
 .usage-dashboard-scope-pill {
   height: 24px;
   padding: 0 10px;
-  border-radius: 999px;
+  border-radius: 0;
   border: 1px solid var(--usage-panel-border);
   background: rgba(122, 168, 255, 0.08);
   display: inline-flex;
@@ -740,7 +738,7 @@ html, body, #root {
   width: 28px;
   height: 28px;
   border: 1px solid var(--usage-panel-border);
-  border-radius: 999px;
+  border-radius: 0;
   background: rgba(255, 255, 255, 0.02);
   color: var(--tx-2);
   display: inline-flex;
@@ -754,7 +752,7 @@ html, body, #root {
   border-color: var(--usage-accent-strong);
   color: var(--tx);
   background: rgba(122, 168, 255, 0.11);
-  transform: translateY(-1px);
+  transform: none;
 }
 
 .usage-dashboard-refresh:disabled {
@@ -774,7 +772,7 @@ html, body, #root {
 .usage-scope-toggle {
   display: inline-flex;
   border: 1px solid var(--usage-panel-border);
-  border-radius: 999px;
+  border-radius: 0;
   background: rgba(255, 255, 255, 0.02);
   overflow: hidden;
   width: fit-content;
@@ -814,7 +812,7 @@ html, body, #root {
   border: 1px solid var(--usage-panel-border);
   background: rgba(10, 14, 24, 0.95);
   color: var(--tx);
-  border-radius: 7px;
+  border-radius: 0;
   padding: 0 9px;
   font-size: 12px;
 }
@@ -827,7 +825,7 @@ html, body, #root {
 
 .usage-metric-card {
   border: 1px solid var(--usage-panel-border);
-  border-radius: 10px;
+  border-radius: 0;
   background: rgba(9, 14, 24, 0.96);
   padding: 12px;
 }
@@ -865,7 +863,7 @@ html, body, #root {
 
 .usage-panel {
   border: 1px solid var(--usage-panel-border);
-  border-radius: 12px;
+  border-radius: 0;
   background: var(--usage-bg-glass);
   box-shadow: none;
   padding: 12px;
@@ -923,7 +921,7 @@ html, body, #root {
 .usage-token-ring {
   width: 94px;
   height: 94px;
-  border-radius: 50%;
+  border-radius: 0;
   display: grid;
   place-items: center;
   flex-shrink: 0;
@@ -932,7 +930,7 @@ html, body, #root {
 .usage-token-ring-inner {
   width: 68px;
   height: 68px;
-  border-radius: 50%;
+  border-radius: 0;
   background: rgba(4, 11, 22, 0.95);
   border: 1px solid rgba(122, 168, 255, 0.28);
   display: grid;
@@ -963,7 +961,24 @@ html, body, #root {
 .usage-token-dot {
   width: 8px;
   height: 8px;
-  border-radius: 50%;
+  border-radius: 0;
+}
+
+/* Force a flat, pixel-console look on common controls and panels. */
+button,
+input,
+select,
+textarea,
+.card,
+.panel,
+.modal,
+[class*='btn'],
+[class*='button'],
+[class*='chip'],
+[class*='pill'],
+[class*='tile'] {
+  border-radius: 0 !important;
+  box-shadow: none !important;
 }
 
 .usage-token-dot.input {

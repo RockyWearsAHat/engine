@@ -87,7 +87,7 @@ describe('AIChat interactions', () => {
     expect(sendMock).toHaveBeenCalledWith({ type: 'chat.stop', sessionId: 'session-1' });
   });
 
-  it('FailedAssistantMessage_RetriesFromLastUserMessage', () => {
+  it('FailedAssistantMessage_RetriesWithoutDuplicatingUserBubble', () => {
     useStore.setState({
       chatMessages: [
         { id: 'user-1', role: 'user', content: 'first request', toolCalls: [], streaming: false, failed: false },
@@ -102,10 +102,10 @@ describe('AIChat interactions', () => {
       type: 'chat',
       sessionId: 'session-1',
       content: 'first request',
+      reloadContext: false,
+      retryFromMessageId: 'assistant-1',
     });
-    expect(useStore.getState().chatMessages.at(-1)).toEqual(
-      expect.objectContaining({ role: 'user', content: 'first request' }),
-    );
+    expect(useStore.getState().chatMessages).toHaveLength(2);
   });
 
   it('ToolCallDetails_ShownAndToggledExpanded', () => {

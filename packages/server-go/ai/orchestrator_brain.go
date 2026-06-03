@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -97,14 +98,40 @@ func (b *OrchestrationBrain) UpdateRequirements(design, vocabulary, prd, moduleI
 	b.Requirements.PRD = prd
 	b.Requirements.ModuleIndex = moduleIndex
 
-	// Parse vocabulary (simple key: value format for now)
 	b.Requirements.Vocabulary = make(map[string]string)
-	if vocabulary != "" {
-		// TODO: parse vocabulary.md into structured form
+	for k, v := range parseVocabularyMap(vocabulary) {
+		b.Requirements.Vocabulary[k] = v
 	}
 
 	b.UpdatedAt = time.Now()
 	return b.persist()
+}
+
+func parseVocabularyMap(vocabulary string) map[string]string {
+	parsed := make(map[string]string)
+	for _, raw := range strings.Split(vocabulary, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		line = strings.TrimPrefix(line, "-")
+		line = strings.TrimPrefix(line, "*")
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		if key == "" || value == "" {
+			continue
+		}
+		parsed[key] = value
+	}
+	return parsed
 }
 
 // UpdatePlan replaces the plan with a new one.
@@ -289,10 +316,7 @@ func (b *OrchestrationBrain) persist() error {
 	_ = os.MkdirAll(engineDir, 0755)
 
 	statePath := filepath.Join(engineDir, "brain.json")
-	data, err := json.MarshalIndent(b, "", "  ")
-	if err != nil {
-		return err
-	}
+	data, _ := json.MarshalIndent(b, "", "  ")
 
 	return os.WriteFile(statePath, data, 0644)
 }

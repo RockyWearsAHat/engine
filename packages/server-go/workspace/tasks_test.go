@@ -213,13 +213,13 @@ func TestDetectTasks_AllScriptTypes(t *testing.T) {
 	dir := t.TempDir()
 	pkg := map[string]any{
 		"scripts": map[string]string{
-			"dev:tauri":            "tauri dev",
-			"build:desktop-debug":  "cargo build",
-			"build:tauri":          "tauri build",
-			"check:desktop":        "cargo check",
-			"smoke:system":         "node smoke.mjs",
-			"dev":                  "vite",
-			"start":                "node dist/server.js",
+			"dev:tauri":           "tauri dev",
+			"build:desktop-debug": "cargo build",
+			"build:tauri":         "tauri build",
+			"check:desktop":       "cargo check",
+			"smoke:system":        "node smoke.mjs",
+			"dev":                 "vite",
+			"start":               "node dist/server.js",
 		},
 	}
 	data, _ := json.Marshal(pkg)
@@ -230,6 +230,59 @@ func TestDetectTasks_AllScriptTypes(t *testing.T) {
 	ts := DetectTasks(dir)
 	if len(ts.Tasks) == 0 {
 		t.Fatal("expected tasks")
+	}
+}
+
+func TestDetectTasks_PackageJSON_IncludesNonPriorityScripts(t *testing.T) {
+	dir := t.TempDir()
+	pkg := map[string]any{
+		"scripts": map[string]string{
+			"dev":           "vite",
+			"custom:verify": "node verify.mjs",
+		},
+	}
+	data, _ := json.Marshal(pkg)
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), data, 0644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+
+	ts := DetectTasks(dir)
+	found := false
+	for _, task := range ts.Tasks {
+		if task.ID == "script:custom:verify" {
+			found = true
+			if task.Kind != "run" {
+				t.Fatalf("expected run kind for custom script, got %q", task.Kind)
+			}
+			if task.Command != "npm run custom:verify" {
+				t.Fatalf("unexpected command: %q", task.Command)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected custom script task to be included")
+	}
+}
+
+func TestInferScriptKind(t *testing.T) {
+	tests := []struct {
+		name       string
+		scriptName string
+		script     string
+		want       string
+	}{
+		{name: "check", scriptName: "lint:all", script: "eslint .", want: "check"},
+		{name: "test", scriptName: "test:unit", script: "vitest", want: "test"},
+		{name: "build", scriptName: "build:web", script: "vite build", want: "build"},
+		{name: "run default", scriptName: "serve", script: "node server.js", want: "run"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := inferScriptKind(tc.scriptName, tc.script); got != tc.want {
+				t.Fatalf("inferScriptKind(%q, %q) = %q, want %q", tc.scriptName, tc.script, got, tc.want)
+			}
+		})
 	}
 }
 

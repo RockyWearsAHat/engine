@@ -20,8 +20,6 @@ func TestResolveTeamOrchestratorModel_SelectedTeam(t *testing.T) {
   premium:
     orchestrator:
       model: "anthropic:claude-opus-4.6"
-dev_loop:
-  default_team: "fast"
 `
 	if err := os.WriteFile(filepath.Join(engineDir, "config.yaml"), []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -42,7 +40,7 @@ dev_loop:
 	}
 }
 
-func TestResolveTeamOrchestratorModel_DefaultTeamFallback(t *testing.T) {
+func TestResolveTeamOrchestratorModel_EmptySelectedTeam(t *testing.T) {
 	projectDir := t.TempDir()
 	engineDir := filepath.Join(projectDir, ".engine")
 	if err := os.MkdirAll(engineDir, 0o755); err != nil {
@@ -53,25 +51,14 @@ func TestResolveTeamOrchestratorModel_DefaultTeamFallback(t *testing.T) {
   fast:
     orchestrator:
       model: "openai:gpt-4o-mini"
-dev_loop:
-  default_team: "fast"
 `
 	if err := os.WriteFile(filepath.Join(engineDir, "config.yaml"), []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
-	team, provider, model, ok := ResolveTeamOrchestratorModel(projectDir, "")
-	if !ok {
-		t.Fatal("expected default team resolution to succeed")
-	}
-	if team != "fast" {
-		t.Fatalf("expected team fast, got %q", team)
-	}
-	if provider != "openai" {
-		t.Fatalf("expected provider openai, got %q", provider)
-	}
-	if model != "gpt-4o-mini" {
-		t.Fatalf("expected model gpt-4o-mini, got %q", model)
+	_, _, _, ok := ResolveTeamOrchestratorModel(projectDir, "")
+	if ok {
+		t.Fatal("expected unresolved team when selectedTeam is empty")
 	}
 }
 
@@ -150,7 +137,7 @@ func TestParseYAMLValue_QuotedAndUnquoted(t *testing.T) {
 	if got := parseYAMLValue("model: 'ollama:gemma4:31b'", "model:"); got != "ollama:gemma4:31b" {
 		t.Fatalf("expected single-quoted value unwrapped, got %q", got)
 	}
-	if got := parseYAMLValue("default_team: fast", "default_team:"); got != "fast" {
+	if got := parseYAMLValue("team: fast", "team:"); got != "fast" {
 		t.Fatalf("expected unquoted value, got %q", got)
 	}
 }
@@ -221,46 +208,32 @@ teams:
     orchestrator:
       model: 'ollama:gemma4:31b'
       model_display: "Gemma"
-dev_loop:
-  default_team: fast
 `
 
-	models, defaultTeam := parseTeamConfigYAML(yaml)
+	models := parseTeamConfigYAML(yaml)
 	if got := models["fast"]; got != "ollama:gemma4:31b" {
 		t.Fatalf("expected parsed orchestrator model, got %q", got)
-	}
-	if defaultTeam != "fast" {
-		t.Fatalf("expected default team fast, got %q", defaultTeam)
 	}
 }
 
 func TestParseTeamConfigYAML_EmptyInput(t *testing.T) {
-	models, defaultTeam := parseTeamConfigYAML("")
+	models := parseTeamConfigYAML("")
 	if len(models) != 0 {
 		t.Fatalf("expected no models for empty yaml, got %#v", models)
 	}
-	if defaultTeam != "" {
-		t.Fatalf("expected empty default team, got %q", defaultTeam)
-	}
 }
 
-func TestParseTeamConfigYAML_DevLoopExtraKeys(t *testing.T) {
-	// dev_loop section with a non-default_team key — exercises the false
-	// branch of the inDevLoop && default_team check.
+func TestParseTeamConfigYAML_IgnoresUnknownSections(t *testing.T) {
 	yaml := `teams:
   fast:
     orchestrator:
       model: "openai:gpt-4o-mini"
 dev_loop:
   max_iterations: 10
-  default_team: fast
 `
-	models, defaultTeam := parseTeamConfigYAML(yaml)
+	models := parseTeamConfigYAML(yaml)
 	if got := models["fast"]; got != "openai:gpt-4o-mini" {
 		t.Fatalf("expected model openai:gpt-4o-mini, got %q", got)
-	}
-	if defaultTeam != "fast" {
-		t.Fatalf("expected default team fast, got %q", defaultTeam)
 	}
 }
 
@@ -273,7 +246,7 @@ func TestParseTeamConfigYAML_OrphanedIndentBeforeTeam(t *testing.T) {
     orchestrator:
       model: "openai:gpt-4o-mini"
 `
-	models, _ := parseTeamConfigYAML(yaml)
+	models := parseTeamConfigYAML(yaml)
 	if got := models["fast"]; got != "openai:gpt-4o-mini" {
 		t.Fatalf("expected model openai:gpt-4o-mini despite orphaned line, got %q", got)
 	}
@@ -319,6 +292,14 @@ func TestParseAutonomousPolicy_Branch(t *testing.T) {
 	}
 }
 
+func TestParseAutonomousPolicy_Team(t *testing.T) {
+	yaml := "autonomous:\n  team: \"fast\"\n"
+	p := parseAutonomousPolicy(yaml)
+	if p.Team != "fast" {
+		t.Fatalf("expected team fast, got %q", p.Team)
+	}
+}
+
 func TestParseAutonomousPolicy_CommentLines(t *testing.T) {
 	yaml := "autonomous:\n  # auto_push is deliberately off\n  auto_commit: true\n"
 	p := parseAutonomousPolicy(yaml)
@@ -360,7 +341,7 @@ func TestResolveAutonomousPolicy_FromFile(t *testing.T) {
 	if err := os.MkdirAll(engineDir, 0o755); err != nil {
 		t.Fatalf("mkdir .engine: %v", err)
 	}
-	content := "autonomous:\n  auto_commit: true\n  auto_push: true\n  branch: \"engine/ci\"\n"
+	content := "autonomous:\n  auto_commit: true\n  auto_push: true\n  branch: \"engine/ci\"\n  team: \"fast\"\n"
 	if err := os.WriteFile(filepath.Join(engineDir, "config.yaml"), []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -374,8 +355,87 @@ func TestResolveAutonomousPolicy_FromFile(t *testing.T) {
 	if p.Branch != "engine/ci" {
 		t.Fatalf("expected branch engine/ci, got %q", p.Branch)
 	}
+	if p.Team != "fast" {
+		t.Fatalf("expected team fast, got %q", p.Team)
+	}
 	if !p.RequireExplicitPublishIntent || !p.MinimalChatMode || !p.StyleAssumptionNotice {
 		t.Fatalf("expected policy defaults still true when omitted, got %+v", p)
+	}
+}
+
+func TestResolveAutonomousStartupTeam_FromAutonomousPolicy(t *testing.T) {
+	projectDir := t.TempDir()
+	engineDir := filepath.Join(projectDir, ".engine")
+	if err := os.MkdirAll(engineDir, 0o755); err != nil {
+		t.Fatalf("mkdir .engine: %v", err)
+	}
+	content := `teams:
+  fast:
+    orchestrator:
+      model: "openai:gpt-4o-mini"
+autonomous:
+  team: "fast"
+`
+	if err := os.WriteFile(filepath.Join(engineDir, "config.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	team, provider, model, ok := ResolveAutonomousStartupTeam(projectDir, "")
+	if !ok {
+		t.Fatal("expected startup team resolution to succeed")
+	}
+	if team != "fast" || provider != "openai" || model != "gpt-4o-mini" {
+		t.Fatalf("unexpected startup resolution: team=%q provider=%q model=%q", team, provider, model)
+	}
+}
+
+func TestResolveAutonomousStartupTeam_ExplicitTeamWins(t *testing.T) {
+	projectDir := t.TempDir()
+	engineDir := filepath.Join(projectDir, ".engine")
+	if err := os.MkdirAll(engineDir, 0o755); err != nil {
+		t.Fatalf("mkdir .engine: %v", err)
+	}
+	content := `teams:
+  fast:
+    orchestrator:
+      model: "openai:gpt-4o-mini"
+  premium:
+    orchestrator:
+      model: "anthropic:claude-opus-4.6"
+autonomous:
+  team: "fast"
+`
+	if err := os.WriteFile(filepath.Join(engineDir, "config.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	team, provider, model, ok := ResolveAutonomousStartupTeam(projectDir, "premium")
+	if !ok {
+		t.Fatal("expected explicit startup team resolution to succeed")
+	}
+	if team != "premium" || provider != "anthropic" || model != "claude-opus-4.6" {
+		t.Fatalf("unexpected startup resolution: team=%q provider=%q model=%q", team, provider, model)
+	}
+}
+
+func TestResolveAutonomousStartupTeam_NoTeamConfigured(t *testing.T) {
+	projectDir := t.TempDir()
+	engineDir := filepath.Join(projectDir, ".engine")
+	if err := os.MkdirAll(engineDir, 0o755); err != nil {
+		t.Fatalf("mkdir .engine: %v", err)
+	}
+	content := `teams:
+  fast:
+    orchestrator:
+      model: "openai:gpt-4o-mini"
+`
+	if err := os.WriteFile(filepath.Join(engineDir, "config.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, _, _, ok := ResolveAutonomousStartupTeam(projectDir, "")
+	if ok {
+		t.Fatal("expected unresolved startup team when neither explicitTeam nor autonomous.team is set")
 	}
 }
 
@@ -390,5 +450,99 @@ func TestParseAutonomousPolicy_NewPolicyFlags(t *testing.T) {
 	}
 	if p.StyleAssumptionNotice {
 		t.Fatal("expected StyleAssumptionNotice=false")
+	}
+}
+
+func TestResolveAutonomousStartupTeam_FromDevLoopDefaultTeam(t *testing.T) {
+	projectDir := t.TempDir()
+	engineDir := filepath.Join(projectDir, ".engine")
+	if err := os.MkdirAll(engineDir, 0o755); err != nil {
+		t.Fatalf("mkdir .engine: %v", err)
+	}
+	content := `teams:
+  fast:
+    orchestrator:
+      model: "openai:gpt-4o-mini"
+dev_loop:
+  default_team: "fast"
+`
+	if err := os.WriteFile(filepath.Join(engineDir, "config.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	team, provider, model, ok := ResolveAutonomousStartupTeam(projectDir, "")
+	if !ok {
+		t.Fatal("expected startup team resolution from dev_loop.default_team")
+	}
+	if team != "fast" || provider != "openai" || model != "gpt-4o-mini" {
+		t.Fatalf("unexpected startup resolution: team=%q provider=%q model=%q", team, provider, model)
+	}
+}
+
+func TestResolveAutonomousStartupTeam_FallsBackToTeamsDefault(t *testing.T) {
+	projectDir := t.TempDir()
+	engineDir := filepath.Join(projectDir, ".engine")
+	if err := os.MkdirAll(engineDir, 0o755); err != nil {
+		t.Fatalf("mkdir .engine: %v", err)
+	}
+	content := `teams:
+  default:
+    orchestrator:
+      model: "llamacpp:qwen2.5-1.5b"
+`
+	if err := os.WriteFile(filepath.Join(engineDir, "config.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	team, provider, model, ok := ResolveAutonomousStartupTeam(projectDir, "")
+	if !ok {
+		t.Fatal("expected startup team resolution from teams.default")
+	}
+	if team != "default" || provider != "llamacpp" || model != "qwen2.5-1.5b" {
+		t.Fatalf("unexpected startup resolution: team=%q provider=%q model=%q", team, provider, model)
+	}
+}
+
+func TestResolveTeamOrchestratorModel_UsesConfigExampleFallback(t *testing.T) {
+	projectDir := t.TempDir()
+	engineDir := filepath.Join(projectDir, ".engine")
+	if err := os.MkdirAll(engineDir, 0o755); err != nil {
+		t.Fatalf("mkdir .engine: %v", err)
+	}
+	content := `teams:
+  fast:
+    orchestrator:
+      model: "openai:gpt-4o-mini"
+`
+	if err := os.WriteFile(filepath.Join(engineDir, "config.example.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write config.example: %v", err)
+	}
+
+	team, provider, model, ok := ResolveTeamOrchestratorModel(projectDir, "fast")
+	if !ok {
+		t.Fatal("expected team resolution to use config.example fallback")
+	}
+	if team != "fast" || provider != "openai" || model != "gpt-4o-mini" {
+		t.Fatalf("unexpected team resolution: team=%q provider=%q model=%q", team, provider, model)
+	}
+}
+
+func TestResolveAutonomousPolicy_UsesConfigExampleFallback(t *testing.T) {
+	projectDir := t.TempDir()
+	engineDir := filepath.Join(projectDir, ".engine")
+	if err := os.MkdirAll(engineDir, 0o755); err != nil {
+		t.Fatalf("mkdir .engine: %v", err)
+	}
+	content := "autonomous:\n  auto_commit: true\n  team: \"fast\"\n"
+	if err := os.WriteFile(filepath.Join(engineDir, "config.example.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write config.example: %v", err)
+	}
+
+	p := ResolveAutonomousPolicy(projectDir)
+	if !p.AutoCommit {
+		t.Fatal("expected AutoCommit=true from config.example")
+	}
+	if p.Team != "fast" {
+		t.Fatalf("expected Team=fast from config.example, got %q", p.Team)
 	}
 }

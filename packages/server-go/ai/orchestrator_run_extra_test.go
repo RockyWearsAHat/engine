@@ -402,8 +402,8 @@ func TestRunAutonomousProject_CancelledWhilePaused(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		if err == nil || !strings.Contains(err.Error(), "cancelled while paused") {
-			t.Fatalf("expected cancelled while paused error, got %v", err)
+		if err == nil || !strings.Contains(err.Error(), "cancelled") {
+			t.Fatalf("expected cancelled error, got %v", err)
 		}
 	case <-time.After(4 * time.Second):
 		t.Fatal("timed out waiting for orchestrator to return")

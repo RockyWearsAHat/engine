@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	gogit "github.com/engine/server/git"
 	gh "github.com/engine/server/github"
 	"github.com/engine/server/remote"
+	"github.com/engine/server/workspace"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/mem"
@@ -86,6 +88,10 @@ var credStoreDelFn = func(key string) error { return getMachineCredStore().Delet
 // Exported as a var so tests can override it to a short duration.
 var ollamaWarmKeepInterval = 20 * time.Minute
 
+// Shell timeouts are vars so tests can force deterministic timeout coverage.
+var interactiveShellTimeout = 2 * time.Minute
+var autonomousShellTimeout = 5 * time.Minute
+
 // autonomousBuilderMaxTurns bounds headless builder loops so a local model that
 // keeps narrating instead of calling signal_done reports a real failure instead
 // of silently stopping or running forever.
@@ -147,10 +153,29 @@ func parseIntEnv(key string, def int) int {
 	return n
 }
 
+func runtimeContextMaxTokens() int {
+	b := parseIntEnv("ENGINE_CONTEXT_MAX_TOKENS", DefaultTokenBudget)
+	if b < 16000 {
+		return DefaultTokenBudget
+	}
+	return b
+}
+
+func runtimeContextRecentWindow() int {
+	w := parseIntEnv("ENGINE_CONTEXT_RECENT_WINDOW", 60)
+	if w < 12 {
+		return 12
+	}
+	if w > 1000 {
+		return 1000
+	}
+	return w
+}
+
 func inferredProviderForModel(model string) string {
 	lower := strings.ToLower(strings.TrimSpace(model))
 	if lower == "" {
-		return "ollama"
+		return "llamacpp"
 	}
 	if strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "o1-") ||
 		strings.HasPrefix(lower, "o3-") || strings.HasPrefix(lower, "o4-") {
@@ -162,7 +187,7 @@ func inferredProviderForModel(model string) string {
 	if looksLikeOllamaModel(lower) {
 		return "ollama"
 	}
-	return "anthropic"
+	return "llamacpp"
 }
 
 func looksLikeOllamaModel(lowerModel string) bool {
@@ -304,6 +329,10 @@ type ChatContext struct {
 	// last n messages in the active history as vital checkpoints so they survive context windowing.
 	// Nil outside of an active loop.
 	MarkVital func(n int)
+	// ReloadContext requests replay from an earlier user checkpoint during retry flows.
+	ReloadContext bool
+	// RetryFromMessageID anchors replay to the user message that precedes this message ID.
+	RetryFromMessageID string
 	// AutonomousPolicy, when non-nil, controls headless session behaviour:
 	// auto-approving commits and/or pushes without prompting the user.
 	AutonomousPolicy *AutonomousPolicy
@@ -440,7 +469,9 @@ var toolRegistry = []anthropicTool{
 		Name:        "list_directory",
 		Description: "List files and directories at a path, up to 4 levels deep.",
 		InputSchema: objSchema([]string{"path"}, map[string]any{
-			"path": strProp("Absolute directory path"),
+			"path":             strProp("Absolute directory path"),
+			"processId":        numProp("Optional process ID to scan and mark generated files in cache before listing"),
+			"includeGenerated": map[string]any{"type": "boolean", "description": "When true, expand generated files instead of collapsing them"},
 		}),
 	},
 	// ── File operations ──────────────────────────────────────────────────────
@@ -462,10 +493,10 @@ var toolRegistry = []anthropicTool{
 	// ── Shell / execution ────────────────────────────────────────────────────
 	{
 		Name:        "shell",
-		Description: "Execute a shell command and return stdout + stderr. Use for running tests, builds, installs, etc.",
+		Description: "Execute a shell command and return stdout + stderr. Defaults to project root when cwd is omitted.",
 		InputSchema: objSchema([]string{"command"}, map[string]any{
 			"command": strProp("Shell command to run"),
-			"cwd":     strProp("Working directory (optional, defaults to project root)"),
+			"cwd":     strProp("Working directory (optional). When omitted, command runs from project root."),
 		}),
 	},
 	{
@@ -956,11 +987,13 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		if err != nil {
 			return err.Error(), true
 		}
-		tree, err := gofs.GetTree(path, 4)
-		if err != nil {
-			return err.Error(), true
+		processID := int(numVal("processId"))
+		includeGenerated := boolVal("includeGenerated")
+		result, listErr := listDirectoryWithCompaction(ctx.ProjectPath, path, processID, includeGenerated)
+		if listErr != nil {
+			return listErr.Error(), true
 		}
-		return formatTree(tree, 0), false
+		return result, false
 
 	case "shell":
 		command := str("command")
@@ -989,10 +1022,7 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		var err error
 		if ctx.AutonomousPolicy != nil {
 			var cwdAwareness string
-			cwd, cwdAwareness, err = resolveAutonomousShellDirectory(ctx.ProjectPath, cwd)
-			if err != nil {
-				return err.Error(), true
-			}
+			cwd, cwdAwareness, _ = resolveAutonomousShellDirectory(ctx.ProjectPath, cwd)
 			if cwdAwareness != "" {
 				if autonomousAwareness != "" {
 					autonomousAwareness += "\n" + cwdAwareness
@@ -1012,9 +1042,9 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		if shell == "" {
 			shell = "/bin/bash"
 		}
-		shellTimeout := 2 * time.Minute
+		shellTimeout := interactiveShellTimeout
 		if ctx.AutonomousPolicy != nil {
-			shellTimeout = 5 * time.Minute
+			shellTimeout = autonomousShellTimeout
 		}
 		shellCtx, shellCancel := stdctx.WithTimeout(stdctx.Background(), shellTimeout)
 		defer shellCancel()
@@ -1650,21 +1680,332 @@ func formatTree(node *gofs.FileNode, depth int) string {
 	return result
 }
 
+type generatedCache struct {
+	UpdatedAt string   `json:"updatedAt"`
+	ProcessID int      `json:"processId,omitempty"`
+	Paths     []string `json:"paths"`
+}
+
+type generatedIndex struct {
+	paths map[string]bool
+}
+
+type dirRenderState struct {
+	maxChars         int
+	truncated        bool
+	includeGenerated bool
+	hints            map[string]bool
+	generated        *generatedIndex
+	projectRoot      string
+}
+
+func listDirectoryWithCompaction(projectRoot, dir string, processID int, includeGenerated bool) (string, error) {
+	idx := loadGeneratedIndex(projectRoot)
+	warning := ""
+	if processID > 0 {
+		if err := updateGeneratedIndexFromPID(projectRoot, processID, idx); err != nil {
+			warning = fmt.Sprintf("Warning: process scan failed for PID %d (%v)", processID, err)
+		}
+	}
+
+	hints := generatedHintsFromTasks(projectRoot)
+	if !includeGenerated && isGeneratedPath(dir, hints, idx) {
+		// If the caller drills into a generated directory, expand it automatically.
+		includeGenerated = true
+	}
+
+	maxChars := parseIntEnv("ENGINE_LIST_DIRECTORY_MAX_CHARS", 16000)
+	ctxMax := parseIntEnv("ENGINE_CONTEXT_MAX_TOKENS", DefaultTokenBudget)
+	autoCap := ctxMax / 4
+	if autoCap > 0 && autoCap < maxChars {
+		maxChars = autoCap
+	}
+	if maxChars < 2000 {
+		maxChars = 2000
+	}
+
+	var sb strings.Builder
+	if warning != "" {
+		sb.WriteString(warning)
+		sb.WriteString("\n\n")
+	}
+
+	name := filepath.Base(dir)
+	if name == "." || name == string(filepath.Separator) || name == "" {
+		name = dir
+	}
+	sb.WriteString("📁 ")
+	sb.WriteString(name)
+	sb.WriteString("\n")
+
+	state := &dirRenderState{maxChars: maxChars, includeGenerated: includeGenerated, hints: hints, generated: idx, projectRoot: filepath.Clean(projectRoot)}
+	if err := appendDirectoryLines(&sb, dir, 1, 4, state); err != nil {
+		return "", err
+	}
+	if state.truncated {
+		sb.WriteString("\n... (truncated to protect context budget; narrow path, set includeGenerated=true, or use read_file/search_files for deeper inspection)")
+	}
+
+	return strings.TrimSpace(sb.String()), nil
+}
+
+func appendDirectoryLines(sb *strings.Builder, dir string, depth, maxDepth int, state *dirRenderState) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return strings.ToLower(entries[i].Name()) < strings.ToLower(entries[j].Name())
+	})
+
+	prefix := strings.Repeat("  ", depth)
+	collapsedGenerated := 0
+	for _, entry := range entries {
+		if state.truncated {
+			break
+		}
+		if entry.Name() == ".engine" && shouldHideEngineDirectory(dir, state) {
+			continue
+		}
+		childPath := filepath.Join(dir, entry.Name())
+		generated := !state.includeGenerated && isGeneratedPath(childPath, state.hints, state.generated)
+		if generated {
+			collapsedGenerated++
+			continue
+		}
+
+		icon := "📄"
+		if entry.IsDir() {
+			icon = "📁"
+		}
+		line := fmt.Sprintf("%s%s %s\n", prefix, icon, entry.Name())
+		if sb.Len()+len(line) > state.maxChars {
+			state.truncated = true
+			break
+		}
+		sb.WriteString(line)
+
+		if entry.IsDir() && depth < maxDepth {
+			if err := appendDirectoryLines(sb, childPath, depth+1, maxDepth, state); err != nil {
+				return err
+			}
+		}
+	}
+
+	if collapsedGenerated > 0 && !state.truncated {
+		line := fmt.Sprintf("%s📦 (collapsed %d generated entries; set includeGenerated=true to expand)\n", prefix, collapsedGenerated)
+		if sb.Len()+len(line) > state.maxChars {
+			state.truncated = true
+		} else {
+			sb.WriteString(line)
+		}
+	}
+
+	return nil
+}
+
+func shouldHideEngineDirectory(dir string, state *dirRenderState) bool {
+	if state == nil || state.projectRoot == "" {
+		return false
+	}
+	return filepath.Clean(dir) == state.projectRoot
+}
+
+func generatedHintsFromTasks(projectRoot string) map[string]bool {
+	hints := map[string]bool{
+		"node_modules": true,
+		"dist":         true,
+		"build":        true,
+		"target":       true,
+		"coverage":     true,
+		".cache":       true,
+		"out":          true,
+		"tmp":          true,
+		"bin":          true,
+		"vendor":       true,
+		"storybook-static": true,
+	}
+
+	detected := workspace.DetectTasks(projectRoot)
+	for _, task := range detected.Tasks {
+		lower := strings.ToLower(strings.TrimSpace(task.Command + " " + task.ID + " " + task.Label + " " + task.Description))
+		for key := range inferGeneratedHintsFromTask(lower) {
+			hints[key] = true
+		}
+	}
+	return hints
+}
+
+func inferGeneratedHintsFromTask(lower string) map[string]bool {
+	hints := map[string]bool{}
+	if strings.Contains(lower, "cover") {
+		hints["coverage"] = true
+		hints[".cache"] = true
+		hints["llvm-cov-target"] = true
+	}
+	if strings.Contains(lower, "build") || strings.Contains(lower, "bundle") || strings.Contains(lower, "compile") {
+		hints["dist"] = true
+		hints["build"] = true
+		hints["target"] = true
+		hints["bin"] = true
+	}
+	if strings.Contains(lower, "test") {
+		hints["coverage"] = true
+		hints[".cache"] = true
+	}
+	if strings.Contains(lower, "storybook") {
+		hints["storybook-static"] = true
+	}
+	if strings.Contains(lower, "temp") || strings.Contains(lower, "tmp") {
+		hints["tmp"] = true
+	}
+	return hints
+}
+
+func isGeneratedPath(path string, hints map[string]bool, idx *generatedIndex) bool {
+	clean := filepath.Clean(path)
+	if idx != nil && idx.paths[clean] {
+		return true
+	}
+	parts := strings.Split(clean, string(filepath.Separator))
+	for _, part := range parts {
+		if hints[part] {
+			return true
+		}
+	}
+	lower := strings.ToLower(clean)
+	return strings.HasSuffix(lower, ".log") || strings.HasSuffix(lower, ".tmp") || strings.HasSuffix(lower, ".profraw") || strings.HasSuffix(lower, ".profdata")
+}
+
+func generatedCachePath(projectRoot string) string {
+	return filepath.Join(projectRoot, ".engine", "generated-files-cache.json")
+}
+
+func loadGeneratedIndex(projectRoot string) *generatedIndex {
+	idx := &generatedIndex{paths: map[string]bool{}}
+	data, err := os.ReadFile(generatedCachePath(projectRoot))
+	if err != nil {
+		return idx
+	}
+	var cache generatedCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return idx
+	}
+	for _, p := range cache.Paths {
+		if p == "" {
+			continue
+		}
+		idx.paths[filepath.Clean(p)] = true
+	}
+	return idx
+}
+
+func saveGeneratedIndex(projectRoot string, processID int, idx *generatedIndex) error {
+	if idx == nil {
+		return nil
+	}
+	paths := make([]string, 0, len(idx.paths))
+	for p := range idx.paths {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	cache := generatedCache{
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+		ProcessID: processID,
+		Paths:     paths,
+	}
+	data, err := json.MarshalIndent(cache, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(projectRoot, ".engine"), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(generatedCachePath(projectRoot), data, 0644)
+}
+
+func updateGeneratedIndexFromPID(projectRoot string, processID int, idx *generatedIndex) error {
+	if idx == nil {
+		return nil
+	}
+	if processID <= 0 {
+		return fmt.Errorf("invalid processId")
+	}
+	proc, err := newProcessFn(int32(processID))
+	if err != nil {
+		return fmt.Errorf("resolve process %d: %w", processID, err)
+	}
+	files, err := proc.OpenFiles()
+	if err != nil {
+		return fmt.Errorf("read open files for pid %d: %w", processID, err)
+	}
+	root := filepath.Clean(projectRoot)
+	rootPrefix := root + string(filepath.Separator)
+	for _, f := range files {
+		p := filepath.Clean(strings.TrimSpace(f.Path))
+		if p == "" {
+			continue
+		}
+		if !filepath.IsAbs(p) {
+			continue
+		}
+		if p != root && !strings.HasPrefix(p, rootPrefix) {
+			continue
+		}
+		idx.paths[p] = true
+		for parent := filepath.Dir(p); parent != root && parent != "." && parent != string(filepath.Separator); parent = filepath.Dir(parent) {
+			idx.paths[parent] = true
+		}
+	}
+	return saveGeneratedIndex(projectRoot, processID, idx)
+}
+
+func resolveRetryUserAnchor(history []db.Message, messageID string) (int, db.Message, bool) {
+	if len(history) == 0 {
+		return -1, db.Message{}, false
+	}
+	anchor := -1
+	if strings.TrimSpace(messageID) != "" {
+		for i := len(history) - 1; i >= 0; i-- {
+			if history[i].ID == messageID {
+				anchor = i
+				break
+			}
+		}
+	}
+	if anchor < 0 {
+		anchor = len(history) - 1
+	}
+	for i := anchor; i >= 0; i-- {
+		if strings.EqualFold(strings.TrimSpace(history[i].Role), "user") {
+			return i, history[i], true
+		}
+	}
+	return -1, db.Message{}, false
+}
+
+func historyFromRetryAnchor(history []db.Message, messageID string) []db.Message {
+	idx, _, ok := resolveRetryUserAnchor(history, messageID)
+	if !ok {
+		return history
+	}
+	out := make([]db.Message, idx+1)
+	copy(out, history[:idx+1])
+	return out
+}
+
 // Chat runs the full agentic loop for a user message, streaming results via ctx callbacks.
 func Chat(ctx *ChatContext, userMessage string) {
 	registerChatAgent(ctx)
 
 	explicitProvider := strings.TrimSpace(os.Getenv("ENGINE_MODEL_PROVIDER"))
 	model := strings.TrimSpace(os.Getenv("ENGINE_MODEL"))
-	if resolvedTeam, teamProvider, teamModel, ok := ResolveTeamOrchestratorModel(ctx.ProjectPath, os.Getenv("ENGINE_ACTIVE_TEAM")); ok {
+	if _, teamProvider, teamModel, ok := ResolveTeamOrchestratorModel(ctx.ProjectPath, os.Getenv("ENGINE_ACTIVE_TEAM")); ok {
 		if model == "" {
 			model = teamModel
 		}
 		if explicitProvider == "" || strings.EqualFold(explicitProvider, "auto") {
 			explicitProvider = strings.TrimSpace(teamProvider)
-		}
-		if strings.TrimSpace(os.Getenv("ENGINE_ACTIVE_TEAM")) == "" {
-			os.Setenv("ENGINE_ACTIVE_TEAM", resolvedTeam) //nolint:errcheck
 		}
 	}
 
@@ -1693,40 +2034,76 @@ func Chat(ctx *ChatContext, userMessage string) {
 	}
 
 	provider := resolveProvider(explicitProvider, model)
-	ollamaBaseURL := os.Getenv("OLLAMA_BASE_URL")
-	if provider == "ollama" && model == "" {
-		if forced := strings.TrimSpace(os.Getenv("ENGINE_OLLAMA_MODEL")); forced != "" {
-			model = forced
+	if model == "" {
+		ctx.OnError("No model selected — set ENGINE_MODEL or choose a team with an explicit orchestrator model")
+		return
+	}
+
+	// Autonomous safety: if a cloud provider was selected but the API key is missing,
+	// automatically downshift to local llama.cpp/Ollama instead of erroring.
+	// This ensures Engine never gets stuck waiting for credentials.
+	if provider == "anthropic" && os.Getenv("ANTHROPIC_API_KEY") == "" {
+		// Downshift to llama.cpp first, then Ollama
+		llamacppModel := strings.TrimSpace(os.Getenv("ENGINE_LLAMACPP_MODEL"))
+		if llamacppModel != "" {
+			provider = "llamacpp"
+			model = llamacppModel
 		} else {
-			model = detectOllamaModel(ollamaBaseURL)
+			ollamaModel := strings.TrimSpace(os.Getenv("ENGINE_OLLAMA_MODEL"))
+			if ollamaModel != "" {
+				provider = "ollama"
+				model = ollamaModel
+			} else {
+				provider = "llamacpp"
+				model = "default"
+			}
 		}
 	}
-	if model == "" {
-		model = defaultModelForProvider(provider)
-	}
-
-	if provider == "anthropic" && os.Getenv("ANTHROPIC_API_KEY") == "" {
-		ctx.OnError("ANTHROPIC_API_KEY not set — configure it in Engine Settings")
-		return
-	}
 	if provider == "openai" && os.Getenv("OPENAI_API_KEY") == "" {
-		ctx.OnError("OPENAI_API_KEY not set — configure it in Engine Settings")
-		return
-	}
-
-	// Persist user message
-	userMsgID := newID()
-	if err := saveMessageFn(userMsgID, ctx.SessionID, "user", userMessage, nil); err != nil {
-		ctx.OnError("Failed to save message: " + err.Error())
-		return
-	}
-	if ctx.OnSessionUpdated != nil {
-		if updatedSession, err := db.GetSession(ctx.SessionID); err == nil && updatedSession != nil {
-			ctx.OnSessionUpdated(updatedSession)
+		// Downshift to llama.cpp first, then Ollama
+		llamacppModel := strings.TrimSpace(os.Getenv("ENGINE_LLAMACPP_MODEL"))
+		if llamacppModel != "" {
+			provider = "llamacpp"
+			model = llamacppModel
+		} else {
+			ollamaModel := strings.TrimSpace(os.Getenv("ENGINE_OLLAMA_MODEL"))
+			if ollamaModel != "" {
+				provider = "ollama"
+				model = ollamaModel
+			} else {
+				provider = "llamacpp"
+				model = "default"
+			}
 		}
 	}
 
 	history, _ := db.GetMessages(ctx.SessionID)
+	effectiveUserMessage := userMessage
+	userMsgID := newID()
+	persistUserMessage := true
+	if ctx.ReloadContext {
+		if _, anchor, ok := resolveRetryUserAnchor(history, ctx.RetryFromMessageID); ok {
+			effectiveUserMessage = anchor.Content
+			userMsgID = anchor.ID
+			persistUserMessage = false
+			history = historyFromRetryAnchor(history, ctx.RetryFromMessageID)
+		}
+	}
+
+	if persistUserMessage {
+		if err := saveMessageFn(userMsgID, ctx.SessionID, "user", effectiveUserMessage, nil); err != nil {
+			ctx.OnError("Failed to save message: " + err.Error())
+			return
+		}
+		if ctx.OnSessionUpdated != nil {
+			if updatedSession, err := db.GetSession(ctx.SessionID); err == nil && updatedSession != nil {
+				ctx.OnSessionUpdated(updatedSession)
+			}
+		}
+		history, _ = db.GetMessages(ctx.SessionID)
+	}
+	userMessage = effectiveUserMessage
+
 	session, _ := db.GetSession(ctx.SessionID)
 	userMessageCount := 0
 	for _, h := range history {
@@ -1810,10 +2187,11 @@ func Chat(ctx *ChatContext, userMessage string) {
 	var allToolCalls []ToolCall
 	var finalText strings.Builder
 
-	// Enforce token budget: trim oldest messages if over budget.
-	trimmedMessages, tokensUsed := trimToTokenBudgetFn(messages, DefaultTokenBudget)
-	if tokensUsed > DefaultTokenBudget {
-		ctx.OnError(fmt.Sprintf("⚠️ Conversation history exceeds token budget (%d > %d). Oldest messages were trimmed to fit.", tokensUsed, DefaultTokenBudget))
+	// Enforce token budget with compaction fallback for older context.
+	budget := runtimeContextMaxTokens()
+	trimmedMessages, tokensUsed := trimToTokenBudgetFn(messages, budget)
+	if tokensUsed > budget {
+		ctx.OnError(fmt.Sprintf("⚠️ Conversation history exceeds token budget (%d > %d). Context compaction was applied.", tokensUsed, budget))
 	}
 	messages = trimmedMessages
 
@@ -1889,15 +2267,8 @@ func runPlannerPrePass(ctx *ChatContext, provider, model, userMessage, branch st
 		resolvedProvider = plannerProvider
 	}
 	resolvedProvider = resolveProvider(resolvedProvider, resolvedModel)
-	if resolvedProvider == "ollama" && resolvedModel == "" {
-		if forced := strings.TrimSpace(os.Getenv("ENGINE_OLLAMA_MODEL")); forced != "" {
-			resolvedModel = forced
-		} else {
-			resolvedModel = detectOllamaModel(os.Getenv("OLLAMA_BASE_URL"))
-		}
-	}
 	if resolvedModel == "" {
-		resolvedModel = defaultModelForProvider(resolvedProvider)
+		return ""
 	}
 
 	plannerCtx := &ChatContext{
@@ -2036,7 +2407,7 @@ func runAnthropicLoop(
 			break
 		}
 
-		windowed := windowByVitality(messages, 20)
+		windowed := windowByVitality(messages, runtimeContextRecentWindow())
 
 		req := anthropicRequest{
 			Model:     model,
@@ -2445,7 +2816,7 @@ func runOpenAICompatibleLoop(
 		}
 	}
 	// Convert history to OpenAI message format
-	windowedHistory := windowByVitality(history, 20)
+	windowedHistory := windowByVitality(history, runtimeContextRecentWindow())
 	msgs := []openAIMessage{{Role: "system", Content: systemPrompt}}
 	for _, m := range windowedHistory {
 		content, _ := m.Content.(string)

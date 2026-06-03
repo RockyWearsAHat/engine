@@ -9,6 +9,52 @@ import (
 	"time"
 )
 
+// AGENT COMMUNICATION PROTOCOL
+//
+// This package implements a calm, structured message-passing system for
+// multi-agent coordination on a single project. The protocol is:
+//
+// ── Participants ──────────────────────────────────────────────────────────
+// - Lead Agent (RoleInteractive): orchestrates, delegates, synthesizes
+// - Specialist Agents (various roles): execute focused tasks, report results
+// - All agents register with AgentPeer (ID, Role, Status)
+//
+// ── Message Shape ─────────────────────────────────────────────────────────
+// AgentMessage has exactly these fields:
+//   - ID: auto-generated (msg-1, msg-2, ...)
+//   - From: sender ID (required, must be registered peer)
+//   - To: recipient ID (required, must be registered peer)
+//   - Subject: one-line brief of the task/question (optional but recommended)
+//   - Body: full task description, context, spec, or question (required, non-empty)
+//   - ReplyTo: ID of the message this replies to (optional, for threading)
+//   - CreatedAt: timestamp (auto-set)
+//
+// ── Validation Rules ──────────────────────────────────────────────────────
+// - Sender and recipient must both be registered peers; send fails otherwise
+// - Body must be non-empty; send fails otherwise
+// - Subject should be <= 80 chars for UI readability
+// - ReplyTo must point to an existing message ID if set
+// - Message IDs are deterministic (msg-N where N increments globally)
+//
+// ── Protocol Flow ─────────────────────────────────────────────────────────
+// 1. Lead agent calls agent_list to discover available specialists
+// 2. Lead calls agent_send(to: "specialist-id", subject: "task", body: brief)
+// 3. Specialist calls agent_inbox(consume: true) to get pending work
+// 4. Specialist processes task, calls agent_send(to: lead, replyTo: msg-N) with result
+// 5. Lead calls agent_await(replyTo: msg-N, timeout: duration) to get specialist result
+// 6. Lead synthesizes all results into one report back to the user
+//
+// ── Async & Thread Safety ─────────────────────────────────────────────────
+// - All Hub methods are goroutine-safe (protected by sync.Mutex)
+// - Await polls the inbox with 10ms sleep; timeout is wall-clock time
+// - Inbox(consume: true) is destructive; called once per agent per work batch
+// - No direct agent-to-agent messaging; all flows through lead
+//
+// ── Determinism ───────────────────────────────────────────────────────────
+// - List() returns peers sorted by ID for consistent prompts
+// - Message ordering is FIFO within an inbox
+// - No duplicate message IDs in the pool
+//
 // AgentPeer is one live participant in a project's agent communication pool.
 type AgentPeer struct {
 	ID        string    `json:"id"`

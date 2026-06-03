@@ -32,7 +32,10 @@
     "packages/server-go/ai/test_loop_test.go",
     "packages/server-go/ai/test_orchestrator_test.go",
     "packages/server-go/ai/team_dispatcher_test.go",
-    "packages/server-go/ai/roles_test.go"
+    "packages/server-go/ai/roles_test.go",
+    "packages/server-go/ai/orchestrator_gap_extra_test.go",
+    "packages/server-go/ai/orchestrator_run_extra_test.go",
+    "packages/server-go/ai/orchestrator_state_extra_test.go"
   ],
   "File Tree": [
     "packages/client/src/test/filetree.test.tsx",

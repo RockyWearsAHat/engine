@@ -71,7 +71,11 @@ export interface RuntimeConfig {
   modelProvider?: string | null;
   ollamaBaseUrl?: string | null;
   model?: string | null;
+  activeTeam?: string | null;
   clonesDir?: string | null;
+  contextMaxTokens?: string | null;
+  contextRecentWindow?: string | null;
+  listDirectoryMaxChars?: string | null;
 }
 
 // Discord control plane types (kept separate from RuntimeConfig because
@@ -200,7 +204,7 @@ export interface TerminalInfo {
 // WebSocket protocol — Client → Server
 export type ClientMessage =
   | { type: 'project.open'; path: string }
-  | { type: 'chat'; sessionId: string; content: string }
+  | { type: 'chat'; sessionId: string; content: string; reloadContext?: boolean; retryFromMessageId?: string }
   | { type: 'chat.stop'; sessionId: string }
   | { type: 'session.create'; projectPath: string }
   | { type: 'session.load'; sessionId: string }
