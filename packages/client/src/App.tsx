@@ -27,10 +27,10 @@ import {
 import {
   FolderOpen, GitBranch, AlertCircle, Settings2, Activity,
   Search, ServerCog, ChartColumn,
-  Minus, Square, X, FileText, Hammer, Play, Terminal as TerminalIcon, Menu, FileStack, RotateCcw,
+  Minus, Square, X, FileText, Hammer, Play, Terminal as TerminalIcon, Menu, RotateCcw,
 } from 'lucide-react';
 
-type ActivityTab = 'explorer' | 'open-editors' | 'git' | 'search' | 'issues' | 'usage';
+type ActivityTab = 'explorer' | 'quality' | 'git' | 'search' | 'issues' | 'usage';
 type RightTab = 'chat' | 'agent';
 type NoticeTone = 'info' | 'error';
 type WindowAction = 'minimize' | 'toggle-maximize' | 'toggle-fullscreen' | 'close';
@@ -126,6 +126,7 @@ export default function App() {
     githubIssues, setGithubIssues, setGithubIssuesLoading, setGithubIssuesError,
     agentSessions, updateAgentSession, addLiveToolCall, resolveLiveToolCall,
     setSearchResults, setEditorPreferences,
+    setQualityProgress, setQualityReport, setQualityError, startQualityScan,
   } = useStore();
 
   const [activityTab, setActivityTab] = useState<ActivityTab>('explorer');
@@ -165,6 +166,7 @@ export default function App() {
   const editorAreaRef = useRef<HTMLDivElement | null>(null);
   const dirtyOpenFilesRef = useRef(openFiles.filter(file => file.dirty));
   const allowWindowCloseRef = useRef(false);
+  const lastQualityScanProjectRef = useRef('');
   const syncRuntimeConfigRef = useRef<() => Promise<void>>(async () => {});
   const requestWorkspaceTasksRef = useRef<(path?: string) => void>(() => {});
   const requestFileCloseRef = useRef<(path: string) => void>(() => {});
@@ -335,7 +337,7 @@ export default function App() {
   }, [resizingPanel]);
 
   const syncRuntimeConfig = useCallback(async () => {
-    const [savedGithubToken, githubOwner, githubRepo, anthropicKey, openaiKey, savedModelProvider, ollamaBaseUrl, model, editorPreferences, clonesDir, activeTeam, contextMaxTokens, contextRecentWindow, listDirectoryMaxChars] = await Promise.all([
+    const [savedGithubToken, githubOwner, githubRepo, anthropicKey, openaiKey, savedModelProvider, ollamaBaseUrl, model, editorPreferences, clonesDir, activeTeam] = await Promise.all([
       bridge.getGithubToken().catch(() => null),
       bridge.getGithubRepoOwner().catch(() => null),
       bridge.getGithubRepoName().catch(() => null),
@@ -347,9 +349,6 @@ export default function App() {
       bridge.getEditorPreferences().catch(() => null),
       bridge.getClonesDir().catch(() => null),
       bridge.getActiveTeam().catch(() => null),
-      bridge.getContextMaxTokens().catch(() => null),
-      bridge.getContextRecentWindow().catch(() => null),
-      bridge.getListDirectoryMaxChars().catch(() => null),
     ]);
     const modelProvider = savedModelProvider || 'llamacpp';
 
@@ -370,9 +369,6 @@ export default function App() {
         model,
         activeTeam,
         clonesDir,
-        contextMaxTokens,
-        contextRecentWindow,
-        listDirectoryMaxChars,
       },
     });
 
@@ -411,6 +407,17 @@ export default function App() {
   const requestWorkspaceTasks = useCallback((path?: string) => {
     wsClient.send({ type: 'workspace.tasks', path: path ? normalizeProjectPath(path) : undefined });
   }, []);
+
+  const requestQualityScan = useCallback((projectPath: string) => {
+    const normalizedPath = normalizeProjectPath(projectPath);
+    if (!normalizedPath) {
+      return;
+    }
+    lastQualityScanProjectRef.current = normalizedPath;
+    startQualityScan(normalizedPath);
+    setQualityError(null);
+    wsClient.send({ type: 'quality.report.get', projectPath: normalizedPath, maxIssues: 120 });
+  }, [setQualityError, startQualityScan]);
 
   const launchWorkspaceTask = useCallback((task: WorkspaceTask | null) => {
     if (!task) {
@@ -818,14 +825,14 @@ export default function App() {
         },
       },
       {
-        id: 'palette:show-open-editors',
+        id: 'palette:show-ai-linter',
         kind: 'command',
-        title: 'Show Open Editors',
-        subtitle: 'Focus the currently open editor list',
-        keywords: 'open editors tabs sidebar',
+        title: 'Show Quality Index',
+        subtitle: 'Focus deterministic code-quality contention findings',
+        keywords: 'quality index code quality cs3500 sidebar',
         badge: 'Sidebar',
         action: () => {
-          setActivityTab('open-editors');
+          setActivityTab('quality');
           setShowSidebar(true);
         },
       },
@@ -987,6 +994,7 @@ export default function App() {
 
         case 'session.created':
           setActiveSession(msg.session);
+          requestQualityScan(msg.session.projectPath);
           setMessages([]);
           pendingToolCallsRef.current[msg.session.id] = [];
           setSessions(prev => {
@@ -1010,6 +1018,7 @@ export default function App() {
 
         case 'session.loaded':
           setActiveSession(msg.session);
+          requestQualityScan(msg.session.projectPath);
           setMessages(msg.messages);
           pendingToolCallsRef.current[msg.session.id] = [];
           if (streamingRef.current?.sessionId === msg.session.id) {
@@ -1146,6 +1155,20 @@ export default function App() {
           setDefaultRunTaskId(msg.defaultRunTaskId ?? null);
           break;
 
+        case 'quality.scan.progress':
+          setQualityProgress(msg.progress);
+          break;
+
+        case 'quality.report':
+          if (msg.error) {
+            setQualityError(msg.error);
+            break;
+          }
+          if (msg.report) {
+            setQualityReport(msg.report);
+          }
+          break;
+
         case 'github.issues':
           setGithubIssues(msg.issues);
           setGithubIssuesError(msg.error ?? null);
@@ -1239,6 +1262,17 @@ export default function App() {
     }
     requestWorkspaceTasks(activeSession.projectPath);
   }, [activeSession?.projectPath, requestWorkspaceTasks]);
+
+  useEffect(() => {
+    const projectPath = normalizeProjectPath(activeSession?.projectPath ?? '');
+    if (!projectPath) {
+      return;
+    }
+    if (lastQualityScanProjectRef.current === projectPath) {
+      return;
+    }
+    requestQualityScan(projectPath);
+  }, [activeSession?.projectPath, requestQualityScan]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1398,7 +1432,8 @@ export default function App() {
             setShowSidebar(true);
             break;
           case 'show-open-editors':
-            setActivityTab('open-editors');
+          case 'show-ai-linter':
+            setActivityTab('quality');
             setShowSidebar(true);
             break;
           case 'show-search':
@@ -1519,8 +1554,8 @@ export default function App() {
                 setActivityTab('explorer');
                 setShowSidebar(true);
               }}
-              onShowOpenEditors={() => {
-                setActivityTab('open-editors');
+              onShowQuality={() => {
+                setActivityTab('quality');
                 setShowSidebar(true);
               }}
               onShowSearch={() => {
@@ -1575,7 +1610,7 @@ export default function App() {
           <div className="activity-bar">
             {([
               ['explorer', FolderOpen],
-              ['open-editors', FileStack],
+              ['quality', Activity],
               ['git', GitBranch],
               ['search', Search],
               ['issues', AlertCircle],
@@ -1988,7 +2023,7 @@ function FileMenu({
   onToggleTerminal,
   onToggleSidebar,
   onShowExplorer,
-  onShowOpenEditors,
+  onShowQuality,
   onShowSearch,
   onShowGit,
   onShowIssues,
@@ -2015,7 +2050,7 @@ function FileMenu({
   onToggleTerminal: () => void;
   onToggleSidebar: () => void;
   onShowExplorer: () => void;
-  onShowOpenEditors: () => void;
+  onShowQuality: () => void;
   onShowSearch: () => void;
   onShowGit: () => void;
   onShowIssues: () => void;
@@ -2088,7 +2123,7 @@ function FileMenu({
             <MenuItem icon={<Menu size={13} />} label={showSidebar ? 'Hide Sidebar' : 'Show Sidebar'} onClick={() => { setOpen(false); onToggleSidebar(); }} />
             <MenuItem icon={<TerminalIcon size={13} />} label={showTerminal ? 'Hide Terminal' : 'Show Terminal'} onClick={() => { setOpen(false); onToggleTerminal(); }} />
             <MenuItem icon={<FolderOpen size={13} />} label={`${activityTab === 'explorer' ? '✓ ' : ''}Explorer`} onClick={() => { setOpen(false); onShowExplorer(); }} />
-            <MenuItem icon={<FileStack size={13} />} label={`${activityTab === 'open-editors' ? '✓ ' : ''}Open Editors`} onClick={() => { setOpen(false); onShowOpenEditors(); }} />
+            <MenuItem icon={<Activity size={13} />} label={`${activityTab === 'quality' ? '✓ ' : ''}Quality Index`} onClick={() => { setOpen(false); onShowQuality(); }} />
             <MenuItem icon={<Search size={13} />} label={`${activityTab === 'search' ? '✓ ' : ''}Search`} onClick={() => { setOpen(false); onShowSearch(); }} />
             <MenuItem icon={<GitBranch size={13} />} label={`${activityTab === 'git' ? '✓ ' : ''}Source Control`} onClick={() => { setOpen(false); onShowGit(); }} />
             <MenuItem icon={<AlertCircle size={13} />} label={`${activityTab === 'issues' ? '✓ ' : ''}Issues`} onClick={() => { setOpen(false); onShowIssues(); }} />

@@ -1,6 +1,7 @@
 package discord
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -383,12 +384,19 @@ func TestAcquireProjectChatSession_UnknownAuthorUsername(t *testing.T) {
 func TestHandleDirectChatMessage_FullPath(t *testing.T) {
 	origChat := chatFunc
 	defer func() { chatFunc = origChat }()
-	chatDone := make(chan struct{})
 	chatFunc = func(ctx *ai.ChatContext, prompt string) {
 		ctx.OnChunk("engine response", false)
 		ctx.OnChunk("", true)
 		ctx.OnSessionUpdated(nil)
-		close(chatDone)
+	}
+
+	origRun := runAutonomousProject
+	defer func() { runAutonomousProject = origRun }()
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		// Conversational route: drive the interactive executor and report it
+		// as a chat answer (not a build).
+		cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		return &ai.OrchestrationState{Conversational: true}, nil
 	}
 
 	svc, _ := newDisabledSvc(t)
@@ -400,12 +408,77 @@ func TestHandleDirectChatMessage_FullPath(t *testing.T) {
 
 	m := msg("ch-direct-full", "fix the bug")
 	svc.handleDirectChatMessage(m, binding)
+	waitForChatIdle(t, svc)
+}
 
-	select {
-	case <-chatDone:
-	case <-timeAfter(3000):
-		t.Log("chatFunc not called (disabled mode ok — goroutine launched)")
+// waitForChatIdle polls until runAgentChat's goroutine clears the active map.
+func waitForChatIdle(t *testing.T, svc *Service) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		svc.activeMu.Lock()
+		n := len(svc.active)
+		svc.activeMu.Unlock()
+		if n == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+	t.Fatal("runAgentChat goroutine did not finish in time")
+}
+
+// TestRunAgentChat_BuildRoute_PostsCompletionSummary covers the build branch:
+// the orchestrator returns a non-conversational state, so runAgentChat posts a
+// completion summary instead of relaying chat text.
+func TestRunAgentChat_BuildRoute_PostsCompletionSummary(t *testing.T) {
+	origRun := runAutonomousProject
+	defer func() { runAutonomousProject = origRun }()
+	var gotBrief string
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		cfg.OnPhase("execute", "writing files")
+		cfg.OnProgress("step done")
+		gotBrief = cfg.Brief
+		return &ai.OrchestrationState{Plan: []ai.PlanStep{{}, {}}, OuterIterations: 3}, nil
+	}
+
+	svc, _ := newDisabledSvc(t)
+	proj := t.TempDir()
+	channelID := "ch-build-route"
+	binding := ProjectBinding{ProjectPath: proj, ChannelID: channelID}
+	svc.stateMu.Lock()
+	svc.state.Projects[proj] = binding
+	svc.stateMu.Unlock()
+
+	m := msg(channelID, "build me a feature")
+	svc.runAgentChat(m, binding, "build me a feature")
+	waitForChatIdle(t, svc)
+
+	if strings.TrimSpace(gotBrief) == "" {
+		t.Fatal("expected orchestrator to be invoked with a brief")
+	}
+}
+
+// TestRunAgentChat_OrchestratorError covers the error branch: the orchestrator
+// returns an error, so runAgentChat reports it and returns early.
+func TestRunAgentChat_OrchestratorError(t *testing.T) {
+	origRun := runAutonomousProject
+	defer func() { runAutonomousProject = origRun }()
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		cfg.OnError("plan failed")
+		return nil, errors.New("plan failed")
+	}
+
+	svc, _ := newDisabledSvc(t)
+	proj := t.TempDir()
+	channelID := "ch-build-error"
+	binding := ProjectBinding{ProjectPath: proj, ChannelID: channelID}
+	svc.stateMu.Lock()
+	svc.state.Projects[proj] = binding
+	svc.stateMu.Unlock()
+
+	m := msg(channelID, "do a thing")
+	svc.runAgentChat(m, binding, "do a thing")
+	waitForChatIdle(t, svc)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

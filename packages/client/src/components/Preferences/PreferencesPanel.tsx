@@ -90,9 +90,6 @@ export default function PreferencesPanel() {
   const [ollamaBaseUrlInput, setOllamaBaseUrlInput] = useState('');
   const [modelInput, setModelInput] = useState('');
   const [clonesDirInput, setClonesDirInput] = useState('');
-  const [contextMaxTokensInput, setContextMaxTokensInput] = useState('');
-  const [contextRecentWindowInput, setContextRecentWindowInput] = useState('');
-  const [listDirectoryMaxCharsInput, setListDirectoryMaxCharsInput] = useState('');
   const [saved, setSaved] = useState<string | null>(null);
   const [serviceStatus, setServiceStatus] = useState<BackgroundServiceStatus | null>(null);
   const [serviceMsg, setServiceMsg] = useState('');
@@ -248,9 +245,6 @@ export default function PreferencesPanel() {
     bridge.getOllamaBaseUrl().then(url => { if (url) setOllamaBaseUrlInput(url); });
     bridge.getModel().then(m => { if (m) setModelInput(m); });
     bridge.getClonesDir().then(d => { if (d) setClonesDirInput(d); });
-    bridge.getContextMaxTokens().then(v => { if (v) setContextMaxTokensInput(v); });
-    bridge.getContextRecentWindow().then(v => { if (v) setContextRecentWindowInput(v); });
-    bridge.getListDirectoryMaxChars().then(v => { if (v) setListDirectoryMaxCharsInput(v); });
     bridge.getEditorPreferences().then(setEditorPreferences);
     bridge.agentServiceStatus().then(setServiceStatus);
   }, [setEditorPreferences, setGithubToken]);
@@ -272,9 +266,6 @@ export default function PreferencesPanel() {
       ollamaBaseUrl?: string | null;
       model?: string | null;
       clonesDir?: string | null;
-      contextMaxTokens?: string | null;
-      contextRecentWindow?: string | null;
-      listDirectoryMaxChars?: string | null;
     }) => {
       const nextConfig = {
         githubToken: overrides?.githubToken ?? (ghInput.trim() || null),
@@ -286,9 +277,6 @@ export default function PreferencesPanel() {
         ollamaBaseUrl: overrides?.ollamaBaseUrl ?? (ollamaBaseUrlInput.trim() || null),
         model: overrides?.model ?? (modelInput.trim() || null),
         clonesDir: overrides?.clonesDir ?? (clonesDirInput.trim() || null),
-          contextMaxTokens: overrides?.contextMaxTokens ?? (contextMaxTokensInput.trim() || null),
-          contextRecentWindow: overrides?.contextRecentWindow ?? (contextRecentWindowInput.trim() || null),
-          listDirectoryMaxChars: overrides?.listDirectoryMaxChars ?? (listDirectoryMaxCharsInput.trim() || null),
       };
 
     setGithubToken(nextConfig.githubToken);
@@ -954,47 +942,6 @@ export default function PreferencesPanel() {
               <span className="preferences-muted">Engine uses Ollama&apos;s OpenAI-compatible `/v1/chat/completions` endpoint. Leave blank for the local default.</span>
             </label>
 
-            <div className="preferences-row three-up">
-              <label className="preferences-field">
-                <span className="preferences-label">Context max tokens</span>
-                <input
-                  type="number"
-                  min={4000}
-                  step={1000}
-                  placeholder="100000"
-                  value={contextMaxTokensInput}
-                  onChange={event => setContextMaxTokensInput(event.target.value)}
-                  style={inputStyle}
-                />
-              </label>
-              <label className="preferences-field">
-                <span className="preferences-label">Recent context window</span>
-                <input
-                  type="number"
-                  min={4}
-                  max={200}
-                  step={1}
-                  placeholder="20"
-                  value={contextRecentWindowInput}
-                  onChange={event => setContextRecentWindowInput(event.target.value)}
-                  style={inputStyle}
-                />
-              </label>
-              <label className="preferences-field">
-                <span className="preferences-label">Directory listing max chars</span>
-                <input
-                  type="number"
-                  min={2000}
-                  step={500}
-                  placeholder="16000"
-                  value={listDirectoryMaxCharsInput}
-                  onChange={event => setListDirectoryMaxCharsInput(event.target.value)}
-                  style={inputStyle}
-                />
-              </label>
-            </div>
-            <span className="preferences-muted">Tune compaction behavior for chat history and list_directory output. Leave blank to use defaults.</span>
-
             <div className="preferences-inline-actions preferences-action-group">
               <button
                 className="btn-secondary"
@@ -1040,28 +987,6 @@ export default function PreferencesPanel() {
                 })}
               >
                 {saved === 'ollamaUrl' ? <><Check size={12} /> Ollama URL saved</> : 'Save Ollama URL'}
-              </button>
-              <button
-                className="btn-secondary"
-                onClick={() => void saveField('contextLimits', async () => {
-                  const maxTokens = contextMaxTokensInput.trim();
-                  const recentWindow = contextRecentWindowInput.trim();
-                  const maxChars = listDirectoryMaxCharsInput.trim();
-                  const ok1 = await bridge.setContextMaxTokens(maxTokens);
-                  const ok2 = await bridge.setContextRecentWindow(recentWindow);
-                  const ok3 = await bridge.setListDirectoryMaxChars(maxChars);
-                  const ok = ok1 && ok2 && ok3;
-                  if (ok) {
-                    pushRuntimeConfig({
-                      contextMaxTokens: maxTokens || null,
-                      contextRecentWindow: recentWindow || null,
-                      listDirectoryMaxChars: maxChars || null,
-                    });
-                  }
-                  return ok;
-                })}
-              >
-                {saved === 'contextLimits' ? <><Check size={12} /> Limits saved</> : 'Save context limits'}
               </button>
             </div>
           </div>

@@ -222,7 +222,7 @@ func TestBuildRoleSystemPrompt_Interactive_ContainsTerseRule(t *testing.T) {
 
 func TestBuildRoleSystemPrompt_Interactive_ContainsLeadDelegationRule(t *testing.T) {
 	p := buildRoleSystemPrompt(RoleInteractive, "/proj", "main", "")
-	for _, required := range []string{"user-facing lead agent", "agent_send", "synthesize one clear report"} {
+	for _, required := range []string{"user-facing lead agent", "agent_send", "agent_receive", "synthesize one clear report"} {
 		if !strings.Contains(p, required) {
 			t.Errorf("expected interactive prompt to contain %q, got %q", required, p)
 		}
@@ -251,7 +251,7 @@ func TestBuildRoleSystemPrompt_AutonomousBuilder_ContainsDiscordProgressRule(t *
 
 func TestRoleBootstrapTools_AutonomousBuilder_HasAgentCommunication(t *testing.T) {
 	tools := roleBootstrapTools(RoleAutonomousBuilder)
-	for _, required := range []string{"agent_list", "agent_send", "agent_inbox", "agent_await"} {
+	for _, required := range []string{"agent_list", "agent_send", "agent_inbox", "agent_receive", "agent_await"} {
 		if !slices.Contains(tools, required) {
 			t.Errorf("RoleAutonomousBuilder missing %q, got %v", required, tools)
 		}
@@ -260,7 +260,7 @@ func TestRoleBootstrapTools_AutonomousBuilder_HasAgentCommunication(t *testing.T
 
 func TestBuildRoleSystemPrompt_AutonomousBuilder_ContainsTeamCommunicationRules(t *testing.T) {
 	p := buildRoleSystemPrompt(RoleAutonomousBuilder, "/proj", "main", "")
-	for _, required := range []string{"TEAM COMMUNICATION RULES", "agent_list", "agent_await", "clean context window"} {
+	for _, required := range []string{"TEAM COMMUNICATION RULES", "agent_list", "agent_receive", "clean context window"} {
 		if !strings.Contains(p, required) {
 			t.Errorf("expected autonomous builder prompt to contain %q, got %q", required, p)
 		}

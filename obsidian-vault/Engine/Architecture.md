@@ -49,6 +49,23 @@ packages/
 - **Secret scanning**: Go intercepts every outgoing AI message and blocks if a secret pattern is matched.
 - **Custom tools**: `.engine/tools/<name>.json` defines project-specific agent tools; inputs passed as `INPUT_<NAME>` env vars to prevent injection.
 - **Test coverage**: 100% client (Vitest), 100% Go (go test), Rust (cargo llvm-cov) — all enforced by completion gate.
+- **Memory OS (always-on)**: append-only hash-chained ledger (`memory_ledger_events`), residual cognition graph (`memory_residual_nodes`, `memory_residual_edges`), deterministic snapshots (`memory_state_snapshots`), deterministic context compilation, and scribe snapshots under `.engine/memory/scribe/`.
+
+## Memory OS Module Surface
+
+- `packages/server-go/db/db.go`
+  - `AppendMemoryLedgerEvent` / `GetMemoryLedgerEvents` / `VerifyMemoryLedgerChain`
+  - `UpsertMemoryResidualNode` / `UpsertMemoryResidualEdge` / `ListTopMemoryResidualNodes`
+  - `SaveMemoryStateSnapshot` / `LoadLatestMemoryStateSnapshot`
+- `packages/server-go/ai/memory_os.go`
+  - Event ingestion from chat/tool/assistant lifecycle
+  - Residual graph updates with composite scoring
+  - Deterministic context compiler for prompt assembly
+  - Shared + model-specific scribe snapshot persistence
+- `packages/server-go/ai/context.go`
+  - Hooks for `user_message`, `tool_call_started`, `tool_call_result`, `assistant_message`
+  - Injects deterministic memory context into interactive prompt context
+  - Persists scribe snapshots after assistant completion
 
 ## Design Principles
 

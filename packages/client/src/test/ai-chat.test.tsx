@@ -108,6 +108,26 @@ describe('AIChat interactions', () => {
     expect(useStore.getState().chatMessages).toHaveLength(2);
   });
 
+  it('AssistantRetryButton_ReloadContextEnabled', () => {
+    useStore.setState({
+      chatMessages: [
+        { id: 'user-1', role: 'user', content: 'first request', toolCalls: [], streaming: false, failed: false },
+        { id: 'assistant-1', role: 'assistant', content: 'stale reply', toolCalls: [], streaming: false, failed: false },
+      ],
+    });
+    render(<AIChat />);
+
+    fireEvent.click(screen.getByTitle('Retry'));
+
+    expect(sendMock).toHaveBeenCalledWith({
+      type: 'chat',
+      sessionId: 'session-1',
+      content: 'first request',
+      reloadContext: true,
+      retryFromMessageId: 'assistant-1',
+    });
+  });
+
   it('ToolCallDetails_ShownAndToggledExpanded', () => {
     useStore.setState({
       chatMessages: [

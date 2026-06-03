@@ -10,7 +10,7 @@ import type { FileNode, GitHubIssue, SearchResult } from '@engine/shared';
 import {
   FolderOpen, Folder, RefreshCw, GitBranch,
   AlertCircle, FileText, ChevronRight, ChevronDown, Circle,
-  Loader2, Search, X, ChartColumn,
+  Loader2, Search, X, ChartColumn, Activity,
 } from 'lucide-react';
 import {
   countFolders,
@@ -25,8 +25,9 @@ import {
   hasDirectChildDirExpanded,
 } from './folderUtils';
 import UsageDashboard from '../Usage/UsageDashboard.js';
+import QualityPanel from '../Quality/QualityPanel.js';
 
-type ActivityTab = 'explorer' | 'open-editors' | 'git' | 'search' | 'issues' | 'usage';
+type ActivityTab = 'explorer' | 'quality' | 'git' | 'search' | 'issues' | 'usage';
 
 type GitFileStatus = 'modified' | 'staged' | 'untracked' | 'ignored' | null;
 
@@ -638,6 +639,18 @@ export default function FileTree({ activityTab, onOpenFolder, onOpenFile, openFi
           </div>
           <div className="sidebar-body">
             <UsageDashboard projectPath={activeSession?.projectPath ?? null} />
+          </div>
+        </>
+      )}
+
+      {activityTab === 'quality' && (
+        <>
+          <div className="sidebar-header">
+            <Activity size={13} style={{ color: 'var(--accent-2)' }} />
+            <span className="sidebar-title">Quality Index</span>
+          </div>
+          <div className="sidebar-body">
+            <QualityPanel />
           </div>
         </>
       )}

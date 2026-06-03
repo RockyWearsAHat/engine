@@ -70,3 +70,15 @@ Add entries here when making non-obvious decisions so future sessions can reason
 **Tradeoffs:** The first implementation is in-process and project-scoped, so cross-device agent communication still needs a transport layer later. The tool contract is intentionally small so it can be backed by a network broker without changing role prompts.
 
 ---
+
+## Decision: Memory OS as infrastructure (not prompt discipline)
+
+**Decided:** Implement an always-on Memory OS in the server with an append-only hash-chained event ledger, a residual cognition graph, deterministic context compiler output, and shared/model-specific scribe snapshots.
+
+**Why:** Finite model context windows make raw-history replay impossible at scale. The only reliable path is: persist all meaningful events losslessly, keep a weighted state graph for relevance, and compile deterministic context packs each turn so the model does zero manual bookkeeping.
+
+**Rejected alternatives:** Relying on manually-authored summaries; storing only recent chat windows; embedding memory directives only in prompt text without backend persistence.
+
+**Tradeoffs:** This increases DB schema and ingestion complexity, and scoring heuristics will need iteration. The first pass focuses on deterministic state recovery and hook coverage rather than a fully autonomous contradiction repair loop.
+
+---

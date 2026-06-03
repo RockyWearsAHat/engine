@@ -21,6 +21,7 @@ import (
 	gofs "github.com/engine/server/fs"
 	gogit "github.com/engine/server/git"
 	"github.com/engine/server/github"
+	"github.com/engine/server/quality"
 	"github.com/engine/server/remote"
 	"github.com/engine/server/terminal"
 	"github.com/engine/server/workspace"
@@ -43,6 +44,14 @@ var (
 	aiBuildInitialSummary      = ai.BuildInitialSessionSummary
 	aiEnsureSessionWorktree    = ai.EnsureSessionWorktree
 	aiCleanupSessionWorktreeDB = ai.CleanupSessionWorktree
+	qualityScanFn              = quality.ScanProject
+	qualityScanWithProgressFn  = func(projectPath string, maxIssues int, onProgress quality.ProgressCallback) (quality.Report, error) {
+		if onProgress == nil {
+			return qualityScanFn(projectPath, maxIssues)
+		}
+		return quality.ScanProjectWithProgress(projectPath, maxIssues, onProgress)
+	}
+	qualityRefreshFn = quality.RefreshProjectIndex
 )
 
 // Overridable repo registry calls for testing.
@@ -603,10 +612,8 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 
 	case "chat":
 		var msg struct {
-			SessionID          string `json:"sessionId"`
-			Content            string `json:"content"`
-			ReloadContext      bool   `json:"reloadContext"`
-			RetryFromMessageID string `json:"retryFromMessageId"`
+			SessionID string `json:"sessionId"`
+			Content   string `json:"content"`
 		}
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			c.sendErr("Bad payload", "BAD_PAYLOAD")
@@ -619,6 +626,21 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		}
 		sessionID := session.ID
 		projectPath = session.ProjectPath
+		chatPrompt := promptWithProjectStatusContext(projectPath, msg.Content)
+
+		// One ingress, one brain: if an orchestrator is already active for this
+		// project, treat new chat input as a continuation directive.
+		if handle := ai.GetOrchestratorHandle(projectPath); handle != nil {
+			handle.Redirect(chatPrompt)
+			c.send(map[string]any{"type": "chat.started", "sessionId": sessionID})
+			c.send(map[string]any{
+				"type":      "chat.notice",
+				"sessionId": sessionID,
+				"notice":    "Directive queued into active orchestrator.",
+			})
+			c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": "", "done": true})
+			return
+		}
 
 		// Create a cancel channel for this request so the client can stop it.
 		cancelCh := make(chan struct{})
@@ -650,123 +672,111 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 					})
 				}
 			}()
-			// Autonomous intent detection: when the user types "build", "go autonomous",
-			// "/build", etc. switch to the autonomous builder role with awareness-only
-			// safety — no approval modals, awareness notes feed back into the loop.
-			var autonomousPolicy *ai.AutonomousPolicy
-			role := ai.RoleInteractive
-			autonomousIntent := ai.DetectAutonomousIntent(msg.Content)
-			if ai.DetectAutonomousIntent(msg.Content) {
-				p := ai.ResolveAutonomousPolicy(projectPath)
-				autonomousPolicy = &p
-				role = ai.RoleAutonomousBuilder
-				c.send(map[string]any{
-					"type":      "chat.notice",
-					"sessionId": sessionID,
-					"notice":    "Autonomous mode engaged — approvals bypassed, awareness notes will be surfaced inline.",
-				})
-			}
-			chatPrompt := promptWithProjectStatusContext(projectPath, msg.Content)
 
-			// Autonomous-intent chat requests must run through the project orchestrator
-			// so chat, Discord, and GitHub entry points share the same execution model.
-			if autonomousIntent {
-				state, orchestratorErr := runAutonomousProject(ai.OrchestratorConfig{
-					ProjectPath:     projectPath,
-					Brief:           chatPrompt,
-					SessionIDPrefix: fmt.Sprintf("chat-%s", shortID(sessionID)),
-					Cancel:          cancelCh,
-					ChatFn:          runAIChat,
-					OnPhase: func(phase, detail string) {
-						c.send(map[string]any{
-							"type":      "chat.notice",
-							"sessionId": sessionID,
-							"notice":    fmt.Sprintf("Orchestrator %s: %s", phase, detail),
-						})
-					},
-					OnError: func(errMsg string) {
-						if strings.TrimSpace(errMsg) == "" {
-							return
-						}
-						c.send(map[string]any{"type": "chat.error", "sessionId": sessionID, "error": errMsg})
-					},
-				})
-				if orchestratorErr != nil {
-					if strings.Contains(strings.ToLower(orchestratorErr.Error()), "cancel") {
-						c.send(map[string]any{"type": "chat.notice", "sessionId": sessionID, "notice": "Orchestrator cancelled."})
-						c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": "", "done": true})
+			state, orchestratorErr := runAutonomousProject(ai.OrchestratorConfig{
+				ProjectPath:     projectPath,
+				Brief:           chatPrompt,
+				SessionIDPrefix: fmt.Sprintf("chat-%s", shortID(sessionID)),
+				Cancel:          cancelCh,
+				ChatFn:          runAIChat,
+				// InteractiveChat is the conversational executor. When the
+				// orchestrator triages this brief as a chat (not a build), it
+				// hands back here so the reply streams to the client with the
+				// full interactive surface — tokens, tool calls, approvals,
+				// session updates — exactly like a direct interactive turn.
+				InteractiveChat: func(brief string, cancel <-chan struct{}) {
+					runAIChat(&ai.ChatContext{
+						ProjectPath: projectPath,
+						SessionID:   sessionID,
+						Cancel:      cancel,
+						Role:        ai.RoleInteractive,
+						OnChunk: func(content string, done bool) {
+							c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": content, "done": done})
+						},
+						OnToolCall: func(name string, input any) {
+							c.send(map[string]any{"type": "chat.tool_call", "sessionId": sessionID, "name": name, "input": input})
+						},
+						OnToolResult: func(name string, result any, isError bool) {
+							c.send(map[string]any{"type": "chat.tool_result", "sessionId": sessionID, "name": name, "result": result, "isError": isError})
+						},
+						OnError: func(errMsg string) {
+							c.send(map[string]any{"type": "chat.error", "sessionId": sessionID, "error": errMsg})
+						},
+						OnSessionUpdated: func(session *db.Session) {
+							c.send(map[string]any{"type": "session.updated", "session": session})
+						},
+						GetOpenTabs: func() []ai.TabInfo {
+							c.tabsMu.RLock()
+							defer c.tabsMu.RUnlock()
+							return c.openTabs
+						},
+						RequestApproval: func(kind, title, message, command string) (bool, error) {
+							return c.requestApproval(sessionID, kind, title, message, command)
+						},
+						SendToClient: func(msgType string, payload any) {
+							m := map[string]any{"type": msgType}
+							switch p := payload.(type) {
+							case map[string]any:
+								maps.Copy(m, p)
+							case map[string]string:
+								for k, v := range p {
+									m[k] = v
+								}
+							}
+							c.send(m)
+						},
+						DiscordDM: func(message string) error {
+							if discordBridge == nil {
+								return fmt.Errorf("Discord not configured")
+							}
+							return discordBridge.SendDMToOwner(message)
+						},
+						DiscordProgress: func(message string) error {
+							if discordBridge == nil {
+								return fmt.Errorf("Discord not configured")
+							}
+							discordBridge.NotifyProjectProgress(projectPath, message)
+							return nil
+						},
+					}, brief)
+				},
+				OnPhase: func(phase, detail string) {
+					c.send(map[string]any{
+						"type":      "chat.notice",
+						"sessionId": sessionID,
+						"notice":    fmt.Sprintf("Orchestrator %s: %s", phase, detail),
+					})
+				},
+				OnError: func(errMsg string) {
+					if strings.TrimSpace(errMsg) == "" {
 						return
 					}
-					c.send(map[string]any{"type": "chat.error", "sessionId": sessionID, "error": orchestratorErr.Error()})
+					c.send(map[string]any{"type": "chat.error", "sessionId": sessionID, "error": errMsg})
+				},
+			})
+			if orchestratorErr != nil {
+				if strings.Contains(strings.ToLower(orchestratorErr.Error()), "cancel") {
+					c.send(map[string]any{"type": "chat.notice", "sessionId": sessionID, "notice": "Orchestrator cancelled."})
 					c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": "", "done": true})
 					return
 				}
-				summary := "Orchestrator completed."
-				if state != nil {
-					summary = fmt.Sprintf("Orchestrator completed (%d steps, %d iterations).", len(state.Plan), state.OuterIterations)
-				}
-				c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": summary, "done": false})
+				c.send(map[string]any{"type": "chat.error", "sessionId": sessionID, "error": orchestratorErr.Error()})
 				c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": "", "done": true})
 				return
 			}
-
-			runAIChat(&ai.ChatContext{
-				ProjectPath:      projectPath,
-				SessionID:        sessionID,
-				ReloadContext:    msg.ReloadContext,
-				RetryFromMessageID: msg.RetryFromMessageID,
-				Cancel:           cancelCh,
-				Role:             role,
-				AutonomousPolicy: autonomousPolicy,
-				OnChunk: func(content string, done bool) {
-					c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": content, "done": done})
-				},
-				OnToolCall: func(name string, input any) {
-					c.send(map[string]any{"type": "chat.tool_call", "sessionId": sessionID, "name": name, "input": input})
-				},
-				OnToolResult: func(name string, result any, isError bool) {
-					c.send(map[string]any{"type": "chat.tool_result", "sessionId": sessionID, "name": name, "result": result, "isError": isError})
-				},
-				OnError: func(errMsg string) {
-					c.send(map[string]any{"type": "chat.error", "sessionId": sessionID, "error": errMsg})
-				},
-				OnSessionUpdated: func(session *db.Session) {
-					c.send(map[string]any{"type": "session.updated", "session": session})
-				},
-				GetOpenTabs: func() []ai.TabInfo {
-					c.tabsMu.RLock()
-					defer c.tabsMu.RUnlock()
-					return c.openTabs
-				},
-				RequestApproval: func(kind, title, message, command string) (bool, error) {
-					return c.requestApproval(sessionID, kind, title, message, command)
-				},
-				SendToClient: func(msgType string, payload any) {
-					m := map[string]any{"type": msgType}
-					switch p := payload.(type) {
-					case map[string]any:
-						maps.Copy(m, p)
-					case map[string]string:
-						for k, v := range p {
-							m[k] = v
-						}
-					}
-					c.send(m)
-				},
-				DiscordDM: func(message string) error {
-					if discordBridge == nil {
-						return fmt.Errorf("Discord not configured")
-					}
-					return discordBridge.SendDMToOwner(message)
-				},
-				DiscordProgress: func(message string) error {
-					if discordBridge == nil {
-						return fmt.Errorf("Discord not configured")
-					}
-					discordBridge.NotifyProjectProgress(projectPath, message)
-					return nil
-				},
-			}, chatPrompt)
+			// A conversational route already streamed its reply and its own
+			// terminal done chunk through InteractiveChat — emitting a build
+			// summary here would be wrong. Only the build pipeline reports a
+			// completion summary.
+			if state != nil && state.Conversational {
+				return
+			}
+			summary := "Orchestrator completed."
+			if state != nil {
+				summary = fmt.Sprintf("Orchestrator completed (%d steps, %d iterations).", len(state.Plan), state.OuterIterations)
+			}
+			c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": summary, "done": false})
+			c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": "", "done": true})
 		}()
 
 	case "chat.stop":
@@ -825,6 +835,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr(err.Error(), "FILE_ERROR")
 			return
 		}
+		go qualityRefreshFn(c.projectPath)
 		c.send(map[string]any{"type": "file.saved", "path": msg.Path})
 
 	case "file.create":
@@ -836,6 +847,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr(err.Error(), "FILE_ERROR")
 			return
 		}
+		go qualityRefreshFn(c.projectPath)
 		c.send(map[string]any{"type": "file.created", "path": msg.Path})
 
 	case "folder.create":
@@ -1064,6 +1076,28 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			return
 		}
 		c.send(map[string]any{"type": "usage.dashboard", "dashboard": dashboard})
+
+	case "quality.report.get":
+		var msg struct {
+			ProjectPath string `json:"projectPath"`
+			MaxIssues   int    `json:"maxIssues"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.send(map[string]any{"type": "quality.report", "error": "Bad payload"})
+			return
+		}
+		targetProjectPath := strings.TrimSpace(msg.ProjectPath)
+		if targetProjectPath == "" {
+			targetProjectPath = projectPath
+		}
+		report, err := qualityScanWithProgressFn(targetProjectPath, msg.MaxIssues, func(progress quality.ScanProgress) {
+			c.send(map[string]any{"type": "quality.scan.progress", "progress": progress})
+		})
+		if err != nil {
+			c.send(map[string]any{"type": "quality.report", "error": err.Error()})
+			return
+		}
+		c.send(map[string]any{"type": "quality.report", "report": report})
 
 	// ── Terminals ─────────────────────────────────────────────────────────────
 

@@ -3,6 +3,7 @@ package ws
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -28,6 +29,21 @@ type capturedAIInvocation struct {
 	provider    string
 	model       string
 	ollamaURL   string
+}
+
+// TestMain installs the default chat routing for ws tests. The orchestrator's
+// real triage reasoning needs a live model, so by default every chat brief is
+// routed straight to the handler's fully-wired interactive executor (the same
+// path a conversational route takes in production). Tests that need build-route
+// behavior override runAutonomousProject explicitly.
+func TestMain(m *testing.M) {
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		if cfg.InteractiveChat != nil {
+			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		}
+		return &ai.OrchestrationState{Conversational: true}, nil
+	}
+	os.Exit(m.Run())
 }
 
 func setupWSProject(t *testing.T) string {
@@ -161,7 +177,17 @@ func TestHandler_ChatMessage_InvokesAIRunnerWithTabsAndRuntimeConfig(t *testing.
 	defer cleanup()
 
 	originalRunAIChat := runAIChat
-	defer func() { runAIChat = originalRunAIChat }()
+	originalRunAutonomousProject := runAutonomousProject
+	defer func() {
+		runAIChat = originalRunAIChat
+		runAutonomousProject = originalRunAutonomousProject
+	}()
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		if cfg.InteractiveChat != nil {
+			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		}
+		return &ai.OrchestrationState{Conversational: true}, nil
+	}
 
 	invocations := make(chan capturedAIInvocation, 1)
 	runAIChat = func(ctx *ai.ChatContext, userMessage string) {
@@ -284,7 +310,17 @@ func TestHandler_ChatMessage_UsesPayloadSessionWhenConnectionStateWasLost(t *tes
 	defer cleanup()
 
 	originalRunAIChat := runAIChat
-	defer func() { runAIChat = originalRunAIChat }()
+	originalRunAutonomousProject := runAutonomousProject
+	defer func() {
+		runAIChat = originalRunAIChat
+		runAutonomousProject = originalRunAutonomousProject
+	}()
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		if cfg.InteractiveChat != nil {
+			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		}
+		return &ai.OrchestrationState{Conversational: true}, nil
+	}
 
 	invocations := make(chan capturedAIInvocation, 1)
 	runAIChat = func(ctx *ai.ChatContext, userMessage string) {
@@ -323,7 +359,17 @@ func TestHandler_ChatMessage_CanWriteAndOpenFileThroughAITools(t *testing.T) {
 	defer cleanup()
 
 	originalRunAIChat := runAIChat
-	defer func() { runAIChat = originalRunAIChat }()
+	originalRunAutonomousProject := runAutonomousProject
+	defer func() {
+		runAIChat = originalRunAIChat
+		runAutonomousProject = originalRunAutonomousProject
+	}()
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		if cfg.InteractiveChat != nil {
+			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		}
+		return &ai.OrchestrationState{Conversational: true}, nil
+	}
 
 	targetPath := filepath.Join(projectDir, "generated", "engine-note.ts")
 	runAIChat = func(ctx *ai.ChatContext, userMessage string) {
@@ -382,99 +428,6 @@ func TestHandler_ChatMessage_CanWriteAndOpenFileThroughAITools(t *testing.T) {
 	}
 	if string(content) != "export const engineNote = 'cave';\n" {
 		t.Fatalf("unexpected file content: %q", string(content))
-	}
-}
-
-func TestHandler_ChatMessage_AutonomousIntent_UsesOrchestratorFlow(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
-	defer cleanup()
-
-	originalRunAIChat := runAIChat
-	originalRunAutonomousProject := runAutonomousProject
-	defer func() {
-		runAIChat = originalRunAIChat
-		runAutonomousProject = originalRunAutonomousProject
-	}()
-
-	aiChatCalled := make(chan struct{}, 1)
-	runAIChat = func(ctx *ai.ChatContext, userMessage string) {
-		_ = ctx
-		_ = userMessage
-		select {
-		case aiChatCalled <- struct{}{}:
-		default:
-		}
-	}
-
-	cfgCh := make(chan ai.OrchestratorConfig, 1)
-	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
-		cfgCh <- cfg
-		if cfg.OnPhase != nil {
-			cfg.OnPhase("plan", "building plan from chat request")
-		}
-		return &ai.OrchestrationState{
-			Plan:            []ai.PlanStep{{Index: 1, Title: "step"}},
-			OuterIterations: 1,
-			CompletedAt:     time.Now().UTC().Format(time.RFC3339),
-		}, nil
-	}
-
-	writeWSMessage(t, conn, map[string]any{
-		"type": "project.open",
-		"path": projectDir,
-	})
-	sessionCreated := readWSMessageOfType(t, conn, "session.created")
-	session, _ := sessionCreated["session"].(map[string]any)
-	sessionID, _ := session["id"].(string)
-	if sessionID == "" {
-		t.Fatalf("expected non-empty session id, got %+v", sessionCreated)
-	}
-
-	content := "/build create installer and relaunch harness"
-	writeWSMessage(t, conn, map[string]any{
-		"type":      "chat",
-		"sessionId": sessionID,
-		"content":   content,
-	})
-
-	started := readWSMessageOfType(t, conn, "chat.started")
-	if started["sessionId"] != sessionID {
-		t.Fatalf("expected chat.started for %q, got %+v", sessionID, started)
-	}
-
-	cfg := <-cfgCh
-	if cfg.ProjectPath != projectDir {
-		t.Fatalf("expected orchestrator project path %q, got %q", projectDir, cfg.ProjectPath)
-	}
-	if !strings.Contains(cfg.Brief, content) {
-		t.Fatalf("expected orchestrator brief to include user request, got %q", cfg.Brief)
-	}
-	if cfg.ChatFn == nil {
-		t.Fatal("expected orchestrator to receive chat function for step execution")
-	}
-
-	select {
-	case <-aiChatCalled:
-		t.Fatal("expected autonomous chat to route through orchestrator runner, not direct runAIChat")
-	default:
-	}
-
-	firstNotice := readWSMessageOfType(t, conn, "chat.notice")
-	secondNotice := readWSMessageOfType(t, conn, "chat.notice")
-	n1, _ := firstNotice["notice"].(string)
-	n2, _ := secondNotice["notice"].(string)
-	if !strings.Contains(n1+n2, "Orchestrator plan") {
-		t.Fatalf("expected orchestrator phase notice, got %q and %q", n1, n2)
-	}
-
-	summaryChunk := readWSMessageOfType(t, conn, "chat.chunk")
-	if done, _ := summaryChunk["done"].(bool); done {
-		t.Fatalf("expected orchestrator summary chunk with done=false, got %+v", summaryChunk)
-	}
-	finalChunk := readWSMessageOfType(t, conn, "chat.chunk")
-	if done, _ := finalChunk["done"].(bool); !done {
-		t.Fatalf("expected final chunk with done=true, got %+v", finalChunk)
 	}
 }
 
@@ -846,13 +799,23 @@ func TestHandler_Chat_CancelPrevious(t *testing.T) {
 	blocked := make(chan struct{})
 	unblock := make(chan struct{})
 	originalRunAIChat := runAIChat
+	originalRunAutonomousProject := runAutonomousProject
 	runAIChat = func(ctx *ai.ChatContext, content string) {
 		if content == "first" {
 			close(blocked)
 			<-ctx.Cancel // wait for cancel
 		}
 	}
-	defer func() { runAIChat = originalRunAIChat }()
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		if cfg.InteractiveChat != nil {
+			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		}
+		return &ai.OrchestrationState{Conversational: true}, nil
+	}
+	defer func() {
+		runAIChat = originalRunAIChat
+		runAutonomousProject = originalRunAutonomousProject
+	}()
 
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
@@ -873,19 +836,64 @@ func TestHandler_Chat_CancelPrevious(t *testing.T) {
 	_ = unblock
 }
 
-func TestHandler_Chat_AddsDiscordStyleProjectContextWhenScaffoldSessionExists(t *testing.T) {
+// TestHandler_Chat_BuildRoute_EmitsPhaseAndSummary covers the build (non
+// conversational) branch: the orchestrator drives a phase, then the handler
+// posts a completion summary instead of relaying chat text.
+func TestHandler_Chat_BuildRoute_EmitsPhaseAndSummary(t *testing.T) {
 	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
 
-	if err := db.CreateSession("scaffold-context-test", projectDir, "main"); err != nil {
-		t.Fatalf("create scaffold session: %v", err)
+	origRun := runAutonomousProject
+	defer func() { runAutonomousProject = origRun }()
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		cfg.OnPhase("execute", "writing files")
+		return &ai.OrchestrationState{
+			Plan:            []ai.PlanStep{{}, {}},
+			OuterIterations: 3,
+		}, nil
 	}
 
-	wrapped := promptWithProjectStatusContext(projectDir, "please continue")
-	if !strings.Contains(wrapped, "Discord project context:") {
-		t.Fatalf("expected Discord-style context wrapper, got: %q", wrapped)
+	writeWSMessage(t, conn, map[string]any{"type": "project.open", "path": projectDir})
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sessionID := sessionMsg["session"].(map[string]any)["id"].(string)
+
+	writeWSMessage(t, conn, map[string]any{"type": "chat", "sessionId": sessionID, "content": "build me a feature"})
+	readWSMessageOfType(t, conn, "chat.started")
+
+	notice := readWSMessageOfType(t, conn, "chat.notice")
+	if !strings.Contains(fmt.Sprint(notice["notice"]), "execute") {
+		t.Fatalf("expected phase notice, got %+v", notice)
 	}
-	if !strings.Contains(wrapped, "User message:\nplease continue") {
-		t.Fatalf("expected wrapped prompt to include original user message, got: %q", wrapped)
+	summary := readWSMessageOfType(t, conn, "chat.chunk")
+	if !strings.Contains(fmt.Sprint(summary["content"]), "Orchestrator completed") {
+		t.Fatalf("expected build summary chunk, got %+v", summary)
+	}
+}
+
+// TestHandler_Chat_BuildRoute_OnErrorRelaysToClient covers the orchestrator
+// OnError closure: a non-cancel error is forwarded as a chat.error.
+func TestHandler_Chat_BuildRoute_OnErrorRelaysToClient(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	origRun := runAutonomousProject
+	defer func() { runAutonomousProject = origRun }()
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		cfg.OnError("plan failed")
+		return nil, fmt.Errorf("plan failed")
+	}
+
+	writeWSMessage(t, conn, map[string]any{"type": "project.open", "path": projectDir})
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sessionID := sessionMsg["session"].(map[string]any)["id"].(string)
+
+	writeWSMessage(t, conn, map[string]any{"type": "chat", "sessionId": sessionID, "content": "do a thing"})
+	readWSMessageOfType(t, conn, "chat.started")
+	msg := readWSMessageOfType(t, conn, "chat.error")
+	if !strings.Contains(fmt.Sprint(msg["error"]), "plan failed") {
+		t.Fatalf("expected plan failed error, got %+v", msg)
 	}
 }
 

@@ -7,6 +7,7 @@ This is the project contract. If a behavior is listed here, Engine is expected t
 ## AI Chat Panel
 
 Send messages with Enter or Cmd/Ctrl+Enter. Cannot send while empty or when no session is active. Stop a streaming response mid-flight with the stop button. Retry a failed response without re-typing. Messages pulse while streaming. The panel auto-scrolls to the bottom; scrolling up pauses auto-scroll and shows a jump-to-bottom button. Tool calls appear inline with expandable input/output detail. Markdown renders with full formatting: headings, lists, code blocks with syntax highlighting, bold, italic, strikethrough, inline code, blockquotes, and horizontal rules.
+Every chat request is handled by the autonomous orchestrator flow; there is no separate interactive-mode execution path.
 
 ---
 
@@ -42,7 +43,7 @@ The AI agent can use these tools when working on your code:
 
 **Search History:** Search past AI session history for relevant context.
 
-**Agent Team Communication:** The lead agent and autonomous worker teams can discover live project agents, send focused delegation messages, read their inbox, and await replies. The user continues talking to one lead agent while the team exchanges concise context packets behind the scenes.
+**Agent Team Communication:** The lead agent and autonomous worker teams can discover live project agents, send focused delegation messages, check and receive inbox messages when convenient, and await replies when blocking is required. If a worker is done and has no pending message, it can proactively report completion back to the caller. The user continues talking to one lead agent while the team exchanges concise context packets behind the scenes.
 
 **Browser Automation:** Open a URL in the default browser (macOS and Linux).
 
@@ -84,7 +85,7 @@ Engine works in a simple loop: intake, plan, build, review, validate, repeat unt
 
 ## File Tree
 
-Six tabs: Explorer, Git, Search, Issues, Open Editors, Usage Dashboard.
+Six tabs: Explorer, Quality Index, Git, Search, Issues, Usage Dashboard.
 
 **Explorer:** Browse the workspace file tree. Files show live git status badges: modified, staged, untracked, ignored. Toggle hidden files on or off. Expand or collapse folders individually. Right-click in the tree to create a new file or folder in the selected location. Context menus support scoped Expand All and Collapse All (for a selected folder or sibling level) and global Expand All/Collapse All from empty tree space. Folder grouping can be toggled from the context menu and the preference is remembered across sessions.
 
@@ -94,7 +95,9 @@ Six tabs: Explorer, Git, Search, Issues, Open Editors, Usage Dashboard.
 
 **Issues:** Browse open GitHub issues for the project. Click an issue to open it in the browser. Loading, error, and empty states are each clearly communicated.
 
-**Open Editors:** See all open files. Click to switch between them. Collapse or expand the list.
+**Open Editors:** See all open files inside the Explorer section. Click to switch between them. Collapse or expand the list.
+
+**Quality Index:** Runs deterministic codebase indexing automatically when a project session loads (no manual run button). The panel shows a centered first-run progress bar with live scan context (`Scanning project - file|func(//section)`), and a slim top progress bar during incremental rescans. Hard-to-spot quality risks include dead-code candidates, duplicate non-DRY blocks, large uncommented regions, documentation drift, and CS 2420/3500 contention signals. Findings include severity, category, file, and line with remediation suggestions. Engine persists the index in `.engine/quality-index.json`, uses `.engine/generated-files-cache.json` to exclude generated artifacts, and completes an incomplete generated-files map before scanning.
 
 **Usage Dashboard:** View API usage analytics in a dedicated sidebar tab with two scopes: project-wide and user-wide. See total spend, input/output tokens, total tokens, average price per token, active development time, and AI compute time. Filter metrics to a specific model and inspect detailed breakdown tables per project and per model.
 
@@ -103,6 +106,7 @@ Six tabs: Explorer, Git, Search, Issues, Open Editors, Usage Dashboard.
 ## Preferences Panel
 
 Tabs for Editor, Discord, and GitHub preferences. Control editor font and theme. Configure Discord integration. Configure GitHub token and repo. Form validation blocks saving an incomplete connection.
+
 
 Log in to GitHub directly from the Preferences panel using the **Login with GitHub** button — no copy-pasting tokens needed. The button starts the GitHub Device Authorization Flow: Engine displays a short user code and a link to `github.com/login/device`. After the user enters the code on GitHub the token is saved automatically and the login button disappears. While authorization is pending the panel shows a Cancel button to abort the flow. Requires `GITHUB_CLIENT_ID` to be set in the server environment (register an OAuth App on GitHub to get one). On successful login, Engine also auto-provisions a `GITHUB_WEBHOOK_SECRET` when missing so webhook validation is ready without manual secret setup.
 
@@ -253,5 +257,5 @@ Each specialist receives a concise task brief and context hints (e.g., "coverage
 
 Team configuration is set via `engine.team.set` WebSocket message (team name, model provider, model). Configuration is resolved from `.engine/config.yaml` if not explicitly provided. Once set, `ENGINE_MODEL_PROVIDER`, `ENGINE_MODEL`, and `ENGINE_ACTIVE_TEAM` environment variables are updated so all agents use the same model policy.
 
-Agent Discovery, Message Routing, and Inbox Management are available to specialists via peer tools: `agent_list` (see teammates), `agent_send` (send focused packet), `agent_inbox` (receive pending messages), `agent_await` (block until a specific reply arrives with timeout).
+Agent Discovery, Message Routing, and Inbox Management are available to specialists via peer tools: `agent_list` (see teammates), `agent_send` (send focused packet), `agent_inbox` (read pending messages), `agent_receive` (non-blocking receive with optional inline response/completion report), `agent_await` (block until a specific reply arrives with timeout).
 

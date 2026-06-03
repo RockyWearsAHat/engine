@@ -1,6 +1,7 @@
 package db
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -261,6 +262,73 @@ func migrate() error {
 			created_at   TEXT NOT NULL,
 			updated_at   TEXT NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS memory_ledger_events (
+			id            TEXT PRIMARY KEY,
+			project_path  TEXT NOT NULL,
+			session_id    TEXT NOT NULL DEFAULT '',
+			sequence      INTEGER NOT NULL,
+			event_type    TEXT NOT NULL,
+			actor_model   TEXT NOT NULL DEFAULT '',
+			payload_json  TEXT NOT NULL DEFAULT '{}',
+			prev_hash     TEXT NOT NULL DEFAULT '',
+			event_hash    TEXT NOT NULL,
+			created_at    TEXT NOT NULL
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_ledger_project_sequence
+			ON memory_ledger_events(project_path, sequence);
+		CREATE INDEX IF NOT EXISTS idx_memory_ledger_project_created
+			ON memory_ledger_events(project_path, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_memory_ledger_project_session_created
+			ON memory_ledger_events(project_path, session_id, created_at DESC);
+		CREATE TABLE IF NOT EXISTS memory_residual_nodes (
+			project_path           TEXT NOT NULL,
+			node_key               TEXT NOT NULL,
+			session_id             TEXT NOT NULL DEFAULT '',
+			node_type              TEXT NOT NULL,
+			label                  TEXT NOT NULL DEFAULT '',
+			verification_status    TEXT NOT NULL DEFAULT 'unverified',
+			confidence             REAL NOT NULL DEFAULT 0,
+			novelty                REAL NOT NULL DEFAULT 0,
+			surprise               REAL NOT NULL DEFAULT 0,
+			verification_strength  REAL NOT NULL DEFAULT 0,
+			dependency_centrality  REAL NOT NULL DEFAULT 0,
+			residual_score         REAL NOT NULL DEFAULT 0,
+			superseded             INTEGER NOT NULL DEFAULT 0,
+			contradicted           INTEGER NOT NULL DEFAULT 0,
+			last_event_sequence    INTEGER NOT NULL DEFAULT 0,
+			updated_at             TEXT NOT NULL,
+			PRIMARY KEY(project_path, node_key)
+		);
+		CREATE INDEX IF NOT EXISTS idx_memory_nodes_project_score
+			ON memory_residual_nodes(project_path, residual_score DESC, updated_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_memory_nodes_project_session_score
+			ON memory_residual_nodes(project_path, session_id, residual_score DESC, updated_at DESC);
+		CREATE TABLE IF NOT EXISTS memory_residual_edges (
+			id                    TEXT PRIMARY KEY,
+			project_path          TEXT NOT NULL,
+			from_node_key         TEXT NOT NULL,
+			to_node_key           TEXT NOT NULL,
+			edge_type             TEXT NOT NULL,
+			weight                REAL NOT NULL DEFAULT 0,
+			unresolved            INTEGER NOT NULL DEFAULT 0,
+			last_event_sequence   INTEGER NOT NULL DEFAULT 0,
+			updated_at            TEXT NOT NULL
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_edges_unique
+			ON memory_residual_edges(project_path, from_node_key, to_node_key, edge_type);
+		CREATE INDEX IF NOT EXISTS idx_memory_edges_project_from
+			ON memory_residual_edges(project_path, from_node_key, updated_at DESC);
+		CREATE TABLE IF NOT EXISTS memory_state_snapshots (
+			id               TEXT PRIMARY KEY,
+			project_path     TEXT NOT NULL,
+			session_id       TEXT NOT NULL DEFAULT '',
+			snapshot_type    TEXT NOT NULL,
+			event_sequence   INTEGER NOT NULL DEFAULT 0,
+			snapshot_json    TEXT NOT NULL DEFAULT '{}',
+			created_at       TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_memory_snapshots_lookup
+			ON memory_state_snapshots(project_path, session_id, snapshot_type, event_sequence DESC, created_at DESC);
 	`)
 	return err
 }
@@ -624,4 +692,456 @@ func GetLearningsByCategory(projectPath string, category string) ([]LearningEven
 		events = []LearningEvent{}
 	}
 	return events, nil
+}
+
+// MemoryLedgerEvent is an immutable event persisted in the append-only Memory OS ledger.
+type MemoryLedgerEvent struct {
+	ID          string `json:"id"`
+	ProjectPath string `json:"projectPath"`
+	SessionID   string `json:"sessionId"`
+	Sequence    int64  `json:"sequence"`
+	EventType   string `json:"eventType"`
+	ActorModel  string `json:"actorModel"`
+	PayloadJSON string `json:"payloadJson"`
+	PrevHash    string `json:"prevHash"`
+	EventHash   string `json:"eventHash"`
+	CreatedAt   string `json:"createdAt"`
+}
+
+// MemoryResidualNode stores a weighted cognition node for deterministic retrieval.
+type MemoryResidualNode struct {
+	NodeKey              string  `json:"nodeKey"`
+	ProjectPath          string  `json:"projectPath"`
+	SessionID            string  `json:"sessionId"`
+	NodeType             string  `json:"nodeType"`
+	Label                string  `json:"label"`
+	VerificationStatus   string  `json:"verificationStatus"`
+	Confidence           float64 `json:"confidence"`
+	Novelty              float64 `json:"novelty"`
+	Surprise             float64 `json:"surprise"`
+	VerificationStrength float64 `json:"verificationStrength"`
+	DependencyCentrality float64 `json:"dependencyCentrality"`
+	ResidualScore        float64 `json:"residualScore"`
+	Superseded           bool    `json:"superseded"`
+	Contradicted         bool    `json:"contradicted"`
+	LastEventSequence    int64   `json:"lastEventSequence"`
+	UpdatedAt            string  `json:"updatedAt"`
+}
+
+// MemoryResidualEdge stores graph relationships between residual nodes.
+type MemoryResidualEdge struct {
+	ID                string  `json:"id"`
+	ProjectPath       string  `json:"projectPath"`
+	FromNodeKey       string  `json:"fromNodeKey"`
+	ToNodeKey         string  `json:"toNodeKey"`
+	EdgeType          string  `json:"edgeType"`
+	Weight            float64 `json:"weight"`
+	Unresolved        bool    `json:"unresolved"`
+	LastEventSequence int64   `json:"lastEventSequence"`
+	UpdatedAt         string  `json:"updatedAt"`
+}
+
+// MemoryStateSnapshot stores deterministic restorable state for quick memory bootstrapping.
+type MemoryStateSnapshot struct {
+	ID            string `json:"id"`
+	ProjectPath   string `json:"projectPath"`
+	SessionID     string `json:"sessionId"`
+	SnapshotType  string `json:"snapshotType"`
+	EventSequence int64  `json:"eventSequence"`
+	SnapshotJSON  string `json:"snapshotJson"`
+	CreatedAt     string `json:"createdAt"`
+}
+
+// AppendMemoryLedgerEvent appends an immutable event with hash-chain integrity.
+func AppendMemoryLedgerEvent(projectPath, sessionID, eventType, actorModel string, payload any) (*MemoryLedgerEvent, error) {
+	if strings.TrimSpace(projectPath) == "" {
+		return nil, fmt.Errorf("projectPath required")
+	}
+	if strings.TrimSpace(eventType) == "" {
+		return nil, fmt.Errorf("eventType required")
+	}
+	if globalDB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+
+	payloadJSON := "{}"
+	if payload != nil {
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		payloadJSON = string(b)
+	}
+
+	tx, err := globalDB.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var prevSeq int64
+	var prevHash string
+	err = tx.QueryRow(`
+		SELECT sequence, event_hash
+		FROM memory_ledger_events
+		WHERE project_path = ?
+		ORDER BY sequence DESC
+		LIMIT 1
+	`, projectPath).Scan(&prevSeq, &prevHash)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	if err == sql.ErrNoRows {
+		prevSeq = 0
+		prevHash = ""
+	}
+
+	event := &MemoryLedgerEvent{
+		ID:          fmt.Sprintf("mem-%d", time.Now().UnixNano()),
+		ProjectPath: projectPath,
+		SessionID:   strings.TrimSpace(sessionID),
+		Sequence:    prevSeq + 1,
+		EventType:   strings.TrimSpace(eventType),
+		ActorModel:  strings.TrimSpace(actorModel),
+		PayloadJSON: payloadJSON,
+		PrevHash:    prevHash,
+		CreatedAt:   now(),
+	}
+
+	event.EventHash = hashMemoryLedgerEvent(event)
+
+	if _, err := tx.Exec(`
+		INSERT INTO memory_ledger_events (
+			id, project_path, session_id, sequence, event_type, actor_model,
+			payload_json, prev_hash, event_hash, created_at
+		) VALUES (?,?,?,?,?,?,?,?,?,?)
+	`,
+		event.ID,
+		event.ProjectPath,
+		event.SessionID,
+		event.Sequence,
+		event.EventType,
+		event.ActorModel,
+		event.PayloadJSON,
+		event.PrevHash,
+		event.EventHash,
+		event.CreatedAt,
+	); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	return event, nil
+}
+
+// GetMemoryLedgerEvents returns events for a project ordered by sequence ascending.
+func GetMemoryLedgerEvents(projectPath string, sinceSequence int64, limit int) ([]MemoryLedgerEvent, error) {
+	if strings.TrimSpace(projectPath) == "" {
+		return []MemoryLedgerEvent{}, nil
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+
+	rows, err := globalDB.Query(`
+		SELECT id, project_path, session_id, sequence, event_type, actor_model, payload_json, prev_hash, event_hash, created_at
+		FROM memory_ledger_events
+		WHERE project_path = ? AND sequence > ?
+		ORDER BY sequence ASC
+		LIMIT ?
+	`, projectPath, sinceSequence, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := make([]MemoryLedgerEvent, 0, limit)
+	for rows.Next() {
+		var event MemoryLedgerEvent
+		if err := rows.Scan(
+			&event.ID,
+			&event.ProjectPath,
+			&event.SessionID,
+			&event.Sequence,
+			&event.EventType,
+			&event.ActorModel,
+			&event.PayloadJSON,
+			&event.PrevHash,
+			&event.EventHash,
+			&event.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if events == nil {
+		events = []MemoryLedgerEvent{}
+	}
+	return events, nil
+}
+
+// VerifyMemoryLedgerChain validates the per-project hash chain for all persisted events.
+func VerifyMemoryLedgerChain(projectPath string) error {
+	events, err := GetMemoryLedgerEvents(projectPath, 0, 1_000_000)
+	if err != nil {
+		return err
+	}
+	prevHash := ""
+	var expectedSeq int64 = 1
+	for _, event := range events {
+		if event.Sequence != expectedSeq {
+			return fmt.Errorf("memory ledger sequence gap at %d (got %d)", expectedSeq, event.Sequence)
+		}
+		if event.PrevHash != prevHash {
+			return fmt.Errorf("memory ledger prev_hash mismatch at sequence %d", event.Sequence)
+		}
+		if hashMemoryLedgerEvent(&event) != event.EventHash {
+			return fmt.Errorf("memory ledger hash mismatch at sequence %d", event.Sequence)
+		}
+		prevHash = event.EventHash
+		expectedSeq++
+	}
+	return nil
+}
+
+// UpsertMemoryResidualNode updates the latest weighted residual state for a node.
+func UpsertMemoryResidualNode(node MemoryResidualNode) error {
+	if strings.TrimSpace(node.NodeKey) == "" || strings.TrimSpace(node.ProjectPath) == "" {
+		return fmt.Errorf("node_key and project_path required")
+	}
+	if strings.TrimSpace(node.NodeType) == "" {
+		node.NodeType = "claim"
+	}
+	if strings.TrimSpace(node.VerificationStatus) == "" {
+		node.VerificationStatus = "unverified"
+	}
+	ts := now()
+	_, err := globalDB.Exec(`
+		INSERT INTO memory_residual_nodes (
+			node_key, project_path, session_id, node_type, label, verification_status,
+			confidence, novelty, surprise, verification_strength, dependency_centrality,
+			residual_score, superseded, contradicted, last_event_sequence, updated_at
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(project_path, node_key) DO UPDATE SET
+			project_path = excluded.project_path,
+			session_id = excluded.session_id,
+			node_type = excluded.node_type,
+			label = excluded.label,
+			verification_status = excluded.verification_status,
+			confidence = excluded.confidence,
+			novelty = excluded.novelty,
+			surprise = excluded.surprise,
+			verification_strength = excluded.verification_strength,
+			dependency_centrality = excluded.dependency_centrality,
+			residual_score = excluded.residual_score,
+			superseded = excluded.superseded,
+			contradicted = excluded.contradicted,
+			last_event_sequence = excluded.last_event_sequence,
+			updated_at = excluded.updated_at
+	`,
+		node.NodeKey,
+		node.ProjectPath,
+		node.SessionID,
+		node.NodeType,
+		node.Label,
+		node.VerificationStatus,
+		node.Confidence,
+		node.Novelty,
+		node.Surprise,
+		node.VerificationStrength,
+		node.DependencyCentrality,
+		node.ResidualScore,
+		boolToInt(node.Superseded),
+		boolToInt(node.Contradicted),
+		node.LastEventSequence,
+		ts,
+	)
+	return err
+}
+
+// UpsertMemoryResidualEdge updates/creates a graph edge between two nodes.
+func UpsertMemoryResidualEdge(edge MemoryResidualEdge) error {
+	if strings.TrimSpace(edge.ProjectPath) == "" || strings.TrimSpace(edge.FromNodeKey) == "" || strings.TrimSpace(edge.ToNodeKey) == "" {
+		return fmt.Errorf("project_path, from_node_key, and to_node_key required")
+	}
+	if strings.TrimSpace(edge.EdgeType) == "" {
+		edge.EdgeType = "depends_on"
+	}
+	if strings.TrimSpace(edge.ID) == "" {
+		edge.ID = fmt.Sprintf("edge-%d", time.Now().UnixNano())
+	}
+
+	ts := now()
+	_, err := globalDB.Exec(`
+		INSERT INTO memory_residual_edges (
+			id, project_path, from_node_key, to_node_key, edge_type, weight, unresolved, last_event_sequence, updated_at
+		) VALUES (?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(project_path, from_node_key, to_node_key, edge_type) DO UPDATE SET
+			weight = excluded.weight,
+			unresolved = excluded.unresolved,
+			last_event_sequence = excluded.last_event_sequence,
+			updated_at = excluded.updated_at
+	`,
+		edge.ID,
+		edge.ProjectPath,
+		edge.FromNodeKey,
+		edge.ToNodeKey,
+		edge.EdgeType,
+		edge.Weight,
+		boolToInt(edge.Unresolved),
+		edge.LastEventSequence,
+		ts,
+	)
+	return err
+}
+
+// ListTopMemoryResidualNodes returns highest-scoring unresolved/supported nodes for retrieval.
+func ListTopMemoryResidualNodes(projectPath, sessionID string, limit int) ([]MemoryResidualNode, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	query := `
+		SELECT node_key, project_path, session_id, node_type, label, verification_status,
+			confidence, novelty, surprise, verification_strength, dependency_centrality,
+			residual_score, superseded, contradicted, last_event_sequence, updated_at
+		FROM memory_residual_nodes
+		WHERE project_path = ?`
+	args := []any{projectPath}
+	if strings.TrimSpace(sessionID) != "" {
+		query += ` AND (session_id = ? OR session_id = '')`
+		args = append(args, strings.TrimSpace(sessionID))
+	}
+	query += ` ORDER BY residual_score DESC, updated_at DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := globalDB.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	nodes := make([]MemoryResidualNode, 0, limit)
+	for rows.Next() {
+		var node MemoryResidualNode
+		var superseded int
+		var contradicted int
+		if err := rows.Scan(
+			&node.NodeKey,
+			&node.ProjectPath,
+			&node.SessionID,
+			&node.NodeType,
+			&node.Label,
+			&node.VerificationStatus,
+			&node.Confidence,
+			&node.Novelty,
+			&node.Surprise,
+			&node.VerificationStrength,
+			&node.DependencyCentrality,
+			&node.ResidualScore,
+			&superseded,
+			&contradicted,
+			&node.LastEventSequence,
+			&node.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		node.Superseded = superseded == 1
+		node.Contradicted = contradicted == 1
+		nodes = append(nodes, node)
+	}
+	if nodes == nil {
+		nodes = []MemoryResidualNode{}
+	}
+	return nodes, nil
+}
+
+// SaveMemoryStateSnapshot persists a deterministic replay/restoration snapshot.
+func SaveMemoryStateSnapshot(snapshot MemoryStateSnapshot) error {
+	if strings.TrimSpace(snapshot.ProjectPath) == "" || strings.TrimSpace(snapshot.SnapshotType) == "" {
+		return fmt.Errorf("project_path and snapshot_type required")
+	}
+	if strings.TrimSpace(snapshot.ID) == "" {
+		snapshot.ID = fmt.Sprintf("snapshot-%d", time.Now().UnixNano())
+	}
+	if strings.TrimSpace(snapshot.SnapshotJSON) == "" {
+		snapshot.SnapshotJSON = "{}"
+	}
+	if strings.TrimSpace(snapshot.CreatedAt) == "" {
+		snapshot.CreatedAt = now()
+	}
+
+	_, err := globalDB.Exec(`
+		INSERT INTO memory_state_snapshots (
+			id, project_path, session_id, snapshot_type, event_sequence, snapshot_json, created_at
+		) VALUES (?,?,?,?,?,?,?)
+	`,
+		snapshot.ID,
+		snapshot.ProjectPath,
+		snapshot.SessionID,
+		snapshot.SnapshotType,
+		snapshot.EventSequence,
+		snapshot.SnapshotJSON,
+		snapshot.CreatedAt,
+	)
+	return err
+}
+
+// LoadLatestMemoryStateSnapshot returns the latest matching snapshot if present.
+func LoadLatestMemoryStateSnapshot(projectPath, sessionID, snapshotType string) (*MemoryStateSnapshot, error) {
+	query := `
+		SELECT id, project_path, session_id, snapshot_type, event_sequence, snapshot_json, created_at
+		FROM memory_state_snapshots
+		WHERE project_path = ? AND snapshot_type = ?`
+	args := []any{projectPath, snapshotType}
+	if strings.TrimSpace(sessionID) != "" {
+		query += ` AND session_id = ?`
+		args = append(args, sessionID)
+	}
+	query += ` ORDER BY event_sequence DESC, created_at DESC LIMIT 1`
+
+	row := globalDB.QueryRow(query, args...)
+	var snapshot MemoryStateSnapshot
+	err := row.Scan(
+		&snapshot.ID,
+		&snapshot.ProjectPath,
+		&snapshot.SessionID,
+		&snapshot.SnapshotType,
+		&snapshot.EventSequence,
+		&snapshot.SnapshotJSON,
+		&snapshot.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func hashMemoryLedgerEvent(event *MemoryLedgerEvent) string {
+	payload := strings.TrimSpace(event.PayloadJSON)
+	if payload == "" {
+		payload = "{}"
+	}
+	material := strings.Join([]string{
+		event.ProjectPath,
+		event.SessionID,
+		fmt.Sprintf("%d", event.Sequence),
+		event.EventType,
+		event.ActorModel,
+		payload,
+		event.PrevHash,
+		event.CreatedAt,
+	}, "|")
+	sum := sha256.Sum256([]byte(material))
+	return fmt.Sprintf("%x", sum[:])
 }

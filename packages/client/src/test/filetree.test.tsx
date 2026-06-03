@@ -184,15 +184,16 @@ describe('FileTree Component', () => {
     expect(container.textContent).toContain('Open a project to view project-specific usage.');
   });
 
-  it('OpenEditorsTab_EditorListRendered', () => {
+  it('QualityTab_AiLinterPanelRendered', () => {
     const { container } = render(
       <FileTree
-        activityTab="open-editors"
+        activityTab="quality"
         onOpenFolder={() => {}}
         onOpenFile={() => {}}
       />,
     );
     expect(container).toBeTruthy();
+    expect(container.textContent).toContain('Quality Index');
   });
 
   it('WithActiveSession_WithGitStatus', () => {
@@ -317,15 +318,16 @@ describe('FileTree Component', () => {
     expect(container).toBeTruthy();
   });
 
-  it('OpenEditorsTab_EditorListRendered', () => {
+  it('QualityTab_AiLinterPanelRendered', () => {
     const { container } = render(
       <FileTree
-        activityTab="open-editors"
+        activityTab="quality"
         onOpenFolder={() => {}}
         onOpenFile={() => {}}
       />,
     );
     expect(container).toBeTruthy();
+    expect(container.textContent).toContain('Quality Index');
   });
 
   it('ExplorerTab_OpenEditorsSectionToggle_Click', () => {
