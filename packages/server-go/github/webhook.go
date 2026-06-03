@@ -139,7 +139,9 @@ type PushPayload struct {
 type IssueCommentPayload struct {
 	Action  string `json:"action"`
 	Comment struct {
-		Body string `json:"body"`
+		ID        int64  `json:"id"`
+		Body      string `json:"body"`
+		CreatedAt string `json:"created_at"`
 		User struct {
 			Login string `json:"login"`
 		} `json:"user"`

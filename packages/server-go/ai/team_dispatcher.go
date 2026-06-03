@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+var teamDispatcherStopTimeout = 30 * time.Second
+
 // TeamWorker represents a single execution context for a team.
 type TeamWorker struct {
 	teamID   string
@@ -258,7 +260,7 @@ func (d *TeamDispatcher) Stop() {
 
 	select {
 	case <-done:
-	case <-time.After(30 * time.Second):
+	case <-time.After(teamDispatcherStopTimeout):
 	}
 }
 

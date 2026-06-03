@@ -1,6 +1,8 @@
 package ai
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,6 +15,20 @@ func setupPhasesDB(t *testing.T) string {
 	dir := t.TempDir()
 	stateDir := t.TempDir()
 	t.Setenv("ENGINE_STATE_DIR", stateDir)
+	engineDir := filepath.Join(dir, ".engine")
+	if err := os.MkdirAll(engineDir, 0o755); err != nil {
+		t.Fatalf("mkdir .engine: %v", err)
+	}
+	config := `teams:
+  fast:
+    orchestrator:
+      model: "openai:gpt-4o-mini"
+autonomous:
+  team: "fast"
+`
+	if err := os.WriteFile(filepath.Join(engineDir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
 	if err := db.Init(dir); err != nil {
 		t.Fatalf("db.Init: %v", err)
 	}
@@ -137,6 +153,165 @@ func TestOrchestratorPlanPhase_EmptyOutput(t *testing.T) {
 	cancel := make(chan struct{})
 	if err := orchestratorPlanPhase(cfg, state, cancel); err == nil {
 		t.Error("expected error for empty plan output")
+	}
+}
+
+func TestOrchestratorPlanPhase_RepairsMissingAcceptance(t *testing.T) {
+	dir := setupPhasesDB(t)
+	callCount := 0
+	cfg := OrchestratorConfig{
+		ProjectPath:     dir,
+		SessionIDPrefix: "t",
+		OnPhase:         func(string, string) {},
+		OnProgress:      func(string) {},
+		OnError:         func(string) {},
+		ChatFn: func(c *ChatContext, _ string) {
+			callCount++
+			if callCount == 1 {
+				c.OnChunk("1. Build thing\n   body without acceptance\n", false)
+				return
+			}
+			c.OnChunk("1. Build thing\n   add implementation\n   Acceptance: `go test ./...` exits 0\n", false)
+		},
+	}
+	state := &OrchestrationState{Brief: "brief", Owner: "o", Repo: "r"}
+	cancel := make(chan struct{})
+	if err := orchestratorPlanPhase(cfg, state, cancel); err != nil {
+		t.Fatalf("orchestratorPlanPhase: %v", err)
+	}
+	if callCount != 2 {
+		t.Fatalf("expected planner + repair pass, got %d calls", callCount)
+	}
+	if len(state.Plan) != 1 {
+		t.Fatalf("expected one repaired step, got %d", len(state.Plan))
+	}
+	if state.Plan[0].Acceptance == "" {
+		t.Fatal("expected repaired acceptance command")
+	}
+}
+
+func TestOrchestratorPlanPhase_RepairSynthesizesAcceptance(t *testing.T) {
+	dir := setupPhasesDB(t)
+	callCount := 0
+	cfg := OrchestratorConfig{
+		ProjectPath:     dir,
+		SessionIDPrefix: "t",
+		OnPhase:         func(string, string) {},
+		OnProgress:      func(string) {},
+		OnError:         func(string) {},
+		ChatFn: func(c *ChatContext, _ string) {
+			callCount++
+			if callCount == 1 {
+				c.OnChunk("1. Build thing\n   body without acceptance\n", false)
+				return
+			}
+			c.OnChunk("1. Build thing\n   body still without acceptance\n", false)
+		},
+	}
+	state := &OrchestrationState{Brief: "brief", Owner: "o", Repo: "r"}
+	cancel := make(chan struct{})
+	if err := orchestratorPlanPhase(cfg, state, cancel); err != nil {
+		t.Fatalf("orchestratorPlanPhase: %v", err)
+	}
+	if len(state.Plan) != 1 {
+		t.Fatalf("expected one repaired step, got %d", len(state.Plan))
+	}
+	if !strings.Contains(state.Plan[0].Acceptance, "echo") {
+		t.Fatalf("expected synthesized acceptance command, got %q", state.Plan[0].Acceptance)
+	}
+}
+
+func TestOrchestratorPlanPhase_RepairFailureBubblesUp(t *testing.T) {
+	dir := setupPhasesDB(t)
+	callCount := 0
+	cfg := OrchestratorConfig{
+		ProjectPath:     dir,
+		SessionIDPrefix: "t",
+		OnPhase:         func(string, string) {},
+		OnProgress:      func(string) {},
+		OnError:         func(string) {},
+		ChatFn: func(c *ChatContext, _ string) {
+			callCount++
+			if callCount == 1 {
+				c.OnChunk("1. Build thing\n   body without acceptance\n", false)
+				return
+			}
+			// Empty repair output -> parse failure in repair pass.
+		},
+	}
+	state := &OrchestrationState{Brief: "brief", Owner: "o", Repo: "r"}
+	cancel := make(chan struct{})
+	err := orchestratorPlanPhase(cfg, state, cancel)
+	if err == nil || !strings.Contains(err.Error(), "repair pass failed") {
+		t.Fatalf("expected repair failure, got %v", err)
+	}
+}
+
+func TestOrchestratorRepairPlanPhase_CreateSessionError(t *testing.T) {
+	cfg := OrchestratorConfig{
+		ProjectPath:     t.TempDir(),
+		SessionIDPrefix: "t",
+		ChatFn:          func(*ChatContext, string) {},
+	}
+	_, err := orchestratorRepairPlanPhase(cfg, &OrchestrationState{Brief: "brief"}, "bad", make(chan struct{}))
+	if err == nil || !strings.Contains(err.Error(), "create plan repair session") {
+		t.Fatalf("expected create plan repair session error, got %v", err)
+	}
+}
+
+func TestOrchestratorRepairPlanPhase_EmptyOutput(t *testing.T) {
+	dir := setupPhasesDB(t)
+	cfg := OrchestratorConfig{
+		ProjectPath:     dir,
+		SessionIDPrefix: "t",
+		ChatFn:          func(*ChatContext, string) {},
+	}
+	_, err := orchestratorRepairPlanPhase(cfg, &OrchestrationState{Brief: "brief"}, "bad", make(chan struct{}))
+	if err == nil || !strings.Contains(err.Error(), "repair output empty or unparsable") {
+		t.Fatalf("expected empty repair output error, got %v", err)
+	}
+}
+
+func TestParsePlanFromText_AcceptanceStopsAtRefactor(t *testing.T) {
+	input := strings.Join([]string{
+		"1. Step",
+		"   Body line",
+		"   Acceptance:",
+		"   ```bash",
+		"   go test ./...",
+		"   ```",
+		"   Refactor: keep module boundaries tight",
+	}, "\n")
+	steps := parsePlanFromText(input)
+	if len(steps) != 1 {
+		t.Fatalf("expected one step, got %d", len(steps))
+	}
+	if !strings.Contains(steps[0].Acceptance, "go test ./...") {
+		t.Fatalf("expected command in acceptance, got %q", steps[0].Acceptance)
+	}
+	if strings.Contains(strings.ToLower(steps[0].Acceptance), "refactor") {
+		t.Fatalf("refactor text should not remain in acceptance, got %q", steps[0].Acceptance)
+	}
+}
+
+func TestParsePlanFromText_AcceptanceJoinsMultipleLines(t *testing.T) {
+	input := strings.Join([]string{
+		"1. Step",
+		"   Body line",
+		"   Acceptance:",
+		"   ```bash",
+		"",
+		"   go test ./...",
+		"   go test ./... -run Smoke",
+		"   ```",
+	}, "\n")
+	steps := parsePlanFromText(input)
+	if len(steps) != 1 {
+		t.Fatalf("expected one step, got %d", len(steps))
+	}
+	want := "go test ./... go test ./... -run Smoke"
+	if steps[0].Acceptance != want {
+		t.Fatalf("expected joined acceptance %q, got %q", want, steps[0].Acceptance)
 	}
 }
 

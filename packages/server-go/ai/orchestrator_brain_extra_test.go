@@ -66,6 +66,9 @@ func TestOrchestrationBrain_UpdateRequirements(t *testing.T) {
 	if brain.Requirements.PRD != "prd text" {
 		t.Errorf("prd not set: %q", brain.Requirements.PRD)
 	}
+	if got := brain.Requirements.Vocabulary["Foo"]; got != "thing" {
+		t.Errorf("expected parsed vocabulary entry, got %q", got)
+	}
 	// Verify persisted to disk
 	data, err := os.ReadFile(filepath.Join(dir, ".engine", "brain.json"))
 	if err != nil {

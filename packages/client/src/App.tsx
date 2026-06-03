@@ -335,7 +335,7 @@ export default function App() {
   }, [resizingPanel]);
 
   const syncRuntimeConfig = useCallback(async () => {
-    const [savedGithubToken, githubOwner, githubRepo, anthropicKey, openaiKey, savedModelProvider, ollamaBaseUrl, model, editorPreferences, clonesDir] = await Promise.all([
+    const [savedGithubToken, githubOwner, githubRepo, anthropicKey, openaiKey, savedModelProvider, ollamaBaseUrl, model, editorPreferences, clonesDir, activeTeam, contextMaxTokens, contextRecentWindow, listDirectoryMaxChars] = await Promise.all([
       bridge.getGithubToken().catch(() => null),
       bridge.getGithubRepoOwner().catch(() => null),
       bridge.getGithubRepoName().catch(() => null),
@@ -346,8 +346,12 @@ export default function App() {
       bridge.getModel().catch(() => null),
       bridge.getEditorPreferences().catch(() => null),
       bridge.getClonesDir().catch(() => null),
+      bridge.getActiveTeam().catch(() => null),
+      bridge.getContextMaxTokens().catch(() => null),
+      bridge.getContextRecentWindow().catch(() => null),
+      bridge.getListDirectoryMaxChars().catch(() => null),
     ]);
-    const modelProvider = savedModelProvider || 'ollama';
+    const modelProvider = savedModelProvider || 'llamacpp';
 
     setGithubToken(savedGithubToken);
     if (editorPreferences) {
@@ -364,7 +368,11 @@ export default function App() {
         modelProvider,
         ollamaBaseUrl,
         model,
+        activeTeam,
         clonesDir,
+        contextMaxTokens,
+        contextRecentWindow,
+        listDirectoryMaxChars,
       },
     });
 
@@ -1203,7 +1211,9 @@ export default function App() {
     const offClose = wsClient.onClose(() => {
       setConnected(false);
     });
-    const runningViaDevServer = typeof window !== 'undefined' && window.location.host.includes(':5173');
+    const runningViaDevServer = typeof window !== 'undefined'
+      && (window.location.protocol === 'http:' || window.location.protocol === 'https:')
+      && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
     const connectTimer = window.setTimeout(
       () => wsClient.connect(),
       runningViaDevServer ? 900 : 0,

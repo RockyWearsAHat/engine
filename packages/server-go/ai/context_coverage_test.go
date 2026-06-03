@@ -63,9 +63,126 @@ func TestChat_CtxModelAndProviderOverride(t *testing.T) {
 	}
 }
 
+func TestChat_AnthropicAndOpenAI_NoKey_DefaultLocalFallback(t *testing.T) {
+	providers := []struct {
+		name     string
+		provider string
+		model    string
+	}{
+		{name: "anthropic", provider: "anthropic", model: "claude-haiku-4.5"},
+		{name: "openai", provider: "openai", model: "gpt-4o-mini"},
+	}
+
+	for _, tt := range providers {
+		t.Run(tt.name, func(t *testing.T) {
+			projectDir := setupHistoryTestProject(t)
+			if err := db.CreateSession("session-default-local-"+tt.name, projectDir, "main"); err != nil {
+				t.Fatalf("create session: %v", err)
+			}
+
+			var requestedModel string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/v1/chat/completions":
+					var req struct {
+						Model string `json:"model"`
+					}
+					_ = json.NewDecoder(r.Body).Decode(&req)
+					requestedModel = req.Model
+					sendSSEDone(w)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			t.Setenv("LLAMACPP_BASE_URL", server.URL)
+			t.Setenv("ENGINE_MODEL_PROVIDER", tt.provider)
+			t.Setenv("ENGINE_MODEL", tt.model)
+			t.Setenv("ENGINE_LLAMACPP_MODEL", "")
+			t.Setenv("ENGINE_OLLAMA_MODEL", "")
+			t.Setenv("ANTHROPIC_API_KEY", "")
+			t.Setenv("OPENAI_API_KEY", "")
+
+			ctx := &ChatContext{
+				ProjectPath:  projectDir,
+				SessionID:    "session-default-local-" + tt.name,
+				OnChunk:      func(string, bool) {},
+				OnError:      func(string) {},
+				OnToolCall:   func(string, any) {},
+				OnToolResult: func(string, any, bool) {},
+			}
+			Chat(ctx, "hello")
+			if requestedModel != "default" {
+				t.Fatalf("expected default llama.cpp model, got %q", requestedModel)
+			}
+		})
+	}
+}
+
+func TestChat_AnthropicAndOpenAI_NoKey_OllamaFallback(t *testing.T) {
+	providers := []struct {
+		name     string
+		provider string
+		model    string
+	}{
+		{name: "anthropic", provider: "anthropic", model: "claude-haiku-4.5"},
+		{name: "openai", provider: "openai", model: "gpt-4o-mini"},
+	}
+
+	for _, tt := range providers {
+		t.Run(tt.name, func(t *testing.T) {
+			projectDir := setupHistoryTestProject(t)
+			if err := db.CreateSession("session-ollama-local-"+tt.name, projectDir, "main"); err != nil {
+				t.Fatalf("create session: %v", err)
+			}
+
+			var requestedModel string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/ps":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"models":[{"name":"qwen2.5:7b"}]}`))
+				case "/v1/chat/completions":
+					var req struct {
+						Model string `json:"model"`
+					}
+					_ = json.NewDecoder(r.Body).Decode(&req)
+					requestedModel = req.Model
+					sendSSEDone(w)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			t.Setenv("OLLAMA_BASE_URL", server.URL)
+			t.Setenv("ENGINE_MODEL_PROVIDER", tt.provider)
+			t.Setenv("ENGINE_MODEL", tt.model)
+			t.Setenv("ENGINE_LLAMACPP_MODEL", "")
+			t.Setenv("ENGINE_OLLAMA_MODEL", "qwen2.5:7b")
+			t.Setenv("ANTHROPIC_API_KEY", "")
+			t.Setenv("OPENAI_API_KEY", "")
+
+			ctx := &ChatContext{
+				ProjectPath:  projectDir,
+				SessionID:    "session-ollama-local-" + tt.name,
+				OnChunk:      func(string, bool) {},
+				OnError:      func(string) {},
+				OnToolCall:   func(string, any) {},
+				OnToolResult: func(string, any, bool) {},
+			}
+			Chat(ctx, "hello")
+			if requestedModel != "qwen2.5:7b" {
+				t.Fatalf("expected Ollama fallback model, got %q", requestedModel)
+			}
+		})
+	}
+}
+
 // TestRunPlannerPrePass_OllamaDetectedModel covers the
 // resolvedProvider=="ollama" && resolvedModel=="" branch (lines 1690-1692).
-func TestRunPlannerPrePass_OllamaDetectedModel(t *testing.T) {
+func TestRunPlannerPrePass_OllamaWithExplicitModel(t *testing.T) {
 	projectDir := setupHistoryTestProject(t)
 
 	var requestedModel string
@@ -89,6 +206,7 @@ func TestRunPlannerPrePass_OllamaDetectedModel(t *testing.T) {
 
 	t.Setenv("OLLAMA_BASE_URL", ollamaServer.URL)
 	t.Setenv("ENGINE_PLANNER_PROVIDER", "ollama")
+	t.Setenv("ENGINE_PLANNER_MODEL", "detected-model:7b")
 
 	ctx := &ChatContext{
 		ProjectPath:  projectDir,
@@ -102,17 +220,15 @@ func TestRunPlannerPrePass_OllamaDetectedModel(t *testing.T) {
 		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
 	}
-	// Pass empty model so detectOllamaModel is invoked.
+	// Explicit planner model must be provided under no-default policy.
 	_ = runPlannerPrePass(ctx, "ollama", "", "refactor the entire codebase", "main")
 	if requestedModel != "detected-model:7b" {
 		t.Errorf("expected detected-model:7b, got %q", requestedModel)
 	}
 }
 
-// TestRunPlannerPrePass_DefaultModel_WhenNoneDetected covers the
-// resolvedModel=="" fallback to defaultModelForProvider (lines 1693-1695).
-// Ollama returns no models so detectOllamaModel returns "", triggering the fallback.
-func TestRunPlannerPrePass_DefaultModel_WhenNoneDetected(t *testing.T) {
+// TestRunPlannerPrePass_NoModelConfigured_ReturnsEmpty covers explicit-model-only behavior.
+func TestRunPlannerPrePass_NoModelConfigured_ReturnsEmpty(t *testing.T) {
 	projectDir := setupHistoryTestProject(t)
 
 	var requestedModel string
@@ -136,6 +252,7 @@ func TestRunPlannerPrePass_DefaultModel_WhenNoneDetected(t *testing.T) {
 
 	t.Setenv("OLLAMA_BASE_URL", ollamaServer.URL)
 	t.Setenv("ENGINE_PLANNER_PROVIDER", "ollama")
+	t.Setenv("ENGINE_PLANNER_MODEL", "")
 
 	ctx := &ChatContext{
 		ProjectPath:  projectDir,
@@ -149,10 +266,12 @@ func TestRunPlannerPrePass_DefaultModel_WhenNoneDetected(t *testing.T) {
 		OnToolCall:   func(string, any) {},
 		OnToolResult: func(string, any, bool) {},
 	}
-	// Empty model list → detectOllamaModel="" → defaultModelForProvider("ollama")
-	_ = runPlannerPrePass(ctx, "ollama", "", "refactor the entire codebase", "main")
-	if requestedModel != defaultOllamaModel {
-		t.Errorf("expected default ollama model %q, got %q", defaultOllamaModel, requestedModel)
+	result := runPlannerPrePass(ctx, "ollama", "", "refactor the entire codebase", "main")
+	if result != "" {
+		t.Errorf("expected empty result when no model configured, got %q", result)
+	}
+	if requestedModel != "" {
+		t.Errorf("expected no planner request when model is missing, got %q", requestedModel)
 	}
 }
 

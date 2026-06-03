@@ -63,15 +63,17 @@ func ResolveLocalFirstRouting(role AgentRole) (string, string) {
 		// what's explicitly allowlisted.
 		return "", ""
 	}
-	// Choose a local Ollama model. If a role-specific override exists in env
+	// Choose a local llama.cpp model for optimal speed. If a role-specific override exists in env
 	// it's respected by the existing pathway, so we only kick in when nothing
 	// stronger has been requested.
-	model := strings.TrimSpace(os.Getenv("ENGINE_OLLAMA_MODEL"))
-	if model == "" {
-		model = detectOllamaModel(os.Getenv("OLLAMA_BASE_URL"))
-	}
+	model := strings.TrimSpace(os.Getenv("ENGINE_LLAMACPP_MODEL"))
 	if strings.TrimSpace(model) == "" {
-		model = defaultOllamaModel
+		// Fall back to Ollama if llama.cpp is not configured
+		model = strings.TrimSpace(os.Getenv("ENGINE_OLLAMA_MODEL"))
+		if strings.TrimSpace(model) == "" {
+			return "", ""
+		}
+		return "ollama", model
 	}
-	return "ollama", model
+	return "llamacpp", model
 }

@@ -105,6 +105,7 @@ func withRunDepsReset(t *testing.T) {
 	origDBListSessionsForScaffold := dbListSessionsForScaffoldFn
 	origScaffoldRunning := scaffoldTriggerRunning
 	origScaffoldLastStart := scaffoldTriggerLastStart
+	origIssueCommentLastDispatch := issueCommentLastDispatch
 	origScaffoldAttemptTimeout := scaffoldAttemptTimeout
 	origRunOrchestrator := runOrchestratorFn
 	origPostStatus := postOrchestratorGitHubStatusFn
@@ -131,6 +132,9 @@ func withRunDepsReset(t *testing.T) {
 	scaffoldTriggerRunning = make(map[string]bool)
 	scaffoldTriggerLastStart = make(map[string]time.Time)
 	scaffoldTriggerMu.Unlock()
+	issueCommentTriggerMu.Lock()
+	issueCommentLastDispatch = make(map[string]time.Time)
+	issueCommentTriggerMu.Unlock()
 
 	t.Cleanup(func() {
 		runFn = origRun
@@ -168,10 +172,163 @@ func withRunDepsReset(t *testing.T) {
 		scaffoldTriggerRunning = origScaffoldRunning
 		scaffoldTriggerLastStart = origScaffoldLastStart
 		scaffoldTriggerMu.Unlock()
+		issueCommentTriggerMu.Lock()
+		issueCommentLastDispatch = origIssueCommentLastDispatch
+		issueCommentTriggerMu.Unlock()
 		scaffoldAttemptTimeout = origScaffoldAttemptTimeout
 		runOrchestratorFn = origRunOrchestrator
 		postOrchestratorGitHubStatusFn = origPostStatus
 	})
+}
+
+func TestReserveIssueCommentDispatch_DedupesWithinCooldown(t *testing.T) {
+	issueCommentTriggerMu.Lock()
+	orig := issueCommentLastDispatch
+	issueCommentLastDispatch = make(map[string]time.Time)
+	issueCommentTriggerMu.Unlock()
+	t.Cleanup(func() {
+		issueCommentTriggerMu.Lock()
+		issueCommentLastDispatch = orig
+		issueCommentTriggerMu.Unlock()
+	})
+
+	if ok := reserveIssueCommentDispatch("/tmp/a", "owner/repo", 42, 9001, "@engine please fix"); !ok {
+		t.Fatal("expected first dispatch reservation to pass")
+	}
+	if ok := reserveIssueCommentDispatch("/tmp/a", "owner/repo", 42, 9001, "@engine please fix"); ok {
+		t.Fatal("expected duplicate dispatch reservation to be suppressed")
+	}
+}
+
+func TestReserveIssueCommentDispatch_DifferentCommentIDAllowsDispatch(t *testing.T) {
+	issueCommentTriggerMu.Lock()
+	orig := issueCommentLastDispatch
+	issueCommentLastDispatch = make(map[string]time.Time)
+	issueCommentTriggerMu.Unlock()
+	t.Cleanup(func() {
+		issueCommentTriggerMu.Lock()
+		issueCommentLastDispatch = orig
+		issueCommentTriggerMu.Unlock()
+	})
+
+	if ok := reserveIssueCommentDispatch("/tmp/a", "owner/repo", 42, 1, "@engine please fix"); !ok {
+		t.Fatal("expected first comment dispatch reservation")
+	}
+	if ok := reserveIssueCommentDispatch("/tmp/a", "owner/repo", 42, 2, "@engine please fix"); !ok {
+		t.Fatal("expected distinct comment id to reserve separately")
+	}
+}
+
+func TestIssueCommentDispatchKey_TrimsAndTruncates(t *testing.T) {
+	got := issueCommentDispatchKey("  /tmp/project  ", "  owner/repo  ", 7, 0, "  "+strings.Repeat("x", 200)+"  ")
+	if !strings.Contains(got, "/tmp/project#owner/repo#7#") {
+		t.Fatalf("unexpected key prefix: %q", got)
+	}
+	if strings.HasSuffix(got, strings.Repeat("x", 200)) {
+		t.Fatalf("expected body to be truncated, got %q", got)
+	}
+	if strings.Contains(got, "  ") {
+		t.Fatalf("expected whitespace to be trimmed, got %q", got)
+	}
+}
+
+func TestReserveIssueCommentDispatch_CleansUpExpiredEntries(t *testing.T) {
+	issueCommentTriggerMu.Lock()
+	orig := issueCommentLastDispatch
+	issueCommentLastDispatch = make(map[string]time.Time)
+	issueCommentTriggerMu.Unlock()
+	t.Cleanup(func() {
+		issueCommentTriggerMu.Lock()
+		issueCommentLastDispatch = orig
+		issueCommentTriggerMu.Unlock()
+	})
+
+	issueCommentTriggerMu.Lock()
+	for i := 0; i < 4100; i++ {
+		issueCommentLastDispatch[fmt.Sprintf("old-%d", i)] = time.Now().Add(-4 * issueCommentTriggerCooldown)
+	}
+	issueCommentTriggerMu.Unlock()
+
+	if ok := reserveIssueCommentDispatch("/tmp/a", "owner/repo", 42, 3, "@engine please fix"); !ok {
+		t.Fatal("expected reservation to pass")
+	}
+
+	issueCommentTriggerMu.Lock()
+	defer issueCommentTriggerMu.Unlock()
+	if len(issueCommentLastDispatch) > 2 {
+		t.Fatalf("expected cleanup to prune old entries, got %d entries", len(issueCommentLastDispatch))
+	}
+}
+
+func TestTriggerIssueSession_DuplicateSuppressed(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	withAIMockServer(t)
+	prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+
+	issueCommentTriggerMu.Lock()
+	orig := issueCommentLastDispatch
+	issueCommentLastDispatch = make(map[string]time.Time)
+	issueCommentTriggerMu.Unlock()
+	t.Cleanup(func() {
+		issueCommentTriggerMu.Lock()
+		issueCommentLastDispatch = orig
+		issueCommentTriggerMu.Unlock()
+	})
+
+	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine please fix","user":{"login":"bob"},"id":9001},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`)
+	triggerIssueSession(projectPath, payload)
+	triggerIssueSession(projectPath, payload)
+}
+
+func TestTriggerIssueSession_UsesActiveOrchestratorRedirect(t *testing.T) {
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	withAIMockServer(t)
+	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	release := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		_, _ = ai.RunAutonomousProject(ai.OrchestratorConfig{
+			ProjectPath:        targetPath,
+			Brief:              "brief",
+			MaxOuterIterations: 1,
+			OnPhase:            func(string, string) {},
+			OnProgress:         func(string) {},
+			OnError:            func(string) {},
+			ChatFn: func(ctx *ai.ChatContext, userMessage string) {
+				if ctx.Role == ai.RoleGriller {
+					<-release
+					ctx.OnChunk("# Design\nA tiny app.", false)
+				}
+			},
+		})
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if ai.GetOrchestratorHandle(targetPath) != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if ai.GetOrchestratorHandle(targetPath) == nil {
+		t.Fatal("expected active orchestrator handle")
+	}
+
+	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine please fix","user":{"login":"bob"},"id":9001},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`)
+	triggerIssueSession(projectPath, payload)
+	close(release)
+	if h := ai.GetOrchestratorHandle(targetPath); h != nil {
+		h.Stop()
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected orchestrator goroutine to exit")
+	}
 }
 
 func setupTestDB(t *testing.T, projectPath string) {
@@ -2060,6 +2217,193 @@ func TestTriggerIssueOpenedSession_OnError(t *testing.T) {
 
 	payload := json.RawMessage(`{"action":"opened","issue":{"number":89,"title":"Bug2","body":"desc2"},"repository":{"full_name":"owner/openederrrepo"},"sender":{"login":"alice"}}`)
 	triggerIssueOpenedSession(projectPath, payload)
+}
+
+func TestTriggerIssueSession_RetriesRetryableErrorBeforeBlocking(t *testing.T) {
+	withRunDepsReset(t)
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	prepareScaffoldTargetRepo(t, projectPath, "owner", "retryable-issue", "# Demo")
+
+	notifier := &mockProgressNotifier{}
+	ws.SetDiscordBridge(notifier)
+	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
+
+	callCount := 0
+	var prompts []string
+	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+		callCount++
+		prompts = append(prompts, prompt)
+		if callCount == 1 {
+			ctx.OnError("autonomous builder stopped after 20 turns without signal_done")
+			return
+		}
+		ctx.OnChunk("done", false)
+	}
+
+	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine fix it","user":{"login":"bob"}},"issue":{"number":9,"title":"Bug"},"repository":{"full_name":"owner/retryable-issue"}}`)
+	triggerIssueSession(projectPath, payload)
+
+	if callCount != 2 {
+		t.Fatalf("expected 2 AI calls, got %d", callCount)
+	}
+	if len(prompts) < 2 || !strings.Contains(prompts[1], "Recovery attempt 2 of 3") {
+		t.Fatalf("expected recovery prompt on second attempt, got %v", prompts)
+	}
+	joined := strings.Join(notifier.notified, "\n")
+	if !strings.Contains(joined, "Retrying automatically (2/3)") {
+		t.Fatalf("expected retry notification, got: %v", notifier.notified)
+	}
+	if strings.Contains(joined, "Issue session blocked") {
+		t.Fatalf("expected retry to avoid blocked notification, got: %v", notifier.notified)
+	}
+	if !strings.Contains(joined, "✅ Issue session issue-9-") {
+		t.Fatalf("expected final success notification, got: %v", notifier.notified)
+	}
+}
+
+func TestTriggerIssueOpenedSession_RetryableErrorStopsAfterMaxAttempts(t *testing.T) {
+	withRunDepsReset(t)
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	prepareScaffoldTargetRepo(t, projectPath, "owner", "retryable-opened", "# Demo")
+
+	notifier := &mockProgressNotifier{}
+	ws.SetDiscordBridge(notifier)
+	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
+
+	callCount := 0
+	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
+		callCount++
+		ctx.OnError("tool error: command not found")
+	}
+
+	payload := json.RawMessage(`{"action":"opened","issue":{"number":11,"title":"Feature","body":"Please add X"},"repository":{"full_name":"owner/retryable-opened"},"sender":{"login":"alice"}}`)
+	triggerIssueOpenedSession(projectPath, payload)
+
+	if callCount != autonomousIssueMaxAttempts {
+		t.Fatalf("expected %d AI calls, got %d", autonomousIssueMaxAttempts, callCount)
+	}
+	joined := strings.Join(notifier.notified, "\n")
+	if strings.Count(joined, "Retrying automatically") != autonomousIssueMaxAttempts-1 {
+		t.Fatalf("expected %d retry notifications, got: %v", autonomousIssueMaxAttempts-1, notifier.notified)
+	}
+	if !strings.Contains(joined, "Issue-opened session blocked") {
+		t.Fatalf("expected blocked notification after retries exhausted, got: %v", notifier.notified)
+	}
+	if strings.Contains(joined, "finished") {
+		t.Fatalf("expected no success notification on exhausted retries, got: %v", notifier.notified)
+	}
+}
+
+func TestIsRetryableAutonomousIssueError(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want bool
+	}{
+		{name: "empty", msg: "   ", want: false},
+		{name: "turn limit", msg: "autonomous builder stopped after 20 turns without signal_done", want: true},
+		{name: "tool error", msg: "command not found: go", want: true},
+		{name: "human required", msg: "need an api key before continuing", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isRetryableAutonomousIssueError(tt.msg); got != tt.want {
+				t.Fatalf("isRetryableAutonomousIssueError(%q) = %v, want %v", tt.msg, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunAutonomousIssueAttempts_RetriesThenSucceeds(t *testing.T) {
+	withRunDepsReset(t)
+	ctx := &ai.ChatContext{}
+	orig := aiChatFn
+	defer func() { aiChatFn = orig }()
+
+	var prompts []string
+	var retries []string
+	callCount := 0
+	aiChatFn = func(ctx *ai.ChatContext, userMessage string) {
+		callCount++
+		prompts = append(prompts, userMessage)
+		if callCount == 1 {
+			ctx.OnError("command not found: go")
+		}
+	}
+
+	err := runAutonomousIssueAttempts(ctx, "Ship the fix", func(nextAttempt int, msg string) {
+		retries = append(retries, fmt.Sprintf("%d:%s", nextAttempt, msg))
+	})
+	if err != "" {
+		t.Fatalf("expected retry flow to recover, got %q", err)
+	}
+	if callCount != 2 {
+		t.Fatalf("expected 2 attempts, got %d", callCount)
+	}
+	if len(retries) != 1 || retries[0] != "2:command not found: go" {
+		t.Fatalf("unexpected retry callbacks: %+v", retries)
+	}
+	if len(prompts) != 2 {
+		t.Fatalf("expected two prompts, got %d", len(prompts))
+	}
+	if prompts[1] == prompts[0] {
+		t.Fatal("expected retry prompt to differ from initial prompt")
+	}
+	if !strings.Contains(prompts[1], "Recovery attempt 2 of 3.") {
+		t.Fatalf("retry prompt missing attempt metadata: %q", prompts[1])
+	}
+	if !strings.Contains(prompts[1], "Previous blocker: command not found: go") {
+		t.Fatalf("retry prompt missing blocker context: %q", prompts[1])
+	}
+	if !strings.Contains(prompts[1], "Original objective:\nShip the fix") {
+		t.Fatalf("retry prompt missing original objective: %q", prompts[1])
+	}
+}
+
+func TestRunAutonomousIssueAttempts_UnknownFailureDoesNotRetry(t *testing.T) {
+	withRunDepsReset(t)
+	ctx := &ai.ChatContext{}
+	orig := aiChatFn
+	defer func() { aiChatFn = orig }()
+
+	callCount := 0
+	aiChatFn = func(ctx *ai.ChatContext, userMessage string) {
+		callCount++
+		ctx.OnError("   ")
+	}
+
+	err := runAutonomousIssueAttempts(ctx, "Ship the fix", nil)
+	if err != "unknown failure" {
+		t.Fatalf("expected normalized unknown failure, got %q", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected no retry for unknown failure, got %d attempts", callCount)
+	}
+}
+
+func TestRunAutonomousIssueAttempts_RetryableErrorWithoutCallbackStillRetries(t *testing.T) {
+	withRunDepsReset(t)
+	ctx := &ai.ChatContext{}
+	orig := aiChatFn
+	defer func() { aiChatFn = orig }()
+
+	callCount := 0
+	aiChatFn = func(ctx *ai.ChatContext, userMessage string) {
+		callCount++
+		if callCount == 1 {
+			ctx.OnError("failed to run the test suite")
+		}
+	}
+
+	err := runAutonomousIssueAttempts(ctx, "Ship the fix", nil)
+	if err != "" {
+		t.Fatalf("expected retry flow to recover without callback, got %q", err)
+	}
+	if callCount != 2 {
+		t.Fatalf("expected 2 attempts without callback, got %d", callCount)
+	}
 }
 
 // ── hasRepoProgress: head differs branch ─────────────────────────────────────

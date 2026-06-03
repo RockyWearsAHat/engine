@@ -3,6 +3,7 @@ package ai
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -245,6 +246,42 @@ func TestRunAutonomousProject_EmptyPath(t *testing.T) {
 	}
 }
 
+func TestRunAutonomousProject_RepoRunWithoutStartupTeamStillErrorsAsBefore(t *testing.T) {
+	dir := t.TempDir()
+	cfg := OrchestratorConfig{ProjectPath: dir, Owner: "o", Repo: "r", MaxOuterIterations: 1}
+	_, err := RunAutonomousProject(cfg)
+	if err == nil {
+		t.Fatal("expected orchestrator error")
+	}
+	// No startup team should not hard-fail at bootstrap; error source should be
+	// the regular execution flow (for example planner/provider setup).
+	if strings.Contains(err.Error(), "startup team required") {
+		t.Fatalf("unexpected startup-team hard failure: %v", err)
+	}
+}
+
+func TestRunAutonomousProject_CancelWhilePaused(t *testing.T) {
+	h := &OrchestratorHandle{cancel: make(chan struct{})}
+	h.paused = true
+
+	paused, err := orchestratorPausedStep(h.cancel, h)
+	if err != nil {
+		t.Fatalf("unexpected error before cancellation: %v", err)
+	}
+	if !paused {
+		t.Fatal("expected paused state before cancellation")
+	}
+
+	close(h.cancel)
+	paused, err = orchestratorPausedStep(h.cancel, h)
+	if err == nil || !strings.Contains(err.Error(), "cancelled while paused") {
+		t.Fatalf("expected paused cancellation error, got %v", err)
+	}
+	if paused {
+		t.Fatal("expected paused result to be false after cancellation")
+	}
+}
+
 // TestRunAutonomousProject_EventOrchestratorRoute verifies USE_EVENT_ORCHESTRATOR=1
 // routes to the event orchestrator path.
 func TestRunAutonomousProject_EventOrchestratorRoute(t *testing.T) {
@@ -252,8 +289,8 @@ func TestRunAutonomousProject_EventOrchestratorRoute(t *testing.T) {
 	dir := t.TempDir()
 	cfg := OrchestratorConfig{
 		ProjectPath:        dir,
-		Owner:              "o",
-		Repo:               "r",
+		Owner:              "",
+		Repo:               "",
 		Brief:              "test brief",
 		MaxOuterIterations: 1,
 		ChatFn: func(ctx *ChatContext, msg string) {
@@ -275,3 +312,4 @@ func TestRunAutonomousProject_EventOrchestratorRoute(t *testing.T) {
 	// Give goroutine a moment to start before test exits.
 	time.Sleep(20 * time.Millisecond)
 }
+

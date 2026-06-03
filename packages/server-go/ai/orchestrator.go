@@ -30,6 +30,8 @@ var OrchestratorStepMaxTurns = 24
 // the behavioral validator at the end will surface the gap.
 var OrchestratorMaxStepAttempts = 5
 
+var orchestratorPausePollInterval = 2 * time.Second
+
 // orchestrationFile is the persisted plan + step state. Lives at
 // <project>/.engine/orchestration.json. Survives restarts.
 const orchestrationFile = "orchestration.json"
@@ -116,9 +118,11 @@ type OrchestratorHandle struct {
 	cancelOnce   sync.Once
 	paused       bool
 	redirectMu   sync.Mutex
-	redirectMsg  string
+	redirectQueue []string
 	approveCh    chan bool
 }
+
+const maxQueuedRedirects = 24
 
 // NewHandle returns a freshly-initialized OrchestratorHandle for projectPath.
 // Useful for tests and external orchestration tooling that need a stoppable handle.
@@ -183,9 +187,19 @@ func (h *OrchestratorHandle) Redirect(message string) {
 	if h == nil {
 		return
 	}
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return
+	}
 	h.redirectMu.Lock()
 	defer h.redirectMu.Unlock()
-	h.redirectMsg = strings.TrimSpace(message)
+	if n := len(h.redirectQueue); n > 0 && h.redirectQueue[n-1] == trimmed {
+		return
+	}
+	h.redirectQueue = append(h.redirectQueue, trimmed)
+	if len(h.redirectQueue) > maxQueuedRedirects {
+		h.redirectQueue = h.redirectQueue[len(h.redirectQueue)-maxQueuedRedirects:]
+	}
 }
 
 func (h *OrchestratorHandle) takeRedirect() string {
@@ -194,9 +208,22 @@ func (h *OrchestratorHandle) takeRedirect() string {
 	}
 	h.redirectMu.Lock()
 	defer h.redirectMu.Unlock()
-	msg := h.redirectMsg
-	h.redirectMsg = ""
-	return msg
+	if len(h.redirectQueue) == 0 {
+		return ""
+	}
+	if len(h.redirectQueue) == 1 {
+		msg := h.redirectQueue[0]
+		h.redirectQueue = nil
+		return msg
+	}
+	var b strings.Builder
+	b.WriteString("Queued external directives (apply in order):")
+	for i, msg := range h.redirectQueue {
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("%d. %s", i+1, msg))
+	}
+	h.redirectQueue = nil
+	return b.String()
 }
 
 func (h *OrchestratorHandle) isPaused() bool {
@@ -206,6 +233,24 @@ func (h *OrchestratorHandle) isPaused() bool {
 	h.redirectMu.Lock()
 	defer h.redirectMu.Unlock()
 	return h.paused
+}
+
+func orchestratorPauseStep(cancel <-chan struct{}, handle *OrchestratorHandle) (bool, error) {
+	if cancelClosed(cancel) {
+		return false, fmt.Errorf("orchestrator: cancelled")
+	}
+	return orchestratorPausedStep(cancel, handle)
+}
+
+func orchestratorPausedStep(cancel <-chan struct{}, handle *OrchestratorHandle) (bool, error) {
+	if !handle.isPaused() {
+		return false, nil
+	}
+	if cancelClosed(cancel) {
+		return false, fmt.Errorf("orchestrator: cancelled while paused")
+	}
+	time.Sleep(orchestratorPausePollInterval)
+	return true, nil
 }
 
 func registerOrchestratorHandle(projectPath string, h *OrchestratorHandle) {
@@ -242,6 +287,17 @@ var runChatFn = Chat
 func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 	if strings.TrimSpace(cfg.ProjectPath) == "" {
 		return nil, fmt.Errorf("orchestrator: project path is required")
+	}
+	if strings.TrimSpace(cfg.Owner) != "" && strings.TrimSpace(cfg.Repo) != "" {
+		activeTeam := strings.TrimSpace(os.Getenv("ENGINE_ACTIVE_TEAM"))
+		resolvedTeam, teamProvider, teamModel, ok := ResolveAutonomousStartupTeam(cfg.ProjectPath, activeTeam)
+		if ok {
+			// Startup bootstrap is lead-owned: pin the autonomous session to the
+			// selected team's orchestrator runtime before any planning starts.
+			os.Setenv("ENGINE_ACTIVE_TEAM", resolvedTeam)    //nolint:errcheck
+			os.Setenv("ENGINE_MODEL_PROVIDER", teamProvider) //nolint:errcheck
+			os.Setenv("ENGINE_MODEL", teamModel)             //nolint:errcheck
+		}
 	}
 	if cfg.MaxOuterIterations <= 0 {
 		cfg.MaxOuterIterations = OrchestratorMaxOuterIterations
@@ -305,11 +361,6 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 			emitErr(cfg.OnError, fmt.Sprintf("plan phase failed: %v", err))
 			return state, err
 		}
-		if len(state.Plan) == 0 {
-			err := fmt.Errorf("planner returned no actionable steps")
-			emitErr(cfg.OnError, err.Error())
-			return state, err
-		}
 		if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
 			emitErr(cfg.OnError, fmt.Sprintf("persist plan: %v", err))
 			return state, err
@@ -323,16 +374,12 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 	}
 
 	for {
-		if cancelClosed(cancel) {
-			return state, fmt.Errorf("orchestrator: cancelled")
+		paused, err := orchestratorPauseStep(cancel, handle)
+		if err != nil {
+			return state, err
 		}
-		if handle.isPaused() {
-			select {
-			case <-cancel:
-				return state, fmt.Errorf("orchestrator: cancelled while paused")
-			case <-time.After(2 * time.Second):
-				continue
-			}
+		if paused {
+			continue
 		}
 
 		state.OuterIterations++
@@ -375,14 +422,11 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 			}
 			// Validation failed → unmark the most recent step so the loop tries
 			// again with the validation feedback in scope.
-			if unchecked := unmarkLastDone(state); unchecked != nil {
-				unchecked.LastFeedback = "Behavioral validation failed: " + validateErr.Error()
-				_ = persistOrchestration(cfg.ProjectPath, state)
-				emit(cfg.OnPhase, "validate", fmt.Sprintf("validation failed, reopening step %d", unchecked.Index))
-				continue
-			}
-			emitErr(cfg.OnError, fmt.Sprintf("validation failed with no steps to reopen: %v", validateErr))
-			return state, validateErr
+			unchecked := ensureReopenStep(state)
+			unchecked.LastFeedback = "Behavioral validation failed: " + validateErr.Error()
+			_ = persistOrchestration(cfg.ProjectPath, state)
+			emit(cfg.OnPhase, "validate", fmt.Sprintf("validation failed, reopening step %d", unchecked.Index))
+			continue
 		}
 
 		step := &state.Plan[nextIdx]
@@ -432,6 +476,20 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 			emit(cfg.OnPhase, "review", fmt.Sprintf("step %d inconclusive review", step.Index))
 		}
 	}
+}
+
+func ensureReopenStep(state *OrchestrationState) *PlanStep {
+	if unchecked := unmarkLastDone(state); unchecked != nil {
+		return unchecked
+	}
+	state.Plan = append(state.Plan, PlanStep{
+		Index:      len(state.Plan) + 1,
+		Title:      "Address validation feedback",
+		Acceptance: "Validation passes",
+		Attempts:   0,
+		Done:       false,
+	})
+	return &state.Plan[len(state.Plan)-1]
 }
 
 // emit is a nil-safe progress emitter.
@@ -578,10 +636,7 @@ func persistOrchestration(projectPath string, state *OrchestrationState) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
+	data, _ := json.MarshalIndent(state, "", "  ")
 	if err := os.WriteFile(filepath.Join(dir, orchestrationFile), data, 0o644); err != nil {
 		return err
 	}

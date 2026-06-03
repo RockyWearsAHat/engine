@@ -34,6 +34,7 @@ var upgrader = websocket.Upgrader{
 }
 
 var runAIChat = ai.Chat
+var runAutonomousProject = ai.RunAutonomousProject
 
 // Overridable DB/AI calls for testing error paths.
 var (
@@ -223,17 +224,21 @@ type conn struct {
 }
 
 type runtimeConfig struct {
-	GitHubToken     *string `json:"githubToken"`
-	GitHubOwner     *string `json:"githubOwner"`
-	GitHubRepo      *string `json:"githubRepo"`
-	AnthropicKey    *string `json:"anthropicKey"`
-	OpenAIKey       *string `json:"openaiKey"`
-	ModelProvider   *string `json:"modelProvider"`
-	OllamaBaseURL   *string `json:"ollamaBaseUrl"`
-	OllamaNumCtx    *string `json:"ollamaNumCtx"`
-	LlamacppBaseURL *string `json:"llamacppBaseUrl"`
-	Model           *string `json:"model"`
-	ClonesDir       *string `json:"clonesDir"`
+	GitHubToken           *string `json:"githubToken"`
+	GitHubOwner           *string `json:"githubOwner"`
+	GitHubRepo            *string `json:"githubRepo"`
+	AnthropicKey          *string `json:"anthropicKey"`
+	OpenAIKey             *string `json:"openaiKey"`
+	ModelProvider         *string `json:"modelProvider"`
+	ActiveTeam            *string `json:"activeTeam"`
+	OllamaBaseURL         *string `json:"ollamaBaseUrl"`
+	OllamaNumCtx          *string `json:"ollamaNumCtx"`
+	LlamacppBaseURL       *string `json:"llamacppBaseUrl"`
+	Model                 *string `json:"model"`
+	ClonesDir             *string `json:"clonesDir"`
+	ContextMaxTokens      *string `json:"contextMaxTokens"`
+	ContextRecentWindow   *string `json:"contextRecentWindow"`
+	ListDirectoryMaxChars *string `json:"listDirectoryMaxChars"`
 }
 
 func (c *conn) resolveChatSession(requestedSessionID string) (*db.Session, error) {
@@ -257,6 +262,62 @@ func (c *conn) resolveChatSession(requestedSessionID string) (*db.Session, error
 	return session, nil
 }
 
+func latestScaffoldStatusLine(projectPath string) string {
+	sessions, err := dbListSessions(projectPath)
+	if err != nil {
+		return ""
+	}
+	for _, sess := range sessions {
+		if !strings.HasPrefix(strings.ToLower(sess.ID), "scaffold-") {
+			continue
+		}
+		updated := strings.TrimSpace(sess.UpdatedAt)
+		if updated == "" {
+			updated = strings.TrimSpace(sess.CreatedAt)
+		}
+		summary := strings.TrimSpace(sess.Summary)
+		if summary == "" {
+			summary = "no summary yet"
+		}
+		return fmt.Sprintf("latest scaffold: %s | updated: %s | messages: %d | %s", shortID(sess.ID), updated, sess.MessageCount, truncate(summary, 160))
+	}
+	return ""
+}
+
+func shortID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
+}
+
+func truncate(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(strings.TrimSpace(s))
+	if len(r) <= n {
+		return string(r)
+	}
+	if n <= 3 {
+		return string(r[:n])
+	}
+	return string(r[:n-3]) + "..."
+}
+
+func promptWithProjectStatusContext(projectPath, prompt string) string {
+	status := latestScaffoldStatusLine(projectPath)
+	if status == "" {
+		return prompt
+	}
+	repoName := strings.TrimSpace(filepath.Base(projectPath))
+	if repoName == "" || repoName == "." {
+		repoName = "project"
+	}
+	return strings.TrimSpace(fmt.Sprintf("Discord project context:\n- Project: %s\n- %s\n- This message came from the project channel, so answer with awareness of existing project/session history. Do not claim setup is just starting if scaffold sessions already exist.\n\nUser message:\n%s", repoName, status, prompt))
+}
+
 func newConn(ws *websocket.Conn, projectPath string) *conn {
 	return &conn{
 		ws:              ws,
@@ -269,7 +330,6 @@ func newConn(ws *websocket.Conn, projectPath string) *conn {
 		testObservers:   make(map[string]*ai.TestObserver),
 	}
 }
-
 
 // send marshals and writes a message to the WebSocket client (thread-safe).
 // Returns silently if the connection has already been closed.
@@ -543,8 +603,10 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 
 	case "chat":
 		var msg struct {
-			SessionID string `json:"sessionId"`
-			Content   string `json:"content"`
+			SessionID          string `json:"sessionId"`
+			Content            string `json:"content"`
+			ReloadContext      bool   `json:"reloadContext"`
+			RetryFromMessageID string `json:"retryFromMessageId"`
 		}
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			c.sendErr("Bad payload", "BAD_PAYLOAD")
@@ -593,6 +655,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			// safety — no approval modals, awareness notes feed back into the loop.
 			var autonomousPolicy *ai.AutonomousPolicy
 			role := ai.RoleInteractive
+			autonomousIntent := ai.DetectAutonomousIntent(msg.Content)
 			if ai.DetectAutonomousIntent(msg.Content) {
 				p := ai.ResolveAutonomousPolicy(projectPath)
 				autonomousPolicy = &p
@@ -603,9 +666,55 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 					"notice":    "Autonomous mode engaged — approvals bypassed, awareness notes will be surfaced inline.",
 				})
 			}
+			chatPrompt := promptWithProjectStatusContext(projectPath, msg.Content)
+
+			// Autonomous-intent chat requests must run through the project orchestrator
+			// so chat, Discord, and GitHub entry points share the same execution model.
+			if autonomousIntent {
+				state, orchestratorErr := runAutonomousProject(ai.OrchestratorConfig{
+					ProjectPath:     projectPath,
+					Brief:           chatPrompt,
+					SessionIDPrefix: fmt.Sprintf("chat-%s", shortID(sessionID)),
+					Cancel:          cancelCh,
+					ChatFn:          runAIChat,
+					OnPhase: func(phase, detail string) {
+						c.send(map[string]any{
+							"type":      "chat.notice",
+							"sessionId": sessionID,
+							"notice":    fmt.Sprintf("Orchestrator %s: %s", phase, detail),
+						})
+					},
+					OnError: func(errMsg string) {
+						if strings.TrimSpace(errMsg) == "" {
+							return
+						}
+						c.send(map[string]any{"type": "chat.error", "sessionId": sessionID, "error": errMsg})
+					},
+				})
+				if orchestratorErr != nil {
+					if strings.Contains(strings.ToLower(orchestratorErr.Error()), "cancel") {
+						c.send(map[string]any{"type": "chat.notice", "sessionId": sessionID, "notice": "Orchestrator cancelled."})
+						c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": "", "done": true})
+						return
+					}
+					c.send(map[string]any{"type": "chat.error", "sessionId": sessionID, "error": orchestratorErr.Error()})
+					c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": "", "done": true})
+					return
+				}
+				summary := "Orchestrator completed."
+				if state != nil {
+					summary = fmt.Sprintf("Orchestrator completed (%d steps, %d iterations).", len(state.Plan), state.OuterIterations)
+				}
+				c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": summary, "done": false})
+				c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": "", "done": true})
+				return
+			}
+
 			runAIChat(&ai.ChatContext{
 				ProjectPath:      projectPath,
 				SessionID:        sessionID,
+				ReloadContext:    msg.ReloadContext,
+				RetryFromMessageID: msg.RetryFromMessageID,
 				Cancel:           cancelCh,
 				Role:             role,
 				AutonomousPolicy: autonomousPolicy,
@@ -657,7 +766,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 					discordBridge.NotifyProjectProgress(projectPath, message)
 					return nil
 				},
-			}, msg.Content)
+			}, chatPrompt)
 		}()
 
 	case "chat.stop":
@@ -903,7 +1012,6 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		_ = json.Unmarshal(raw, &msg)
 		c.handleDiscordHistoryRecent(msg.ProjectPath, msg.ThreadID, msg.Since, msg.Limit)
 
-
 	// ── Remote pairing ─────────────────────────────────────────────────────────────────────────────
 
 	case "remote.pair.code.generate":
@@ -1050,15 +1158,24 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr("Bad payload", "BAD_PAYLOAD")
 			return
 		}
-		if strings.TrimSpace(msg.Team) != "" && (strings.TrimSpace(msg.Provider) == "" || strings.TrimSpace(msg.Model) == "") {
-			_, resolvedProvider, resolvedModel, ok := ai.ResolveTeamOrchestratorModel(projectPath, msg.Team)
-			if ok {
-				if strings.TrimSpace(msg.Provider) == "" {
-					msg.Provider = resolvedProvider
-				}
-				if strings.TrimSpace(msg.Model) == "" {
-					msg.Model = resolvedModel
-				}
+		teamName := strings.TrimSpace(msg.Team)
+		if teamName != "" {
+			_, resolvedProvider, resolvedModel, ok := ai.ResolveTeamOrchestratorModel(projectPath, teamName)
+			if !ok {
+				c.sendErr("Unknown team or missing orchestrator model in .engine/config.yaml", "TEAM_CONFIG_ERROR")
+				return
+			}
+			// Server is authoritative: selecting a team must apply that team's
+			// orchestrator runtime, not a caller-provided provider/model pair.
+			msg.Provider = resolvedProvider
+			msg.Model = resolvedModel
+		}
+		if teamName == "" {
+			hasProvider := strings.TrimSpace(msg.Provider) != ""
+			hasModel := strings.TrimSpace(msg.Model) != ""
+			if hasProvider != hasModel {
+				c.sendErr("provider and model must be set together when team is omitted", "BAD_PAYLOAD")
+				return
 			}
 		}
 		if strings.TrimSpace(msg.Provider) != "" {
@@ -1074,7 +1191,6 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			"type": "engine.team.updated",
 			"team": msg.Team,
 		})
-
 
 	// ── Test Observer ─────────────────────────────────────────────────────────
 
@@ -1342,11 +1458,15 @@ func applyRuntimeConfig(cfg runtimeConfig) {
 	setRuntimeEnv("ANTHROPIC_API_KEY", cfg.AnthropicKey)
 	setRuntimeEnv("OPENAI_API_KEY", cfg.OpenAIKey)
 	setRuntimeEnv("ENGINE_MODEL_PROVIDER", cfg.ModelProvider)
+	setRuntimeEnv("ENGINE_ACTIVE_TEAM", cfg.ActiveTeam)
 	setRuntimeEnv("OLLAMA_BASE_URL", cfg.OllamaBaseURL)
 	setRuntimeEnv("ENGINE_OLLAMA_NUM_CTX", cfg.OllamaNumCtx)
 	setRuntimeEnv("LLAMACPP_BASE_URL", cfg.LlamacppBaseURL)
 	setRuntimeEnv("ENGINE_MODEL", cfg.Model)
 	setRuntimeEnv("ENGINE_CLONES_DIR", cfg.ClonesDir)
+	setRuntimeEnv("ENGINE_CONTEXT_MAX_TOKENS", cfg.ContextMaxTokens)
+	setRuntimeEnv("ENGINE_CONTEXT_RECENT_WINDOW", cfg.ContextRecentWindow)
+	setRuntimeEnv("ENGINE_LIST_DIRECTORY_MAX_CHARS", cfg.ListDirectoryMaxChars)
 }
 
 func setRuntimeEnv(key string, value *string) {
@@ -1426,9 +1546,9 @@ func fetchGitHubIssues(owner, repo string) ([]githubIssue, error) {
 			Name  string `json:"name"`
 			Color string `json:"color"`
 		} `json:"labels"`
-		CreatedAt   string      `json:"created_at"`
-		UpdatedAt   string      `json:"updated_at"`
-		PullRequest any `json:"pull_request"`
+		CreatedAt   string `json:"created_at"`
+		UpdatedAt   string `json:"updated_at"`
+		PullRequest any    `json:"pull_request"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, err

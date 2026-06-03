@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..');
 const host = process.env.ENGINE_CLIENT_DEV_HOST ?? '127.0.0.1';
-const port = Number.parseInt(process.env.ENGINE_CLIENT_DEV_PORT ?? '5173', 10);
+const port = Number.parseInt(process.env.ENGINE_WEB_PORT ?? process.env.ENGINE_CLIENT_DEV_PORT ?? '24445', 10);
 const acceptedTitles = ['<title>MyEditor</title>', '<title>Engine</title>'];
 const hostCandidates = [...new Set([host, 'localhost', '127.0.0.1', '::1'])];
 
@@ -105,7 +105,7 @@ if (occupiedByEngineHost) {
 
 if (occupiedByOtherProcess) {
   console.error(
-    `[ensure-client-dev] Port ${port} is already in use by a non-Engine service. Stop that process or change ENGINE_CLIENT_DEV_PORT.`,
+    `[ensure-client-dev] Port ${port} is already in use by a non-Engine service. Stop that process or change ENGINE_WEB_PORT (or legacy ENGINE_CLIENT_DEV_PORT).`,
   );
   process.exit(1);
 }

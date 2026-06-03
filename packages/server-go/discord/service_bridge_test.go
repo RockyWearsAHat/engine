@@ -231,6 +231,29 @@ func TestServiceReload_Disabled(t *testing.T) {
 	}
 }
 
+func TestServiceReload_SameConfig_DoesNotRestartGateway(t *testing.T) {
+	svc, _ := newDisabledSvc(t)
+
+	activeCfg := Config{
+		Enabled:            true,
+		BotToken:           strings.Repeat("a", 72),
+		GuildID:            "guild-1",
+		AllowedUsers:       map[string]bool{"u1": true},
+		CommandPrefix:      "!",
+		ControlChannelName: "engine-control",
+	}
+	svc.cfg = activeCfg
+	originalSession := &discordgo.Session{}
+	svc.dg = originalSession
+
+	if err := svc.Reload(activeCfg); err != nil {
+		t.Fatalf("Reload(same cfg): %v", err)
+	}
+	if svc.dg != originalSession {
+		t.Fatal("expected existing Discord session to be preserved for same config")
+	}
+}
+
 func TestServiceSearchHistory_Empty(t *testing.T) {
 	svc, _ := newDisabledSvc(t)
 	hits, err := svc.SearchHistory("/nonexistent", "query", "", 10)
@@ -816,6 +839,25 @@ func TestStart_Disabled(t *testing.T) {
 	}
 }
 
+func TestStart_EnabledShortToken(t *testing.T) {
+	dir := initDiscordTestDB(t)
+	svc, err := NewService(Config{
+		Enabled:            true,
+		BotToken:           "short-token",
+		GuildID:            "guild-short",
+		CommandPrefix:      "!",
+		AllowedUsers:       map[string]bool{"u1": true},
+		ControlChannelName: "engine-control",
+		StoragePath:        dir,
+	}, t.TempDir())
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if err := svc.Start(); err == nil || !strings.Contains(err.Error(), "too short") {
+		t.Fatalf("expected short token error, got %v", err)
+	}
+}
+
 // ── send / sendTagged empty-msg path (requires non-nil dg) ────────────────────
 
 func TestSend_EmptyMsg_WithNonNilDG(t *testing.T) {
@@ -1021,6 +1063,58 @@ func TestServiceReload_Enabled_LoadStateError(t *testing.T) {
 	}
 	if err := svc.Reload(cfg); err == nil {
 		t.Fatal("expected error from corrupt state file in Reload")
+	}
+}
+
+func TestServiceReload_Enabled_ShortToken(t *testing.T) {
+	svc, _ := newDisabledSvc(t)
+	cfg := Config{
+		Enabled:            true,
+		BotToken:           "short-token",
+		GuildID:            "guild-1",
+		AllowedUsers:       map[string]bool{"user1": true},
+		CommandPrefix:      "!",
+		ControlChannelName: "engine-control",
+	}
+	if err := svc.Reload(cfg); err == nil || !strings.Contains(err.Error(), "too short") {
+		t.Fatalf("expected short token error from Reload, got %v", err)
+	}
+}
+
+func TestSameConfig(t *testing.T) {
+	base := Config{
+		Enabled:            true,
+		BotToken:           "  token  ",
+		GuildID:            " guild ",
+		CommandPrefix:      " ! ",
+		ControlChannelName: " ctrl ",
+		AllowedUsers:       map[string]bool{"a": true},
+	}
+	if !sameConfig(base, Config{
+		Enabled:            true,
+		BotToken:           "token",
+		GuildID:            "guild",
+		CommandPrefix:      "!",
+		ControlChannelName: "ctrl",
+		AllowedUsers:       map[string]bool{"a": true},
+	}) {
+		t.Fatal("expected trimmed equivalent configs to match")
+	}
+
+	cases := []Config{
+		{Enabled: false, BotToken: "token", GuildID: "guild", CommandPrefix: "!", ControlChannelName: "ctrl", AllowedUsers: map[string]bool{"a": true}},
+		{Enabled: true, BotToken: "different", GuildID: "guild", CommandPrefix: "!", ControlChannelName: "ctrl", AllowedUsers: map[string]bool{"a": true}},
+		{Enabled: true, BotToken: "token", GuildID: "different", CommandPrefix: "!", ControlChannelName: "ctrl", AllowedUsers: map[string]bool{"a": true}},
+		{Enabled: true, BotToken: "token", GuildID: "guild", CommandPrefix: "?", ControlChannelName: "ctrl", AllowedUsers: map[string]bool{"a": true}},
+		{Enabled: true, BotToken: "token", GuildID: "guild", CommandPrefix: "!", ControlChannelName: "different", AllowedUsers: map[string]bool{"a": true}},
+		{Enabled: true, BotToken: "token", GuildID: "guild", CommandPrefix: "!", ControlChannelName: "ctrl", AllowedUsers: map[string]bool{"a": true, "b": true}},
+		{Enabled: true, BotToken: "token", GuildID: "guild", CommandPrefix: "!", ControlChannelName: "ctrl", AllowedUsers: map[string]bool{"b": true}},
+	}
+
+	for i, cfg := range cases {
+		if sameConfig(base, cfg) {
+			t.Fatalf("expected mismatch case %d to be false", i)
+		}
 	}
 }
 
@@ -2436,7 +2530,7 @@ func TestStart_GatewaySuccess(t *testing.T) {
 	dir := initDiscordTestDB(t)
 	svc, err := NewService(Config{
 		Enabled:            true,
-		BotToken:           "test-token",
+		BotToken:           strings.Repeat("t", 72),
 		GuildID:            "guild-start",
 		CommandPrefix:      "!",
 		AllowedUsers:       map[string]bool{"u1": true},
@@ -2453,7 +2547,178 @@ func TestStart_GatewaySuccess(t *testing.T) {
 	if svc.dg == nil {
 		t.Fatal("expected svc.dg to be set after successful Start()")
 	}
+	firstSession := svc.dg
+
+	if err := svc.Start(); err != nil {
+		t.Fatalf("second Start() should be idempotent, got error: %v", err)
+	}
+	if svc.dg != firstSession {
+		t.Fatal("expected second Start() to reuse existing Discord session")
+	}
 	_ = svc.Close()
+}
+
+func TestStart_GatewayOpenFailureClearsSession(t *testing.T) {
+	gatewaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"url": "ws://127.0.0.1:1", "shards": 1})
+	}))
+	defer gatewaySrv.Close()
+
+	origGatewayBot := discordgo.EndpointGatewayBot
+	origGateway := discordgo.EndpointGateway
+	defer func() {
+		discordgo.EndpointGatewayBot = origGatewayBot
+		discordgo.EndpointGateway = origGateway
+	}()
+	discordgo.EndpointGatewayBot = gatewaySrv.URL
+	discordgo.EndpointGateway = gatewaySrv.URL
+
+	dir := initDiscordTestDB(t)
+	svc, err := NewService(Config{
+		Enabled:            true,
+		BotToken:           strings.Repeat("t", 72),
+		GuildID:            "guild-start-fail",
+		CommandPrefix:      "!",
+		AllowedUsers:       map[string]bool{"u1": true},
+		StoragePath:        dir,
+		ControlChannelName: "engine-control",
+	}, dir)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	if err := svc.Start(); err == nil {
+		t.Fatal("expected Start() to fail when the gateway cannot be opened")
+	}
+	if svc.dg != nil {
+		t.Fatal("expected svc.dg to be cleared after Start() open failure")
+	}
+}
+
+func TestReload_GatewaySuccess(t *testing.T) {
+	wsURL, wsCleanup := startDiscordWSMock(t)
+	defer wsCleanup()
+
+	gatewaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"url": wsURL, "shards": 1})
+	}))
+	defer gatewaySrv.Close()
+
+	origGatewayBot := discordgo.EndpointGatewayBot
+	origGateway := discordgo.EndpointGateway
+	defer func() {
+		discordgo.EndpointGatewayBot = origGatewayBot
+		discordgo.EndpointGateway = origGateway
+	}()
+	discordgo.EndpointGatewayBot = gatewaySrv.URL
+	discordgo.EndpointGateway = gatewaySrv.URL
+
+	dir := initDiscordTestDB(t)
+	svc, err := NewService(Config{Enabled: false, StoragePath: dir}, dir)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	err = svc.Reload(Config{
+		Enabled:            true,
+		BotToken:           strings.Repeat("t", 72),
+		GuildID:            "guild-reload",
+		CommandPrefix:      "!",
+		AllowedUsers:       map[string]bool{"u1": true},
+		StoragePath:        dir,
+		ControlChannelName: "engine-control",
+	})
+	if err != nil {
+		t.Fatalf("Reload() returned error: %v", err)
+	}
+	if svc.dg == nil {
+		t.Fatal("expected Reload() to establish a Discord session")
+	}
+	_ = svc.Close()
+}
+
+func TestReload_GatewayOpenFailureClearsSession(t *testing.T) {
+	gatewaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"url": "ws://127.0.0.1:1", "shards": 1})
+	}))
+	defer gatewaySrv.Close()
+
+	origGatewayBot := discordgo.EndpointGatewayBot
+	origGateway := discordgo.EndpointGateway
+	defer func() {
+		discordgo.EndpointGatewayBot = origGatewayBot
+		discordgo.EndpointGateway = origGateway
+	}()
+	discordgo.EndpointGatewayBot = gatewaySrv.URL
+	discordgo.EndpointGateway = gatewaySrv.URL
+
+	dir := initDiscordTestDB(t)
+	svc, err := NewService(Config{Enabled: false, StoragePath: dir}, dir)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	err = svc.Reload(Config{
+		Enabled:            true,
+		BotToken:           strings.Repeat("t", 72),
+		GuildID:            "guild-reload-fail",
+		CommandPrefix:      "!",
+		AllowedUsers:       map[string]bool{"u1": true},
+		StoragePath:        dir,
+		ControlChannelName: "engine-control",
+	})
+	if err == nil {
+		t.Fatal("expected Reload() to fail when the gateway cannot be opened")
+	}
+	if svc.dg != nil {
+		t.Fatal("expected svc.dg to be cleared after Reload() open failure")
+	}
+}
+
+func TestReload_DisabledClosesExistingSession(t *testing.T) {
+	wsURL, wsCleanup := startDiscordWSMock(t)
+	defer wsCleanup()
+
+	gatewaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"url": wsURL, "shards": 1})
+	}))
+	defer gatewaySrv.Close()
+
+	origGatewayBot := discordgo.EndpointGatewayBot
+	origGateway := discordgo.EndpointGateway
+	defer func() {
+		discordgo.EndpointGatewayBot = origGatewayBot
+		discordgo.EndpointGateway = origGateway
+	}()
+	discordgo.EndpointGatewayBot = gatewaySrv.URL
+	discordgo.EndpointGateway = gatewaySrv.URL
+
+	dir := initDiscordTestDB(t)
+	svc, err := NewService(Config{
+		Enabled:            true,
+		BotToken:           strings.Repeat("t", 72),
+		GuildID:            "guild-reload-close",
+		CommandPrefix:      "!",
+		AllowedUsers:       map[string]bool{"u1": true},
+		StoragePath:        dir,
+		ControlChannelName: "engine-control",
+	}, dir)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("Start() returned error: %v", err)
+	}
+	if svc.dg == nil {
+		t.Fatal("expected active Discord session before Reload(false)")
+	}
+
+	if err := svc.Reload(Config{Enabled: false, StoragePath: dir, CommandPrefix: "?"}); err != nil {
+		t.Fatalf("Reload(false) returned error: %v", err)
+	}
+	if svc.dg != nil {
+		t.Fatal("expected Reload(false) to close the existing Discord session")
+	}
 }
 
 // ── Validate() post-Open paths ────────────────────────────────────────────────

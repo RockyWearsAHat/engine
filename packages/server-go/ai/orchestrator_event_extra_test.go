@@ -72,11 +72,14 @@ func TestFormatVocabulary_NonEmpty(t *testing.T) {
 	}
 }
 
-// TestExtractPlanFromContext_AlwaysEmpty verifies it always returns empty slice.
-func TestExtractPlanFromContext_AlwaysEmpty(t *testing.T) {
+// TestExtractPlanFromContext_ParsesNumberedPlan verifies planner text is parsed.
+func TestExtractPlanFromContext_ParsesNumberedPlan(t *testing.T) {
 	plan := extractPlanFromContext("1. Step one\n   do things\n   Acceptance: `go build`")
-	if len(plan) != 0 {
-		t.Errorf("expected empty plan, got %d steps", len(plan))
+	if len(plan) != 1 {
+		t.Fatalf("expected one step, got %d", len(plan))
+	}
+	if plan[0].Index != 1 || plan[0].Title != "Step one" {
+		t.Fatalf("unexpected parsed step: %+v", plan[0])
 	}
 }
 

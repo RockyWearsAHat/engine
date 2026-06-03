@@ -247,6 +247,52 @@ func TestExecuteToolForTest_ListDirectory(t *testing.T) {
 	}
 }
 
+func TestExecuteToolForTest_ListDirectory_CollapsesGeneratedByCache(t *testing.T) {
+	ctx := makeChatCtx(t)
+	genDir := filepath.Join(ctx.ProjectPath, "build")
+	if err := os.MkdirAll(genDir, 0755); err != nil {
+		t.Fatalf("mkdir build: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(genDir, "artifact.log"), []byte("x"), 0644); err != nil {
+		t.Fatalf("write generated file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(ctx.ProjectPath, ".engine"), 0755); err != nil {
+		t.Fatalf("mkdir .engine: %v", err)
+	}
+	cache := generatedCache{UpdatedAt: time.Now().UTC().Format(time.RFC3339), Paths: []string{genDir}}
+	raw, _ := json.Marshal(cache)
+	if err := os.WriteFile(filepath.Join(ctx.ProjectPath, ".engine", "generated-files-cache.json"), raw, 0644); err != nil {
+		t.Fatalf("write generated cache: %v", err)
+	}
+
+	result, isErr := ExecuteToolForTest("list_directory", map[string]any{"path": "."}, ctx)
+	if isErr {
+		t.Fatalf("unexpected error: %s", result)
+	}
+	if !strings.Contains(result, "collapsed") {
+		t.Fatalf("expected collapsed generated summary, got %q", result)
+	}
+
+	result, isErr = ExecuteToolForTest("list_directory", map[string]any{"path": ".", "includeGenerated": true}, ctx)
+	if isErr {
+		t.Fatalf("unexpected includeGenerated error: %s", result)
+	}
+	if !strings.Contains(result, "artifact.log") {
+		t.Fatalf("expected generated file to appear when includeGenerated=true, got %q", result)
+	}
+	if strings.Contains(result, ".engine") {
+		t.Fatalf("expected top-level .engine to stay hidden in project root listing, got %q", result)
+	}
+
+	engineResult, engineErr := ExecuteToolForTest("list_directory", map[string]any{"path": ".engine", "includeGenerated": true}, ctx)
+	if engineErr {
+		t.Fatalf("expected direct .engine listing to succeed, got %q", engineResult)
+	}
+	if !strings.Contains(engineResult, "generated-files-cache.json") {
+		t.Fatalf("expected direct .engine listing to include cache file, got %q", engineResult)
+	}
+}
+
 func TestExecuteToolForTest_ReadFile(t *testing.T) {
 	ctx := makeChatCtx(t)
 	result, isErr := ExecuteToolForTest("read_file", map[string]any{"path": "PROJECT_GOAL.md"}, ctx)
@@ -1346,8 +1392,8 @@ func TestInferredProviderForModel_O4Prefix(t *testing.T) {
 }
 
 func TestInferredProviderForModel_DefaultAnthropic(t *testing.T) {
-	if got := inferredProviderForModel("totally-unknown-model-xyz"); got != "anthropic" {
-		t.Errorf("expected anthropic default, got %q", got)
+	if got := inferredProviderForModel("totally-unknown-model-xyz"); got != "llamacpp" {
+		t.Errorf("expected llamacpp default, got %q", got)
 	}
 }
 
@@ -1967,8 +2013,14 @@ func TestChat_Anthropic_NoKey(t *testing.T) {
 	if err := db.CreateSession("sess-anth-nokey", dir, "main"); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sendSSEDone(w)
+	}))
+	defer server.Close()
 	t.Setenv("ENGINE_MODEL_PROVIDER", "anthropic")
-	t.Setenv("ENGINE_MODEL", "")
+	t.Setenv("ENGINE_MODEL", "claude-haiku-4.5")
+	t.Setenv("ENGINE_LLAMACPP_MODEL", "fallback-local")
+	t.Setenv("LLAMACPP_BASE_URL", server.URL)
 	t.Setenv("ANTHROPIC_API_KEY", "")
 
 	var gotErr string
@@ -1981,8 +2033,8 @@ func TestChat_Anthropic_NoKey(t *testing.T) {
 		OnError:      func(e string) { gotErr = e },
 	}
 	Chat(ctx, "hello")
-	if !strings.Contains(gotErr, "ANTHROPIC_API_KEY") {
-		t.Errorf("expected ANTHROPIC_API_KEY error, got %q", gotErr)
+	if gotErr != "" {
+		t.Errorf("expected local fallback without error, got %q", gotErr)
 	}
 }
 
@@ -1991,8 +2043,14 @@ func TestChat_OpenAI_NoKey(t *testing.T) {
 	if err := db.CreateSession("sess-oai-nokey", dir, "main"); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sendSSEDone(w)
+	}))
+	defer server.Close()
 	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
-	t.Setenv("ENGINE_MODEL", "")
+	t.Setenv("ENGINE_MODEL", "gpt-4o-mini")
+	t.Setenv("ENGINE_LLAMACPP_MODEL", "fallback-local")
+	t.Setenv("LLAMACPP_BASE_URL", server.URL)
 	t.Setenv("OPENAI_API_KEY", "")
 
 	var gotErr string
@@ -2005,8 +2063,8 @@ func TestChat_OpenAI_NoKey(t *testing.T) {
 		OnError:      func(e string) { gotErr = e },
 	}
 	Chat(ctx, "hello")
-	if !strings.Contains(gotErr, "OPENAI_API_KEY") {
-		t.Errorf("expected OPENAI_API_KEY error, got %q", gotErr)
+	if gotErr != "" {
+		t.Errorf("expected local fallback without error, got %q", gotErr)
 	}
 }
 
@@ -2033,7 +2091,7 @@ func TestChat_Ollama_WithGetOpenTabs(t *testing.T) {
 	defer ollamaServer.Close()
 
 	t.Setenv("ENGINE_MODEL_PROVIDER", "ollama")
-	t.Setenv("ENGINE_MODEL", "")
+	t.Setenv("ENGINE_MODEL", "gemma:2b")
 	t.Setenv("OLLAMA_BASE_URL", ollamaServer.URL)
 
 	tabsCalled := false
@@ -3988,7 +4046,7 @@ func TestCloneRepoFn_Default_SuccessPath(t *testing.T) {
 
 // TestChat_TeamRouting_ModelFromTeamConfig exercises the branches where:
 //   - ENGINE_MODEL is empty → model is resolved from team config
-//   - ENGINE_ACTIVE_TEAM is empty → gets set from default_team
+//   - ENGINE_ACTIVE_TEAM is explicit → selected team's routing is used
 //   - ENGINE_MODEL_PROVIDER is explicit (non-"auto") → not overridden by team
 func TestChat_TeamRouting_ModelFromTeamConfig(t *testing.T) {
 	dir := setupHistoryTestProject(t)
@@ -4004,16 +4062,20 @@ func TestChat_TeamRouting_ModelFromTeamConfig(t *testing.T) {
   fast:
     orchestrator:
       model: "anthropic:claude-haiku-4.5"
-dev_loop:
-  default_team: fast
 `
 	if err := os.WriteFile(filepath.Join(engineDir, "config.yaml"), []byte(configYAML), 0o644); err != nil {
 		t.Fatalf("write config.yaml: %v", err)
 	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sendSSEDone(w)
+	}))
+	defer server.Close()
 
 	t.Setenv("ENGINE_MODEL", "")
 	t.Setenv("ENGINE_MODEL_PROVIDER", "anthropic")
-	t.Setenv("ENGINE_ACTIVE_TEAM", "")
+	t.Setenv("ENGINE_ACTIVE_TEAM", "fast")
+	t.Setenv("ENGINE_LLAMACPP_MODEL", "fallback-local")
+	t.Setenv("LLAMACPP_BASE_URL", server.URL)
 	t.Setenv("ANTHROPIC_API_KEY", "")
 
 	var gotErr string
@@ -4026,9 +4088,8 @@ dev_loop:
 		OnError:      func(e string) { gotErr = e },
 	}
 	Chat(ctx, "hello")
-	// Expected: ANTHROPIC_API_KEY error (team routing ran, then hit API key check)
-	if !strings.Contains(gotErr, "ANTHROPIC_API_KEY") {
-		t.Errorf("expected ANTHROPIC_API_KEY error after team routing, got %q", gotErr)
+	if gotErr != "" {
+		t.Errorf("expected team routing to fall back locally without error, got %q", gotErr)
 	}
 }
 
@@ -4050,16 +4111,20 @@ func TestChat_TeamRouting_AutoProviderReplaced(t *testing.T) {
   fast:
     orchestrator:
       model: "anthropic:claude-haiku-4.5"
-dev_loop:
-  default_team: fast
 `
 	if err := os.WriteFile(filepath.Join(engineDir, "config.yaml"), []byte(configYAML), 0o644); err != nil {
 		t.Fatalf("write config.yaml: %v", err)
 	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sendSSEDone(w)
+	}))
+	defer server.Close()
 
 	t.Setenv("ENGINE_MODEL", "my-override-model")
 	t.Setenv("ENGINE_MODEL_PROVIDER", "auto")
 	t.Setenv("ENGINE_ACTIVE_TEAM", "fast")
+	t.Setenv("ENGINE_LLAMACPP_MODEL", "fallback-local")
+	t.Setenv("LLAMACPP_BASE_URL", server.URL)
 	t.Setenv("ANTHROPIC_API_KEY", "")
 
 	var gotErr string
@@ -4072,9 +4137,34 @@ dev_loop:
 		OnError:      func(e string) { gotErr = e },
 	}
 	Chat(ctx, "hello")
-	// Expected: ANTHROPIC_API_KEY error (auto provider was replaced by team's anthropic)
-	if !strings.Contains(gotErr, "ANTHROPIC_API_KEY") {
-		t.Errorf("expected ANTHROPIC_API_KEY error after auto provider routing, got %q", gotErr)
+	if gotErr != "" {
+		t.Errorf("expected auto provider routing to fall back locally without error, got %q", gotErr)
+	}
+}
+
+func TestChat_NoModelSelectedError(t *testing.T) {
+	dir := setupHistoryTestProject(t)
+	if err := db.CreateSession("sess-no-model", dir, "main"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	t.Setenv("ENGINE_MODEL", "")
+	t.Setenv("ENGINE_MODEL_PROVIDER", "")
+	t.Setenv("ENGINE_ACTIVE_TEAM", "")
+	t.Setenv("ENGINE_LOCAL_FIRST", "0")
+
+	var gotErr string
+	ctx := &ChatContext{
+		ProjectPath:  dir,
+		SessionID:    "sess-no-model",
+		OnChunk:      func(string, bool) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
+		OnError:      func(e string) { gotErr = e },
+	}
+	Chat(ctx, "hello")
+	if !strings.Contains(gotErr, "No model selected") {
+		t.Fatalf("expected no-model error, got %q", gotErr)
 	}
 }
 

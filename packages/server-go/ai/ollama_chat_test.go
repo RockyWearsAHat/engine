@@ -42,7 +42,7 @@ func TestChat_OllamaProvider_UsesRunningModelAndPersistsMessages(t *testing.T) {
 	defer ollamaServer.Close()
 
 	t.Setenv("ENGINE_MODEL_PROVIDER", "ollama")
-	t.Setenv("ENGINE_MODEL", "")
+	t.Setenv("ENGINE_MODEL", "gemma4:31b")
 	t.Setenv("OLLAMA_BASE_URL", ollamaServer.URL)
 
 	var chunks []string
@@ -117,7 +117,7 @@ func TestChat_RolePlanner_SeedsPreGrantedTools(t *testing.T) {
 	defer ollamaServer.Close()
 
 	t.Setenv("ENGINE_MODEL_PROVIDER", "ollama")
-	t.Setenv("ENGINE_MODEL", "")
+	t.Setenv("ENGINE_MODEL", "llama3.2")
 	t.Setenv("OLLAMA_BASE_URL", ollamaServer.URL)
 
 	var got strings.Builder

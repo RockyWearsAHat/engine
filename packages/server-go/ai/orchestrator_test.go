@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +52,46 @@ func TestParsePlanFromText_RenumbersSkippedNumbers(t *testing.T) {
 	}
 	if steps[0].Index != 1 || steps[1].Index != 2 {
 		t.Errorf("renumber failed: %+v", []int{steps[0].Index, steps[1].Index})
+	}
+}
+
+func TestParsePlanFromText_MultilineAcceptanceBlock(t *testing.T) {
+	input := strings.Join([]string{
+		"1. Validate README",
+		"   Ensure README exists and can be fetched.",
+		"   Acceptance:",
+		"   ```bash",
+		"   curl -sf https://raw.githubusercontent.com/RockyWearsAHat/2d-platforming-game/HEAD/README.md",
+		"   ```",
+	}, "\n")
+
+	steps := parsePlanFromText(input)
+	if len(steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(steps))
+	}
+	if !strings.Contains(steps[0].Acceptance, "curl -sf") {
+		t.Fatalf("expected acceptance command to be captured, got %q", steps[0].Acceptance)
+	}
+	if !hasRunnableAcceptance(steps[0].Acceptance) {
+		t.Fatalf("expected acceptance to be runnable, got %q", steps[0].Acceptance)
+	}
+}
+
+func TestParsePlanFromText_IgnoresNoiseBeforeFirstStep(t *testing.T) {
+	input := strings.Join([]string{
+		"Plan: draft",
+		"",
+		"random note",
+		"1. First",
+		"   Acceptance: `echo ok` exits 0",
+		"",
+	}, "\n")
+	steps := parsePlanFromText(input)
+	if len(steps) != 1 {
+		t.Fatalf("expected one parsed step, got %d", len(steps))
+	}
+	if steps[0].Body != "" {
+		t.Fatalf("expected empty body for acceptance-only step, got %q", steps[0].Body)
 	}
 }
 
@@ -159,6 +200,66 @@ func TestOrchestratorHandle_StopRedirectPause(t *testing.T) {
 		t.Fatal("cancel channel not closed by Stop")
 	}
 	h.Stop() // idempotent
+}
+
+func TestOrchestratorHandle_QueuesRedirectsUntilNextBoundary(t *testing.T) {
+	h := &OrchestratorHandle{
+		cancel:    make(chan struct{}),
+		approveCh: make(chan bool, 1),
+	}
+	h.Redirect("focus issue #12")
+	h.Redirect("also prioritize flaky test stabilization")
+
+	queued := h.takeRedirect()
+	if !strings.Contains(queued, "Queued external directives") {
+		t.Fatalf("expected queued redirect header, got %q", queued)
+	}
+	if !strings.Contains(queued, "1. focus issue #12") {
+		t.Fatalf("expected first queued redirect, got %q", queued)
+	}
+	if !strings.Contains(queued, "2. also prioritize flaky test stabilization") {
+		t.Fatalf("expected second queued redirect, got %q", queued)
+	}
+	if got := h.takeRedirect(); got != "" {
+		t.Fatalf("queued redirect should be single-use once consumed, got %q", got)
+	}
+}
+
+func TestOrchestratorHandle_RedirectIgnoresEmptyAndDuplicates(t *testing.T) {
+	h := &OrchestratorHandle{
+		cancel:    make(chan struct{}),
+		approveCh: make(chan bool, 1),
+	}
+
+	h.Redirect("   ")
+	if got := h.takeRedirect(); got != "" {
+		t.Fatalf("empty redirect should be ignored, got %q", got)
+	}
+
+	h.Redirect("focus on tests")
+	h.Redirect("focus on tests")
+	if got := h.takeRedirect(); got != "focus on tests" {
+		t.Fatalf("duplicate redirect should be ignored, got %q", got)
+	}
+}
+
+func TestOrchestratorHandle_RedirectTruncatesOldest(t *testing.T) {
+	h := &OrchestratorHandle{
+		cancel:    make(chan struct{}),
+		approveCh: make(chan bool, 1),
+	}
+
+	for i := 0; i < maxQueuedRedirects+1; i++ {
+		h.Redirect(fmt.Sprintf("message-%02d", i))
+	}
+
+	queued := h.takeRedirect()
+	if strings.Contains(queued, "message-00") {
+		t.Fatalf("oldest redirect should be truncated, got %q", queued)
+	}
+	if !strings.Contains(queued, fmt.Sprintf("message-%02d", maxQueuedRedirects)) {
+		t.Fatalf("newest redirect missing after truncation, got %q", queued)
+	}
 }
 
 func TestGetOrchestratorHandle_RegisterDeregister(t *testing.T) {

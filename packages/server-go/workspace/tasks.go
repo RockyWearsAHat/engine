@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -124,6 +125,20 @@ func detectPackageJSONTasks(root string) TaskSet {
 		addScript(item.Name, "test", item.Label, item.Description)
 	}
 
+	remaining := make([]string, 0, len(pkg.Scripts))
+	for name, script := range pkg.Scripts {
+		if seen[name] || strings.TrimSpace(script) == "" {
+			continue
+		}
+		remaining = append(remaining, name)
+	}
+	sort.Strings(remaining)
+	for _, name := range remaining {
+		script := pkg.Scripts[name]
+		kind := inferScriptKind(name, script)
+		addScript(name, kind, "Run script: "+name, "Run package.json script '"+name+"'.")
+	}
+
 	defaultRun := firstTaskID(tasks, "run")
 	defaultBuild := firstTaskID(tasks, "build")
 
@@ -132,6 +147,20 @@ func detectPackageJSONTasks(root string) TaskSet {
 		DefaultBuildTask: defaultBuild,
 		DefaultRunTask:   defaultRun,
 	}
+}
+
+func inferScriptKind(name, script string) string {
+	lower := strings.ToLower(name + " " + script)
+	if strings.Contains(lower, "lint") || strings.Contains(lower, "typecheck") || strings.Contains(lower, "check") {
+		return "check"
+	}
+	if strings.Contains(lower, "test") || strings.Contains(lower, "spec") || strings.Contains(lower, "smoke") || strings.Contains(lower, "coverage") || strings.Contains(lower, "e2e") {
+		return "test"
+	}
+	if strings.Contains(lower, "build") || strings.Contains(lower, "compile") || strings.Contains(lower, "bundle") || strings.Contains(lower, "package") {
+		return "build"
+	}
+	return "run"
 }
 
 func detectCargoTasks(root string) TaskSet {
