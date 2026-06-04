@@ -198,15 +198,16 @@ func BuildSelectiveContextPrompt(
 	return BuildSelectiveContext(projectPath, session, userMessage, openTabs, nil).Prompt
 }
 
-func BuildSelectiveContext(
+func gatherAndScoreContextBlocks(
 	projectPath string,
 	session *db.Session,
 	userMessage string,
 	openTabs []TabInfo,
 	residualProfile map[string]float64,
-) selectiveContextResult {
-	queryTerms := extractSearchTerms(userMessage, flattenTabPaths(openTabs))
+	queryTerms []string,
+) ([]contextBlock, []historySearchHit) {
 	blocks := make([]contextBlock, 0, 4)
+	var historyHits []historySearchHit
 
 	if focus := buildCurrentFocusContext(openTabs); focus != "" {
 		blocks = append(blocks, contextBlock{
@@ -245,6 +246,19 @@ func BuildSelectiveContext(
 		})
 	}
 
+	return blocks, historyHits
+}
+
+func BuildSelectiveContext(
+	projectPath string,
+	session *db.Session,
+	userMessage string,
+	openTabs []TabInfo,
+	residualProfile map[string]float64,
+) selectiveContextResult {
+	queryTerms := extractSearchTerms(userMessage, flattenTabPaths(openTabs))
+	blocks, historyHits := gatherAndScoreContextBlocks(projectPath, session, userMessage, openTabs, residualProfile, queryTerms)
+
 	if len(blocks) == 0 {
 		return selectiveContextResult{}
 	}
@@ -273,6 +287,14 @@ func SearchHistory(
 	return SearchHistoryWithResiduals(projectPath, currentSessionID, query, openTabs, scope, limit, nil)
 }
 
+func normalizeHistoryScope(scope string) string {
+	scope = strings.TrimSpace(strings.ToLower(scope))
+	if scope == "" {
+		scope = "project"
+	}
+	return scope
+}
+
 func SearchHistoryWithResiduals(
 	projectPath string,
 	currentSessionID string,
@@ -295,10 +317,7 @@ func SearchHistoryWithResiduals(
 	projectLearnings, _ := db.GetProjectLearnings(projectPath, projectHistoryLearningLimit)
 	projectValidations, _ := db.GetProjectValidations(projectPath, projectHistoryValidationLimit)
 
-	scope = strings.TrimSpace(strings.ToLower(scope))
-	if scope == "" {
-		scope = "project"
-	}
+	scope = normalizeHistoryScope(scope)
 
 	hits := make([]historySearchHit, 0, limit*3)
 	for _, message := range projectMessages {

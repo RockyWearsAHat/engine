@@ -382,6 +382,17 @@ func setupWSProjectAndConnection(t *testing.T) (string, *websocket.Conn, func())
 	return projectDir, conn, cleanup
 }
 
+// setupWSProjectWithNullBridgeAndConnection sets up a test project, clears Discord bridge, and opens connection.
+// Consolidates: setupWSProject + SetDiscordBridge(nil) + openWSTestConnection pattern.
+// Returns projectDir, connection, and cleanup function.
+func setupWSProjectWithNullBridgeAndConnection(t *testing.T) (string, *websocket.Conn, func()) {
+	t.Helper()
+	projectDir := setupWSProject(t)
+	SetDiscordBridge(nil)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	return projectDir, conn, cleanup
+}
+
 // setupDiscordBridgeScopedTest sets up a Discord bridge with automatic cleanup via deferred restoration.
 // Manages SetDiscordBridge state for the duration of the test.
 // Returns a cleanup function that restores the original nil state.
@@ -391,6 +402,25 @@ func setupDiscordBridgeScopedTest(t *testing.T, bridge DiscordBridge) func() {
 	return func() {
 		SetDiscordBridge(nil)
 	}
+}
+
+// testSendAndAssertErrorCode consolidates: send message → read response → assert error code.
+// Requires an already-open connection and project.
+// Fails test if response is not an error message or if code doesn't match.
+func testSendAndAssertErrorCode(t *testing.T, conn *websocket.Conn, payload map[string]any, expectedCode string) {
+	t.Helper()
+	writeWSMessage(t, conn, payload)
+	msg := readWSMessageOfType(t, conn, "error")
+	assertErrorCode(t, msg, expectedCode)
+}
+
+// testSendAndReadMessage consolidates: send message → read response of expected type.
+// Requires an already-open connection.
+// Returns the full response message for caller inspection.
+func testSendAndReadMessage(t *testing.T, conn *websocket.Conn, payload map[string]any, expectedResponseType string) map[string]any {
+	t.Helper()
+	writeWSMessage(t, conn, payload)
+	return readWSMessageOfType(t, conn, expectedResponseType)
 }
 
 // testDiscordFeatureWithSetup consolidates the pattern: setup bridge, project, connection, send message, receive response.
@@ -450,6 +480,19 @@ func readApprovalRequest(t *testing.T, conn *websocket.Conn) string {
 	return approvalID
 }
 
+// readSessionID reads a session.created message from the websocket and returns the session ID.
+// Extracts the session ID from the session object for convenience.
+func readSessionID(t *testing.T, conn *websocket.Conn) string {
+	t.Helper()
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sess, _ := sessionMsg["session"].(map[string]any)
+	sessionID, _ := sess["id"].(string)
+	if sessionID == "" {
+		t.Fatalf("expected session id in session.created, got %+v", sessionMsg)
+	}
+	return sessionID
+}
+
 // setupAIChatAndOrchestratorWithDefaults is a convenience wrapper around setupAIChatAndOrchestratorScoped
 // that pre-fills the orchestrator handler with default interactive mode if handler is nil.
 // Returns cleanup function.
@@ -484,4 +527,113 @@ func testProjectOpenAndChat(t *testing.T, chatHandler func(*ai.ChatContext, stri
 	readWSMessageOfType(t, conn, "chat.started")
 
 	return projectDir, conn, cleanup, sessionID
+}
+
+// ─── Assertion helpers for cleaner test code ──────────────────────────────────
+
+// assertErrorCode verifies that a message is an error with the expected error code.
+// Fails the test with detailed message if code does not match.
+func assertErrorCode(t *testing.T, msg map[string]any, expectedCode string) {
+	t.Helper()
+	if msg["type"] != "error" {
+		t.Fatalf("expected error message, got type=%q in %+v", msg["type"], msg)
+	}
+	code, _ := msg["code"].(string)
+	if code != expectedCode {
+		t.Fatalf("expected error code %q, got %q in %+v", expectedCode, code, msg)
+	}
+}
+
+// assertMessageType verifies that a message has the expected type.
+// Fails the test with detailed message if type does not match.
+func assertMessageType(t *testing.T, msg map[string]any, expectedType string) {
+	t.Helper()
+	if msg["type"] != expectedType {
+		t.Fatalf("expected message type %q, got %q in %+v", expectedType, msg["type"], msg)
+	}
+}
+
+// ─── Chat flow helpers ─────────────────────────────────────────────────────────
+
+// readChatToolCall reads a chat.tool_call message and verifies the tool name matches expected.
+// Returns the full tool call message for inspection of parameters.
+func readChatToolCall(t *testing.T, conn *websocket.Conn, expectedName string) map[string]any {
+	t.Helper()
+	msg := readWSMessageOfType(t, conn, "chat.tool_call")
+	if name, _ := msg["name"].(string); name != expectedName {
+		t.Fatalf("expected tool call name %q, got %q in %+v", expectedName, name, msg)
+	}
+	return msg
+}
+
+// readChatToolResult reads a chat.tool_result message and verifies the tool name matches expected.
+// Returns the full tool result message for inspection of result.
+func readChatToolResult(t *testing.T, conn *websocket.Conn, expectedName string) map[string]any {
+	t.Helper()
+	msg := readWSMessageOfType(t, conn, "chat.tool_result")
+	if name, _ := msg["name"].(string); name != expectedName {
+		t.Fatalf("expected tool result name %q, got %q in %+v", expectedName, name, msg)
+	}
+	return msg
+}
+
+// readChatChunksFinal reads all chat.chunk messages until one with done=true is received.
+// Returns all chunks read, including the final one with done=true.
+func readChatChunksFinal(t *testing.T, conn *websocket.Conn) []map[string]any {
+	t.Helper()
+	var chunks []map[string]any
+	for {
+		chunk := readWSMessageOfType(t, conn, "chat.chunk")
+		chunks = append(chunks, chunk)
+		done, _ := chunk["done"].(bool)
+		if done {
+			break
+		}
+	}
+	return chunks
+}
+
+// ─── Authentication and connection helpers ──────────────────────────────────
+
+// openWSAuthenticatedConnection sets up a websocket connection with auth token and validates response.
+// Fails test if connection succeeds when it shouldn't or fails when it should succeed.
+// Returns connection and cleanup function (or nil connection if expectedStatusCode is not 200).
+func openWSAuthenticatedConnection(t *testing.T, projectDir, token string, expectedStatusCode int) (*websocket.Conn, func()) {
+	t.Helper()
+
+	hub := NewHub(projectDir)
+	server := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	if token != "" {
+		wsURL += "?token=" + url.QueryEscape(token)
+	}
+
+	conn, response, err := websocket.DefaultDialer.Dial(wsURL, nil)
+
+	cleanup := func() {
+		if conn != nil {
+			conn.Close() //nolint:errcheck
+		}
+		server.Close()
+	}
+
+	if expectedStatusCode == http.StatusOK {
+		if err != nil {
+			cleanup()
+			t.Fatalf("expected successful websocket connection with token %q, got error: %v", token, err)
+		}
+		return conn, cleanup
+	}
+
+	// Non-200 expected: connection should fail with specific status
+	if err == nil {
+		cleanup()
+		t.Fatalf("expected connection to fail with status %d, but connection succeeded", expectedStatusCode)
+	}
+	if response == nil || response.StatusCode != expectedStatusCode {
+		cleanup()
+		t.Fatalf("expected status code %d, got %#v", expectedStatusCode, response)
+	}
+	return nil, cleanup
 }

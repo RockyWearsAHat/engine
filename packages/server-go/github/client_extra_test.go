@@ -7,8 +7,12 @@ import (
 	"testing"
 )
 
-// Test gaps for github.go client methods and integration scenarios.
-// Shared helpers: newServerWithStatus, newClientWithBase (see github_test.go).
+// ── Test Coverage: github.go client methods (RemoveAssignees, AddAssignees, CreatePR) ────────
+//
+// Shared public test utilities (defined in github_test.go):
+//   • newServerWithStatus(t, status) - Returns httptest.Server with fixed status code
+//   • newClientWithBase(base) - Creates *Client with custom test server base URL
+//     (uses rebaseTransport to rewrite api.github.com → test server)
 
 // TestRemoveAssignees_EmptyNoop verifies RemoveAssignees is a no-op on empty assignee list.
 func TestRemoveAssignees_EmptyNoop(t *testing.T) {
@@ -31,14 +35,14 @@ func TestAddAssignees_EmptyNoop(t *testing.T) {
 func TestRemoveAssignees_Success(t *testing.T) {
 	var method string
 	var payload map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		method = r.Method
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatalf("decode remove assignees payload: %v", err)
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
-	}))
+	})
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -70,10 +74,11 @@ func TestRemoveAssignees_InvalidBase_RequestError(t *testing.T) {
 // TestCreatePR_Success verifies CreatePR successfully parses PR response from GitHub API.
 // Tests behavioral side effect (HTTP POST to GitHub PR creation endpoint).
 func TestCreatePR_Success(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"number":17,"html_url":"https://example/pr/17","state":"open"}`))
-	}))
+	srv := newJSONResponseServer(t, map[string]any{
+		"number": 17,
+		"html_url": "https://example/pr/17",
+		"state": "open",
+	}, http.StatusCreated)
 	defer srv.Close()
 
 	// TestCreatePR_DoPostError (behavior tested in github_gaps_test.go).

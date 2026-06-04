@@ -475,7 +475,7 @@ export default function PreferencesPanel() {
         </aside>
 
         <div className="preferences-content">
-      <section id="desktop-services" className="preferences-card preferences-extensions">
+      <section id="desktop-services" className="preferences-card">
         <div className="preferences-card-header">
           <div className="preferences-card-title">
             <ServerCog size={15} />

@@ -8,8 +8,14 @@ import (
 	"testing"
 )
 
-// Test gaps for feedback.go, github.go (client methods), engagement.go.
-// See github_test.go for shared helpers: newServerWithStatus, setupGitHubAPI, newEngineDir, setupEngineEnv, resetEngineLoginCache.
+// ── Test Coverage: feedback.go, github.go client methods, engagement.go ────────────
+//
+// Shared public test utilities (defined in github_test.go):
+//   • newServerWithStatus(t, status) - Returns httptest.Server with fixed status code
+//   • setupGitHubAPI(t, srv, token) - Configures GITHUB_API_BASE and GITHUB_TOKEN for mock server
+//   • newEngineDir(t) - Creates temp directory with .engine subdirectory
+//   • setupEngineEnv(t) - Sets ENGINE_GITHUB_{BOT_TOKEN,LOGIN,PROJECT_NUMBER} variables
+//   • resetEngineLoginCache(t) - Clears cached engine login state
 
 // ── feedback.go gaps ──────────────────────────────────────────────────────────
 
@@ -73,10 +79,7 @@ func TestNormaliseStatusState_Pending(t *testing.T) {
 // TestPostCommitStatus_DoPostError verifies PostCommitStatus returns error on non-2xx response.
 // Tests behavioral side effect (HTTP POST to commit status API).
 func TestPostCommitStatus_DoPostError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`internal error`)) //nolint:errcheck
-	}))
+	srv := newErrorResponseServer(t, http.StatusInternalServerError, `internal error`)
 	defer srv.Close()
 
 	setupGitHubAPI(t, srv, "tok")
@@ -90,9 +93,7 @@ func TestPostCommitStatus_DoPostError(t *testing.T) {
 // TestPostIssueComment_DoPostError verifies PostIssueComment returns error on non-2xx response.
 // Tests behavioral side effect (HTTP POST to issue comment API).
 func TestPostIssueComment_DoPostError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
+	srv := newErrorResponseServer(t, http.StatusInternalServerError, "")
 	defer srv.Close()
 
 	setupGitHubAPI(t, srv, "tok")
@@ -167,7 +168,7 @@ func TestFindHeadSHA_TruncatedSHA(t *testing.T) {
 
 // TestAddAssignees_DoPostError verifies AddAssignees returns error on non-2xx response.
 func TestAddAssignees_DoPostError(t *testing.T) {
-	srv := newServerWithStatus(t, http.StatusInternalServerError)
+	srv := newErrorResponseServer(t, http.StatusInternalServerError, "")
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -178,7 +179,7 @@ func TestAddAssignees_DoPostError(t *testing.T) {
 
 // TestRemoveAssignees_DoRequestError verifies RemoveAssignees returns error on DELETE failure.
 func TestRemoveAssignees_DoRequestError(t *testing.T) {
-	srv := newServerWithStatus(t, http.StatusInternalServerError)
+	srv := newErrorResponseServer(t, http.StatusInternalServerError, "")
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -189,7 +190,7 @@ func TestRemoveAssignees_DoRequestError(t *testing.T) {
 
 // TestEditComment_DoPatchError verifies EditComment returns error on PATCH failure.
 func TestEditComment_DoPatchError(t *testing.T) {
-	srv := newServerWithStatus(t, http.StatusInternalServerError)
+	srv := newErrorResponseServer(t, http.StatusInternalServerError, "")
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)

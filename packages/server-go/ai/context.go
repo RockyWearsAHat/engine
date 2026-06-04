@@ -434,22 +434,31 @@ func (oc *OutputCollector) String() string {
 	return oc.buf.String()
 }
 
+func initChatContextCallbacks(oc *OutputCollector) (func(string, bool), func(string), func(string, any), func(string, any, bool)) {
+	onChunk := func(content string, _ bool) {
+		oc.Write(content)
+	}
+	onError := func(string) {}
+	onToolCall := func(string, any) {}
+	onToolResult := func(string, any, bool) {}
+	return onChunk, onError, onToolCall, onToolResult
+}
+
 // newChatContextForRole creates a ChatContext with output collection pre-configured.
 // This consolidates the repeated pattern of building a context with sync.Mutex + strings.Builder
 // for collecting streamed output from a role-based chat session.
 func newChatContextForRole(cfg OrchestratorConfig, sessionID string, role AgentRole, cancel <-chan struct{}) (*ChatContext, *OutputCollector) {
 	oc := &OutputCollector{}
+	onChunk, onError, onToolCall, onToolResult := initChatContextCallbacks(oc)
 	ctx := &ChatContext{
-		ProjectPath: cfg.ProjectPath,
-		SessionID:   sessionID,
-		Role:        role,
-		Cancel:      cancel,
-		OnChunk: func(content string, _ bool) {
-			oc.Write(content)
-		},
-		OnError:      func(string) {},
-		OnToolCall:   func(string, any) {},
-		OnToolResult: func(string, any, bool) {},
+		ProjectPath:  cfg.ProjectPath,
+		SessionID:    sessionID,
+		Role:         role,
+		Cancel:       cancel,
+		OnChunk:      onChunk,
+		OnError:      onError,
+		OnToolCall:   onToolCall,
+		OnToolResult: onToolResult,
 	}
 	return ctx, oc
 }

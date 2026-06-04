@@ -193,14 +193,12 @@ func TestVerifyRequest_BadSignatureEncoding(t *testing.T) {
 
 // TestHandleExec_MethodNotAllowed tests that /mesh/exec rejects non-POST requests.
 func TestHandleExec_MethodNotAllowed(t *testing.T) {
-	ts := newMeshServer(t, defaultMeshTestConfig())
-	testMethodNotAllowed(t, ts, "/mesh/exec")
+	testExecEndpointMethodNotAllowed(t)
 }
 
 // TestHandleExec_BadJSON tests that /mesh/exec returns 400 for malformed request bodies.
 func TestHandleExec_BadJSON(t *testing.T) {
-	ts := newMeshServer(t, defaultMeshTestConfig())
-	testSignedBadJSON(t, ts, "/mesh/exec")
+	testExecEndpointBadJSON(t)
 }
 
 // TestHandleExec_EmptyCommand tests that /mesh/exec returns 400 for empty commands.
@@ -245,14 +243,12 @@ func TestHandleExec_NonExistentCommand(t *testing.T) {
 
 // TestHandleInference_MethodNotAllowed tests that /mesh/inference rejects non-POST requests.
 func TestHandleInference_MethodNotAllowed(t *testing.T) {
-	ts := newMeshServer(t, defaultMeshTestConfig())
-	testMethodNotAllowed(t, ts, "/mesh/inference")
+	testInferenceEndpointMethodNotAllowed(t)
 }
 
 // TestHandleInference_BadJSON tests that /mesh/inference returns 400 for malformed request bodies.
 func TestHandleInference_BadJSON(t *testing.T) {
-	ts := newMeshServer(t, defaultMeshTestConfig())
-	testSignedBadJSON(t, ts, "/mesh/inference")
+	testInferenceEndpointBadJSON(t)
 }
 
 // TestHandleInference_EmptyPath tests that /mesh/inference returns 400 for empty paths.

@@ -60,12 +60,6 @@ func assertStatusCode(t *testing.T, got, want int) {
 	}
 }
 
-// assertJSONResponse decodes and validates a JSON response.
-func assertJSONResponse(t *testing.T, body io.Reader, want interface{}) error {
-	t.Helper()
-	return json.NewDecoder(body).Decode(want)
-}
-
 // doSignedRequest executes a signed request and returns the response.
 // Caller is responsible for closing resp.Body.
 func doSignedRequest(t *testing.T, ts *httptest.Server, path, method, secret, origin string, body []byte) *http.Response {
@@ -199,28 +193,50 @@ func doSignedHealthAndDecode(t *testing.T, ts *httptest.Server) *HealthResponse 
 	return decodeHealthResponse(t, resp.Body)
 }
 
-// testMethodNotAllowed verifies that an endpoint rejects non-POST requests.
-func testMethodNotAllowed(t *testing.T, ts *httptest.Server, endpoint string) {
+// testMethodNotAllowed verifies that a given path rejects non-POST requests.
+func testMethodNotAllowed(t *testing.T, ts *httptest.Server, path string) {
 	t.Helper()
-	resp, err := http.Get(ts.URL + endpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	assertStatusCode(t, resp.StatusCode, http.StatusMethodNotAllowed)
+	doSignedRequestAndClose(t, ts, path, http.MethodGet, testSecret, testClientName, []byte{}, http.StatusMethodNotAllowed)
 }
 
-// testSignedBadJSON verifies that an endpoint rejects malformed JSON with 400.
-func testSignedBadJSON(t *testing.T, ts *httptest.Server, endpoint string) {
+// testSignedBadJSON verifies that a given path rejects malformed JSON.
+func testSignedBadJSON(t *testing.T, ts *httptest.Server, path string) {
 	t.Helper()
-	doSignedRequestAndClose(t, ts, endpoint, http.MethodPost, testSecret, testClientName,
-		[]byte("not-json"), http.StatusBadRequest)
+	doSignedRequestAndClose(t, ts, path, http.MethodPost, testSecret, testClientName, []byte("not-json{{{"), http.StatusBadRequest)
 }
 
-// testSignedInferenceValidation verifies empty path validation.
+// testSignedInferenceValidation verifies that /mesh/inference rejects empty path requests.
 func testSignedInferenceValidation(t *testing.T, ts *httptest.Server) {
 	t.Helper()
 	body := marshalInferenceRequest("", "", nil)
 	doSignedRequestAndClose(t, ts, "/mesh/inference", http.MethodPost, testSecret, testClientName, body, http.StatusBadRequest)
+}
+
+// testExecEndpointMethodNotAllowed creates an exec server and verifies it rejects non-POST requests.
+func testExecEndpointMethodNotAllowed(t *testing.T) {
+	t.Helper()
+	ts := newMeshServer(t, defaultMeshTestConfig())
+	testMethodNotAllowed(t, ts, "/mesh/exec")
+}
+
+// testExecEndpointBadJSON creates an exec server and verifies it rejects malformed JSON.
+func testExecEndpointBadJSON(t *testing.T) {
+	t.Helper()
+	ts := newMeshServer(t, defaultMeshTestConfig())
+	testSignedBadJSON(t, ts, "/mesh/exec")
+}
+
+// testInferenceEndpointMethodNotAllowed creates an inference server and verifies it rejects non-POST requests.
+func testInferenceEndpointMethodNotAllowed(t *testing.T) {
+	t.Helper()
+	ts := newMeshServer(t, defaultMeshTestConfig())
+	testMethodNotAllowed(t, ts, "/mesh/inference")
+}
+
+// testInferenceEndpointBadJSON creates an inference server and verifies it rejects malformed JSON.
+func testInferenceEndpointBadJSON(t *testing.T) {
+	t.Helper()
+	ts := newMeshServer(t, defaultMeshTestConfig())
+	testSignedBadJSON(t, ts, "/mesh/inference")
 }
 

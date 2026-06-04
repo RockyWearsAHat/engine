@@ -47,9 +47,7 @@ func TestHandler_DiscordConfigGet_NilBridge(t *testing.T) {
 	defer cleanup()
 
 	msg := sendAndReceive(t, conn, map[string]any{"type": "discord.config.get"}, "discord.config")
-	if msg["type"] != "discord.config" {
-		t.Fatalf("expected discord.config, got %+v", msg)
-	}
+	assertMessageType(t, msg, "discord.config")
 }
 
 // TestHandler_DiscordConfigGet_WithBridge verifies discord.config.get returns active config when bridge is set.
@@ -79,9 +77,7 @@ func TestHandler_DiscordHistorySearch_NilBridge(t *testing.T) {
 		"query":       "hello",
 		"limit":       10,
 	}, "error")
-	if msg["code"] != "DISCORD_UNAVAILABLE" {
-		t.Fatalf("expected DISCORD_UNAVAILABLE, got %+v", msg)
-	}
+	assertErrorCode(t, msg, "DISCORD_UNAVAILABLE")
 }
 
 // TestHandler_DiscordHistorySearch_WithBridge_Success verifies search returns hits when bridge is available.
@@ -115,36 +111,25 @@ func TestHandler_DiscordHistorySearch_WithBridge_Error(t *testing.T) {
 	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]any{
+	testSendAndAssertErrorCode(t, conn, map[string]any{
 		"type":  "discord.history.search",
 		"query": "x",
-	})
-	msg := readWSMessageOfType(t, conn, "error")
-	if msg["code"] != "DISCORD_SEARCH" {
-		t.Fatalf("expected DISCORD_SEARCH error, got %+v", msg)
-	}
+	}, "DISCORD_SEARCH")
 }
 
 // ─── Discord history recent ───────────────────────────────────────────────────
 
 // TestHandler_DiscordHistoryRecent_NilBridge verifies recent returns error when Discord is unavailable.
-// TestHandler_DiscordHistoryRecent_NilBridge verifies recent returns error when Discord is unavailable.
 func TestHandler_DiscordHistoryRecent_NilBridge(t *testing.T) {
-	SetDiscordBridge(nil)
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectWithNullBridgeAndConnection(t)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]any{
+	testSendAndAssertErrorCode(t, conn, map[string]any{
 		"type":        "discord.history.recent",
-		"projectPath": projectDir,
+		"projectPath": "",
 		"threadId":    "tid",
 		"limit":       10,
-	})
-	msg := readWSMessageOfType(t, conn, "error")
-	if msg["code"] != "DISCORD_UNAVAILABLE" {
-		t.Fatalf("expected DISCORD_UNAVAILABLE, got %+v", msg)
-	}
+	}, "DISCORD_UNAVAILABLE")
 }
 
 // TestHandler_DiscordHistoryRecent_WithBridge_Success verifies recent returns message rows when bridge is available.
@@ -178,14 +163,10 @@ func TestHandler_DiscordHistoryRecent_WithBridge_Error(t *testing.T) {
 	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]any{
+	testSendAndAssertErrorCode(t, conn, map[string]any{
 		"type":     "discord.history.recent",
 		"threadId": "tid",
-	})
-	msg := readWSMessageOfType(t, conn, "error")
-	if msg["code"] != "DISCORD_RECENT" {
-		t.Fatalf("expected DISCORD_RECENT error, got %+v", msg)
-	}
+	}, "DISCORD_RECENT")
 }
 
 // ─── Discord config set ───────────────────────────────────────────────────────
@@ -256,12 +237,10 @@ func TestHandler_DiscordConfigSet_WithBridge_ReloadOK(t *testing.T) {
 func TestHandler_GitHubUser_NoToken(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("ENGINE_GITHUB_TOKEN", "")
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]any{"type": "github.user"})
-	msg := readWSMessageOfType(t, conn, "github.user")
+	msg := testSendAndReadMessage(t, conn, map[string]any{"type": "github.user"}, "github.user")
 	if msg["error"] == nil {
 		t.Fatalf("expected error in github.user response, got %+v", msg)
 	}
@@ -293,8 +272,7 @@ func TestHandler_QualityReportGet_Success(t *testing.T) {
 		}, nil
 	})()
 
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{"type": "quality.report.get", "maxIssues": 42})
@@ -314,8 +292,7 @@ func TestHandler_QualityReportGet_Error(t *testing.T) {
 		return quality.Report{}, fmt.Errorf("scan failed")
 	})()
 
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{"type": "quality.report.get"})
@@ -358,8 +335,7 @@ func TestHandler_QualityReportGet_ProgressEvent(t *testing.T) {
 
 // TestHandler_QualityReportGet_BadPayload verifies bad payload for maxIssues returns error.
 func TestHandler_QualityReportGet_BadPayload(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{"type": "quality.report.get", "maxIssues": "bad"})
@@ -389,8 +365,7 @@ func TestHandler_GitHubIssues_EnvOverridePartial(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_OWNER", "")
 	t.Setenv("ENGINE_GITHUB_REPO", "")
 
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -992,32 +967,17 @@ func TestHandler_ResolveAllApprovals_OnConnectionClose(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 
-	origRunAIChat := runAIChat
-	origRunAutonomousProject := runAutonomousProject
-	defer func() {
-		runAIChat = origRunAIChat
-		runAutonomousProject = origRunAutonomousProject
-	}()
-
 	resolved := make(chan bool, 1)
-	runAIChat = func(ctx *ai.ChatContext, _ string) {
+	defer setupAIChatAndOrchestratorWithDefaults(t, func(ctx *ai.ChatContext, _ string) {
 		allowed, _ := ctx.RequestApproval("shell", "T", "m", "c")
 		resolved <- allowed
-	}
-	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
-		if cfg.InteractiveChat != nil {
-			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
-		}
-		return &ai.OrchestrationState{Conversational: true}, nil
-	}
+	})()
 
 	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
 	})
-	created := readWSMessageOfType(t, conn, "session.created")
-	sess, _ := created["session"].(map[string]any)
-	sessionID, _ := sess["id"].(string)
+	sessionID := readSessionID(t, conn)
 
 	writeWSMessage(t, conn, map[string]any{
 		"type":      "chat",
