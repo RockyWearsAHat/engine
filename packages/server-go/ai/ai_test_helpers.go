@@ -87,3 +87,24 @@ func setupHistoryDBProject(t *testing.T) string {
 	setupTestDBWithStateDir(t, projectDir)
 	return projectDir
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── Consolidated Test Document Writing Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+// These helpers reduce duplication of repeated document write sequences in tests.
+
+// writeTestDocTriplet writes the three core orchestration docs (design, vocabulary, prd)
+// to the project path, failing the test if any write fails.
+// Consolidates the repeated 3-write pattern in orchestrator_gap_extra_test.go.
+func writeTestDocTriplet(t *testing.T, dir string, designContent, vocabContent, prdContent string) {
+	t.Helper()
+	if err := WriteDoc(dir, DocDesign, designContent); err != nil {
+		t.Fatalf("WriteDoc design: %v", err)
+	}
+	if err := WriteDoc(dir, DocVocabulary, vocabContent); err != nil {
+		t.Fatalf("WriteDoc vocabulary: %v", err)
+	}
+	if err := WriteDoc(dir, DocPRD, prdContent); err != nil {
+		t.Fatalf("WriteDoc prd: %v", err)
+	}
+}

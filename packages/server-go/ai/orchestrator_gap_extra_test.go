@@ -461,15 +461,7 @@ func TestRunAutonomousProject_PlanPhaseFailure(t *testing.T) {
 
 func TestRunAutonomousProject_RegeneratesInvalidLoadedPlan(t *testing.T) {
 	dir := setupPhasesDB(t)
-	if err := WriteDoc(dir, DocDesign, "design"); err != nil {
-		t.Fatalf("WriteDoc design: %v", err)
-	}
-	if err := WriteDoc(dir, DocVocabulary, "vocab"); err != nil {
-		t.Fatalf("WriteDoc vocabulary: %v", err)
-	}
-	if err := WriteDoc(dir, DocPRD, "prd"); err != nil {
-		t.Fatalf("WriteDoc prd: %v", err)
-	}
+	writeTestDocTriplet(t, dir, "design", "vocab", "prd")
 
 	loaded := &OrchestrationState{
 		Owner: "o",
@@ -529,15 +521,7 @@ func TestRunAutonomousProject_RegeneratesInvalidLoadedPlan(t *testing.T) {
 
 func TestRunAutonomousProject_SkipsExhaustedAndEmitsSkip(t *testing.T) {
 	dir := setupPhasesDB(t)
-	if err := WriteDoc(dir, DocDesign, "design"); err != nil {
-		t.Fatalf("WriteDoc design: %v", err)
-	}
-	if err := WriteDoc(dir, DocVocabulary, "vocab"); err != nil {
-		t.Fatalf("WriteDoc vocabulary: %v", err)
-	}
-	if err := WriteDoc(dir, DocPRD, "prd"); err != nil {
-		t.Fatalf("WriteDoc prd: %v", err)
-	}
+	writeTestDocTriplet(t, dir, "design", "vocab", "prd")
 	state := &OrchestrationState{
 		Owner: "o", Repo: "r", Brief: "brief",
 		Plan: []PlanStep{{Index: 1, Title: "stuck", Attempts: OrchestratorMaxStepAttempts, Done: false, Acceptance: "`echo ok`"}},
