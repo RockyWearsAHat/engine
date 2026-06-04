@@ -276,3 +276,153 @@ func setupAIChatAndOrchestratorScoped(chatHandler func(*ai.ChatContext, string),
 		runAutonomousProject = originalOrch
 	}
 }
+
+// ─── Consolidated test flow helpers ────────────────────────────────────────
+
+// openProjectAndGetSession is a helper that consolidates the pattern:
+// project.open → session.created. Returns projectDir, connection, cleanup, and sessionID.
+func openProjectAndGetSession(t *testing.T, projectDir string) (string, *websocket.Conn, func(), string) {
+	t.Helper()
+	conn, cleanup := openWSTestConnection(t, projectDir)
+
+	writeWSMessage(t, conn, map[string]any{"type": "project.open", "path": projectDir})
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sessionID := sessionMsg["session"].(map[string]any)["id"].(string)
+
+	return projectDir, conn, cleanup, sessionID
+}
+
+// testFileOperationError consolidates error-checking pattern for file operations.
+// Sends a message with the given operation type and bad path, expects FILE_ERROR response.
+func testFileOperationError(t *testing.T, conn *websocket.Conn, opType string) {
+	t.Helper()
+	badPath := "/dev/null/nope/file.txt"
+	if opType == "folder.create" {
+		badPath = "/dev/null/nope"
+	}
+
+	msg := map[string]any{"type": opType, "path": badPath}
+	if opType == "file.save" {
+		msg["content"] = "hi"
+	}
+	writeWSMessage(t, conn, msg)
+
+	response := readWSMessageOfType(t, conn, "error")
+	if response["code"] != "FILE_ERROR" {
+		t.Fatalf("expected FILE_ERROR for %s, got %+v", opType, response)
+	}
+}
+
+// setupMockHTTPClient replaces wsHTTPClient with a fixed transport and returns cleanup function.
+// Useful for mocking GitHub API responses.
+func setupMockHTTPClient(t *testing.T, statusCode int, body string) func() {
+	t.Helper()
+	original := wsHTTPClient
+	wsHTTPClient = &http.Client{
+		Transport: &fixedHTTPTransport{statusCode: statusCode, body: body},
+	}
+	return func() { wsHTTPClient = original }
+}
+
+// setupChatFlowWithApproval sets up a chat flow that requests approval.
+// Returns projectDir, connection, cleanup, and channels for result/error reporting.
+// The approval request message will be read automatically.
+func setupChatFlowWithApproval(t *testing.T, chatHandler func(*ai.ChatContext, string)) (string, *websocket.Conn, func(), <-chan bool, <-chan error) {
+	t.Helper()
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+
+	allowedResult := make(chan bool, 1)
+	errResult := make(chan error, 1)
+
+	defer setupAIChatAndOrchestratorScoped(
+		chatHandler,
+		func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+			if cfg.InteractiveChat != nil {
+				cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+			}
+			return &ai.OrchestrationState{Conversational: true}, nil
+		},
+	)()
+
+	// Project setup
+	writeWSMessage(t, conn, map[string]any{
+		"type": "project.open",
+		"path": projectDir,
+	})
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sessionID := sessionMsg["session"].(map[string]any)["id"].(string)
+
+	// Trigger chat with approval request
+	writeWSMessage(t, conn, map[string]any{
+		"type":      "chat",
+		"sessionId": sessionID,
+		"content":   "request approval",
+	})
+	readWSMessageOfType(t, conn, "chat.started")
+
+	// Read the approval request
+	approvalMsg := readWSMessageOfType(t, conn, "approval.request")
+	req, _ := approvalMsg["request"].(map[string]any)
+	_, _ = req["id"].(string) // approval ID exists but caller reads from msg directly
+
+	return projectDir, conn, cleanup, allowedResult, errResult
+}
+
+// ─── Consolidated test flow helpers (DRY) ────────────────────────────────────
+
+// setupWSProjectAndConnection consolidates the common pattern of creating a test project and opening a websocket connection.
+// Returns projectDir, connection, and cleanup function.
+func setupWSProjectAndConnection(t *testing.T) (string, *websocket.Conn, func()) {
+	t.Helper()
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	return projectDir, conn, cleanup
+}
+
+// setupDiscordBridgeScopedTest sets up a Discord bridge with automatic cleanup via deferred restoration.
+// Manages SetDiscordBridge state for the duration of the test.
+// Returns a cleanup function that restores the original nil state.
+func setupDiscordBridgeScopedTest(t *testing.T, bridge DiscordBridge) func() {
+	t.Helper()
+	SetDiscordBridge(bridge)
+	return func() {
+		SetDiscordBridge(nil)
+	}
+}
+
+// testDiscordFeatureWithSetup consolidates the pattern: setup bridge, project, connection, send message, receive response.
+// Caller provides the message payload and expected response type.
+// Returns projectDir, connection, cleanup, and the response message.
+func testDiscordFeatureWithSetup(t *testing.T, bridge DiscordBridge, payload map[string]any, expectedResponseType string) (string, *websocket.Conn, func(), map[string]any) {
+	t.Helper()
+	SetDiscordBridge(bridge)
+	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
+	response := sendAndReceive(t, conn, payload, expectedResponseType)
+	return projectDir, conn, cleanup, response
+}
+
+// testGitHubAPIWithMockHTTP consolidates the pattern: setup mock HTTP client, project, connection, send message, receive response.
+// Caller provides HTTP status code, response body, message payload, and expected response type.
+// Returns projectDir, connection, cleanup, and the response message.
+func testGitHubAPIWithMockHTTP(t *testing.T, statusCode int, responseBody string, payload map[string]any, expectedResponseType string) (string, *websocket.Conn, func(), map[string]any) {
+	t.Helper()
+	httpCleanup := setupMockHTTPClient(t, statusCode, responseBody)
+	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
+	response := sendAndReceive(t, conn, payload, expectedResponseType)
+	fullCleanup := func() {
+		cleanup()
+		httpCleanup()
+	}
+	return projectDir, conn, fullCleanup, response
+}
+
+// testSimpleWSMessageFlow sends a message and reads a response of the expected type.
+// Useful for tests that just need to exercise a simple request-response pattern.
+func testSimpleWSMessageFlow(t *testing.T, payload map[string]any, expectedResponseType string) map[string]any {
+	t.Helper()
+	_, conn, cleanup := setupWSProjectAndConnection(t)
+	defer cleanup()
+	return sendAndReceive(t, conn, payload, expectedResponseType)
+}

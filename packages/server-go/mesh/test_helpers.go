@@ -166,3 +166,36 @@ func doSignedExecRequestAndDecode(t *testing.T, ts *httptest.Server, cmd string,
 	return decodeExecResponse(t, resp.Body)
 }
 
+// doSignedRequestAndExpectStatus executes a signed request and asserts the response status code.
+// Caller is responsible for reading/closing the response body.
+func doSignedRequestAndExpectStatus(t *testing.T, ts *httptest.Server, path, method, secret, origin string, body []byte, expectedStatus int) *http.Response {
+	t.Helper()
+	resp := doSignedRequest(t, ts, path, method, secret, origin, body)
+	assertStatusCode(t, resp.StatusCode, expectedStatus)
+	return resp
+}
+
+// doSignedRequestAndClose executes a signed request, closes the response body, and asserts status.
+func doSignedRequestAndClose(t *testing.T, ts *httptest.Server, path, method, secret, origin string, body []byte, expectedStatus int) {
+	t.Helper()
+	resp := doSignedRequest(t, ts, path, method, secret, origin, body)
+	defer resp.Body.Close()
+	assertStatusCode(t, resp.StatusCode, expectedStatus)
+}
+
+// doSignedInferenceAndDecode executes a signed inference request and decodes the response.
+func doSignedInferenceAndDecode(t *testing.T, ts *httptest.Server, path, method string, body []byte) *InferenceResponse {
+	t.Helper()
+	resp := doSignedRequestAndExpectStatus(t, ts, "/mesh/inference", http.MethodPost, testSecret, testClientName, body, http.StatusOK)
+	defer resp.Body.Close()
+	return decodeInferenceResponse(t, resp.Body)
+}
+
+// doSignedHealthAndDecode executes a signed health request and decodes the response.
+func doSignedHealthAndDecode(t *testing.T, ts *httptest.Server) *HealthResponse {
+	t.Helper()
+	resp := doSignedRequestAndExpectStatus(t, ts, "/mesh/health", http.MethodPost, testSecret, testClientName, []byte{}, http.StatusOK)
+	defer resp.Body.Close()
+	return decodeHealthResponse(t, resp.Body)
+}
+

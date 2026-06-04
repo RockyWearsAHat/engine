@@ -42,11 +42,8 @@ func deregisterAIOrchestratorHandle(projectPath string)
 // ─── Discord config get ───────────────────────────────────────────────────────
 
 // TestHandler_DiscordConfigGet_NilBridge verifies discord.config.get returns default config when no bridge is set.
-// TestHandler_DiscordConfigGet_NilBridge verifies discord.config.get returns default config when no bridge is set.
 func TestHandler_DiscordConfigGet_NilBridge(t *testing.T) {
-	SetDiscordBridge(nil)
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	msg := sendAndReceive(t, conn, map[string]any{"type": "discord.config.get"}, "discord.config")
@@ -58,11 +55,9 @@ func TestHandler_DiscordConfigGet_NilBridge(t *testing.T) {
 // TestHandler_DiscordConfigGet_WithBridge verifies discord.config.get returns active config when bridge is set.
 func TestHandler_DiscordConfigGet_WithBridge(t *testing.T) {
 	stub := &testDiscordBridge{cfg: discord.Config{Enabled: true, BotToken: "tok"}}
-	SetDiscordBridge(stub)
-	defer SetDiscordBridge(nil)
+	defer setupDiscordBridgeScopedTest(t, stub)()
 
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	msg := sendAndReceive(t, conn, map[string]any{"type": "discord.config.get"}, "discord.config")
@@ -74,16 +69,13 @@ func TestHandler_DiscordConfigGet_WithBridge(t *testing.T) {
 // ─── Discord history search ───────────────────────────────────────────────────
 
 // TestHandler_DiscordHistorySearch_NilBridge verifies search returns error when Discord is unavailable.
-// TestHandler_DiscordHistorySearch_NilBridge verifies search returns error when Discord is unavailable.
 func TestHandler_DiscordHistorySearch_NilBridge(t *testing.T) {
-	SetDiscordBridge(nil)
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	msg := sendAndReceive(t, conn, map[string]any{
 		"type":        "discord.history.search",
-		"projectPath": projectDir,
+		"projectPath": "",
 		"query":       "hello",
 		"limit":       10,
 	}, "error")
@@ -97,16 +89,14 @@ func TestHandler_DiscordHistorySearch_WithBridge_Success(t *testing.T) {
 	stub := &testDiscordBridge{
 		searchHits: []db.DiscordSearchHit{{DiscordMessage: db.DiscordMessage{ID: "m1", Content: "cave AI"}}},
 	}
-	SetDiscordBridge(stub)
-	defer SetDiscordBridge(nil)
+	defer setupDiscordBridgeScopedTest(t, stub)()
 
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
 		"type":        "discord.history.search",
-		"projectPath": projectDir,
+		"projectPath": "",
 		"query":       "cave",
 		"limit":       5,
 	})
@@ -120,11 +110,9 @@ func TestHandler_DiscordHistorySearch_WithBridge_Success(t *testing.T) {
 // TestHandler_DiscordHistorySearch_WithBridge_Error verifies search error is forwarded to client.
 func TestHandler_DiscordHistorySearch_WithBridge_Error(t *testing.T) {
 	stub := &testDiscordBridge{searchErr: fmt.Errorf("db failure")}
-	SetDiscordBridge(stub)
-	defer SetDiscordBridge(nil)
+	defer setupDiscordBridgeScopedTest(t, stub)()
 
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -164,16 +152,14 @@ func TestHandler_DiscordHistoryRecent_WithBridge_Success(t *testing.T) {
 	stub := &testDiscordBridge{
 		recentRows: []db.DiscordMessage{{ID: "r1", Content: "hello"}},
 	}
-	SetDiscordBridge(stub)
-	defer SetDiscordBridge(nil)
+	defer setupDiscordBridgeScopedTest(t, stub)()
 
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
 		"type":        "discord.history.recent",
-		"projectPath": projectDir,
+		"projectPath": "",
 		"threadId":    "tid",
 		"limit":       5,
 	})
@@ -187,11 +173,9 @@ func TestHandler_DiscordHistoryRecent_WithBridge_Success(t *testing.T) {
 // TestHandler_DiscordHistoryRecent_WithBridge_Error verifies recent error is forwarded to client.
 func TestHandler_DiscordHistoryRecent_WithBridge_Error(t *testing.T) {
 	stub := &testDiscordBridge{recentErr: fmt.Errorf("db err")}
-	SetDiscordBridge(stub)
-	defer SetDiscordBridge(nil)
+	defer setupDiscordBridgeScopedTest(t, stub)()
 
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -207,11 +191,8 @@ func TestHandler_DiscordHistoryRecent_WithBridge_Error(t *testing.T) {
 // ─── Discord config set ───────────────────────────────────────────────────────
 
 // TestHandler_DiscordConfigSet_NilBridgeDisabledConfig verifies disabled config is always saved without bridge.
-// TestHandler_DiscordConfigSet_NilBridgeDisabledConfig verifies disabled config is always saved without bridge.
 func TestHandler_DiscordConfigSet_NilBridgeDisabledConfig(t *testing.T) {
-	SetDiscordBridge(nil)
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -230,11 +211,9 @@ func TestHandler_DiscordConfigSet_NilBridgeDisabledConfig(t *testing.T) {
 // TestHandler_DiscordConfigSet_WithBridge_ReloadError verifies reload errors are reported as warnings.
 func TestHandler_DiscordConfigSet_WithBridge_ReloadError(t *testing.T) {
 	stub := &testDiscordBridge{reloadErr: fmt.Errorf("reload fail")}
-	SetDiscordBridge(stub)
-	defer SetDiscordBridge(nil)
+	defer setupDiscordBridgeScopedTest(t, stub)()
 
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -253,11 +232,9 @@ func TestHandler_DiscordConfigSet_WithBridge_ReloadError(t *testing.T) {
 // TestHandler_DiscordConfigSet_WithBridge_ReloadOK verifies successful config reload returns no warning.
 func TestHandler_DiscordConfigSet_WithBridge_ReloadOK(t *testing.T) {
 	stub := &testDiscordBridge{cfg: discord.Config{Enabled: true}}
-	SetDiscordBridge(stub)
-	defer SetDiscordBridge(nil)
+	defer setupDiscordBridgeScopedTest(t, stub)()
 
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -294,21 +271,9 @@ func TestHandler_GitHubUser_NoToken(t *testing.T) {
 func TestHandler_GitHubUser_MockHTTP_Success(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-token")
 
-	origClient := wsHTTPClient
-	wsHTTPClient = &http.Client{
-		Transport: &fixedHTTPTransport{
-			statusCode: 200,
-			body:       `{"login":"caveman","name":"Cave Man","avatar_url":"http://example.com/av"}`,
-		},
-	}
-	defer func() { wsHTTPClient = origClient }()
-
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, _, cleanup, msg := testGitHubAPIWithMockHTTP(t, 200, `{"login":"caveman","name":"Cave Man","avatar_url":"http://example.com/av"}`, map[string]any{"type": "github.user"}, "github.user")
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]any{"type": "github.user"})
-	msg := readWSMessageOfType(t, conn, "github.user")
 	user, _ := msg["user"].(map[string]any)
 	if user["login"] != "caveman" {
 		t.Fatalf("expected login caveman, got %+v", msg)
@@ -416,18 +381,9 @@ func TestHandler_QualityReportGet_BadPayload(t *testing.T) {
 func TestHandler_GitHubUser_MockHTTP_APIError(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-token")
 
-	origClient := wsHTTPClient
-	wsHTTPClient = &http.Client{
-		Transport: &fixedHTTPTransport{statusCode: 401, body: `{"message":"Bad credentials"}`},
-	}
-	defer func() { wsHTTPClient = origClient }()
-
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, _, cleanup, msg := testGitHubAPIWithMockHTTP(t, 401, `{"message":"Bad credentials"}`, map[string]any{"type": "github.user"}, "github.user")
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]any{"type": "github.user"})
-	msg := readWSMessageOfType(t, conn, "github.user")
 	if msg["error"] == nil {
 		t.Fatalf("expected error on 401, got %+v", msg)
 	}
@@ -462,24 +418,9 @@ func TestHandler_GitHubIssues_MockHTTP_Success(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_REPO", "engine")
 	t.Setenv("GITHUB_TOKEN", "tok")
 
-	origClient := wsHTTPClient
-	wsHTTPClient = &http.Client{
-		Transport: &fixedHTTPTransport{
-			statusCode: 200,
-			body:       `[{"number":1,"title":"bug","body":"desc","html_url":"http://gh.com/1","state":"open","user":{"login":"dev"},"labels":[],"created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z","pull_request":null}]`,
-		},
-	}
-	defer func() { wsHTTPClient = origClient }()
-
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, _, cleanup, msg := testGitHubAPIWithMockHTTP(t, 200, `[{"number":1,"title":"bug","body":"desc","html_url":"http://gh.com/1","state":"open","user":{"login":"dev"},"labels":[],"created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z","pull_request":null}]`, map[string]any{"type": "github.issues", "projectPath": ""}, "github.issues")
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]any{
-		"type":        "github.issues",
-		"projectPath": projectDir,
-	})
-	msg := readWSMessageOfType(t, conn, "github.issues")
 	issues, _ := msg["issues"].([]any)
 	if len(issues) != 1 {
 		t.Fatalf("expected 1 issue, got %+v", msg)
@@ -490,18 +431,9 @@ func TestHandler_GitHubIssues_MockHTTP_APIError(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_OWNER", "cave")
 	t.Setenv("ENGINE_GITHUB_REPO", "engine")
 
-	origClient := wsHTTPClient
-	wsHTTPClient = &http.Client{
-		Transport: &fixedHTTPTransport{statusCode: 403, body: `{"message":"Forbidden"}`},
-	}
-	defer func() { wsHTTPClient = origClient }()
-
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, _, cleanup, msg := testGitHubAPIWithMockHTTP(t, 403, `{"message":"Forbidden"}`, map[string]any{"type": "github.issues"}, "github.issues")
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]any{"type": "github.issues"})
-	msg := readWSMessageOfType(t, conn, "github.issues")
 	if msg["error"] == nil {
 		t.Fatalf("expected error on 403, got %+v", msg)
 	}
@@ -781,20 +713,10 @@ func TestHandler_SessionCreate(t *testing.T) {
 
 func TestHandler_SessionLoad(t *testing.T) {
 	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
-	defer cleanup()
-
+	
 	// First open a project to create a session.
-	writeWSMessage(t, conn, map[string]any{
-		"type": "project.open",
-		"path": projectDir,
-	})
-	created := readWSMessageOfType(t, conn, "session.created")
-	sess, _ := created["session"].(map[string]any)
-	sessionID, _ := sess["id"].(string)
-	if sessionID == "" {
-		t.Fatalf("no session id from project.open: %+v", created)
-	}
+	_, conn, cleanup, sessionID := openProjectAndGetSession(t, projectDir)
+	defer cleanup()
 
 	// Now request session.load with the same ID.
 	writeWSMessage(t, conn, map[string]any{

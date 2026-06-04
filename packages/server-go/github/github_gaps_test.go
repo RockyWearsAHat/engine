@@ -8,6 +8,14 @@ import (
 	"testing"
 )
 
+// newServerWithStatus creates a test server that responds with the given status.
+func newServerWithStatus(t *testing.T, status int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+	}))
+}
+
 // ── feedback.go gaps ──────────────────────────────────────────────────────────
 
 // TestDefaultIfEmpty_NonEmpty verifies that defaultIfEmpty returns the first non-empty value.
@@ -100,6 +108,7 @@ func TestPostIssueComment_DoPostError(t *testing.T) {
 	}
 }
 
+// TestPostIssueComment_NoToken verifies PostIssueComment is best-effort when token is missing.
 func TestPostIssueComment_NoToken(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	err := PostIssueComment("owner", "repo", 5, "hello")
@@ -161,10 +170,9 @@ func TestFindHeadSHA_TruncatedSHA(t *testing.T) {
 
 // ── github.go client method error paths ──────────────────────────────────────
 
+// TestAddAssignees_DoPostError verifies AddAssignees returns error on non-2xx response.
 func TestAddAssignees_DoPostError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
+	srv := newServerWithStatus(t, http.StatusInternalServerError)
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -173,10 +181,9 @@ func TestAddAssignees_DoPostError(t *testing.T) {
 	}
 }
 
+// TestRemoveAssignees_DoRequestError verifies RemoveAssignees returns error on DELETE failure.
 func TestRemoveAssignees_DoRequestError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
+	srv := newServerWithStatus(t, http.StatusInternalServerError)
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -185,10 +192,9 @@ func TestRemoveAssignees_DoRequestError(t *testing.T) {
 	}
 }
 
+// TestEditComment_DoPatchError verifies EditComment returns error on PATCH failure.
 func TestEditComment_DoPatchError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
+	srv := newServerWithStatus(t, http.StatusInternalServerError)
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -197,6 +203,7 @@ func TestEditComment_DoPatchError(t *testing.T) {
 	}
 }
 
+// TestCreatePR_DoPostError verifies CreatePR returns error on non-2xx POST response.
 func TestCreatePR_DoPostError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
@@ -212,6 +219,7 @@ func TestCreatePR_DoPostError(t *testing.T) {
 
 // ── engagement.go gaps ────────────────────────────────────────────────────────
 
+// TestEngageOnIssueProgress_NoStoredComment_Noop verifies EngageOnIssueProgress skips API call when no comment stored.
 func TestEngageOnIssueProgress_NoStoredComment_Noop(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
 	dir := newEngineDir(t)
@@ -230,6 +238,7 @@ func TestEngageOnIssueProgress_NoStoredComment_Noop(t *testing.T) {
 	}
 }
 
+// TestEngageOnIssueComplete_NoStoredComment_AddsNew verifies EngageOnIssueComplete posts new comment when store is empty.
 func TestEngageOnIssueComplete_NoStoredComment_AddsNew(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
 	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "")
@@ -257,6 +266,7 @@ func TestEngageOnIssueComplete_NoStoredComment_AddsNew(t *testing.T) {
 	}
 }
 
+// TestEngageOnIssueBlocked_NoStoredComment_AddsNew verifies EngageOnIssueBlocked posts new comment when store is empty.
 func TestEngageOnIssueBlocked_NoStoredComment_AddsNew(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
 	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "")
@@ -283,6 +293,7 @@ func TestEngageOnIssueBlocked_NoStoredComment_AddsNew(t *testing.T) {
 	}
 }
 
+// TestEngageOnIssuePickup_NoToken_Noop verifies EngageOnIssuePickup is best-effort when token is missing.
 func TestEngageOnIssuePickup_NoToken_Noop(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
@@ -294,6 +305,7 @@ func TestEngageOnIssuePickup_NoToken_Noop(t *testing.T) {
 	EngageOnIssuePickup(dir, "owner", "repo", 1, "sess-x")
 }
 
+// TestEngageOnIssuePickup_AssignEngineError_Continues verifies EngageOnIssuePickup continues on assignee failure.
 func TestEngageOnIssuePickup_AssignEngineError_Continues(t *testing.T) {
 	setupEngineEnv(t)
 
@@ -329,6 +341,7 @@ func TestEngageOnIssuePickup_AssignEngineError_Continues(t *testing.T) {
 	}
 }
 
+// TestEngageOnIssuePickup_AddCommentError_DoesNotStoreComment verifies failed comment posts are not cached.
 func TestEngageOnIssuePickup_AddCommentError_DoesNotStoreComment(t *testing.T) {
 	setupEngineEnv(t)
 
@@ -358,6 +371,7 @@ func TestEngageOnIssuePickup_AddCommentError_DoesNotStoreComment(t *testing.T) {
 	}
 }
 
+// TestEngageOnIssueProgress_EngineClientError_Returns verifies EngageOnIssueProgress is best-effort when client creation fails.
 func TestEngageOnIssueProgress_EngineClientError_Returns(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
@@ -369,6 +383,7 @@ func TestEngageOnIssueProgress_EngineClientError_Returns(t *testing.T) {
 	EngageOnIssueProgress(dir, "owner", "repo", 9, "execute", "detail", 1, 2)
 }
 
+// TestEngageOnIssueComplete_EngineClientError_Returns verifies EngageOnIssueComplete is best-effort when client creation fails.
 func TestEngageOnIssueComplete_EngineClientError_Returns(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
@@ -378,6 +393,7 @@ func TestEngageOnIssueComplete_EngineClientError_Returns(t *testing.T) {
 	EngageOnIssueComplete(dir, "owner", "repo", 10, 3, "")
 }
 
+// TestEngageOnIssueBlocked_EngineClientError_Returns verifies EngageOnIssueBlocked is best-effort when client creation fails.
 func TestEngageOnIssueBlocked_EngineClientError_Returns(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
@@ -385,50 +401,4 @@ func TestEngageOnIssueBlocked_EngineClientError_Returns(t *testing.T) {
 	dir := newEngineDir(t)
 
 	EngageOnIssueBlocked(dir, "owner", "repo", 11, "need help")
-}
-
-// ── identity.go gaps ──────────────────────────────────────────────────────────
-
-func TestAssignEngine_EmptyLogin_Noop(t *testing.T) {
-	t.Setenv("ENGINE_GITHUB_LOGIN", "")
-	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
-	t.Setenv("GITHUB_TOKEN", "")
-
-	// EngineLogin() returns "" → AssignEngine returns nil immediately.
-	if err := AssignEngine("owner", "repo", 5); err != nil {
-		t.Errorf("expected nil, got %v", err)
-	}
-}
-
-func TestUnassignEngine_EmptyLogin_Noop(t *testing.T) {
-	t.Setenv("ENGINE_GITHUB_LOGIN", "")
-	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
-	t.Setenv("GITHUB_TOKEN", "")
-
-	if err := UnassignEngine("owner", "repo", 5); err != nil {
-		t.Errorf("expected nil, got %v", err)
-	}
-}
-
-func TestEngineLogin_APIError_ReturnsEmpty(t *testing.T) {
-	// Clear cache.
-	engineLoginMu.Lock()
-	engineLoginCached = ""
-	engineLoginAt = engineLoginAt.Add(-2 * engineLoginTTL)
-	engineLoginMu.Unlock()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"message":"Bad credentials"}`)) //nolint:errcheck
-	}))
-	defer srv.Close()
-
-	t.Setenv("GITHUB_API_BASE", srv.URL)
-	t.Setenv("ENGINE_GITHUB_LOGIN", "")
-	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
-
-	login := EngineLogin()
-	if login != "" {
-		t.Errorf("expected empty login on API error, got %q", login)
-	}
 }

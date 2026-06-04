@@ -218,6 +218,16 @@ func setupScaffoldTest(t *testing.T, owner, repo, readme string) string {
 	return projectPath
 }
 
+// setupTriggerTestWithDB initializes database, AI mock server, and scaffold repo for trigger tests.
+func setupTriggerTestWithDB(t *testing.T, owner, repo, readme string) (projectPath, targetPath string) {
+	t.Helper()
+	projectPath = t.TempDir()
+	setupTestDB(t, projectPath)
+	withAIMockServer(t)
+	targetPath = prepareScaffoldTargetRepo(t, projectPath, owner, repo, readme)
+	return
+}
+
 func TestReserveIssueCommentDispatch_DedupesWithinCooldown(t *testing.T) {
 	withIssueCommentStateMutex(t)
 
@@ -340,6 +350,41 @@ func setupTestDB(t *testing.T, projectPath string) {
 	}
 }
 
+// setupRunModeLocalTest initializes a run() test with local mode (no VPN/remote).
+func setupRunModeLocalTest(t *testing.T) string {
+	t.Helper()
+	withRunDepsReset(t)
+	projectPath := t.TempDir()
+	t.Setenv("PROJECT_PATH", projectPath)
+	t.Setenv("ENGINE_VPN", "")
+	t.Setenv("ENGINE_REMOTE", "")
+	return projectPath
+}
+
+// setupTriggerTestWithAIEnv initializes a trigger test with AI environment variables.
+func setupTriggerTestWithAIEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "")
+}
+
+// assertSessionCreated verifies that a session was created by checking count increase.
+func assertSessionCreated(t *testing.T, projectPath string, beforeCount int) {
+	t.Helper()
+	afterCount := countSessions(t, projectPath)
+	if afterCount <= beforeCount {
+		t.Fatalf("expected session count to increase, before=%d after=%d", beforeCount, afterCount)
+	}
+}
+
+// triggerAndAssertSessionCreated is a consolidated helper for tests that trigger a payload and verify session creation.
+func triggerAndAssertSessionCreated(t *testing.T, triggerFn func(string, json.RawMessage), projectPath, targetPath string, payload json.RawMessage) {
+	t.Helper()
+	before := countSessions(t, targetPath)
+	triggerFn(projectPath, payload)
+	assertSessionCreated(t, targetPath, before)
+}
+
 // countSessions returns the number of sessions in the database at projectPath.
 func countSessions(t *testing.T, projectPath string) int {
 	t.Helper()
@@ -431,6 +476,20 @@ func withRunCommandMocked(t *testing.T, mockFn func(string, ...string) ([]byte, 
 	t.Cleanup(func() {
 		runCommandCombinedOutputFn = orig
 	})
+}
+
+// setupRunModeBaseDeps initializes common run() dependencies (dbInit, discord config, discord service).
+func setupRunModeBaseDeps(t *testing.T) {
+	t.Helper()
+	projectPath := t.TempDir()
+	t.Setenv("PROJECT_PATH", projectPath)
+	dbInitFn = func(path string) error { return nil }
+	loadDiscordConfigFn = func(path string) (discord.Config, error) {
+		return discord.Config{Enabled: false}, nil
+	}
+	newDiscordServiceFn = func(cfg discord.Config, path string) (discordRuntime, error) {
+		return &fakeDiscordService{}, nil
+	}
 }
 
 func TestBuildAutonomousRepoPath_HomeErrorFallsBackToProject(t *testing.T) {
@@ -838,70 +897,38 @@ func TestTriggerCIAnalysisSession_BadPayload(t *testing.T) {
 }
 
 func TestTriggerScaffoldSession_ValidPayloadCreatesSession(t *testing.T) {
-	projectPath := t.TempDir()
-	setupTestDB(t, projectPath)
-	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
-	t.Setenv("OPENAI_API_KEY", "")
-	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	projectPath, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
+	setupTriggerTestWithAIEnv(t)
 
-	before := countSessions(t, targetPath)
 	payload := json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`)
-	triggerScaffoldSession(projectPath, payload)
-	after := countSessions(t, targetPath)
-
-	if after <= before {
-		t.Fatalf("expected session count to increase, before=%d after=%d", before, after)
-	}
+	triggerAndAssertSessionCreated(t, triggerScaffoldSession, projectPath, targetPath, payload)
 }
 
 func TestTriggerCIAnalysisSession_ValidPayloadCreatesSession(t *testing.T) {
 	projectPath := t.TempDir()
 	setupTestDB(t, projectPath)
-	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
-	t.Setenv("OPENAI_API_KEY", "")
+	setupTriggerTestWithAIEnv(t)
 
 	before := countSessions(t, projectPath)
 	payload := json.RawMessage(`{"workflow_run":{"name":"CI","html_url":"https://example.com/run/1","conclusion":"failure"},"repository":{"full_name":"owner/repo"}}`)
 	triggerCIAnalysisSession(projectPath, payload)
-	after := countSessions(t, projectPath)
-
-	if after <= before {
-		t.Fatalf("expected session count to increase, before=%d after=%d", before, after)
-	}
+	assertSessionCreated(t, projectPath, before)
 }
 
 func TestTriggerIssueSession_ValidPayloadCreatesSession(t *testing.T) {
-	projectPath := t.TempDir()
-	setupTestDB(t, projectPath)
-	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
-	t.Setenv("OPENAI_API_KEY", "")
-	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	projectPath, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
+	setupTriggerTestWithAIEnv(t)
 
-	before := countSessions(t, targetPath)
 	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine please fix","user":{"login":"bob"}},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`)
-	triggerIssueSession(projectPath, payload)
-	after := countSessions(t, targetPath)
-
-	if after <= before {
-		t.Fatalf("expected session count to increase, before=%d after=%d", before, after)
-	}
+	triggerAndAssertSessionCreated(t, triggerIssueSession, projectPath, targetPath, payload)
 }
 
 func TestTriggerIssueOpenedSession_ValidPayloadCreatesSession(t *testing.T) {
-	projectPath := t.TempDir()
-	setupTestDB(t, projectPath)
-	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
-	t.Setenv("OPENAI_API_KEY", "")
-	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	projectPath, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
+	setupTriggerTestWithAIEnv(t)
 
-	before := countSessions(t, targetPath)
 	payload := json.RawMessage(`{"action":"opened","issue":{"number":43,"title":"Feature","body":"Please add X"},"repository":{"full_name":"owner/repo"},"sender":{"login":"alice"}}`)
-	triggerIssueOpenedSession(projectPath, payload)
-	after := countSessions(t, targetPath)
-
-	if after <= before {
-		t.Fatalf("expected session count to increase, before=%d after=%d", before, after)
-	}
+	triggerAndAssertSessionCreated(t, triggerIssueOpenedSession, projectPath, targetPath, payload)
 }
 
 func TestRun_DBInitError(t *testing.T) {
@@ -931,10 +958,7 @@ func TestRun_DiscordConfigError(t *testing.T) {
 
 func TestRun_LocalMode_ListenError(t *testing.T) {
 	withRunDepsReset(t)
-	projectPath := t.TempDir()
-	t.Setenv("PROJECT_PATH", projectPath)
-	t.Setenv("ENGINE_VPN", "")
-	t.Setenv("ENGINE_REMOTE", "")
+	setupRunModeLocalTest(t)
 	t.Setenv("PORT", "31337")
 
 	listenErr := errors.New("listen failed")
@@ -981,10 +1005,8 @@ func TestRun_LocalMode_ListenError(t *testing.T) {
 
 func TestRun_VPNMode_TunnelInitError(t *testing.T) {
 	withRunDepsReset(t)
-	projectPath := t.TempDir()
-	t.Setenv("PROJECT_PATH", projectPath)
+	setupRunModeLocalTest(t)
 	t.Setenv("ENGINE_VPN", "1")
-	t.Setenv("ENGINE_REMOTE", "")
 
 	dbInitFn = func(projectPath string) error { return nil }
 	loadDiscordConfigFn = func(projectPath string) (discord.Config, error) {
@@ -1005,9 +1027,7 @@ func TestRun_VPNMode_TunnelInitError(t *testing.T) {
 
 func TestRun_RemoteMode_ServerInitError(t *testing.T) {
 	withRunDepsReset(t)
-	projectPath := t.TempDir()
-	t.Setenv("PROJECT_PATH", projectPath)
-	t.Setenv("ENGINE_VPN", "")
+	setupRunModeLocalTest(t)
 	t.Setenv("ENGINE_REMOTE", "1")
 
 	dbInitFn = func(projectPath string) error { return nil }
@@ -1207,18 +1227,12 @@ func TestRun_DiscordEnabled_ServiceInitError_NonFatal(t *testing.T) {
 
 func TestRun_VPNMode_RespectsVPNPortOverride(t *testing.T) {
 	withRunDepsReset(t)
-	projectPath := t.TempDir()
-	t.Setenv("PROJECT_PATH", projectPath)
+	setupRunModeBaseDeps(t)
 	t.Setenv("ENGINE_VPN", "1")
 	t.Setenv("ENGINE_REMOTE", "")
 	t.Setenv("VPN_PORT", "4545")
 
 	var seenPort string
-	dbInitFn = func(projectPath string) error { return nil }
-	loadDiscordConfigFn = func(projectPath string) (discord.Config, error) { return discord.Config{Enabled: false}, nil }
-	newDiscordServiceFn = func(cfg discord.Config, projectPath string) (discordRuntime, error) {
-		return &fakeDiscordService{}, nil
-	}
 	newVPNTunnelFn = func(cfg vpn.Config) (*vpn.Tunnel, error) {
 		seenPort = cfg.Port
 		return nil, errors.New("stop")
@@ -1232,18 +1246,12 @@ func TestRun_VPNMode_RespectsVPNPortOverride(t *testing.T) {
 
 func TestRun_RemoteMode_RespectsRemotePortOverride(t *testing.T) {
 	withRunDepsReset(t)
-	projectPath := t.TempDir()
-	t.Setenv("PROJECT_PATH", projectPath)
+	setupRunModeBaseDeps(t)
 	t.Setenv("ENGINE_VPN", "")
 	t.Setenv("ENGINE_REMOTE", "1")
 	t.Setenv("REMOTE_PORT", "5656")
 
 	var seenPort string
-	dbInitFn = func(projectPath string) error { return nil }
-	loadDiscordConfigFn = func(projectPath string) (discord.Config, error) { return discord.Config{Enabled: false}, nil }
-	newDiscordServiceFn = func(cfg discord.Config, projectPath string) (discordRuntime, error) {
-		return &fakeDiscordService{}, nil
-	}
 	newRemoteServerFn = func(cfg remote.Config, wsHandler http.HandlerFunc) (*remote.Server, error) {
 		seenPort = cfg.Port
 		return nil, errors.New("stop")
@@ -1272,8 +1280,8 @@ func TestRun_DiscordEnabled_Success(t *testing.T) {
 		return &fakeDiscordService{}, nil
 	}
 	setDiscordBridgeFn = func(s ws.DiscordBridge) { bridgeSet = true }
-	httpHandleFuncFn = func(pattern string, handler func(http.ResponseWriter, *http.Request)) {}
-	httpHandleFn = func(pattern string, handler http.Handler) {}
+	httpHandleFuncFn = func(_ string, _ func(http.ResponseWriter, *http.Request)) {}
+	httpHandleFn = func(_ string, _ http.Handler) {}
 	httpListenAndServeFn = func(addr string, handler http.Handler) error {
 		return errors.New("test stop")
 	}
@@ -1338,10 +1346,7 @@ func TestDefaultNewDiscordServiceFn_Call(t *testing.T) {
 }
 
 func TestTriggerScaffoldSession_OnChunkCalled(t *testing.T) {
-	projectPath := t.TempDir()
-	setupTestDB(t, projectPath)
-	withAIMockServer(t)
-	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	projectPath, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
 
 	payload := json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`)
 	triggerScaffoldSession(projectPath, payload)
@@ -1373,10 +1378,7 @@ func TestTriggerCIAnalysisSession_OnChunkCalled(t *testing.T) {
 }
 
 func TestTriggerIssueSession_OnChunkCalled(t *testing.T) {
-	projectPath := t.TempDir()
-	setupTestDB(t, projectPath)
-	withAIMockServer(t)
-	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	projectPath, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
 
 	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine please fix","user":{"login":"bob"}},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`)
 	triggerIssueSession(projectPath, payload)
@@ -1390,10 +1392,7 @@ func TestTriggerIssueSession_OnChunkCalled(t *testing.T) {
 }
 
 func TestTriggerIssueOpenedSession_OnChunkCalled(t *testing.T) {
-	projectPath := t.TempDir()
-	setupTestDB(t, projectPath)
-	withAIMockServer(t)
-	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
+	projectPath, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
 
 	payload := json.RawMessage(`{"action":"opened","issue":{"number":43,"title":"Feature","body":"Please add X"},"repository":{"full_name":"owner/repo"},"sender":{"login":"alice"}}`)
 	triggerIssueOpenedSession(projectPath, payload)
@@ -1834,11 +1833,9 @@ func (m *mockAutoEnroller) AutoEnrollProject(projectPath, owner, repo string) er
 }
 
 func TestTriggerScaffoldSession_CallsAutoEnrollProject(t *testing.T) {
-	projectPath := t.TempDir()
-	setupTestDB(t, projectPath)
+	projectPath, targetProjectPath := setupTriggerTestWithDB(t, "owner", "myrepo", "# Demo\n@engine")
 	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
 	t.Setenv("OPENAI_API_KEY", "")
-	targetProjectPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "myrepo", "# Demo\n@engine")
 
 	enroller := &mockAutoEnroller{}
 	ws.SetDiscordBridge(enroller)
@@ -2194,14 +2191,11 @@ func TestTriggerIssueSession_OnChunkDone(t *testing.T) {
 
 func TestTriggerIssueSession_OnError(t *testing.T) {
 	withRunDepsReset(t)
-	projectPath := t.TempDir()
-	setupTestDB(t, projectPath)
-	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "issuerepo2", "# Demo")
+	projectPath, _ := setupTriggerTestWithDB(t, "owner", "issuerepo2", "# Demo")
 
 	aiChatFn = func(ctx *ai.ChatContext, _ string) {
 		ctx.OnError("issue error")
 	}
-	setupTestDB(t, targetPath)
 
 	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine fix","user":{"login":"bob"}},"issue":{"number":78,"title":"Other"},"repository":{"full_name":"owner/issuerepo2"}}`)
 	triggerIssueSession(projectPath, payload)
@@ -2209,15 +2203,12 @@ func TestTriggerIssueSession_OnError(t *testing.T) {
 
 func TestTriggerIssueOpenedSession_OnChunkDone(t *testing.T) {
 	withRunDepsReset(t)
-	projectPath := t.TempDir()
-	setupTestDB(t, projectPath)
-	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "openedrepo", "# Demo")
+	projectPath, _ := setupTriggerTestWithDB(t, "owner", "openedrepo", "# Demo")
 
 	aiChatFn = func(ctx *ai.ChatContext, _ string) {
 		ctx.OnChunk("opened content", false)
 		ctx.OnChunk("", true)
 	}
-	setupTestDB(t, targetPath)
 
 	payload := json.RawMessage(`{"action":"opened","issue":{"number":88,"title":"Feature","body":"desc"},"repository":{"full_name":"owner/openedrepo"},"sender":{"login":"alice"}}`)
 	triggerIssueOpenedSession(projectPath, payload)
@@ -2225,14 +2216,11 @@ func TestTriggerIssueOpenedSession_OnChunkDone(t *testing.T) {
 
 func TestTriggerIssueOpenedSession_OnError(t *testing.T) {
 	withRunDepsReset(t)
-	projectPath := t.TempDir()
-	setupTestDB(t, projectPath)
-	targetPath := prepareScaffoldTargetRepo(t, projectPath, "owner", "openederrrepo", "# Demo")
+	projectPath, _ := setupTriggerTestWithDB(t, "owner", "openederrrepo", "# Demo")
 
 	aiChatFn = func(ctx *ai.ChatContext, _ string) {
 		ctx.OnError("opened error")
 	}
-	setupTestDB(t, targetPath)
 
 	payload := json.RawMessage(`{"action":"opened","issue":{"number":89,"title":"Bug2","body":"desc2"},"repository":{"full_name":"owner/openederrrepo"},"sender":{"login":"alice"}}`)
 	triggerIssueOpenedSession(projectPath, payload)
@@ -2240,9 +2228,7 @@ func TestTriggerIssueOpenedSession_OnError(t *testing.T) {
 
 func TestTriggerIssueSession_RetriesRetryableErrorBeforeBlocking(t *testing.T) {
 	withRunDepsReset(t)
-	projectPath := t.TempDir()
-	setupTestDB(t, projectPath)
-	prepareScaffoldTargetRepo(t, projectPath, "owner", "retryable-issue", "# Demo")
+	projectPath, _ := setupTriggerTestWithDB(t, "owner", "retryable-issue", "# Demo")
 
 	notifier := &mockProgressNotifier{}
 	ws.SetDiscordBridge(notifier)
@@ -2283,9 +2269,7 @@ func TestTriggerIssueSession_RetriesRetryableErrorBeforeBlocking(t *testing.T) {
 
 func TestTriggerIssueOpenedSession_RetryableErrorStopsAfterMaxAttempts(t *testing.T) {
 	withRunDepsReset(t)
-	projectPath := t.TempDir()
-	setupTestDB(t, projectPath)
-	prepareScaffoldTargetRepo(t, projectPath, "owner", "retryable-opened", "# Demo")
+	projectPath, _ := setupTriggerTestWithDB(t, "owner", "retryable-opened", "# Demo")
 
 	notifier := &mockProgressNotifier{}
 	ws.SetDiscordBridge(notifier)

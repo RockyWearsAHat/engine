@@ -1,8 +1,6 @@
 package remote
 
 import (
-	"bytes"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -64,21 +62,14 @@ func TestHealth_Handler(t *testing.T) {
 func TestHandlePair_WrongMethod(t *testing.T) {
 	s := newTestServer(t)
 	req := httptest.NewRequest("GET", "/remote/pair", nil)
-	rr := testRequest(t, s, req)
-
-	if rr.Code != http.StatusMethodNotAllowed {
-		t.Errorf("status = %d, want 405", rr.Code)
-	}
+	rr := requestAndExpectStatus(t, s, req, http.StatusMethodNotAllowed)
+	_ = rr
 }
 
 func TestHandlePair_InvalidCode(t *testing.T) {
 	s := newTestServer(t)
-	body := bytes.NewBufferString(`{"code": "000000"}`)
-	req := httptest.NewRequest("POST", "/remote/pair", body)
-	req.Header.Set("Content-Type", "application/json")
-	rr := testRequest(t, s, req)
-
-	assertStatusCode(t, rr.Code, http.StatusOK)
+	req := newJSONPostRequestFromString("/remote/pair", `{"code": "000000"}`)
+	rr := requestAndExpectStatus(t, s, req, http.StatusOK)
 	resp := decodeJSONResponse(t, rr.Body, map[string]any{})
 	assertJSONField(t, resp, "ok", false)
 }
@@ -90,12 +81,8 @@ func TestHandlePair_ValidCode(t *testing.T) {
 		t.Fatalf("GenerateCode: %v", err)
 	}
 
-	body, _ := json.Marshal(map[string]string{"code": code})
-	req := httptest.NewRequest("POST", "/remote/pair", bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	rr := testRequest(t, s, req)
-
-	assertStatusCode(t, rr.Code, http.StatusOK)
+	req := newJSONPostRequest("/remote/pair", map[string]string{"code": code})
+	rr := requestAndExpectStatus(t, s, req, http.StatusOK)
 	resp := decodeJSONResponse(t, rr.Body, map[string]any{})
 	assertJSONField(t, resp, "ok", true)
 	assertJSONFieldNotEmpty(t, resp, "token")
@@ -103,13 +90,9 @@ func TestHandlePair_ValidCode(t *testing.T) {
 
 func TestHandlePair_BadJSON(t *testing.T) {
 	s := newTestServer(t)
-	req := httptest.NewRequest("POST", "/remote/pair", bytes.NewBufferString("{invalid"))
-	req.Header.Set("Content-Type", "application/json")
+	req := newJSONPostRequestFromString("/remote/pair", "{invalid")
 	rr := testRequest(t, s, req)
-
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", rr.Code)
-	}
+	assertStatusCode(t, rr.Code, http.StatusBadRequest)
 }
 
 func TestHandleRefresh_ValidToken(t *testing.T) {
@@ -132,20 +115,14 @@ func TestHandleRefresh_InvalidToken(t *testing.T) {
 	s := newTestServer(t)
 	req := httptest.NewRequest("POST", "/remote/refresh", nil)
 	rr := testRequest(t, s, req)
-
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", rr.Code)
-	}
+	assertStatusCode(t, rr.Code, http.StatusUnauthorized)
 }
 
 func TestWS_RequiresAuth(t *testing.T) {
 	s := newTestServer(t)
 	req := httptest.NewRequest("GET", "/ws", nil)
 	rr := testRequest(t, s, req)
-
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", rr.Code)
-	}
+	assertStatusCode(t, rr.Code, http.StatusUnauthorized)
 }
 
 func TestListenAndServeTLS_TLSConfigError(t *testing.T) {
@@ -162,16 +139,12 @@ func TestListenAndServeTLS_TLSConfigError(t *testing.T) {
 	}
 }
 
-// TestHandleRefresh_DirectCall_InvalidToken calls handleRefresh directly (bypassing
-// AuthMiddleware) to cover the ValidateToken-error branch inside the handler.
 func TestHandleRefresh_DirectCall_InvalidToken(t *testing.T) {
 	s := newTestServer(t)
 	req := httptest.NewRequest("POST", "/remote/refresh", nil)
 	rr := httptest.NewRecorder()
 	s.handleRefresh(rr, req)
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", rr.Code)
-	}
+	assertStatusCode(t, rr.Code, http.StatusUnauthorized)
 }
 func TestNewServer_EnsureStorageDirError(t *testing.T) {
         // Make storage path a file so EnsureStorageDir fails.
