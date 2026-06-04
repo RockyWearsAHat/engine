@@ -7,45 +7,42 @@
  * containing YAML config. This exercises parseEngineConfigYaml, teamCostTier,
  * costLabel, teamIcon, and splitModelString without touching private symbols.
  */
-import { act, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store/index.js';
+import { createWsClientMock, sendWsMessage, createBridgeMock } from './test-helpers.js';
 
 // ── WS mock with callback capture ─────────────────────────────────────────────
 
-let capturedWsCallback: ((data: unknown) => void) | null = null;
-let capturedOnOpenCallback: (() => void) | null = null;
+const { mockDef: wsMockDef, wsCallbacks } = createWsClientMock();
 
-vi.mock('../ws/client.js', () => ({
-  wsClient: {
-    send: vi.fn(),
-    onMessage: vi.fn((cb: (data: unknown) => void) => {
-      capturedWsCallback = cb;
-      return () => { capturedWsCallback = null; };
-    }),
-    onOpen: vi.fn((cb: () => void) => {
-      capturedOnOpenCallback = cb;
-      return () => { capturedOnOpenCallback = null; };
-    }),
-    onClose: vi.fn(() => () => {}),
-  },
-}));
+vi.mock('../ws/client.js', () => wsMockDef);
 
-vi.mock('../bridge.js', () => ({
-  bridge: {
+vi.mock('../bridge.js', () =>
+  createBridgeMock({
     openExternal: vi.fn(),
     getLocalServerToken: vi.fn().mockResolvedValue(null),
     getGithubToken: vi.fn().mockResolvedValue(null),
     getActiveTeam: vi.fn().mockResolvedValue(null),
     setActiveTeam: vi.fn().mockResolvedValue(undefined),
-  },
-}));
+  })
+);
 
 // ── Lazy import after mocks ───────────────────────────────────────────────────
 
 const { default: TeamSelector } = await import('../components/Preferences/TeamSelector.js');
 const { wsClient } = await import('../ws/client.js');
 const { bridge } = await import('../bridge.js');
+
+// ── Test setup helper ─────────────────────────────────────────────────────────
+
+/**
+ * Setup bridge.getActiveTeam to return null (inactive state).
+ * Used in multiple describe blocks to ensure consistent mock state.
+ */
+function setupInactiveTeam() {
+  vi.mocked(bridge.getActiveTeam).mockResolvedValue(null);
+}
 
 // ── YAML fixtures ─────────────────────────────────────────────────────────────
 
@@ -133,17 +130,11 @@ const EMPTY_TEAMS_YAML = `
 teams: {}
 `;
 
-function sendWsMessage(msg: unknown) {
-  act(() => {
-    capturedWsCallback?.(msg);
-  });
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('TeamSelector — loading state', () => {
   beforeEach(() => {
-    vi.mocked(bridge.getActiveTeam).mockResolvedValue(null);
+    setupInactiveTeam();
   });
 
   it('NoEngineConfigMessage_LoadingPlaceholderShown', () => {
@@ -155,20 +146,20 @@ describe('TeamSelector — loading state', () => {
 describe('TeamSelector — error state', () => {
   it('EngineConfigErrorField_GenericMissingConfigGuidanceShown', () => {
     render(<TeamSelector />);
-    sendWsMessage({ type: 'engine.config', error: 'config file not found' });
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', error: 'config file not found' });
     expect(screen.getByText(/no team config found/i)).toBeTruthy();
   });
 
   it('NullYamlNoError_StaysInLoadingState', () => {
     render(<TeamSelector />);
-    sendWsMessage({ type: 'engine.config', yaml: null });
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: null });
     expect(screen.getByText(/loading team config/i)).toBeTruthy();
   });
 });
 
 describe('TeamSelector — free team (teamCostTier, costLabel)', () => {
   beforeEach(() => {
-    vi.mocked(bridge.getActiveTeam).mockResolvedValue(null);
+    setupInactiveTeam();
   });
 
   it('FastTeamFromYaml_Rendered', () => {

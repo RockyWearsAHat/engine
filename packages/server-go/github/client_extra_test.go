@@ -1,9 +1,7 @@
 package github
 
 import (
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 )
 
@@ -17,45 +15,30 @@ import (
 // TestRemoveAssignees_EmptyNoop verifies RemoveAssignees is a no-op on empty assignee list.
 func TestRemoveAssignees_EmptyNoop(t *testing.T) {
 	c := newClientWithBase("http://example.com")
-	if err := c.RemoveAssignees(1, nil); err != nil {
-		t.Fatalf("expected nil, got %v", err)
-	}
+	err := c.RemoveAssignees(1, nil)
+	assertHTTPSuccess(t, err, "RemoveAssignees empty list")
 }
 
 // TestAddAssignees_EmptyNoop verifies AddAssignees is a no-op on empty assignee list.
 func TestAddAssignees_EmptyNoop(t *testing.T) {
 	c := newClientWithBase("http://example.com")
-	if err := c.AddAssignees(1, nil); err != nil {
-		t.Fatalf("expected nil, got %v", err)
-	}
+	err := c.AddAssignees(1, nil)
+	assertHTTPSuccess(t, err, "AddAssignees empty list")
 }
 
 // TestRemoveAssignees_Success verifies RemoveAssignees sends DELETE request with correct payload.
 // Tests behavioral side effect (HTTP DELETE to GitHub API).
 func TestRemoveAssignees_Success(t *testing.T) {
 	var method string
-	var payload map[string]any
-	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		method = r.Method
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode remove assignees payload: %v", err)
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{}`))
-	})
+	payload := make(map[string]any)
+	srv := newTestServer(t, captureHTTPRequestHandler(t, &method, &payload))
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
-	if err := c.RemoveAssignees(9, []string{"engine-bot"}); err != nil {
-		t.Fatalf("RemoveAssignees: %v", err)
-	}
-	if method != http.MethodDelete {
-		t.Fatalf("method = %s, want DELETE", method)
-	}
-	list, ok := payload["assignees"].([]any)
-	if !ok || len(list) != 1 || list[0] != "engine-bot" {
-		t.Fatalf("unexpected payload: %#v", payload)
-	}
+	err := c.RemoveAssignees(9, []string{"engine-bot"})
+	assertHTTPSuccess(t, err, "RemoveAssignees")
+	assertHTTPMethod(t, method, http.MethodDelete)
+	assertHTTPPayloadSlice(t, payload, "assignees", []string{"engine-bot"})
 }
 
 // TestRemoveAssignees_DoRequestError (behavior tested in github_gaps_test.go).
@@ -75,19 +58,15 @@ func TestRemoveAssignees_InvalidBase_RequestError(t *testing.T) {
 // Tests behavioral side effect (HTTP POST to GitHub PR creation endpoint).
 func TestCreatePR_Success(t *testing.T) {
 	srv := newJSONResponseServer(t, map[string]any{
-		"number": 17,
+		"number":   17,
 		"html_url": "https://example/pr/17",
-		"state": "open",
+		"state":    "open",
 	}, http.StatusCreated)
 	defer srv.Close()
 
-	// TestCreatePR_DoPostError (behavior tested in github_gaps_test.go).
-
 	c := newClientWithBase(srv.URL)
 	pr, err := c.CreatePR("title", "body", "feature", "main")
-	if err != nil {
-		t.Fatalf("CreatePR: %v", err)
-	}
+	assertHTTPSuccess(t, err, "CreatePR")
 	if pr.Number != 17 || pr.State != "open" {
 		t.Fatalf("unexpected PR: %+v", pr)
 	}
@@ -95,16 +74,12 @@ func TestCreatePR_Success(t *testing.T) {
 
 // TestCreatePR_ParseError verifies CreatePR returns error when response is not valid JSON.
 func TestCreatePR_ParseError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte("not-json"))
-	}))
+	srv := newResponseServer(t, http.StatusCreated, "not-json")
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
-	if _, err := c.CreatePR("title", "body", "feature", "main"); err == nil {
-		t.Fatal("expected parse error")
-	}
+	_, err := c.CreatePR("title", "body", "feature", "main")
+	assertHTTPError(t, err, "CreatePR parse error")
 }
 
 // TestUnassignEngine_Success verifies UnassignEngine sends DELETE request to GitHub API.
@@ -116,8 +91,7 @@ func TestUnassignEngine_Success(t *testing.T) {
 	srv := newServerWithStatus(t, http.StatusOK)
 	defer srv.Close()
 
-	t.Setenv("GITHUB_API_BASE", srv.URL)
-	if err := UnassignEngine("owner", "repo", 22); err != nil {
-		t.Fatalf("UnassignEngine: %v", err)
-	}
+	setupGitHubAPI(t, srv, "")
+	err := UnassignEngine("owner", "repo", 22)
+	assertHTTPSuccess(t, err, "UnassignEngine")
 }

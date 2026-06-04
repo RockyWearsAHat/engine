@@ -13,6 +13,96 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
+// Helper functions to reduce test duplication
+
+func newServiceWithEmptyProjects(storagePath string) *Service {
+	return &Service{
+		cfg: Config{StoragePath: storagePath},
+		state: persistedState{
+			Projects: make(map[string]ProjectBinding),
+		},
+	}
+}
+
+func newServiceWithProjects(storagePath string, projects map[string]ProjectBinding) *Service {
+	return &Service{
+		cfg: Config{StoragePath: storagePath},
+		state: persistedState{
+			Projects: projects,
+		},
+	}
+}
+
+func newTestMessageCreate(channelID, guildID, content string, authorID string, isBot bool) *discordgo.MessageCreate {
+	return &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			ChannelID: channelID,
+			GuildID:   guildID,
+			Content:   content,
+			Author:    &discordgo.User{ID: authorID, Bot: isBot},
+		},
+	}
+}
+
+func assertErrorMessage(t *testing.T, err error, wantMsg string, testName string) {
+	if err == nil {
+		t.Fatalf("%s: expected error %q, got nil", testName, wantMsg)
+	}
+	if err.Error() != wantMsg {
+		t.Fatalf("%s: expected error %q, got %v", testName, wantMsg, err)
+	}
+}
+
+// ── Staged setup helpers for config and state ────────────────────────────────
+
+// clearDiscordEnv clears all Discord-related environment variables in one step
+func clearDiscordEnv(t *testing.T) {
+	t.Setenv("ENGINE_DISCORD", "")
+	t.Setenv("ENGINE_DISCORD_BOT_TOKEN", "")
+	t.Setenv("ENGINE_DISCORD_GUILD_ID", "")
+	t.Setenv("ENGINE_DISCORD_ALLOWED_USER_IDS", "")
+	t.Setenv("ENGINE_DISCORD_PREFIX", "")
+	t.Setenv("ENGINE_DISCORD_CONTROL_CHANNEL", "")
+	t.Setenv("ENGINE_STATE_DIR", "")
+}
+
+// setDiscordEnv sets Discord environment variables from a config-like map
+func setDiscordEnv(t *testing.T, env map[string]string) {
+	for k, v := range env {
+		t.Setenv(k, v)
+	}
+}
+
+// createConfigFile writes a discord config file to projectDir/.engine/discord.json
+func createConfigFile(t *testing.T, projectDir string, configJSON string) string {
+	configDir := filepath.Join(projectDir, ".engine")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configPath := filepath.Join(configDir, defaultConfigFileName)
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return configPath
+}
+
+// writePersistentState writes a service state file to storage directory
+func writePersistentState(t *testing.T, storageDir string, state persistedState) {
+	data, _ := json.Marshal(state)
+	statePath := filepath.Join(storageDir, defaultStateFileName)
+	if err := os.WriteFile(statePath, data, 0o600); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+}
+
+// setDiscordConfigForTests sets Discord config environment variables from a config map.
+// Consolidates repeated t.Setenv() patterns. Keys match ENGINE_* env vars.
+func setDiscordConfigForTests(t *testing.T, config map[string]string) {
+	for k, v := range config {
+		t.Setenv(k, v)
+	}
+}
+
 func TestParseCommand(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -182,20 +272,9 @@ func TestSplitForDiscord(t *testing.T) {
 }
 
 func TestLoadConfigFromProjectFile(t *testing.T) {
-	t.Setenv("ENGINE_DISCORD", "")
-	t.Setenv("ENGINE_DISCORD_BOT_TOKEN", "")
-	t.Setenv("ENGINE_DISCORD_GUILD_ID", "")
-	t.Setenv("ENGINE_DISCORD_ALLOWED_USER_IDS", "")
-	t.Setenv("ENGINE_DISCORD_PREFIX", "")
-	t.Setenv("ENGINE_DISCORD_CONTROL_CHANNEL", "")
-	t.Setenv("ENGINE_STATE_DIR", "")
+	clearDiscordEnv(t)
 
 	projectDir := t.TempDir()
-	configDir := filepath.Join(projectDir, ".engine")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatalf("mkdir config dir: %v", err)
-	}
-	configPath := filepath.Join(configDir, defaultConfigFileName)
 	configJSON := `{
 		"enabled": true,
 		"botToken": "bot-token",
@@ -204,9 +283,7 @@ func TestLoadConfigFromProjectFile(t *testing.T) {
 		"commandPrefix": "/",
 		"controlChannelName": "ops-room"
 	}`
-	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+	configPath := createConfigFile(t, projectDir, configJSON)
 
 	cfg, err := LoadConfig(projectDir)
 	if err != nil {
@@ -230,6 +307,7 @@ func TestLoadConfigFromProjectFile(t *testing.T) {
 	if cfg.ControlChannelName != "ops-room" {
 		t.Fatalf("unexpected control channel: %q", cfg.ControlChannelName)
 	}
+	configDir := filepath.Join(projectDir, ".engine")
 	if cfg.StoragePath != configDir {
 		t.Fatalf("unexpected storage path: %q", cfg.StoragePath)
 	}
@@ -240,26 +318,21 @@ func TestLoadConfigFromProjectFile(t *testing.T) {
 
 func TestLoadConfigEnvOverridesProjectFile(t *testing.T) {
 	projectDir := t.TempDir()
-	configDir := filepath.Join(projectDir, ".engine")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatalf("mkdir config dir: %v", err)
-	}
-	configPath := filepath.Join(configDir, defaultConfigFileName)
 	configJSON := `{
 		"enabled": false,
 		"botToken": "file-token",
 		"guildId": "file-guild",
 		"allowedUserIds": ["file-user"]
 	}`
-	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+	_ = createConfigFile(t, projectDir, configJSON)
 
-	t.Setenv("ENGINE_DISCORD", "true")
-	t.Setenv("ENGINE_DISCORD_BOT_TOKEN", "env-token")
-	t.Setenv("ENGINE_DISCORD_GUILD_ID", "env-guild")
-	t.Setenv("ENGINE_DISCORD_ALLOWED_USER_IDS", "env-user")
-	t.Setenv("ENGINE_DISCORD_PREFIX", "!")
+	setDiscordConfigForTests(t, map[string]string{
+		"ENGINE_DISCORD":                  "true",
+		"ENGINE_DISCORD_BOT_TOKEN":        "env-token",
+		"ENGINE_DISCORD_GUILD_ID":         "env-guild",
+		"ENGINE_DISCORD_ALLOWED_USER_IDS": "env-user",
+		"ENGINE_DISCORD_PREFIX":           "!",
+	})
 
 	cfg, err := LoadConfig(projectDir)
 	if err != nil {
@@ -687,6 +760,8 @@ func TestIsAllowedUser(t *testing.T) {
 		t.Fatal("expected user-2 to be denied")
 	}
 }
+
+// Duplicate in service_extra_test.go — kept here for historical compatibility
 
 func TestResolveProjectByChannel(t *testing.T) {
 	svc := &Service{

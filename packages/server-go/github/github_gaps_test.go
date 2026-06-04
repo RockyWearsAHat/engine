@@ -1,10 +1,7 @@
 package github
 
 import (
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -79,29 +76,21 @@ func TestNormaliseStatusState_Pending(t *testing.T) {
 // TestPostCommitStatus_DoPostError verifies PostCommitStatus returns error on non-2xx response.
 // Tests behavioral side effect (HTTP POST to commit status API).
 func TestPostCommitStatus_DoPostError(t *testing.T) {
-	srv := newErrorResponseServer(t, http.StatusInternalServerError, `internal error`)
+	srv := setupGitHubAPIWithErrorServer(t, http.StatusInternalServerError, "tok")
 	defer srv.Close()
 
-	setupGitHubAPI(t, srv, "tok")
-
 	err := PostCommitStatus("owner", "repo", "abc123", "pending", "", "desc", "")
-	if err == nil {
-		t.Error("expected error from non-2xx response")
-	}
+	assertHTTPErrorWithStatus(t, err, http.StatusInternalServerError, "PostCommitStatus")
 }
 
 // TestPostIssueComment_DoPostError verifies PostIssueComment returns error on non-2xx response.
 // Tests behavioral side effect (HTTP POST to issue comment API).
 func TestPostIssueComment_DoPostError(t *testing.T) {
-	srv := newErrorResponseServer(t, http.StatusInternalServerError, "")
+	srv := setupGitHubAPIWithErrorServer(t, http.StatusInternalServerError, "tok")
 	defer srv.Close()
 
-	setupGitHubAPI(t, srv, "tok")
-
 	err := PostIssueComment("owner", "repo", 5, "hello")
-	if err == nil {
-		t.Error("expected error from non-2xx response")
-	}
+	assertHTTPErrorWithStatus(t, err, http.StatusInternalServerError, "PostIssueComment")
 }
 
 // TestPostIssueComment_NoToken verifies PostIssueComment is best-effort when token is missing.
@@ -117,26 +106,18 @@ func TestPostIssueComment_NoToken(t *testing.T) {
 // TestFindHeadSHA_DoGetError verifies FindHeadSHA returns error on 404 response.
 // Tests behavioral side effect (HTTP GET to branch API).
 func TestFindHeadSHA_DoGetError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`not found`)) //nolint:errcheck
-	}))
+	srv := newResponseServer(t, http.StatusNotFound, "not found")
 	defer srv.Close()
 
 	setupGitHubAPI(t, srv, "tok")
 
 	_, err := FindHeadSHA("owner", "repo", "main")
-	if err == nil {
-		t.Error("expected error from 404 response")
-	}
+	assertHTTPError(t, err, "FindHeadSHA 404")
 }
 
 // TestFindHeadSHA_NoSHAField verifies FindHeadSHA returns error when sha field is missing.
 func TestFindHeadSHA_NoSHAField(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"no_sha_here": "nope"}`)) //nolint:errcheck
-	}))
+	srv := newResponseServer(t, http.StatusOK, `{"no_sha_here": "nope"}`)
 	defer srv.Close()
 
 	setupGitHubAPI(t, srv, "tok")
@@ -149,11 +130,7 @@ func TestFindHeadSHA_NoSHAField(t *testing.T) {
 
 // TestFindHeadSHA_TruncatedSHA verifies FindHeadSHA returns error for truncated JSON response.
 func TestFindHeadSHA_TruncatedSHA(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		// sha field with no closing quote
-		w.Write([]byte(`{"sha":"abc123`)) //nolint:errcheck
-	}))
+	srv := newResponseServer(t, http.StatusOK, `{"sha":"abc123`)
 	defer srv.Close()
 
 	setupGitHubAPI(t, srv, "tok")
@@ -168,49 +145,42 @@ func TestFindHeadSHA_TruncatedSHA(t *testing.T) {
 
 // TestAddAssignees_DoPostError verifies AddAssignees returns error on non-2xx response.
 func TestAddAssignees_DoPostError(t *testing.T) {
-	srv := newErrorResponseServer(t, http.StatusInternalServerError, "")
+	srv := setupGitHubAPIWithErrorServer(t, http.StatusInternalServerError, "")
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
-	if err := c.AddAssignees(1, []string{"user"}); err == nil {
-		t.Error("expected error from non-2xx response")
-	}
+	err := c.AddAssignees(1, []string{"user"})
+	assertHTTPError(t, err, "AddAssignees error response")
 }
 
 // TestRemoveAssignees_DoRequestError verifies RemoveAssignees returns error on DELETE failure.
 func TestRemoveAssignees_DoRequestError(t *testing.T) {
-	srv := newErrorResponseServer(t, http.StatusInternalServerError, "")
+	srv := setupGitHubAPIWithErrorServer(t, http.StatusInternalServerError, "")
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
-	if err := c.RemoveAssignees(1, []string{"user"}); err == nil {
-		t.Error("expected error from non-2xx DELETE response")
-	}
+	err := c.RemoveAssignees(1, []string{"user"})
+	assertHTTPError(t, err, "RemoveAssignees DELETE error")
 }
 
 // TestEditComment_DoPatchError verifies EditComment returns error on PATCH failure.
 func TestEditComment_DoPatchError(t *testing.T) {
-	srv := newErrorResponseServer(t, http.StatusInternalServerError, "")
+	srv := setupGitHubAPIWithErrorServer(t, http.StatusInternalServerError, "")
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
-	if err := c.EditComment(99, "new body"); err == nil {
-		t.Error("expected error from non-2xx PATCH response")
-	}
+	err := c.EditComment(99, "new body")
+	assertHTTPError(t, err, "EditComment PATCH error")
 }
 
 // TestCreatePR_DoPostError verifies CreatePR returns error on non-2xx POST response.
 func TestCreatePR_DoPostError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		w.Write([]byte(`{"message":"Validation Failed"}`)) //nolint:errcheck
-	}))
+	srv := newResponseServer(t, http.StatusUnprocessableEntity, `{"message":"Validation Failed"}`)
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
-	if _, err := c.CreatePR("title", "body", "feat", "main"); err == nil {
-		t.Error("expected error from non-2xx POST response")
-	}
+	_, err := c.CreatePR("title", "body", "feat", "main")
+	assertHTTPError(t, err, "CreatePR validation error")
 }
 
 // ── engagement.go gaps ────────────────────────────────────────────────────────
@@ -221,10 +191,10 @@ func TestEngageOnIssueProgress_NoStoredComment_Noop(t *testing.T) {
 	dir := newEngineDir(t)
 	// No comment stored → early return, no API call.
 	var called bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
-	}))
+	})
 	defer srv.Close()
 	t.Setenv("GITHUB_API_BASE", srv.URL)
 
@@ -240,16 +210,15 @@ func TestEngageOnIssueComplete_NoStoredComment_AddsNew(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "")
 
 	var addCalled bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
+	srv := newTestServer(t, newMethodConditionalHandler(t,
+		func(w http.ResponseWriter, r *http.Request) (int, string) {
 			addCalled = true
-			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(map[string]int{"id": 5555}) //nolint:errcheck
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`)) //nolint:errcheck
-	}))
+			return http.StatusCreated, mustMarshalJSON(map[string]int{"id": 5555})
+		},
+		func(w http.ResponseWriter, r *http.Request) (int, string) {
+			return http.StatusOK, "{}"
+		},
+	))
 	defer srv.Close()
 	t.Setenv("GITHUB_API_BASE", srv.URL)
 
@@ -268,16 +237,15 @@ func TestEngageOnIssueBlocked_NoStoredComment_AddsNew(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "")
 
 	var addCalled bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
+	srv := newTestServer(t, newMethodConditionalHandler(t,
+		func(w http.ResponseWriter, r *http.Request) (int, string) {
 			addCalled = true
-			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(map[string]int{"id": 7777}) //nolint:errcheck
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`)) //nolint:errcheck
-	}))
+			return http.StatusCreated, mustMarshalJSON(map[string]int{"id": 7777})
+		},
+		func(w http.ResponseWriter, r *http.Request) (int, string) {
+			return http.StatusOK, "{}"
+		},
+	))
 	defer srv.Close()
 	t.Setenv("GITHUB_API_BASE", srv.URL)
 
@@ -307,21 +275,22 @@ func TestEngageOnIssuePickup_AssignEngineError_Continues(t *testing.T) {
 
 	var sawAssignees bool
 	var sawComments bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/assignees"):
-			sawAssignees = true
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(`{"message":"boom"}`))
-		case strings.HasSuffix(r.URL.Path, "/comments"):
-			sawComments = true
-			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"id":101}`))
-		default:
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{}`))
-		}
-	}))
+	srv := newTestServer(t, newPathSuffixHandler(t, http.StatusOK, "{}",
+		pathSuffixMatcher{
+			suffix: "/assignees",
+			handler: func(w http.ResponseWriter, r *http.Request) (int, string) {
+				sawAssignees = true
+				return http.StatusInternalServerError, `{"message":"boom"}`
+			},
+		},
+		pathSuffixMatcher{
+			suffix: "/comments",
+			handler: func(w http.ResponseWriter, r *http.Request) (int, string) {
+				sawComments = true
+				return http.StatusCreated, `{"id":101}`
+			},
+		},
+	))
 	defer srv.Close()
 	t.Setenv("GITHUB_API_BASE", srv.URL)
 
@@ -341,19 +310,20 @@ func TestEngageOnIssuePickup_AssignEngineError_Continues(t *testing.T) {
 func TestEngageOnIssuePickup_AddCommentError_DoesNotStoreComment(t *testing.T) {
 	setupEngineEnv(t)
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/assignees"):
-			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{}`))
-		case strings.HasSuffix(r.URL.Path, "/comments"):
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(`{"message":"boom"}`))
-		default:
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{}`))
-		}
-	}))
+	srv := newTestServer(t, newPathSuffixHandler(t, http.StatusOK, "{}",
+		pathSuffixMatcher{
+			suffix: "/assignees",
+			handler: func(w http.ResponseWriter, r *http.Request) (int, string) {
+				return http.StatusCreated, "{}"
+			},
+		},
+		pathSuffixMatcher{
+			suffix: "/comments",
+			handler: func(w http.ResponseWriter, r *http.Request) (int, string) {
+				return http.StatusInternalServerError, `{"message":"boom"}`
+			},
+		},
+	))
 	defer srv.Close()
 	t.Setenv("GITHUB_API_BASE", srv.URL)
 

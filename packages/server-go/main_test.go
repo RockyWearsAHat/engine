@@ -498,6 +498,153 @@ func setupRunModeBaseDeps(t *testing.T) {
 	}
 }
 
+// setupRunModeLocalWithCommonMocks initializes a run() test for local mode (no VPN/remote)
+// with all common dependency mocks already set for testing typical flows.
+func setupRunModeLocalWithCommonMocks(t *testing.T) string {
+	t.Helper()
+	return setupRunModeLocalWithDiscordDisabled(t)
+}
+
+// setupRunModeWithHTTPMocks initializes HTTP mocking for run() tests that need to control
+// the HTTP handler registration and listen flow. Caller provides functions to set handlers.
+func setupRunModeWithHTTPMocks(t *testing.T,
+	onHandleFunc func(pattern string, handler func(http.ResponseWriter, *http.Request)) bool,
+	onHandle func(pattern string, handler http.Handler),
+	onListenAndServe func(addr string, handler http.Handler) error) {
+	t.Helper()
+	httpHandleFuncFn = func(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+		if onHandleFunc != nil {
+			onHandleFunc(pattern, handler)
+		}
+	}
+	httpHandleFn = func(pattern string, handler http.Handler) {
+		if onHandle != nil {
+			onHandle(pattern, handler)
+		}
+	}
+	httpListenAndServeFn = func(addr string, handler http.Handler) error {
+		if onListenAndServe != nil {
+			return onListenAndServe(addr, handler)
+		}
+		return nil
+	}
+}
+
+// setupDisabledDiscordAndDB sets up disabled Discord and no-op database initialization.
+// Used when tests need Discord disabled but don't require other elaborate mocking.
+func setupDisabledDiscordAndDB(t *testing.T) {
+	t.Helper()
+	dbInitFn = func(projectPath string) error { return nil }
+	loadDiscordConfigFn = func(projectPath string) (discord.Config, error) {
+		return discord.Config{Enabled: false}, nil
+	}
+	newDiscordServiceFn = func(cfg discord.Config, projectPath string) (discordRuntime, error) {
+		return &fakeDiscordService{}, nil
+	}
+}
+
+// setupRunModeLocalDefaultMocks initializes run() test for local mode with all default mocks:
+// withRunDepsReset, project path setup, disabled Discord, and no-op HTTP handlers.
+// This is the most common pattern for local mode tests.
+func setupRunModeLocalDefaultMocks(t *testing.T) string {
+	t.Helper()
+	projectPath := setupRunModeLocalWithDiscordDisabled(t)
+	httpHandleFuncFn = func(_ string, _ func(http.ResponseWriter, *http.Request)) {}
+	httpHandleFn = func(_ string, _ http.Handler) {}
+	httpListenAndServeFn = func(_ string, _ http.Handler) error { return nil }
+	return projectPath
+}
+
+// setupRunModeLocalWithDiscordDisabled initializes a run() test with local mode (no VPN/remote)
+// with Discord and database mocking disabled. Consolidates setupRunModeLocalTest + setupDisabledDiscordAndDB.
+func setupRunModeLocalWithDiscordDisabled(t *testing.T) string {
+	t.Helper()
+	projectPath := setupRunModeLocalTest(t)
+	setupDisabledDiscordAndDB(t)
+	return projectPath
+}
+
+// setupRunTriggerWithHubAndDiscordConfig sets up run() with database initialized,
+// hub created, and Discord enabled config loaded. Common for Discord integration tests.
+// Caller should set newDiscordServiceFn to control Discord service behavior.
+func setupRunTriggerWithHubAndDiscordConfig(t *testing.T) string {
+	t.Helper()
+	projectPath := setupRunModeLocalTest(t)
+	dbInitFn = func(path string) error { return db.Init(path) }
+	newHubFn = func(path string) *ws.Hub { return ws.NewHub(path) }
+	loadDiscordConfigFn = func(path string) (discord.Config, error) {
+		return discord.Config{Enabled: true, BotToken: "tok", GuildID: "g1"}, nil
+	}
+	setupRunModeWithHTTPMocks(t,
+		func(pattern string, handler func(http.ResponseWriter, *http.Request)) bool { return false },
+		func(pattern string, handler http.Handler) {},
+		func(addr string, handler http.Handler) error { return errors.New("test stop") })
+	return projectPath
+}
+
+// setupRunEventWatcherWithRepoMonitor initializes run() with repo monitor and events watcher
+// for testing GitHub event handling. Sets up all base dependencies plus repo monitoring.
+func setupRunEventWatcherWithRepoMonitor(t *testing.T) (string, *gh.RepoMonitor) {
+	t.Helper()
+	projectPath := setupRunModeLocalWithDiscordDisabled(t)
+	var monitor *gh.RepoMonitor
+	newRepoMonitorFn = func() *gh.RepoMonitor {
+		monitor = gh.NewRepoMonitor()
+		return monitor
+	}
+	repoMonitorStartFn = func(rm *gh.RepoMonitor) {}
+	httpHandleFuncFn = func(pattern string, handler func(http.ResponseWriter, *http.Request)) {}
+	httpHandleFn = func(pattern string, handler http.Handler) {}
+	httpListenAndServeFn = func(addr string, handler http.Handler) error { return errors.New("stop") }
+	runAsyncFn = func(fn func()) { fn() }
+	triggerScaffoldSessionFn = func(string, json.RawMessage) {}
+	triggerCIAnalysisSessionFn = func(string, json.RawMessage) {}
+	triggerIssueSessionFn = func(string, json.RawMessage) {}
+	triggerIssueOpenedSessionFn = func(string, json.RawMessage) {}
+	return projectPath, monitor
+}
+
+// setupRunTriggerWithAIEnv initializes run() with AI environment for tests that need model config.
+func setupRunTriggerWithAIEnv(t *testing.T) string {
+	t.Helper()
+	t.Setenv("ENGINE_MODEL_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "")
+	return t.TempDir()
+}
+
+// setupRunTriggerWithEventsWatcher sets up run() with events watcher configuration.
+// Returns projectPath and a marker to track if watcher start was called.
+func setupRunTriggerWithEventsWatcher(t *testing.T) string {
+	t.Helper()
+	projectPath := setupRunModeLocalWithDiscordDisabled(t)
+	httpHandleFuncFn = func(_ string, _ func(http.ResponseWriter, *http.Request)) {}
+	httpHandleFn = func(_ string, _ http.Handler) {}
+	httpListenAndServeFn = func(_ string, _ http.Handler) error { return errors.New("stop") }
+	fakeWatcher := gh.NewEventsWatcher("fake-token", gh.NewRepoMonitor())
+	newEventsWatcherFn = func(_ *gh.RepoMonitor) *gh.EventsWatcher { return fakeWatcher }
+	eventsWatcherStartFn = func(_ *gh.EventsWatcher, _ context.Context) {}
+	return projectPath
+}
+
+// setupTriggerWithAIMock initializes a trigger test with database and AI mock server.
+func setupTriggerWithAIMock(t *testing.T) string {
+	t.Helper()
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	withAIMockServer(t)
+	return projectPath
+}
+
+// callAllTriggerFunctions invokes all four trigger session types with the given payloads.
+// Useful for tests that validate error handling or side effects across all trigger types.
+func callAllTriggerFunctions(projectPath string,
+	scaffoldPayload, ciPayload, issuePayload, issueOpenedPayload json.RawMessage) {
+	triggerScaffoldSession(projectPath, scaffoldPayload)
+	triggerCIAnalysisSession(projectPath, ciPayload)
+	triggerIssueSession(projectPath, issuePayload)
+	triggerIssueOpenedSession(projectPath, issueOpenedPayload)
+}
+
 // withAIChatMocked temporarily replaces aiChatFn with the given mock for test isolation.
 // Automatically restores the original via t.Cleanup.
 func withAIChatMocked(t *testing.T, mockFn func(*ai.ChatContext, string)) {
@@ -1008,25 +1155,16 @@ func TestRun_DiscordConfigError(t *testing.T) {
 }
 
 func TestRun_LocalMode_ListenError(t *testing.T) {
-	withRunDepsReset(t)
-	setupRunModeLocalTest(t)
+	setupRunModeLocalDefaultMocks(t)
 	t.Setenv("PORT", "31337")
 
 	listenErr := errors.New("listen failed")
 	var healthHandler func(http.ResponseWriter, *http.Request)
-	dbInitFn = func(projectPath string) error { return nil }
-	loadDiscordConfigFn = func(projectPath string) (discord.Config, error) {
-		return discord.Config{Enabled: false}, nil
-	}
-	newDiscordServiceFn = func(cfg discord.Config, projectPath string) (discordRuntime, error) {
-		return &fakeDiscordService{}, nil
-	}
 	httpHandleFuncFn = func(pattern string, handler func(http.ResponseWriter, *http.Request)) {
 		if pattern == "/health" {
 			healthHandler = handler
 		}
 	}
-	httpHandleFn = func(pattern string, handler http.Handler) {}
 	httpListenAndServeFn = func(addr string, handler http.Handler) error {
 		return listenErr
 	}
@@ -1059,13 +1197,7 @@ func TestRun_VPNMode_TunnelInitError(t *testing.T) {
 	setupRunModeLocalTest(t)
 	t.Setenv("ENGINE_VPN", "1")
 
-	dbInitFn = func(projectPath string) error { return nil }
-	loadDiscordConfigFn = func(projectPath string) (discord.Config, error) {
-		return discord.Config{Enabled: false}, nil
-	}
-	newDiscordServiceFn = func(cfg discord.Config, projectPath string) (discordRuntime, error) {
-		return &fakeDiscordService{}, nil
-	}
+	setupDisabledDiscordAndDB(t)
 	newVPNTunnelFn = func(cfg vpn.Config) (*vpn.Tunnel, error) {
 		return nil, errors.New("vpn init failed")
 	}
@@ -1081,13 +1213,7 @@ func TestRun_RemoteMode_ServerInitError(t *testing.T) {
 	setupRunModeLocalTest(t)
 	t.Setenv("ENGINE_REMOTE", "1")
 
-	dbInitFn = func(projectPath string) error { return nil }
-	loadDiscordConfigFn = func(projectPath string) (discord.Config, error) {
-		return discord.Config{Enabled: false}, nil
-	}
-	newDiscordServiceFn = func(cfg discord.Config, projectPath string) (discordRuntime, error) {
-		return &fakeDiscordService{}, nil
-	}
+	setupDisabledDiscordAndDB(t)
 	newRemoteServerFn = func(cfg remote.Config, wsHandler http.HandlerFunc) (*remote.Server, error) {
 		return nil, errors.New("remote init failed")
 	}
@@ -1099,21 +1225,12 @@ func TestRun_RemoteMode_ServerInitError(t *testing.T) {
 }
 
 func TestRun_VPNMode_ListenErrorAfterRegister(t *testing.T) {
-	withRunDepsReset(t)
-	projectPath := t.TempDir()
-	t.Setenv("PROJECT_PATH", projectPath)
+	setupRunModeLocalDefaultMocks(t)
 	t.Setenv("ENGINE_VPN", "1")
 	t.Setenv("ENGINE_REMOTE", "")
 
 	listenErr := errors.New("vpn listen failed")
 	registered := false
-	dbInitFn = func(projectPath string) error { return nil }
-	loadDiscordConfigFn = func(projectPath string) (discord.Config, error) {
-		return discord.Config{Enabled: false}, nil
-	}
-	newDiscordServiceFn = func(cfg discord.Config, projectPath string) (discordRuntime, error) {
-		return &fakeDiscordService{}, nil
-	}
 	newVPNTunnelFn = func(cfg vpn.Config) (*vpn.Tunnel, error) {
 		return &vpn.Tunnel{}, nil
 	}
@@ -1142,13 +1259,7 @@ func TestRun_RemoteMode_ListenErrorAfterPairing(t *testing.T) {
 
 	listenErr := errors.New("remote listen failed")
 	pairingSet := false
-	dbInitFn = func(projectPath string) error { return nil }
-	loadDiscordConfigFn = func(projectPath string) (discord.Config, error) {
-		return discord.Config{Enabled: false}, nil
-	}
-	newDiscordServiceFn = func(cfg discord.Config, projectPath string) (discordRuntime, error) {
-		return &fakeDiscordService{}, nil
-	}
+	setupDisabledDiscordAndDB(t)
 	newRemoteServerFn = func(cfg remote.Config, wsHandler http.HandlerFunc) (*remote.Server, error) {
 		return &remote.Server{Pairing: remote.NewPairingManager()}, nil
 	}
@@ -1232,9 +1343,10 @@ func TestRun_DiscordEnabled_StartError_NonFatal(t *testing.T) {
 		return &fakeDiscordServiceStartErr{err: errors.New("discord open: fake gateway error")}, nil
 	}
 	setDiscordBridgeFn = func(s ws.DiscordBridge) { bridgeSet = true }
-	httpHandleFuncFn = func(pattern string, handler func(http.ResponseWriter, *http.Request)) {}
-	httpHandleFn = func(pattern string, handler http.Handler) {}
-	httpListenAndServeFn = func(addr string, handler http.Handler) error { return listenErr }
+	setupRunModeWithHTTPMocks(t,
+		func(pattern string, handler func(http.ResponseWriter, *http.Request)) bool { return false },
+		func(pattern string, handler http.Handler) {},
+		func(addr string, handler http.Handler) error { return listenErr })
 
 	err := run()
 	if !errors.Is(err, listenErr) {
@@ -1263,9 +1375,10 @@ func TestRun_DiscordEnabled_ServiceInitError_NonFatal(t *testing.T) {
 		return nil, errors.New("init failed")
 	}
 	setDiscordBridgeFn = func(s ws.DiscordBridge) { bridgeSet = true }
-	httpHandleFuncFn = func(pattern string, handler func(http.ResponseWriter, *http.Request)) {}
-	httpHandleFn = func(pattern string, handler http.Handler) {}
-	httpListenAndServeFn = func(addr string, handler http.Handler) error { return listenErr }
+	setupRunModeWithHTTPMocks(t,
+		func(pattern string, handler func(http.ResponseWriter, *http.Request)) bool { return false },
+		func(pattern string, handler http.Handler) {},
+		func(addr string, handler http.Handler) error { return listenErr })
 
 	err := run()
 	if !errors.Is(err, listenErr) {
@@ -1331,11 +1444,10 @@ func TestRun_DiscordEnabled_Success(t *testing.T) {
 		return &fakeDiscordService{}, nil
 	}
 	setDiscordBridgeFn = func(s ws.DiscordBridge) { bridgeSet = true }
-	httpHandleFuncFn = func(_ string, _ func(http.ResponseWriter, *http.Request)) {}
-	httpHandleFn = func(_ string, _ http.Handler) {}
-	httpListenAndServeFn = func(addr string, handler http.Handler) error {
-		return errors.New("test stop")
-	}
+	setupRunModeWithHTTPMocks(t,
+		func(pattern string, handler func(http.ResponseWriter, *http.Request)) bool { return false },
+		func(pattern string, handler http.Handler) {},
+		func(addr string, handler http.Handler) error { return errors.New("test stop") })
 
 	_ = run()
 
@@ -1406,10 +1518,7 @@ func TestTriggerScaffoldSession_OnChunkCalled(t *testing.T) {
 }
 
 func TestTriggerCIAnalysisSession_OnChunkCalled(t *testing.T) {
-	projectPath := t.TempDir()
-	setupTestDB(t, projectPath)
-	withAIMockServer(t)
-
+	projectPath := setupTriggerWithAIMock(t)
 	triggerCIAnalysisSession(projectPath, makeCIPayload())
 	assertSessionsCreated(t, projectPath)
 }
@@ -1438,10 +1547,7 @@ func TestTriggerSessions_DBCreateAndSaveErrorsCovered(t *testing.T) {
 	}
 	prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
 
-	triggerScaffoldSession(projectPath, makeScaffoldPayload())
-	triggerCIAnalysisSession(projectPath, makeCIPayload())
-	triggerIssueSession(projectPath, makeIssueCommentPayload())
-	triggerIssueOpenedSession(projectPath, makeIssueOpenedPayload())
+	callAllTriggerFunctions(projectPath, makeScaffoldPayload(), makeCIPayload(), makeIssueCommentPayload(), makeIssueOpenedPayload())
 }
 
 func TestTriggerSessions_SaveMessageErrorBranchesCovered(t *testing.T) {
@@ -1457,10 +1563,7 @@ func TestTriggerSessions_SaveMessageErrorBranchesCovered(t *testing.T) {
 	}
 	prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
 
-	triggerScaffoldSession(projectPath, makeScaffoldPayload())
-	triggerCIAnalysisSession(projectPath, makeCIPayload())
-	triggerIssueSession(projectPath, makeIssueCommentPayload())
-	triggerIssueOpenedSession(projectPath, makeIssueOpenedPayload())
+	callAllTriggerFunctions(projectPath, makeScaffoldPayload(), makeCIPayload(), makeIssueCommentPayload(), makeIssueOpenedPayload())
 }
 
 func TestTriggerScaffoldSession_NoOpFirstPass_RetriesThenReportsNoop(t *testing.T) {

@@ -10,22 +10,22 @@ import (
 	"github.com/engine/server/db"
 )
 
+// setupContextProfileTest creates a temp directory and initializes the context DB.
+// Single canonical entry point for all context profile tests; replaces setupContextDBTestProject and initContextTestDB.
+func setupContextProfileTest(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	setupTestDBWithStateDir(t, dir)
+	return dir
+}
+
 func initContextProfileTestDB(t *testing.T, projectPath string) {
 	t.Helper()
 	setupTestDBWithStateDir(t, projectPath)
 }
 
-// initContextTestDB is a shorthand for tests that need a tempdir with DB initialized.
-func initContextTestDB(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	initContextProfileTestDB(t, dir)
-	return dir
-}
-
 func TestResolveProjectDirection_UsesExisting(t *testing.T) {
-	dir := t.TempDir()
-	initContextProfileTestDB(t, dir)
+	dir := setupContextProfileTest(t)
 	if err := db.UpsertProjectDirection(dir, "existing direction"); err != nil {
 		t.Fatalf("UpsertProjectDirection: %v", err)
 	}
@@ -37,8 +37,7 @@ func TestResolveProjectDirection_UsesExisting(t *testing.T) {
 }
 
 func TestApplyFirstTurnAutonomyContext_SendsNoticeAndCachesProfile(t *testing.T) {
-	dir := t.TempDir()
-	initContextProfileTestDB(t, dir)
+	dir := setupContextProfileTest(t)
 
 	var notices []string
 	discordNotices := 0
@@ -81,8 +80,7 @@ func TestApplyFirstTurnAutonomyContext_SendsNoticeAndCachesProfile(t *testing.T)
 }
 
 func TestApplyFirstTurnAutonomyContext_StyleGiven_SkipsNotice(t *testing.T) {
-	dir := t.TempDir()
-	initContextProfileTestDB(t, dir)
+	dir := setupContextProfileTest(t)
 
 	noticeCount := 0
 	ctx := &ChatContext{
@@ -99,8 +97,7 @@ func TestApplyFirstTurnAutonomyContext_StyleGiven_SkipsNotice(t *testing.T) {
 }
 
 func TestApplyFirstTurnAutonomyContext_NotFirstMessage_Noops(t *testing.T) {
-	dir := t.TempDir()
-	initContextProfileTestDB(t, dir)
+	dir := setupContextProfileTest(t)
 
 	noticeCount := 0
 	ctx := &ChatContext{
@@ -122,8 +119,7 @@ func TestEnsureProjectProfileCache_EmptyInputs_NoPanic(t *testing.T) {
 }
 
 func TestLoadProjectProfile_FromDB(t *testing.T) {
-	dir := t.TempDir()
-	initContextProfileTestDB(t, dir)
+	dir := setupContextProfileTest(t)
 
 	raw := `{"projectPath":"` + dir + `","type":"web-app","doneDefinition":["home page loads"],"deployTarget":"local","verification":{"usesPlaywright":true,"startCmd":"pnpm dev","checkURL":"http://localhost:5173","port":5173,"checkCmds":[]},"liveCheckCmd":"curl -sf http://localhost:5173","workingBehaviors":["User can load homepage"]}`
 	if err := db.UpsertProjectProfile(dir, raw); err != nil {
@@ -140,8 +136,7 @@ func TestLoadProjectProfile_FromDB(t *testing.T) {
 }
 
 func TestEnsureProjectProfileCache_ExplicitPublishIntentStored(t *testing.T) {
-	dir := t.TempDir()
-	initContextProfileTestDB(t, dir)
+	dir := setupContextProfileTest(t)
 
 	ensureProjectProfileCache(dir, "Deploy this API to Docker and publish release", "")
 
@@ -158,8 +153,7 @@ func TestEnsureProjectProfileCache_ExplicitPublishIntentStored(t *testing.T) {
 }
 
 func TestApplyFirstTurnAutonomyContext_StyleNoticeDisabledInPolicy(t *testing.T) {
-	dir := t.TempDir()
-	initContextProfileTestDB(t, dir)
+	dir := setupContextProfileTest(t)
 
 	engineDir := filepath.Join(dir, ".engine")
 	if err := os.MkdirAll(engineDir, 0o755); err != nil {
@@ -198,8 +192,7 @@ func TestApplyFirstTurnAutonomyContext_StyleNoticeDisabledInPolicy(t *testing.T)
 }
 
 func TestLoadProjectProfile_InvalidJSON_ReturnsNil(t *testing.T) {
-	dir := t.TempDir()
-	initContextProfileTestDB(t, dir)
+	dir := setupContextProfileTest(t)
 
 	if err := db.UpsertProjectProfile(dir, "not-json"); err != nil {
 		t.Fatalf("UpsertProjectProfile: %v", err)
@@ -212,8 +205,7 @@ func TestLoadProjectProfile_InvalidJSON_ReturnsNil(t *testing.T) {
 }
 
 func TestLoadProjectProfile_Missing_ReturnsNil(t *testing.T) {
-	dir := t.TempDir()
-	initContextProfileTestDB(t, dir)
+	dir := setupContextProfileTest(t)
 
 	profile := loadProjectProfile(dir)
 	if profile != nil {

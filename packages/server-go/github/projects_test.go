@@ -110,20 +110,10 @@ func TestGraphqlDo_ErrorPaths(t *testing.T) {
 // TestGetProjectV2ID_FallsBackToOrg verifies project lookup falls back from user to organization scope.
 // Tests behavioral side effect (HTTP POST to GitHub GraphQL API).
 func TestGetProjectV2ID_FallsBackToOrg(t *testing.T) {
-	setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Query string `json:"query"`
-		}
-		if err := decodeGraphQLRequest(r, &req); err != nil {
-			t.Fatalf("decode graphql request: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(req.Query, "user(login") {
-			io.WriteString(w, `{"errors":[{"message":"user not found"}]}`)
-			return
-		}
-		io.WriteString(w, `{"data":{"organization":{"projectV2":{"id":"P_ORG"}}}}`)
-	}))
+	setupGraphQLServer(t, newGraphQLHandlerWithQueries(t,
+		graphQLMatch("user(login", `{"errors":[{"message":"user not found"}]}`),
+		graphQLMatch("organization", `{"data":{"organization":{"projectV2":{"id":"P_ORG"}}}}`),
+	))
 
 	id, err := getProjectV2ID("tok", "octo", 3)
 	if err != nil {
@@ -165,26 +155,11 @@ func TestAddIssueToEngineProject_BestEffortWhenNotConfigured(t *testing.T) {
 // Tests behavioral side effect (HTTP POST to GitHub GraphQL mutations).
 func TestAddIssueToEngineProject_Success(t *testing.T) {
 	setupProjectEnv(t, 3, "octo", "tok", "engine-bot")
-	setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Query string `json:"query"`
-		}
-		if err := decodeGraphQLRequest(r, &req); err != nil {
-			t.Fatalf("decode add-project request: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.Contains(req.Query, "projectV2(number"):
-			io.WriteString(w, `{"data":{"user":{"projectV2":{"id":"P1"}}}}`)
-		case strings.Contains(req.Query, "issue(number"):
-			io.WriteString(w, `{"data":{"repository":{"issue":{"id":"I1"}}}}`)
-		case strings.Contains(req.Query, "addProjectV2ItemById"):
-			io.WriteString(w, `{"data":{"addProjectV2ItemById":{"item":{"id":"ITEM1"}}}}`)
-		default:
-			w.WriteHeader(http.StatusBadRequest)
-			io.WriteString(w, `{"errors":[{"message":"unexpected query"}]}`)
-		}
-	}))
+	setupGraphQLServer(t, newGraphQLHandlerWithQueries(t,
+		graphQLMatch("projectV2(number", `{"data":{"user":{"projectV2":{"id":"P1"}}}}`),
+		graphQLMatch("issue(number", `{"data":{"repository":{"issue":{"id":"I1"}}}}`),
+		graphQLMatch("addProjectV2ItemById", `{"data":{"addProjectV2ItemById":{"item":{"id":"ITEM1"}}}}`),
+	))
 
 	itemID, err := AddIssueToEngineProject("owner", "repo", 7)
 	if err != nil {
@@ -199,28 +174,18 @@ func TestUpdateProjectItemStatus_SuccessAndSkip(t *testing.T) {
 	setupProjectEnv(t, 9, "octo", "tok", "engine-bot")
 
 	calls := 0
-	setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		var req struct {
-			Query string `json:"query"`
+	counter := func(m graphQLQueryMatcher) graphQLQueryMatcher {
+		return func(query string) (bool, string) {
+			calls++
+			return m(query)
 		}
-		if err := decodeGraphQLRequest(r, &req); err != nil {
-			t.Fatalf("decode update-status request: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
+	}
 
-		switch {
-		case strings.Contains(req.Query, "projectV2(number"):
-			io.WriteString(w, `{"data":{"user":{"projectV2":{"id":"P1"}}}}`)
-		case strings.Contains(req.Query, "fields(first"):
-			io.WriteString(w, `{"data":{"node":{"fields":{"nodes":[{"id":"F1","name":"Status","options":[{"id":"OPT1","name":"Done"},{"id":"OPT2","name":"In Progress"}]}]}}}}`)
-		case strings.Contains(req.Query, "updateProjectV2ItemFieldValue"):
-			io.WriteString(w, `{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"ITEM1"}}}}`)
-		default:
-			w.WriteHeader(http.StatusBadRequest)
-			io.WriteString(w, `{"errors":[{"message":"unexpected query"}]}`)
-		}
-	}))
+	setupGraphQLServer(t, newGraphQLHandlerWithQueries(t,
+		counter(graphQLMatch("projectV2(number", `{"data":{"user":{"projectV2":{"id":"P1"}}}}`)),
+		counter(graphQLMatch("fields(first", `{"data":{"node":{"fields":{"nodes":[{"id":"F1","name":"Status","options":[{"id":"OPT1","name":"Done"},{"id":"OPT2","name":"In Progress"}]}]}}}}`)),
+		counter(graphQLMatch("updateProjectV2ItemFieldValue", `{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"ITEM1"}}}}`)),
+	))
 
 	if err := UpdateProjectItemStatus("owner", "ITEM1", "Done"); err != nil {
 		t.Fatalf("UpdateProjectItemStatus: %v", err)
@@ -238,24 +203,11 @@ func TestUpdateProjectItemStatus_SuccessAndSkip(t *testing.T) {
 func TestUpdateProjectItemStatus_FieldOrOptionMissingSkips(t *testing.T) {
 	setupProjectEnv(t, 9, "octo", "tok", "")
 
-	setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Query string `json:"query"`
-		}
-		if err := decodeGraphQLRequest(r, &req); err != nil {
-			t.Fatalf("decode field/option request: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(req.Query, "projectV2(number") {
-			io.WriteString(w, `{"data":{"user":{"projectV2":{"id":"P1"}}}}`)
-			return
-		}
-		if strings.Contains(req.Query, "fields(first") {
-			io.WriteString(w, `{"data":{"node":{"fields":{"nodes":[{"id":"X","name":"Priority","options":[{"id":"P1","name":"High"}]}]}}}}`)
-			return
-		}
-		io.WriteString(w, `{"data":{}}`)
-	}))
+	setupGraphQLServer(t, newGraphQLHandlerWithQueries(t,
+		graphQLMatch("projectV2(number", `{"data":{"user":{"projectV2":{"id":"P1"}}}}`),
+		graphQLMatch("fields(first", `{"data":{"node":{"fields":{"nodes":[{"id":"X","name":"Priority","options":[{"id":"P1","name":"High"}]}]}}}}`),
+		graphQLMatchFallthrough(`{"data":{}}`),
+	))
 
 	if err := UpdateProjectItemStatus("owner", "ITEM1", "Done"); err != nil {
 		t.Fatalf("expected nil when status option missing, got %v", err)
@@ -264,10 +216,16 @@ func TestUpdateProjectItemStatus_FieldOrOptionMissingSkips(t *testing.T) {
 
 func TestGraphqlDo_StatusAndParseErrors(t *testing.T) {
 	t.Run("non-2xx status", func(t *testing.T) {
-		setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-			io.WriteString(w, `boom`)
-		}))
+		t.Setenv("GITHUB_API_BASE", "http://127.0.0.1:1")
+		oldHTTP := eventsHTTPClient
+		eventsHTTPClient = &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       io.NopCloser(strings.NewReader(`boom`)),
+				Header:     make(http.Header),
+			}, nil
+		})}
+		t.Cleanup(func() { eventsHTTPClient = oldHTTP })
 
 		if err := graphqlDo("tok", "query { ping }", nil, nil); err == nil {
 			t.Fatal("expected status error")
@@ -275,10 +233,9 @@ func TestGraphqlDo_StatusAndParseErrors(t *testing.T) {
 	})
 
 	t.Run("invalid json response", func(t *testing.T) {
-		setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			io.WriteString(w, `not-json`)
-		}))
+		setupGraphQLServer(t, newGraphQLHandlerWithQueries(t,
+			graphQLMatchFallthrough(`not-json`),
+		))
 
 		if err := graphqlDo("tok", "query { ping }", nil, nil); err == nil {
 			t.Fatal("expected parse error")
@@ -287,10 +244,9 @@ func TestGraphqlDo_StatusAndParseErrors(t *testing.T) {
 }
 
 func TestGetProjectV2ID_BothLookupsFail(t *testing.T) {
-	setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"errors":[{"message":"nope"}]}`)
-	}))
+	setupGraphQLServer(t, newGraphQLHandlerWithQueries(t,
+		graphQLMatchFallthrough(`{"errors":[{"message":"nope"}]}`),
+	))
 
 	if _, err := getProjectV2ID("tok", "octo", 3); err == nil {
 		t.Fatal("expected both-lookups-failed error")
@@ -298,10 +254,9 @@ func TestGetProjectV2ID_BothLookupsFail(t *testing.T) {
 }
 
 func TestGetProjectV2ID_NotFound(t *testing.T) {
-	setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"data":{"user":{"projectV2":{"id":""}}}}`)
-	}))
+	setupGraphQLServer(t, newGraphQLHandlerWithQueries(t,
+		graphQLMatchFallthrough(`{"data":{"user":{"projectV2":{"id":""}}}}`),
+	))
 
 	if _, err := getProjectV2ID("tok", "octo", 3); err == nil {
 		t.Fatal("expected not found error")
@@ -309,10 +264,19 @@ func TestGetProjectV2ID_NotFound(t *testing.T) {
 }
 
 func TestGetIssueNodeID_GraphqlError(t *testing.T) {
-	setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		io.WriteString(w, `boom`)
-	}))
+	setupGraphQLServer(t, newGraphQLHandlerWithQueries(t,
+		graphQLMatchFallthrough(`boom`),
+	))
+	// Override to return error status
+	oldHTTP := eventsHTTPClient
+	t.Cleanup(func() { eventsHTTPClient = oldHTTP })
+	eventsHTTPClient = &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Body:       io.NopCloser(strings.NewReader(`boom`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
 
 	if _, err := getIssueNodeID("tok", "owner", "repo", 1); err == nil {
 		t.Fatal("expected graphql error")
@@ -322,10 +286,9 @@ func TestGetIssueNodeID_GraphqlError(t *testing.T) {
 func TestAddIssueToEngineProject_ErrorBranches(t *testing.T) {
 	t.Run("project lookup error", func(t *testing.T) {
 		setupProjectEnv(t, 3, "octo", "tok", "")
-		setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			io.WriteString(w, `{"errors":[{"message":"no project"}]}`)
-		}))
+		setupGraphQLServer(t, newGraphQLHandlerWithQueries(t,
+			graphQLMatchFallthrough(`{"errors":[{"message":"no project"}]}`),
+		))
 
 		if _, err := AddIssueToEngineProject("owner", "repo", 1); err == nil {
 			t.Fatal("expected project lookup error")
@@ -334,23 +297,11 @@ func TestAddIssueToEngineProject_ErrorBranches(t *testing.T) {
 
 	t.Run("issue lookup error", func(t *testing.T) {
 		setupProjectEnv(t, 3, "octo", "tok", "")
-		setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var req struct {
-				Query string `json:"query"`
-			}
-			if err := decodeGraphQLRequest(r, &req); err != nil {
-				t.Fatalf("decode issue lookup request: %v", err)
-			}
-			w.Header().Set("Content-Type", "application/json")
-			switch {
-			case strings.Contains(req.Query, "projectV2(number"):
-				io.WriteString(w, `{"data":{"user":{"projectV2":{"id":"P1"}}}}`)
-			case strings.Contains(req.Query, "issue(number"):
-				io.WriteString(w, `{"errors":[{"message":"no issue"}]}`)
-			default:
-				io.WriteString(w, `{"data":{}}`)
-			}
-		}))
+		setupGraphQLServer(t, newGraphQLHandlerWithQueries(t,
+			graphQLMatch("projectV2(number", `{"data":{"user":{"projectV2":{"id":"P1"}}}}`),
+			graphQLMatch("issue(number", `{"errors":[{"message":"no issue"}]}`),
+			graphQLMatchFallthrough(`{"data":{}}`),
+		))
 
 		if _, err := AddIssueToEngineProject("owner", "repo", 1); err == nil {
 			t.Fatal("expected issue lookup error")
@@ -359,25 +310,12 @@ func TestAddIssueToEngineProject_ErrorBranches(t *testing.T) {
 
 	t.Run("mutation error", func(t *testing.T) {
 		setupProjectEnv(t, 3, "octo", "tok", "")
-		setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var req struct {
-				Query string `json:"query"`
-			}
-			if err := decodeGraphQLRequest(r, &req); err != nil {
-				t.Fatalf("decode mutation request: %v", err)
-			}
-			w.Header().Set("Content-Type", "application/json")
-			switch {
-			case strings.Contains(req.Query, "projectV2(number"):
-				io.WriteString(w, `{"data":{"user":{"projectV2":{"id":"P1"}}}}`)
-			case strings.Contains(req.Query, "issue(number"):
-				io.WriteString(w, `{"data":{"repository":{"issue":{"id":"I1"}}}}`)
-			case strings.Contains(req.Query, "addProjectV2ItemById"):
-				io.WriteString(w, `{"errors":[{"message":"mutation fail"}]}`)
-			default:
-				io.WriteString(w, `{"data":{}}`)
-			}
-		}))
+		setupGraphQLServer(t, newGraphQLHandlerWithQueries(t,
+			graphQLMatch("projectV2(number", `{"data":{"user":{"projectV2":{"id":"P1"}}}}`),
+			graphQLMatch("issue(number", `{"data":{"repository":{"issue":{"id":"I1"}}}}`),
+			graphQLMatch("addProjectV2ItemById", `{"errors":[{"message":"mutation fail"}]}`),
+			graphQLMatchFallthrough(`{"data":{}}`),
+		))
 
 		if _, err := AddIssueToEngineProject("owner", "repo", 1); err == nil {
 			t.Fatal("expected mutation error")
@@ -396,10 +334,9 @@ func TestUpdateProjectItemStatus_EarlyAndErrorPaths(t *testing.T) {
 
 	t.Run("project lookup error", func(t *testing.T) {
 		setupProjectEnv(t, 9, "octo", "tok", "")
-		setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			io.WriteString(w, `{"errors":[{"message":"no project"}]}`)
-		}))
+		setupGraphQLServer(t, newGraphQLHandlerWithQueries(t,
+			graphQLMatchFallthrough(`{"errors":[{"message":"no project"}]}`),
+		))
 
 		if err := UpdateProjectItemStatus("owner", "ITEM1", "Done"); err == nil {
 			t.Fatal("expected project lookup error")
@@ -408,20 +345,10 @@ func TestUpdateProjectItemStatus_EarlyAndErrorPaths(t *testing.T) {
 
 	t.Run("field list error", func(t *testing.T) {
 		setupProjectEnv(t, 9, "octo", "tok", "")
-		setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var req struct {
-				Query string `json:"query"`
-			}
-			if err := decodeGraphQLRequest(r, &req); err != nil {
-				t.Fatalf("decode field list error request: %v", err)
-			}
-			w.Header().Set("Content-Type", "application/json")
-			if strings.Contains(req.Query, "projectV2(number") {
-				io.WriteString(w, `{"data":{"user":{"projectV2":{"id":"P1"}}}}`)
-				return
-			}
-			io.WriteString(w, `{"errors":[{"message":"field query failed"}]}`)
-		}))
+		setupGraphQLServer(t, newGraphQLHandlerWithQueries(t,
+			graphQLMatch("projectV2(number", `{"data":{"user":{"projectV2":{"id":"P1"}}}}`),
+			graphQLMatchFallthrough(`{"errors":[{"message":"field query failed"}]}`),
+		))
 
 		if err := UpdateProjectItemStatus("owner", "ITEM1", "Done"); err == nil {
 			t.Fatal("expected field list error")

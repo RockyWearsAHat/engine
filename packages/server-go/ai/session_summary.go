@@ -255,26 +255,46 @@ func BuildInitialProjectDirection(projectPath string) string {
 	return strings.Join(sections, "\n")
 }
 
+func stageLoadProjectDirection(projectPath string) string {
+	existing, err := db.GetProjectDirection(projectPath)
+	if err == nil && strings.TrimSpace(existing) != "" {
+		return existing
+	}
+	return ""
+}
+
+func stageUpsertProjectDirection(projectPath string, direction string) {
+	if strings.TrimSpace(direction) != "" {
+		db.UpsertProjectDirection(projectPath, direction) //nolint:errcheck
+	}
+}
+
+// EnsureProjectDirection loads the project direction from the database or builds it fresh.
+// If a non-empty direction exists, returns it.
+// If missing or empty, builds the initial direction, persists it, and returns it.
 func EnsureProjectDirection(projectPath string) string {
 	if projectPath == "" {
 		return ""
 	}
-	if existing, err := db.GetProjectDirection(projectPath); err == nil && strings.TrimSpace(existing) != "" {
+	existing := stageLoadProjectDirection(projectPath)
+	if existing != "" {
 		return existing
 	}
 	direction := BuildInitialProjectDirection(projectPath)
-	if strings.TrimSpace(direction) != "" {
-		db.UpsertProjectDirection(projectPath, direction) //nolint:errcheck
-	}
+	stageUpsertProjectDirection(projectPath, direction)
 	return direction
 }
 
-func BuildInitialSessionSummary(projectPath string) string {
+func stageBuildInitialSummary(projectPath string) string {
 	direction := truncateSummary(BuildWorkspacePromptContext(projectPath), 300)
 	if direction == "" {
 		return ""
 	}
 	return truncateSummary("Project context: "+direction, sessionSummaryMaxChars)
+}
+
+func BuildInitialSessionSummary(projectPath string) string {
+	return stageBuildInitialSummary(projectPath)
 }
 
 func BuildWorkspacePromptContext(projectPath string) string {

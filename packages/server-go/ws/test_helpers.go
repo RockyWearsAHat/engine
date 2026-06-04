@@ -593,7 +593,32 @@ func readChatChunksFinal(t *testing.T, conn *websocket.Conn) []map[string]any {
 	return chunks
 }
 
+// testDiscordFeatureFlow consolidates: setup bridge → project → connection → send message → receive response.
+// Optionally verify response code if expectedErrorCode is non-empty.
+func testDiscordFeatureFlow(t *testing.T, bridge DiscordBridge, payload map[string]any, expectedResponseType, expectedErrorCode string) (string, *websocket.Conn, func(), map[string]any) {
+	t.Helper()
+	defer setupDiscordBridgeScopedTest(t, bridge)()
+	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
+	response := sendAndReceive(t, conn, payload, expectedResponseType)
+	if expectedErrorCode != "" {
+		assertErrorCode(t, response, expectedErrorCode)
+	}
+	return projectDir, conn, cleanup, response
+}
+
 // ─── Authentication and connection helpers ──────────────────────────────────
+
+// testAuthConnectionRejectsWithoutToken verifies websocket rejects connections without valid auth token.
+// Sets up project and attempts connection with empty token.
+func testAuthConnectionRejectsWithoutToken(t *testing.T, tokenValue string) {
+	t.Helper()
+	projectDir := setupWSProject(t)
+	t.Setenv("ENGINE_LOCAL_WS_TOKEN", tokenValue)
+	_, err := openWSTestConnectionWithToken(t, projectDir, "")
+	if err == nil {
+		t.Fatal("expected connection rejection without token")
+	}
+}
 
 // openWSAuthenticatedConnection sets up a websocket connection with auth token and validates response.
 // Fails test if connection succeeds when it shouldn't or fails when it should succeed.
@@ -636,4 +661,90 @@ func openWSAuthenticatedConnection(t *testing.T, projectDir, token string, expec
 		t.Fatalf("expected status code %d, got %#v", expectedStatusCode, response)
 	}
 	return nil, cleanup
+}
+
+// ─── HTTP redirect transport for GitHub API mocking ─────────────────────────
+
+// wsRedirectTransport redirects HTTP requests to a test server.
+// Used to mock GitHub API responses in websocket handler tests.
+type wsRedirectTransport struct {
+	target string
+	real   http.RoundTripper
+}
+
+func (t *wsRedirectTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r2 := r.Clone(r.Context())
+	u, _ := url.Parse(t.target + r.URL.Path)
+	r2.URL = u
+	r2.Host = u.Host
+	return t.real.RoundTrip(r2)
+}
+
+// setupHTTPServerAndClient configures wsHTTPClient to redirect to the given server.
+// Returns a cleanup function that restores the original client.
+// Consolidates: create server + redirect transport + restore pattern.
+func setupHTTPServerAndClient(t *testing.T, server *httptest.Server) func() {
+	t.Helper()
+	original := wsHTTPClient
+	wsHTTPClient = &http.Client{
+		Transport: &wsRedirectTransport{target: server.URL, real: http.DefaultTransport},
+	}
+	return func() {
+		wsHTTPClient = original
+	}
+}
+
+// setupDiscordBridgeAndProjectForTest consolidates: setupDiscordBridgeScopedTest + setupWSProjectAndConnection.
+// Caller provides bridge, and returns projectDir, connection, and cleanup function.
+func setupDiscordBridgeAndProjectForTest(t *testing.T, bridge DiscordBridge) (string, *websocket.Conn, func()) {
+	t.Helper()
+	SetDiscordBridge(bridge)
+	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
+	return projectDir, conn, func() {
+		cleanup()
+		SetDiscordBridge(nil)
+	}
+}
+
+// setupGitHubHTTPMock creates a test HTTP server with the given response and redirects wsHTTPClient to it.
+// Returns the server and cleanup function (which closes server and restores original client).
+// Consolidates: httptest.NewServer + setupHTTPServerAndClient pattern.
+func setupGitHubHTTPMock(t *testing.T, statusCode int, body string) (*httptest.Server, func()) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(statusCode)
+		w.Write([]byte(body)) //nolint:errcheck
+	}))
+	clientCleanup := setupHTTPServerAndClient(t, server)
+	return server, func() {
+		clientCleanup()
+		server.Close()
+	}
+}
+
+// ─── Hub and server setup helpers ──────────────────────────────────────────────
+
+// setupWSHubAndServer creates a WebSocket hub and test HTTP server serving that hub.
+// Returns the hub, server, and cleanup function that closes the server.
+// Consolidates: NewHub + httptest.NewServer(hub.ServeWS) + defer close pattern.
+func setupWSHubAndServer(t *testing.T, projectDir string) (*Hub, *httptest.Server, func()) {
+	t.Helper()
+	hub := NewHub(projectDir)
+	server := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	return hub, server, func() {
+		server.Close()
+	}
+}
+
+// testWSConnectionError tests a connection pattern that should result in an HTTP error response.
+// Sets up hub, server, dials without websocket upgrade headers, and verifies connection fails.
+// Used for testing upgrade errors and protocol violations.
+func testWSConnectionError(t *testing.T, projectDir string, testFunc func(*httptest.Server) error) {
+	t.Helper()
+	hub := NewHub(projectDir)
+	server := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer server.Close()
+	if err := testFunc(server); err != nil {
+		t.Fatalf("connection error test: %v", err)
+	}
 }

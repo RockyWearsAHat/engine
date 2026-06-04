@@ -212,10 +212,7 @@ func TestHandleExec_EmptyCommand(t *testing.T) {
 func TestHandleExec_WithCwdAndEnv(t *testing.T) {
 	ts := newMeshServer(t, defaultMeshTestConfig())
 
-	body := marshalExecRequestFull("echo", t.TempDir(), []string{"MY_VAR=test"}, []string{"hello"})
-	resp := doSignedRequestAndExpectStatus(t, ts, "/mesh/exec", http.MethodPost, testSecret, testClientName, body, http.StatusOK)
-	defer resp.Body.Close()
-	result := decodeExecResponse(t, resp.Body)
+	result := doSignedExecFullAndDecode(t, ts, "echo", t.TempDir(), []string{"MY_VAR=test"}, []string{"hello"})
 	if result.ExitCode != 0 {
 		t.Errorf("exit code = %d, want 0", result.ExitCode)
 	}
@@ -382,10 +379,7 @@ func TestClientHealth_NetworkError(t *testing.T) {
 
 // TestClientExec_Success tests that the client successfully executes remote commands.
 func TestClientExec_Success(t *testing.T) {
-	ts := newMeshServer(t, defaultMeshTestConfig())
-
-	peer := &Peer{Name: testServerName, Address: strings.TrimPrefix(ts.URL, "http://"), Secret: testSecret}
-	c := NewClient(testClientName)
+	_, peer, c := newServerAndClientPair(t)
 
 	result, err := c.Exec(context.Background(), peer, ExecRequest{Command: "echo", Args: []string{"hi"}})
 	if err != nil {

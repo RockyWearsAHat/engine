@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,7 +20,6 @@ import (
 	"github.com/engine/server/db"
 	"github.com/engine/server/discord"
 	"github.com/engine/server/remote"
-	"github.com/gorilla/websocket"
 )
 
 // TestMain installs the default chat routing for ws tests. The orchestrator's
@@ -43,20 +41,7 @@ func TestMain(m *testing.M) {
 
 // TestServeWS_RejectsMissingTokenWhenLocalAuthEnabled verifies websocket rejects connections without valid auth token.
 func TestServeWS_RejectsMissingTokenWhenLocalAuthEnabled(t *testing.T) {
-	projectDir := setupWSProject(t)
-	t.Setenv("ENGINE_LOCAL_WS_TOKEN", "desktop-secret")
-	hub := NewHub(projectDir)
-	server := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
-	defer server.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	_, response, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err == nil {
-		t.Fatal("expected websocket dial to fail without auth token")
-	}
-	if response == nil || response.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected 401 unauthorized response, got %#v", response)
-	}
+	testAuthConnectionRejectsWithoutToken(t, "desktop-secret")
 }
 
 // TestServeWS_AllowsTokenWhenLocalAuthEnabled verifies authenticated connections are allowed with valid token.
@@ -347,19 +332,7 @@ func TestHandler_RemotePairCodeGenerate_ReturnsCode(t *testing.T) {
 	}
 }
 
-// wsRedirectTransport redirects HTTP requests to a test server.
-type wsRedirectTransport struct {
-	target string
-	real   http.RoundTripper
-}
-
-func (t *wsRedirectTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	r2 := r.Clone(r.Context())
-	u, _ := url.Parse(t.target + r.URL.Path)
-	r2.URL = u
-	r2.Host = u.Host
-	return t.real.RoundTrip(r2)
-}
+// Note: wsRedirectTransport is defined in test_helpers.go and used for mocking GitHub API responses.
 
 func TestFetchGitHubUser_NoToken(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
@@ -370,14 +343,9 @@ func TestFetchGitHubUser_NoToken(t *testing.T) {
 }
 
 func TestFetchGitHubUser_ServerError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer srv.Close()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
-	orig := wsHTTPClient
-	wsHTTPClient = &http.Client{Transport: &wsRedirectTransport{target: srv.URL, real: http.DefaultTransport}}
-	defer func() { wsHTTPClient = orig }()
+	_, cleanup := setupGitHubHTTPMock(t, http.StatusUnauthorized, "")
+	defer cleanup()
 	_, err := fetchGitHubUser()
 	if err == nil {
 		t.Error("expected error on non-200 response")
@@ -385,14 +353,9 @@ func TestFetchGitHubUser_ServerError(t *testing.T) {
 }
 
 func TestFetchGitHubIssues_ServerError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-	}))
-	defer srv.Close()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
-	orig := wsHTTPClient
-	wsHTTPClient = &http.Client{Transport: &wsRedirectTransport{target: srv.URL, real: http.DefaultTransport}}
-	defer func() { wsHTTPClient = orig }()
+	_, cleanup := setupGitHubHTTPMock(t, http.StatusForbidden, "")
+	defer cleanup()
 	_, err := fetchGitHubIssues("owner", "repo")
 	if err == nil {
 		t.Error("expected error on non-200 response")
@@ -400,15 +363,9 @@ func TestFetchGitHubIssues_ServerError(t *testing.T) {
 }
 
 func TestFetchGitHubIssues_BadJSON(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("not json")) //nolint:errcheck
-	}))
-	defer srv.Close()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
-	orig := wsHTTPClient
-	wsHTTPClient = &http.Client{Transport: &wsRedirectTransport{target: srv.URL, real: http.DefaultTransport}}
-	defer func() { wsHTTPClient = orig }()
+	_, cleanup := setupGitHubHTTPMock(t, http.StatusOK, "not json")
+	defer cleanup()
 	_, err := fetchGitHubIssues("owner", "repo")
 	if err == nil {
 		t.Error("expected error on bad JSON")
@@ -435,15 +392,15 @@ func (p *panicDiscordBridge) NotifyProjectProgress(_, _ string) {}
 
 func TestServeWS_UpgradeError(t *testing.T) {
 	projectDir := setupWSProject(t)
-	hub := NewHub(projectDir)
-	server := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
-	defer server.Close()
-	// Plain HTTP GET → upgrader fails
-	resp, err := http.Get(server.URL)
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
-	resp.Body.Close()
+	testWSConnectionError(t, projectDir, func(server *httptest.Server) error {
+		// Plain HTTP GET → upgrader fails
+		resp, err := http.Get(server.URL)
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
+		return nil
+	})
 }
 
 func TestSend_MarshalError(t *testing.T) {
@@ -586,15 +543,9 @@ func TestHandler_TestSummaryGet_NoObserver(t *testing.T) {
 }
 
 func TestFetchGitHubUser_DecodeError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"login": 42}`)) //nolint:errcheck // number → decode error
-	}))
-	defer srv.Close()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
-	orig := wsHTTPClient
-	wsHTTPClient = &http.Client{Transport: &wsRedirectTransport{target: srv.URL, real: http.DefaultTransport}}
-	defer func() { wsHTTPClient = orig }()
+	_, cleanup := setupGitHubHTTPMock(t, http.StatusOK, `{"login": 42}`)
+	defer cleanup()
 	_, err := fetchGitHubUser()
 	if err == nil {
 		t.Error("expected decode error for wrong field type")
@@ -602,9 +553,12 @@ func TestFetchGitHubUser_DecodeError(t *testing.T) {
 }
 
 func TestFetchGitHubIssues_TransportError(t *testing.T) {
-	orig := wsHTTPClient
-	wsHTTPClient = &http.Client{Transport: &wsRedirectTransport{target: "http://127.0.0.1:1", real: http.DefaultTransport}}
-	defer func() { wsHTTPClient = orig }()
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+	original := wsHTTPClient
+	wsHTTPClient = &http.Client{
+		Transport: &wsRedirectTransport{target: "http://127.0.0.1:1", real: http.DefaultTransport},
+	}
+	defer func() { wsHTTPClient = original }()
 	_, err := fetchGitHubIssues("owner", "repo")
 	if err == nil {
 		t.Error("expected transport error")
@@ -613,15 +567,9 @@ func TestFetchGitHubIssues_TransportError(t *testing.T) {
 
 func TestFetchGitHubIssues_PRFiltered(t *testing.T) {
 	// All results are PRs → filtered → nil → nil guard → []githubIssue{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"number":1,"title":"PR","pull_request":{"url":"https://github.com/pr/1"}}]`)) //nolint:errcheck
-	}))
-	defer srv.Close()
 	t.Setenv("GITHUB_TOKEN", "fake-token")
-	orig := wsHTTPClient
-	wsHTTPClient = &http.Client{Transport: &wsRedirectTransport{target: srv.URL, real: http.DefaultTransport}}
-	defer func() { wsHTTPClient = orig }()
+	_, cleanup := setupGitHubHTTPMock(t, http.StatusOK, `[{"number":1,"title":"PR","pull_request":{"url":"https://github.com/pr/1"}}]`)
+	defer cleanup()
 	issues, err := fetchGitHubIssues("owner", "repo")
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)

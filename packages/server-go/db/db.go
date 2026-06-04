@@ -390,10 +390,21 @@ func GetSession(id string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	if direction, directionErr := GetProjectDirection(sess.ProjectPath); directionErr == nil {
+	attachProjectDirection(sess)
+	return sess, nil
+}
+
+// attachProjectDirection fetches the project direction for a session and attaches
+// it if found. Side effect: reads from project_directions table. Returns with
+// ProjectDirection field set or unchanged if fetch fails.
+func attachProjectDirection(sess *Session) {
+	if sess == nil {
+		return
+	}
+	direction, err := GetProjectDirection(sess.ProjectPath)
+	if err == nil {
 		sess.ProjectDirection = direction
 	}
-	return sess, nil
 }
 
 func ListSessions(projectPath string) ([]Session, error) {
@@ -417,15 +428,27 @@ func ListSessions(projectPath string) ([]Session, error) {
 		}
 		sessions = append(sessions, *s)
 	}
-	if direction, directionErr := GetProjectDirection(projectPath); directionErr == nil {
-		for i := range sessions {
-			sessions[i].ProjectDirection = direction
-		}
-	}
+	attachProjectDirectionToAll(&sessions, projectPath)
 	if sessions == nil {
 		sessions = []Session{}
 	}
 	return sessions, nil
+}
+
+// attachProjectDirectionToAll fetches the project direction and attaches it to
+// all sessions in the slice. Side effect: reads from project_directions table
+// once. Updates all sessions in place if direction is found.
+func attachProjectDirectionToAll(sessions *[]Session, projectPath string) {
+	if sessions == nil || len(*sessions) == 0 {
+		return
+	}
+	direction, err := GetProjectDirection(projectPath)
+	if err != nil {
+		return
+	}
+	for i := range *sessions {
+		(*sessions)[i].ProjectDirection = direction
+	}
 }
 
 type scanner interface {
@@ -459,7 +482,13 @@ func SaveMessage(id, sessionId, role, content string, toolCalls any) error {
 	if err != nil {
 		return err
 	}
-	_, err = globalDB.Exec(`UPDATE sessions SET updated_at=? WHERE id=?`, t, sessionId)
+	return updateSessionTimestamp(sessionId, t)
+}
+
+// updateSessionTimestamp updates a session's updated_at field. Side effect:
+// writes to sessions table.
+func updateSessionTimestamp(sessionId, timestamp string) error {
+	_, err := globalDB.Exec(`UPDATE sessions SET updated_at=? WHERE id=?`, timestamp, sessionId)
 	return err
 }
 

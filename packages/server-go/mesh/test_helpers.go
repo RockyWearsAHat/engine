@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -193,10 +194,40 @@ func doSignedHealthAndDecode(t *testing.T, ts *httptest.Server) *HealthResponse 
 	return decodeHealthResponse(t, resp.Body)
 }
 
+// doSignedExecFullAndDecode executes a full exec request with all fields and decodes the response.
+func doSignedExecFullAndDecode(t *testing.T, ts *httptest.Server, cmd, cwd string, env []string, args []string) *ExecResponse {
+	t.Helper()
+	body := marshalExecRequestFull(cmd, cwd, env, args)
+	resp := doSignedRequestAndExpectStatus(t, ts, "/mesh/exec", http.MethodPost, testSecret, testClientName, body, http.StatusOK)
+	defer resp.Body.Close()
+	return decodeExecResponse(t, resp.Body)
+}
+
+// doSignedInferenceFullAndDecode executes an inference request with all fields and decodes the response.
+func doSignedInferenceFullAndDecode(t *testing.T, ts *httptest.Server, path, method string, bodyObj interface{}) *InferenceResponse {
+	t.Helper()
+	body := marshalInferenceRequest(path, method, bodyObj)
+	return doSignedInferenceAndDecode(t, ts, path, method, body)
+}
+
 // testMethodNotAllowed verifies that a given path rejects non-POST requests.
 func testMethodNotAllowed(t *testing.T, ts *httptest.Server, path string) {
 	t.Helper()
 	doSignedRequestAndClose(t, ts, path, http.MethodGet, testSecret, testClientName, []byte{}, http.StatusMethodNotAllowed)
+}
+
+// testEndpointMethodNotAllowed creates a server and verifies any endpoint rejects non-POST requests.
+func testEndpointMethodNotAllowed(t *testing.T, path string) {
+	t.Helper()
+	ts := newMeshServer(t, defaultMeshTestConfig())
+	testMethodNotAllowed(t, ts, path)
+}
+
+// testEndpointBadJSON creates a server and verifies any endpoint rejects malformed JSON.
+func testEndpointBadJSON(t *testing.T, path string) {
+	t.Helper()
+	ts := newMeshServer(t, defaultMeshTestConfig())
+	testSignedBadJSON(t, ts, path)
 }
 
 // testSignedBadJSON verifies that a given path rejects malformed JSON.
@@ -215,28 +246,43 @@ func testSignedInferenceValidation(t *testing.T, ts *httptest.Server) {
 // testExecEndpointMethodNotAllowed creates an exec server and verifies it rejects non-POST requests.
 func testExecEndpointMethodNotAllowed(t *testing.T) {
 	t.Helper()
-	ts := newMeshServer(t, defaultMeshTestConfig())
-	testMethodNotAllowed(t, ts, "/mesh/exec")
+	testEndpointMethodNotAllowed(t, "/mesh/exec")
 }
 
 // testExecEndpointBadJSON creates an exec server and verifies it rejects malformed JSON.
 func testExecEndpointBadJSON(t *testing.T) {
 	t.Helper()
-	ts := newMeshServer(t, defaultMeshTestConfig())
-	testSignedBadJSON(t, ts, "/mesh/exec")
+	testEndpointBadJSON(t, "/mesh/exec")
 }
 
 // testInferenceEndpointMethodNotAllowed creates an inference server and verifies it rejects non-POST requests.
 func testInferenceEndpointMethodNotAllowed(t *testing.T) {
 	t.Helper()
-	ts := newMeshServer(t, defaultMeshTestConfig())
-	testMethodNotAllowed(t, ts, "/mesh/inference")
+	testEndpointMethodNotAllowed(t, "/mesh/inference")
 }
 
 // testInferenceEndpointBadJSON creates an inference server and verifies it rejects malformed JSON.
 func testInferenceEndpointBadJSON(t *testing.T) {
 	t.Helper()
+	testEndpointBadJSON(t, "/mesh/inference")
+}
+
+// newPeerFromTestServer constructs a Peer from a test server URL using test constants.
+func newPeerFromTestServer(t *testing.T, ts *httptest.Server) *Peer {
+	t.Helper()
+	return &Peer{
+		Name:    testServerName,
+		Address: strings.TrimPrefix(ts.URL, "http://"),
+		Secret:  testSecret,
+	}
+}
+
+// newServerAndClientPair creates a mesh server with default config, constructs a peer, and returns both with a client.
+func newServerAndClientPair(t *testing.T) (*httptest.Server, *Peer, *Client) {
+	t.Helper()
 	ts := newMeshServer(t, defaultMeshTestConfig())
-	testSignedBadJSON(t, ts, "/mesh/inference")
+	peer := newPeerFromTestServer(t, ts)
+	c := NewClient(testClientName)
+	return ts, peer, c
 }
 
