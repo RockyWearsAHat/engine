@@ -7,16 +7,6 @@ import (
 	"testing"
 )
 
-// newTLSConfig creates a test TLS config with a temporary directory.
-func newTLSConfig(t *testing.T) (*tls.Config, string) {
-	t.Helper()
-	dir := t.TempDir()
-	cfg, err := LoadOrCreateTLSConfig(dir)
-	if err != nil {
-		t.Fatalf("LoadOrCreateTLSConfig: %v", err)
-	}
-	return cfg, dir
-}
 
 func TestLoadOrCreateTLSConfig_CreatesNew(t *testing.T) {
 	cfg, _ := newTLSConfig(t)

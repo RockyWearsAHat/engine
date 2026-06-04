@@ -17,9 +17,10 @@ import (
 
 // EngageOnIssuePickup is called the moment Engine decides to work on an issue.
 // Performs multiple side effects in sequence:
-//   1. Self-assigns Engine's bot account
-//   2. Adds the issue to the Engine project board (if configured)
-//   3. Pins a kickoff comment so the user sees immediate activity on GitHub
+//  1. Self-assigns Engine's bot account
+//  2. Adds the issue to the Engine project board (if configured)
+//  3. Pins a kickoff comment so the user sees immediate activity on GitHub
+//
 // projectPath is the local clone root (used for persisting the comment store).
 func EngageOnIssuePickup(projectPath, owner, repo string, issueNumber int, sessionID string) {
 	// 1. Self-assign.

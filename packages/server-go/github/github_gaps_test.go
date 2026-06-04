@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -221,8 +219,7 @@ func TestCreatePR_DoPostError(t *testing.T) {
 
 func TestEngageOnIssueProgress_NoStoredComment_Noop(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
-	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, ".engine"), 0o700) //nolint:errcheck
+	dir := newEngineDir(t)
 	// No comment stored → early return, no API call.
 	var called bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -256,8 +253,7 @@ func TestEngageOnIssueComplete_NoStoredComment_AddsNew(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("GITHUB_API_BASE", srv.URL)
 
-	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, ".engine"), 0o700) //nolint:errcheck
+	dir := newEngineDir(t)
 	// No stored comment — code takes the else branch and calls AddComment.
 
 	EngageOnIssueComplete(dir, "owner", "repo", 11, 3, "https://github.com/pr/1")
@@ -284,8 +280,7 @@ func TestEngageOnIssueBlocked_NoStoredComment_AddsNew(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("GITHUB_API_BASE", srv.URL)
 
-	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, ".engine"), 0o700) //nolint:errcheck
+	dir := newEngineDir(t)
 
 	EngageOnIssueBlocked(dir, "owner", "repo", 13, "tests failing")
 	if !addCalled {
@@ -298,17 +293,14 @@ func TestEngageOnIssuePickup_NoToken_Noop(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("ENGINE_GITHUB_LOGIN", "")
 
-	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, ".engine"), 0o700) //nolint:errcheck
+	dir := newEngineDir(t)
 
 	// Should not panic; EngineClient returns error → returns early.
 	EngageOnIssuePickup(dir, "owner", "repo", 1, "sess-x")
 }
 
 func TestEngageOnIssuePickup_AssignEngineError_Continues(t *testing.T) {
-	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
-	t.Setenv("ENGINE_GITHUB_LOGIN", "engine-bot")
-	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "")
+	setupEngineEnv(t)
 
 	var sawAssignees bool
 	var sawComments bool
@@ -330,8 +322,7 @@ func TestEngageOnIssuePickup_AssignEngineError_Continues(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("GITHUB_API_BASE", srv.URL)
 
-	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, ".engine"), 0o700) //nolint:errcheck
+	dir := newEngineDir(t)
 
 	EngageOnIssuePickup(dir, "owner", "repo", 1, "sess-1")
 
@@ -344,9 +335,7 @@ func TestEngageOnIssuePickup_AssignEngineError_Continues(t *testing.T) {
 }
 
 func TestEngageOnIssuePickup_AddCommentError_DoesNotStoreComment(t *testing.T) {
-	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
-	t.Setenv("ENGINE_GITHUB_LOGIN", "engine-bot")
-	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "")
+	setupEngineEnv(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -364,8 +353,7 @@ func TestEngageOnIssuePickup_AddCommentError_DoesNotStoreComment(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("GITHUB_API_BASE", srv.URL)
 
-	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, ".engine"), 0o700) //nolint:errcheck
+	dir := newEngineDir(t)
 
 	EngageOnIssuePickup(dir, "owner", "repo", 2, "sess-2")
 
@@ -379,8 +367,7 @@ func TestEngageOnIssueProgress_EngineClientError_Returns(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 
-	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, ".engine"), 0o700) //nolint:errcheck
+	dir := newEngineDir(t)
 	store := IssueCommentStoreFor(dir)
 	store.Set("owner", "repo", 9, 123)
 
@@ -391,8 +378,7 @@ func TestEngageOnIssueComplete_EngineClientError_Returns(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 
-	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, ".engine"), 0o700) //nolint:errcheck
+	dir := newEngineDir(t)
 
 	EngageOnIssueComplete(dir, "owner", "repo", 10, 3, "")
 }
@@ -401,8 +387,7 @@ func TestEngageOnIssueBlocked_EngineClientError_Returns(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 
-	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, ".engine"), 0o700) //nolint:errcheck
+	dir := newEngineDir(t)
 
 	EngageOnIssueBlocked(dir, "owner", "repo", 11, "need help")
 }

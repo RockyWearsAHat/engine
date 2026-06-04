@@ -12,16 +12,6 @@ import (
 	"time"
 )
 
-// newAuthManager creates a test AuthManager with a temporary directory.
-func newAuthManager(t *testing.T) *AuthManager {
-	t.Helper()
-	dir := t.TempDir()
-	am, err := NewAuthManager(dir)
-	if err != nil {
-		t.Fatalf("NewAuthManager: %v", err)
-	}
-	return am
-}
 
 func TestNewAuthManager_CreatesSecret(t *testing.T) {
 	am := newAuthManager(t)

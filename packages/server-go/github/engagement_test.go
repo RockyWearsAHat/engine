@@ -5,8 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -62,12 +60,9 @@ func setupFakeGitHub(t *testing.T) (serverURL string, assignCalled *bool, commen
 func TestEngageOnIssuePickup_AssignsAndComments(t *testing.T) {
 	url, assigned, comment, _ := setupFakeGitHub(t)
 	t.Setenv("GITHUB_API_BASE", url)
-	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
-	t.Setenv("ENGINE_GITHUB_LOGIN", "engine-bot")
-	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "") // disable project board
+	setupEngineEnv(t)
 
-	dir := t.TempDir()
-	_ = os.MkdirAll(filepath.Join(dir, ".engine"), 0700)
+	dir := newEngineDir(t)
 
 	EngageOnIssuePickup(dir, "owner", "repo", 7, "sess-001")
 
@@ -94,12 +89,9 @@ func TestEngageOnIssuePickup_AssignsAndComments(t *testing.T) {
 func TestEngageOnIssueProgress_EditsComment(t *testing.T) {
 	url, _, _, editBody := setupFakeGitHub(t)
 	t.Setenv("GITHUB_API_BASE", url)
-	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
-	t.Setenv("ENGINE_GITHUB_LOGIN", "engine-bot")
-	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "")
+	setupEngineEnv(t)
 
-	dir := t.TempDir()
-	_ = os.MkdirAll(filepath.Join(dir, ".engine"), 0700)
+	dir := newEngineDir(t)
 	store := IssueCommentStoreFor(dir)
 	store.Set("owner", "repo", 5, 2002)
 
@@ -118,12 +110,9 @@ func TestEngageOnIssueProgress_EditsComment(t *testing.T) {
 func TestEngageOnIssueComplete_EditsComment(t *testing.T) {
 	url, _, _, editBody := setupFakeGitHub(t)
 	t.Setenv("GITHUB_API_BASE", url)
-	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
-	t.Setenv("ENGINE_GITHUB_LOGIN", "engine-bot")
-	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "")
+	setupEngineEnv(t)
 
-	dir := t.TempDir()
-	_ = os.MkdirAll(filepath.Join(dir, ".engine"), 0700)
+	dir := newEngineDir(t)
 	store := IssueCommentStoreFor(dir)
 	store.Set("owner", "repo", 3, 3003)
 
@@ -141,12 +130,9 @@ func TestEngageOnIssueComplete_EditsComment(t *testing.T) {
 func TestEngageOnIssueBlocked_EditsComment(t *testing.T) {
 	url, _, _, editBody := setupFakeGitHub(t)
 	t.Setenv("GITHUB_API_BASE", url)
-	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
-	t.Setenv("ENGINE_GITHUB_LOGIN", "engine-bot")
-	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "")
+	setupEngineEnv(t)
 
-	dir := t.TempDir()
-	_ = os.MkdirAll(filepath.Join(dir, ".engine"), 0700)
+	dir := newEngineDir(t)
 	store := IssueCommentStoreFor(dir)
 	store.Set("owner", "repo", 8, 4004)
 

@@ -109,6 +109,12 @@ var autonomousShellTimeout = 5 * time.Minute
 // of silently stopping or running forever.
 var autonomousBuilderMaxTurns = 32
 
+// scored represents a tool matched by search, with a keyword match score.
+type scored struct {
+	tool  anthropicTool
+	score int
+}
+
 func init() {
 	go ollamaWarmKeeper()
 }
@@ -963,6 +969,35 @@ var toolRegistryIndex = func() map[string]anthropicTool {
 	return m
 }()
 
+// summarizeToolsAndMergeIntoActive merges newly found tools into ctx.ActiveTools (dedup by name)
+// and returns a human-readable summary of what was found and added.
+func summarizeToolsAndMergeIntoActive(matches []scored, ctx *ChatContext) string {
+	activeByName := make(map[string]bool, len(ctx.ActiveTools))
+	for _, t := range ctx.ActiveTools {
+		activeByName[t.Name] = true
+	}
+	var added []string
+	for _, m := range matches {
+		if !activeByName[m.tool.Name] {
+			ctx.ActiveTools = append(ctx.ActiveTools, m.tool)
+			activeByName[m.tool.Name] = true
+			added = append(added, m.tool.Name)
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Tools found and now available:\n")
+	for _, m := range matches {
+		sb.WriteString(fmt.Sprintf("  • %s — %s\n", m.tool.Name, m.tool.Description))
+	}
+	if len(added) > 0 {
+		sb.WriteString(fmt.Sprintf("\nAdded to active tools: %s", strings.Join(added, ", ")))
+	} else {
+		sb.WriteString("\n(All matched tools were already active)")
+	}
+	return sb.String()
+}
+
 // bootstrapTools is the minimal set sent to the model at the start of every request.
 // Only navigation + tool discovery. Everything else must be discovered via search_tools.
 var bootstrapToolNames = []string{"search_tools", "read_file", "list_directory", "mark_vital"}
@@ -983,11 +1018,6 @@ func bootstrapTools() []anthropicTool {
 func executeSearchTools(query string, ctx *ChatContext) string {
 	query = strings.ToLower(strings.TrimSpace(query))
 	words := strings.Fields(query)
-
-	type scored struct {
-		tool  anthropicTool
-		score int
-	}
 
 	// Score each tool by how many query words appear in its name+description.
 	var matches []scored
@@ -1028,31 +1058,7 @@ func executeSearchTools(query string, ctx *ChatContext) string {
 		return "No tools matched that query. Available categories: file operations, shell/execution, search, git, editor UI, github."
 	}
 
-	// Merge newly found tools into ctx.ActiveTools (dedup by name).
-	activeByName := make(map[string]bool, len(ctx.ActiveTools))
-	for _, t := range ctx.ActiveTools {
-		activeByName[t.Name] = true
-	}
-	var added []string
-	for _, m := range matches {
-		if !activeByName[m.tool.Name] {
-			ctx.ActiveTools = append(ctx.ActiveTools, m.tool)
-			activeByName[m.tool.Name] = true
-			added = append(added, m.tool.Name)
-		}
-	}
-
-	var sb strings.Builder
-	sb.WriteString("Tools found and now available:\n")
-	for _, m := range matches {
-		sb.WriteString(fmt.Sprintf("  • %s — %s\n", m.tool.Name, m.tool.Description))
-	}
-	if len(added) > 0 {
-		sb.WriteString(fmt.Sprintf("\nAdded to active tools: %s", strings.Join(added, ", ")))
-	} else {
-		sb.WriteString("\n(All matched tools were already active)")
-	}
-	return sb.String()
+	return summarizeToolsAndMergeIntoActive(matches, ctx)
 }
 
 // executeTool runs the named tool and returns (result string, isError bool).
@@ -2092,6 +2098,13 @@ func updateGeneratedIndexFromPID(projectRoot string, processID int, idx *generat
 	if err != nil {
 		return fmt.Errorf("read open files for pid %d: %w", processID, err)
 	}
+	updateGeneratedIndexFromFiles(projectRoot, files, idx)
+	return saveGeneratedIndex(projectRoot, processID, idx)
+}
+
+// updateGeneratedIndexFromFiles filters and records paths from open files into the index.
+// Only absolute paths within projectRoot (or its subdirectories) are recorded.
+func updateGeneratedIndexFromFiles(projectRoot string, files []goprocess.OpenFilesStat, idx *generatedIndex) {
 	root := filepath.Clean(projectRoot)
 	rootPrefix := root + string(filepath.Separator)
 	for _, f := range files {
@@ -2110,7 +2123,6 @@ func updateGeneratedIndexFromPID(projectRoot string, processID int, idx *generat
 			idx.paths[parent] = true
 		}
 	}
-	return saveGeneratedIndex(projectRoot, processID, idx)
 }
 
 func resolveRetryUserAnchor(history []db.Message, messageID string) (int, db.Message, bool) {

@@ -80,8 +80,7 @@ func TestHandler_DiscordConfigGet_NilBridge(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]any{"type": "discord.config.get"})
-	msg := readWSMessageOfType(t, conn, "discord.config")
+	msg := sendAndReceive(t, conn, map[string]any{"type": "discord.config.get"}, "discord.config")
 	if msg["type"] != "discord.config" {
 		t.Fatalf("expected discord.config, got %+v", msg)
 	}
@@ -97,8 +96,7 @@ func TestHandler_DiscordConfigGet_WithBridge(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]any{"type": "discord.config.get"})
-	msg := readWSMessageOfType(t, conn, "discord.config")
+	msg := sendAndReceive(t, conn, map[string]any{"type": "discord.config.get"}, "discord.config")
 	if msg["active"] != true {
 		t.Fatalf("expected active:true, got %+v", msg)
 	}
@@ -114,13 +112,12 @@ func TestHandler_DiscordHistorySearch_NilBridge(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]any{
+	msg := sendAndReceive(t, conn, map[string]any{
 		"type":        "discord.history.search",
 		"projectPath": projectDir,
 		"query":       "hello",
 		"limit":       10,
-	})
-	msg := readWSMessageOfType(t, conn, "error")
+	}, "error")
 	if msg["code"] != "DISCORD_UNAVAILABLE" {
 		t.Fatalf("expected DISCORD_UNAVAILABLE, got %+v", msg)
 	}

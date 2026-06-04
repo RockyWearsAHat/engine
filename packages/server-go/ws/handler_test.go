@@ -5,7 +5,6 @@ package ws
 // as Go does not conventionally require them for test functions.
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -50,64 +49,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func setupWSProject(t *testing.T) string {
-	t.Helper()
 
-	projectDir := filepath.Join(t.TempDir(), "project")
-	if err := os.MkdirAll(filepath.Join(projectDir, ".github", "references"), 0755); err != nil {
-		t.Fatalf("mkdir refs: %v", err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(projectDir, "PROJECT_GOAL.md"),
-		[]byte("Engine should route chat messages into the AI pipeline reliably."),
-		0644,
-	); err != nil {
-		t.Fatalf("write project goal: %v", err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(projectDir, ".github", "references", "architecture.md"),
-		[]byte("Chat messages should preserve open-tab context and runtime provider configuration."),
-		0644,
-	); err != nil {
-		t.Fatalf("write architecture doc: %v", err)
-	}
-
-	stateDir := t.TempDir()
-	t.Setenv("ENGINE_STATE_DIR", stateDir)
-	if err := db.Init(projectDir); err != nil {
-		t.Fatalf("db init: %v", err)
-	}
-
-	return projectDir
-}
-
-func openWSTestConnection(t *testing.T, projectDir string) (*websocket.Conn, func()) {
-	t.Helper()
-	return openWSTestConnectionWithToken(t, projectDir, "")
-}
-
-func openWSTestConnectionWithToken(t *testing.T, projectDir, token string) (*websocket.Conn, func()) {
-	t.Helper()
-
-	hub := NewHub(projectDir)
-	server := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
-
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	if token != "" {
-		wsURL += "?token=" + url.QueryEscape(token)
-	}
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		server.Close()
-		t.Fatalf("dial websocket: %v", err)
-	}
-
-	cleanup := func() {
-		conn.Close() //nolint:errcheck
-		server.Close()
-	}
-	return conn, cleanup
-}
 
 // TestServeWS_RejectsMissingTokenWhenLocalAuthEnabled verifies websocket rejects connections without valid auth token.
 func TestServeWS_RejectsMissingTokenWhenLocalAuthEnabled(t *testing.T) {
@@ -144,45 +86,7 @@ func TestServeWS_AllowsTokenWhenLocalAuthEnabled(t *testing.T) {
 	}
 }
 
-func writeWSMessage(t *testing.T, conn *websocket.Conn, payload map[string]any) {
-	t.Helper()
-	if err := conn.WriteJSON(payload); err != nil {
-		t.Fatalf("write websocket json: %v", err)
-	}
-}
 
-// sendAndReceive writes a message and reads the first response of the expected type.
-func sendAndReceive(t *testing.T, conn *websocket.Conn, payload map[string]any, expectedType string) map[string]any {
-	t.Helper()
-	writeWSMessage(t, conn, payload)
-	return readWSMessageOfType(t, conn, expectedType)
-}
-
-func readWSMessageOfType(t *testing.T, conn *websocket.Conn, expectedType string) map[string]any {
-	t.Helper()
-
-	deadline := time.Now().Add(5 * time.Second)
-	if err := conn.SetReadDeadline(deadline); err != nil {
-		t.Fatalf("set read deadline: %v", err)
-	}
-	for time.Now().Before(deadline) {
-		_, raw, err := conn.ReadMessage()
-		if err != nil {
-			t.Fatalf("read websocket message: %v", err)
-		}
-
-		var message map[string]any
-		if err := json.Unmarshal(raw, &message); err != nil {
-			t.Fatalf("decode websocket message: %v", err)
-		}
-		if message["type"] == expectedType {
-			return message
-		}
-	}
-
-	t.Fatalf("timed out waiting for websocket message type %q", expectedType)
-	return nil
-}
 
 // TestHandler_ChatMessage_InvokesAIRunnerWithTabsAndRuntimeConfig verifies chat routing passes open tabs and model config to AI.
 func TestHandler_ChatMessage_InvokesAIRunnerWithTabsAndRuntimeConfig(t *testing.T) {
