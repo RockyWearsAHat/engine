@@ -255,14 +255,10 @@ func TestUpdateProjectItemStatus_FieldOrOptionMissingSkips(t *testing.T) {
 
 func TestGraphqlDo_StatusAndParseErrors(t *testing.T) {
 	t.Run("non-2xx status", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(`boom`))
+			io.WriteString(w, `boom`)
 		}))
-		defer srv.Close()
-
-		t.Setenv("GITHUB_API_BASE", srv.URL)
-		withEventsHTTPClient(t, srv)
 
 		if err := graphqlDo("tok", "query { ping }", nil, nil); err == nil {
 			t.Fatal("expected status error")
@@ -270,14 +266,10 @@ func TestGraphqlDo_StatusAndParseErrors(t *testing.T) {
 	})
 
 	t.Run("invalid json response", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`not-json`))
+			io.WriteString(w, `not-json`)
 		}))
-		defer srv.Close()
-
-		t.Setenv("GITHUB_API_BASE", srv.URL)
-		withEventsHTTPClient(t, srv)
 
 		if err := graphqlDo("tok", "query { ping }", nil, nil); err == nil {
 			t.Fatal("expected parse error")
@@ -386,11 +378,7 @@ func TestAddIssueToEngineProject_ErrorBranches(t *testing.T) {
 
 func TestUpdateProjectItemStatus_EarlyAndErrorPaths(t *testing.T) {
 	t.Run("missing token or owner is no-op", func(t *testing.T) {
-		t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "9")
-		t.Setenv("ENGINE_GITHUB_PROJECT_OWNER", "")
-		t.Setenv("ENGINE_GITHUB_LOGIN", "")
-		t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
-		t.Setenv("GITHUB_TOKEN", "")
+		setupProjectEnv(t, 9, "", "", "")
 
 		if err := UpdateProjectItemStatus("owner", "ITEM1", "Done"); err != nil {
 			t.Fatalf("expected nil no-op, got %v", err)
@@ -398,18 +386,11 @@ func TestUpdateProjectItemStatus_EarlyAndErrorPaths(t *testing.T) {
 	})
 
 	t.Run("project lookup error", func(t *testing.T) {
-		t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "9")
-		t.Setenv("ENGINE_GITHUB_PROJECT_OWNER", "octo")
-		t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
-
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setupProjectEnv(t, 9, "octo", "tok", "")
+		setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"errors":[{"message":"no project"}]}`))
+			io.WriteString(w, `{"errors":[{"message":"no project"}]}`)
 		}))
-		defer srv.Close()
-		t.Setenv("GITHUB_API_BASE", srv.URL)
-
-		withEventsHTTPClient(t, srv)
 
 		if err := UpdateProjectItemStatus("owner", "ITEM1", "Done"); err == nil {
 			t.Fatal("expected project lookup error")
@@ -417,28 +398,21 @@ func TestUpdateProjectItemStatus_EarlyAndErrorPaths(t *testing.T) {
 	})
 
 	t.Run("field list error", func(t *testing.T) {
-		t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "9")
-		t.Setenv("ENGINE_GITHUB_PROJECT_OWNER", "octo")
-		t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
-
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setupProjectEnv(t, 9, "octo", "tok", "")
+		setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req struct {
 				Query string `json:"query"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			if err := decodeGraphQLRequest(r, &req); err != nil {
 				t.Fatalf("decode field list error request: %v", err)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			if strings.Contains(req.Query, "projectV2(number") {
-				_, _ = w.Write([]byte(`{"data":{"user":{"projectV2":{"id":"P1"}}}}`))
+				io.WriteString(w, `{"data":{"user":{"projectV2":{"id":"P1"}}}}`)
 				return
 			}
-			_, _ = w.Write([]byte(`{"errors":[{"message":"field query failed"}]}`))
+			io.WriteString(w, `{"errors":[{"message":"field query failed"}]}`)
 		}))
-		defer srv.Close()
-		t.Setenv("GITHUB_API_BASE", srv.URL)
-
-		withEventsHTTPClient(t, srv)
 
 		if err := UpdateProjectItemStatus("owner", "ITEM1", "Done"); err == nil {
 			t.Fatal("expected field list error")
@@ -473,11 +447,7 @@ func TestGraphqlDo_RequestAndReadErrors(t *testing.T) {
 }
 
 func TestAddIssueToEngineProject_MissingOwnerOrToken_NoOp(t *testing.T) {
-	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "3")
-	t.Setenv("ENGINE_GITHUB_PROJECT_OWNER", "")
-	t.Setenv("ENGINE_GITHUB_LOGIN", "")
-	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
-	t.Setenv("GITHUB_TOKEN", "")
+	setupProjectEnv(t, 3, "", "", "")
 
 	itemID, err := AddIssueToEngineProject("owner", "repo", 1)
 	if err != nil {
