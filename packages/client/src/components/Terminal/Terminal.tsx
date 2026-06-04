@@ -36,6 +36,7 @@ function createTerminalTheme() {
   };
 }
 
+/** Multi-tab terminal emulator with xterm.js, font theming, and command request handling. */
 export default function Terminal({
   commandRequest,
   onCommandHandled,
@@ -52,6 +53,7 @@ export default function Terminal({
   const handledRequestIdsRef = useRef<Set<string>>(new Set());
   tabsRef.current = tabs;
 
+  /** Renders a terminal emulator with tab management and command handling capabilities. */
   const createTerminal = (terminalId: string, cwd: string, label: string) => {
     const xterm = new XTerm({
       theme: createTerminalTheme(),

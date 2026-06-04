@@ -40,13 +40,18 @@ export ENGINE_MODEL=qwen2.5-1.5b
 
 Tune in `.engine/llama-fleet.env`:
 
-- `LLAMA_PORTS` adds or removes backend instances.
+- `LLAMA_BACKENDS=auto` sizes backend count from local CPU budget.
+- `LLAMA_BASE_PORT` sets the first backend port when auto-sizing.
+- `LLAMA_PORTS` (optional) explicitly pins backend ports.
 - `LLAMA_PARALLEL` increases slots per backend.
 - `LLAMA_CTX`, `LLAMA_THREADS`, `LLAMA_THREADS_HTTP` tune throughput/latency.
 - `LLAMA_THREADS_BATCH`, `LLAMA_BATCH`, `LLAMA_UBATCH` tune batching efficiency.
 - `LLAMA_N_GPU_LAYERS`, `LLAMA_DEFRAG_THOLD` tune memory behavior.
 - `LLAMA_FLASH_ATTN`, `LLAMA_MLOCK`, `LLAMA_NO_MMAP`, `LLAMA_NUMA` are optional
 	low-end hardware toggles.
+
+In Preferences -> Model, use **Scan local fleet settings** to run a sequential
+machine scan and generate a recommended `.engine/llama-fleet.env` profile.
 
 Recommended scaling path:
 

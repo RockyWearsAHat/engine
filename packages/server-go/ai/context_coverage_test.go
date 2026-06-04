@@ -12,9 +12,15 @@ import (
 // sendSSEDone writes a minimal SSE stream with one stop event.
 func sendSSEDone(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/event-stream")
-	_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n"))
-	_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))
-	_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	if _, err := w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n")); err != nil {
+		return
+	}
+	if _, err := w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")); err != nil {
+		return
+	}
+	if _, err := w.Write([]byte("data: [DONE]\n\n")); err != nil {
+		return
+	}
 }
 
 // TestChat_CtxModelAndProviderOverride covers the ctx.ModelOverride and
@@ -30,12 +36,16 @@ func TestChat_CtxModelAndProviderOverride(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/ps":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"models":[{"name":"qwen2.5:1.5b"}]}`))
+			if _, err := w.Write([]byte(`{"models":[{"name":"qwen2.5:1.5b"}]}`)); err != nil {
+				t.Fatalf("write /api/ps response: %v", err)
+			}
 		case "/v1/chat/completions":
 			var req struct {
 				Model string `json:"model"`
 			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
 			requestedModel = req.Model
 			sendSSEDone(w)
 		default:
@@ -87,7 +97,9 @@ func TestChat_AnthropicAndOpenAI_NoKey_DefaultLocalFallback(t *testing.T) {
 					var req struct {
 						Model string `json:"model"`
 					}
-					_ = json.NewDecoder(r.Body).Decode(&req)
+					if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+						t.Fatalf("decode request: %v", err)
+					}
 					requestedModel = req.Model
 					sendSSEDone(w)
 				default:
@@ -142,12 +154,16 @@ func TestChat_AnthropicAndOpenAI_NoKey_OllamaFallback(t *testing.T) {
 				switch r.URL.Path {
 				case "/api/ps":
 					w.Header().Set("Content-Type", "application/json")
-					_, _ = w.Write([]byte(`{"models":[{"name":"qwen2.5:7b"}]}`))
+					if _, err := w.Write([]byte(`{"models":[{"name":"qwen2.5:7b"}]}`)); err != nil {
+						t.Fatalf("write /api/ps response: %v", err)
+					}
 				case "/v1/chat/completions":
 					var req struct {
 						Model string `json:"model"`
 					}
-					_ = json.NewDecoder(r.Body).Decode(&req)
+					if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+						t.Fatalf("decode request: %v", err)
+					}
 					requestedModel = req.Model
 					sendSSEDone(w)
 				default:
@@ -190,12 +206,16 @@ func TestRunPlannerPrePass_OllamaWithExplicitModel(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/ps":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"models":[{"name":"detected-model:7b"}]}`))
+			if _, err := w.Write([]byte(`{"models":[{"name":"detected-model:7b"}]}`)); err != nil {
+				t.Fatalf("write /api/ps response: %v", err)
+			}
 		case "/v1/chat/completions":
 			var req struct {
 				Model string `json:"model"`
 			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
 			requestedModel = req.Model
 			sendSSEDone(w)
 		default:
@@ -236,12 +256,16 @@ func TestRunPlannerPrePass_NoModelConfigured_ReturnsEmpty(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/ps":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"models":[]}`))
+			if _, err := w.Write([]byte(`{"models":[]}`)); err != nil {
+				t.Fatalf("write /api/ps response: %v", err)
+			}
 		case "/v1/chat/completions":
 			var req struct {
 				Model string `json:"model"`
 			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
 			requestedModel = req.Model
 			sendSSEDone(w)
 		default:

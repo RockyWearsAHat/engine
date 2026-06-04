@@ -1,6 +1,7 @@
 import { render, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useStore } from '../store/index.js';
+import { resetStoreForTests } from './store-test-helpers.js';
 import type { FileNode, GitStatus } from '@engine/shared';
 
 // Mocks
@@ -66,19 +67,12 @@ describe('FileTree Component', () => {
   };
 
   beforeEach(() => {
+    resetStoreForTests();
     useStore.setState({
       fileTree: sampleTree,
       openFiles: [testFile],
       activeFilePath: '/project/file1.ts',
       gitStatus: sampleGitStatus,
-      githubIssues: [],
-      githubIssuesLoading: false,
-      githubIssuesError: null,
-      searchQuery: '',
-      searchResults: [],
-      searchLoading: false,
-      searchError: null,
-      showDotfiles: false,
       activeSession: {
         id: 's1',
         projectPath: '/project',

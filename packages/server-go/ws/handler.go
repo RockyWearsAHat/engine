@@ -1226,6 +1226,27 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			"team": msg.Team,
 		})
 
+	case "llama.fleet.scan":
+		var msg struct {
+			WriteFile bool `json:"writeFile"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.sendErr("Bad payload", "BAD_PAYLOAD")
+			return
+		}
+		result, err := runLlamaFleetScan(projectPath, msg.WriteFile)
+		if err != nil {
+			c.send(map[string]any{
+				"type":  "llama.fleet.scan.result",
+				"error": err.Error(),
+			})
+			return
+		}
+		c.send(map[string]any{
+			"type":   "llama.fleet.scan.result",
+			"result": result,
+		})
+
 	// ── Test Observer ─────────────────────────────────────────────────────────
 
 	case "test.observe":

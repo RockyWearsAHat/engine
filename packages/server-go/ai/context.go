@@ -2218,7 +2218,7 @@ func Chat(ctx *ChatContext, userMessage string) {
 		extraContext = strings.TrimSpace(strings.TrimSpace(extraContext) + "\n\n" + identityContext)
 	}
 
-	_ = WriteAutonomyHandoffCache(ctx.ProjectPath, func() *AutonomyHandoff {
+	if err := WriteAutonomyHandoffCache(ctx.ProjectPath, func() *AutonomyHandoff {
 		handoff := BuildAutonomyHandoff(userMsgID, ctx.SessionID, ctx.ProjectPath, userMessage, func() string {
 			if session == nil {
 				return ""
@@ -2226,7 +2226,9 @@ func Chat(ctx *ChatContext, userMessage string) {
 			return session.Summary
 		}(), profile)
 		return &handoff
-	}())
+	}()); err != nil {
+		ctx.OnError(fmt.Sprintf("write autonomy handoff cache failed: %v", err))
+	}
 	systemPrompt := buildRoleSystemPrompt(ctx.Role, ctx.ProjectPath, branch, extraContext)
 
 	// Seed the active tool set from the role's pre-granted tools.
@@ -2262,12 +2264,14 @@ func Chat(ctx *ChatContext, userMessage string) {
 		tc = allToolCalls
 	}
 	assistantMessageID := newID()
-	db.SaveMessage(assistantMessageID, ctx.SessionID, "assistant", finalText.String(), tc) //nolint:errcheck
+	if err := db.SaveMessage(assistantMessageID, ctx.SessionID, "assistant", finalText.String(), tc); err != nil {
+		ctx.OnError(fmt.Sprintf("save assistant message failed: %v", err))
+	}
 	lastLedgerEvent, _ := ingestMemoryEvent(ctx.ProjectPath, ctx.SessionID, "assistant_message", model, map[string]any{
 		"id":   assistantMessageID,
 		"text": finalText.String(),
 	})
-	db.SaveAttentionResiduals(BuildAttentionResidualRecords(                               //nolint:errcheck
+	if err := db.SaveAttentionResiduals(BuildAttentionResidualRecords(
 		ctx.SessionID,
 		userMsgID,
 		userMessage,
@@ -2279,24 +2283,30 @@ func Chat(ctx *ChatContext, userMessage string) {
 			}
 			return session.Summary
 		}(),
-	))
+	)); err != nil {
+		ctx.OnError(fmt.Sprintf("save attention residuals failed: %v", err))
+	}
 	if summary := BuildUpdatedSessionSummary(func() string {
 		if session == nil {
 			return ""
 		}
 		return session.Summary
 	}(), userMessage, finalText.String(), allToolCalls); summary != "" {
-		db.UpdateSessionSummary(ctx.SessionID, summary) //nolint:errcheck
+		if err := db.UpdateSessionSummary(ctx.SessionID, summary); err != nil {
+			ctx.OnError(fmt.Sprintf("update session summary failed: %v", err))
+		}
 		if ctx.OnSessionUpdated != nil {
 			if updatedSession, err := db.GetSession(ctx.SessionID); err == nil && updatedSession != nil {
 				ctx.OnSessionUpdated(updatedSession)
 			}
 		}
 
-		_ = WriteAutonomyHandoffCache(ctx.ProjectPath, func() *AutonomyHandoff {
+		if err := WriteAutonomyHandoffCache(ctx.ProjectPath, func() *AutonomyHandoff {
 			handoff := BuildAutonomyHandoff(assistantMessageID, ctx.SessionID, ctx.ProjectPath, userMessage, summary, profile)
 			return &handoff
-		}())
+		}()); err != nil {
+			ctx.OnError(fmt.Sprintf("write autonomy handoff cache failed: %v", err))
+		}
 	}
 	if compiled := buildDeterministicMemoryContext(ctx.ProjectPath, ctx.SessionID, userMessage, openTabs, 2200); compiled != "" {
 		seq := int64(0)

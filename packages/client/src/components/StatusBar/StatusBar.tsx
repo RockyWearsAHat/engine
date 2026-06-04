@@ -18,6 +18,7 @@ const mdModeLabels: { mode: MarkdownViewMode; label: string; description: string
 const isDesktop = typeof window !== 'undefined'
   && ('__TAURI__' in window || !!(window as unknown as Record<string, unknown>).electronAPI);
 
+/** Shows editor status, git state, markdown preview mode, and connection info in the bottom bar. */
 export default function StatusBar() {
   const {
     gitStatus,
@@ -80,6 +81,7 @@ export default function StatusBar() {
 
   return (
     <div className={`status-bar ${connected ? '' : 'disconnected'}`}>
+      {/* Left group: connection status, git branch state, GitHub user */}
       <div className="status-group">
         <span className={`status-item ${connected ? 'connected' : 'disconnected'}`}>
           {connected ? <Wifi size={10} /> : <WifiOff size={10} />}
@@ -106,6 +108,7 @@ export default function StatusBar() {
         )}
       </div>
 
+      {/* Right group: active file details, markdown mode selector, save button, app name */}
       <div className="status-group">
         {activeFile && editorStatus && (
           <>

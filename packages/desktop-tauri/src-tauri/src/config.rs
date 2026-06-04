@@ -283,6 +283,7 @@ mod tests {
         assert_eq!(cfg.editor_tab_size, 2);
     }
 
+    #[allow(dead_code)]
     #[test]
     fn default_project_path_from_prefers_home() {
         let result = default_project_path_from(
@@ -292,18 +293,21 @@ mod tests {
         assert_eq!(result, "/tmp/home");
     }
 
+    #[allow(dead_code)]
     #[test]
     fn default_project_path_from_uses_current_dir_without_home() {
         let result = default_project_path_from(None, Some(PathBuf::from("/tmp/current")));
         assert_eq!(result, "/tmp/current");
     }
 
+    #[allow(dead_code)]
     #[test]
     fn default_project_path_from_falls_back_to_dot() {
         let result = default_project_path_from(None, None);
         assert_eq!(result, ".");
     }
 
+    #[allow(dead_code)]
     #[test]
     fn project_path_for_server_with_env_prefers_non_empty_env() {
         let mut cfg = AppConfig::default();
@@ -312,6 +316,7 @@ mod tests {
         assert_eq!(result, "/workspace/from-env");
     }
 
+    #[allow(dead_code)]
     #[test]
     fn project_path_for_server_with_env_uses_config_when_env_blank() {
         let mut cfg = AppConfig::default();
@@ -320,6 +325,7 @@ mod tests {
         assert_eq!(result, "/workspace/from-config");
     }
 
+    #[allow(dead_code)]
     #[test]
     fn project_path_for_server_with_env_falls_back_when_no_env_or_config() {
         let cfg = AppConfig::default();

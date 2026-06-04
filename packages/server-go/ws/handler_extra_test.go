@@ -1474,6 +1474,57 @@ func TestHandler_EngineTeamSet_PartialProviderModelReturnsError(t *testing.T) {
 	}
 }
 
+func TestHandler_LlamaFleetScan_Success(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{
+		"type": "llama.fleet.scan",
+	})
+
+	msg := readWSMessageOfType(t, conn, "llama.fleet.scan.result")
+	result, ok := msg["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object, got %#v", msg)
+	}
+	if _, ok := result["machine"].(map[string]any); !ok {
+		t.Fatalf("expected machine block, got %#v", result)
+	}
+	if _, ok := result["recommendation"].(map[string]any); !ok {
+		t.Fatalf("expected recommendation block, got %#v", result)
+	}
+}
+
+func TestHandler_LlamaFleetScan_WriteFile(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{
+		"type":      "llama.fleet.scan",
+		"writeFile": true,
+	})
+
+	msg := readWSMessageOfType(t, conn, "llama.fleet.scan.result")
+	result, ok := msg["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object, got %#v", msg)
+	}
+
+	if wrote, _ := result["wroteEnvFile"].(bool); !wrote {
+		t.Fatalf("expected wroteEnvFile=true, got %#v", result["wroteEnvFile"])
+	}
+
+	envPath, _ := result["envFilePath"].(string)
+	if strings.TrimSpace(envPath) == "" {
+		t.Fatalf("expected envFilePath in result, got %#v", result)
+	}
+	if _, err := os.Stat(envPath); err != nil {
+		t.Fatalf("expected env file to exist at %s: %v", envPath, err)
+	}
+}
+
 func TestQualityScanWithProgressFn_NoCallbackFallsBackToQualityScan(t *testing.T) {
 	prevScan := qualityScanFn
 	defer func() { qualityScanFn = prevScan }()

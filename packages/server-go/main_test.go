@@ -1516,7 +1516,9 @@ func TestTriggerScaffoldSession_ErrorFirstPass_RetriesAndSucceeds(t *testing.T) 
 			ctx.OnError("temporary tool failure")
 			return
 		}
-		_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "scaffold_progress.txt"), []byte("done"), 0o644)
+		if err := os.WriteFile(filepath.Join(ctx.ProjectPath, "scaffold_progress.txt"), []byte("done"), 0o644); err != nil {
+			t.Fatalf("write scaffold progress file: %v", err)
+		}
 		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "add", "scaffold_progress.txt").CombinedOutput()
 		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "scaffold: initial implementation").CombinedOutput()
 		ctx.OnChunk("recovered and completed", false)
@@ -1574,14 +1576,18 @@ func TestTriggerScaffoldSession_OnlyUntrackedFirstPass_RetriesAsNoop(t *testing.
 		callCount++
 		if callCount == 1 {
 			// Simulate AI writing only a planning doc (untracked, not committed).
-			_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "PROJECT_GOAL.md"), []byte("plan"), 0o644)
+			if err := os.WriteFile(filepath.Join(ctx.ProjectPath, "PROJECT_GOAL.md"), []byte("plan"), 0o644); err != nil {
+				t.Fatalf("write project goal: %v", err)
+			}
 			ctx.OnChunk("wrote project goal", false)
 			ctx.OnChunk("", true)
 			return
 		}
 		// Second attempt: record the prompt then commit actual code.
 		attempt2Prompt = prompt
-		_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "main.go"), []byte("package main"), 0o644)
+		if err := os.WriteFile(filepath.Join(ctx.ProjectPath, "main.go"), []byte("package main"), 0o644); err != nil {
+			t.Fatalf("write main.go: %v", err)
+		}
 		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "add", "main.go").CombinedOutput()
 		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "scaffold: add main").CombinedOutput()
 		ctx.OnChunk("implemented", false)
@@ -1632,7 +1638,9 @@ func TestTriggerScaffoldSession_TimeoutThenError_ReportsBlockedAfterRetry(t *tes
 			}
 			return
 		}
-		_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "partial_progress.txt"), []byte("done"), 0o644)
+		if err := os.WriteFile(filepath.Join(ctx.ProjectPath, "partial_progress.txt"), []byte("done"), 0o644); err != nil {
+			t.Fatalf("write partial progress file: %v", err)
+		}
 		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "add", "partial_progress.txt").CombinedOutput()
 		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "partial progress").CombinedOutput()
 		ctx.OnError("agent exited early")
@@ -2609,7 +2617,9 @@ func TestTriggerScaffoldSession_SecondAttemptMakesProgress(t *testing.T) {
 		callCount++
 		if callCount == 2 {
 			// Create and commit a file so hasCommitProgress detects real progress.
-			_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "progress.txt"), []byte("done"), 0o644)
+			if err := os.WriteFile(filepath.Join(ctx.ProjectPath, "progress.txt"), []byte("done"), 0o644); err != nil {
+				t.Fatalf("write progress file: %v", err)
+			}
 			_, _ = exec.Command("git", "-C", ctx.ProjectPath, "add", "progress.txt").CombinedOutput()
 			_, _ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "scaffold: add progress").CombinedOutput()
 		}
@@ -2732,7 +2742,9 @@ func TestTriggerScaffoldSession_FirstAttemptMakesProgress(t *testing.T) {
 	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
 		callCount++
 		sawPriorContext = strings.Contains(prompt, "Prior scaffold attempts")
-		_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "first_progress.txt"), []byte("done"), 0o644)
+		if err := os.WriteFile(filepath.Join(ctx.ProjectPath, "first_progress.txt"), []byte("done"), 0o644); err != nil {
+			t.Fatalf("write first progress file: %v", err)
+		}
 		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "add", "first_progress.txt").CombinedOutput()
 		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "scaffold: first pass").CombinedOutput()
 		ctx.OnChunk("response", false)
@@ -2864,7 +2876,9 @@ func TestTriggerScaffoldSession_ErrorSecondAttemptWithRepoProgress_ReportsStoppe
 			ctx.OnError("first attempt failed")
 			return
 		}
-		_ = os.WriteFile(filepath.Join(ctx.ProjectPath, "partial.txt"), []byte("done"), 0o644)
+		if err := os.WriteFile(filepath.Join(ctx.ProjectPath, "partial.txt"), []byte("done"), 0o644); err != nil {
+			t.Fatalf("write partial file: %v", err)
+		}
 		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "add", "partial.txt").CombinedOutput()
 		_, _ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "partial work").CombinedOutput()
 		ctx.OnError("incomplete")

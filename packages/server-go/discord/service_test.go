@@ -980,10 +980,10 @@ func TestHandleProjectCommand_NoArgs(t *testing.T) {
 	}
 	// no panic, send no-op
 	svc.handleProjectCommand(m, nil)
-	svc.handleProjectCommand(m, []string{"add"})      // missing path
-	svc.handleProjectCommand(m, []string{"remove"})   // missing name
-	svc.handleProjectCommand(m, []string{"unknown"})  // unknown sub
-	svc.handleProjectCommand(m, []string{"list"})     // lists empty
+	svc.handleProjectCommand(m, []string{"add"})     // missing path
+	svc.handleProjectCommand(m, []string{"remove"})  // missing name
+	svc.handleProjectCommand(m, []string{"unknown"}) // unknown sub
+	svc.handleProjectCommand(m, []string{"list"})    // lists empty
 }
 
 func TestHandleAskCommand_Branches(t *testing.T) {

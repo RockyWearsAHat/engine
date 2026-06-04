@@ -119,7 +119,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		UpAt:      s.startAt.Format(time.RFC3339),
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		http.Error(w, "encode health response", http.StatusInternalServerError)
+		return
+	}
 }
 
 // handleExec runs a shell command on this peer and returns the captured
@@ -186,7 +189,10 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		http.Error(w, "encode exec response", http.StatusInternalServerError)
+		return
+	}
 }
 
 // authenticate verifies the request was signed by a configured peer's secret.

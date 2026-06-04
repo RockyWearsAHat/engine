@@ -61,7 +61,9 @@ func Init(projectPath string) error {
 // hold globalDBMu.
 func initLocked(projectPath string) error {
 	if globalDB != nil {
-		_ = globalDB.Close()
+		if err := globalDB.Close(); err != nil {
+			fmt.Printf("warning: close existing db connection failed: %v\n", err)
+		}
 		globalDB = nil
 	}
 

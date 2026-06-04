@@ -13,8 +13,8 @@ import (
 // orchestratorControlFns are the live hooks into the running orchestrator.
 // Bound at package init to the ai package functions; tests can swap them.
 var (
-	orchestratorHandleFn   = ai.GetOrchestratorHandle
-	orchestratorListFn     = ai.ListOrchestratorProjects
+	orchestratorHandleFn = ai.GetOrchestratorHandle
+	orchestratorListFn   = ai.ListOrchestratorProjects
 )
 
 // handleStopCommand stops the orchestrator running for the bound project.
@@ -37,7 +37,8 @@ func (s *Service) handleStopCommand(m *discordgo.MessageCreate, args []string) {
 // handleRedirectCommand injects a new instruction into the orchestrator.
 // The instruction is prepended to the next builder step.
 // Usage: !redirect <instruction>
-//        !redirect <project> <instruction>   (from control channel)
+//
+//	!redirect <project> <instruction>   (from control channel)
 func (s *Service) handleRedirectCommand(m *discordgo.MessageCreate, args []string) {
 	if len(args) == 0 {
 		s.send(m.ChannelID, "Usage: !redirect <instruction>   or   !redirect <project> <instruction> (from control channel)")
@@ -116,4 +117,3 @@ func (s *Service) applyPauseToOrchestrator(projectPath string, pause bool) {
 		h.Resume()
 	}
 }
-

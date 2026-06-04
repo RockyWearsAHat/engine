@@ -22,6 +22,7 @@ function emitMessage(msg: ServerMessage): void {
   handlers.forEach((handler) => handler(msg));
 }
 
+/** Factory: create a realistic UsageDashboard payload for testing. Merge overrides to customize. */
 function makeDashboard(overrides?: Partial<UsageDashboardPayload>): UsageDashboardPayload {
   return {
     scope: 'project',

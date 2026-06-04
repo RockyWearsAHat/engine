@@ -37,7 +37,9 @@ func orchestratorIntakePhase(cfg OrchestratorConfig, state *OrchestrationState, 
 	// Backward compat: if the legacy context.md exists, treat it as design.md
 	// so old sessions resume gracefully.
 	if legacy := readContextDoc(cfg.ProjectPath); strings.TrimSpace(legacy) != "" {
-		_ = WriteDoc(cfg.ProjectPath, DocDesign, legacy)
+		if err := WriteDoc(cfg.ProjectPath, DocDesign, legacy); err != nil {
+			return "", fmt.Errorf("persist migrated design.md: %w", err)
+		}
 		return legacy, nil
 	}
 

@@ -284,7 +284,9 @@ func TestCleanupSessionWorktree_MergeError(t *testing.T) {
 	err = CleanupSessionWorktree("merge-err-sess", dir, true)
 	// We don't assert on error here — the merge might succeed or fail depending on git state.
 	// The important thing is that the code path is exercised without panic.
-	_ = err
+	if err != nil {
+		t.Logf("cleanup returned expected non-fatal error: %v", err)
+	}
 }
 
 func TestCleanupSessionWorktree_CheckoutBaselineError(t *testing.T) {
@@ -297,7 +299,9 @@ func TestCleanupSessionWorktree_CheckoutBaselineError(t *testing.T) {
 	}
 	err := CleanupSessionWorktree("co-err-sess", notGit, true)
 	// Expect an error since git checkout will fail in a non-git dir.
-	_ = err
+	if err == nil {
+		t.Fatal("expected checkout baseline error in non-git directory")
+	}
 }
 
 func TestCleanupSessionWorktree_MergeBranchError(t *testing.T) {
@@ -310,7 +314,9 @@ func TestCleanupSessionWorktree_MergeBranchError(t *testing.T) {
 	}
 	err := CleanupSessionWorktree("merge-fail-sess", dir, true)
 	// Merge should fail because the session branch doesn't exist.
-	_ = err
+	if err == nil {
+		t.Fatal("expected merge branch error for missing session branch")
+	}
 }
 
 func TestCleanupSessionWorktree_RemoveWorktreeError(t *testing.T) {
@@ -325,5 +331,7 @@ func TestCleanupSessionWorktree_RemoveWorktreeError(t *testing.T) {
 		t.Fatalf("write blocker: %v", err)
 	}
 	err := CleanupSessionWorktree("rmerr-sess", dir, false)
-	_ = err
+	if err == nil {
+		t.Fatal("expected remove worktree error when path is a file")
+	}
 }

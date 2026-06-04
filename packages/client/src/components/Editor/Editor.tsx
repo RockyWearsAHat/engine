@@ -327,6 +327,7 @@ function LargeFileViewport({
 }
 
 function Editor() {
+  /* Extract editor state using shallow selector to minimize re-renders */
   const {
     openFiles,
     activeFilePath,
@@ -348,19 +349,27 @@ function Editor() {
   })));
   const activeFile = openFiles.find(f => f.path === activeFilePath);
   const [selectionInfo, setSelectionInfo] = useState({ line: 1, column: 1, endLine: 1 });
+
+  /* Buffers: track file content & line breaks separately to avoid UI thrashing on large edits */
   const buffersRef = useRef<Record<string, string>>({});
   const lineBreaksRef = useRef<Record<string, number[]>>({});
   const pendingEditRef = useRef<{ path: string; start: number; end: number } | null>(null);
+
+  /* Animation frame & UI update scheduling refs to debounce renders */
   const cursorFrameRef = useRef<number | null>(null);
   const highlightFrameRef = useRef<number | null>(null);
   const highlightTimeoutRef = useRef<number | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
   const pendingScrollTopRef = useRef(0);
+
+  /* DOM element refs: textarea, syntax highlight overlay, gutter, content area */
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const highlightOverlayRef = useRef<HTMLDivElement | null>(null);
   const highlightContentRef = useRef<HTMLPreElement | null>(null);
   const contentAreaRef = useRef<HTMLDivElement | null>(null);
   const gutterRef = useRef<HTMLDivElement | null>(null);
+
+  /* Viewport state: scroll position and visible height for large-file viewport calculations */
   const [editorScrollTop, setEditorScrollTop] = useState(0);
   const [editorViewportHeight, setEditorViewportHeight] = useState(600);
 

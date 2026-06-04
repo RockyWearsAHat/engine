@@ -121,7 +121,9 @@ func TestInit_MkdirError(t *testing.T) {
 
 func TestListSessions_QueryAndScanErrors(t *testing.T) {
 	initTestDB(t)
-	_ = globalDB.Close()
+	if err := globalDB.Close(); err != nil {
+		t.Fatalf("close global db: %v", err)
+	}
 	if _, err := ListSessions("/p"); err == nil {
 		t.Fatal("expected query error on closed db")
 	}
@@ -150,7 +152,9 @@ func TestSaveAndGetMessages_ErrorPaths(t *testing.T) {
 		t.Fatal("expected scan error for NULL message id")
 	}
 
-	_ = raw.Close()
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
 	if _, err := GetMessages("s1"); err == nil {
 		t.Fatal("expected query error on closed db")
 	}
@@ -177,7 +181,9 @@ func TestValidationAndLearning_ErrorPaths(t *testing.T) {
 		t.Fatal("expected scan error for NULL learning id by category")
 	}
 
-	_ = raw.Close()
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
 	if _, err := GetValidationResults("s1"); err == nil {
 		t.Fatal("expected query error for validations on closed db")
 	}
@@ -222,7 +228,9 @@ func TestProjectHistory_ErrorPaths(t *testing.T) {
 		t.Fatal("expected scan error for project validations")
 	}
 
-	_ = raw.Close()
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
 	if _, err := GetProjectMessages("/p", 10); err == nil {
 		t.Fatal("expected query error for project messages on closed db")
 	}
@@ -240,7 +248,9 @@ func TestProjectHistory_ErrorPaths(t *testing.T) {
 func TestProjectDirection_QueryError(t *testing.T) {
 	raw := openRawDB(t)
 	setGlobalDBForTest(t, raw)
-	_ = raw.Close()
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
 	if _, err := GetProjectDirection("/p"); err == nil {
 		t.Fatal("expected query error on closed db")
 	}
@@ -268,7 +278,9 @@ func TestDiscordDB_ErrorPaths(t *testing.T) {
 		t.Fatal("expected scan error for discord recent list")
 	}
 
-	_ = raw.Close()
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
 	if _, err := DiscordSearchMessages("/p", "hello", "", 10); err == nil {
 		t.Fatal("expected query error for discord search on closed db")
 	}
@@ -280,7 +292,9 @@ func TestDiscordDB_ErrorPaths(t *testing.T) {
 func TestAttentionResiduals_ErrorPaths(t *testing.T) {
 	raw := openRawDB(t)
 	setGlobalDBForTest(t, raw)
-	_ = raw.Close()
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
 	if err := SaveAttentionResiduals([]AttentionResidual{{ID: "1"}}); err == nil {
 		t.Fatal("expected begin error on closed db")
 	}
@@ -416,8 +430,12 @@ func TestSaveWorkingState_AndLoad_RoundTrip(t *testing.T) {
 
 func TestSaveWorkingState_Upsert(t *testing.T) {
 	initTestDB(t)
-	_ = SaveWorkingState("s-upsert", `{"CurrentTask":"v1"}`)
-	_ = SaveWorkingState("s-upsert", `{"CurrentTask":"v2"}`)
+	if err := SaveWorkingState("s-upsert", `{"CurrentTask":"v1"}`); err != nil {
+		t.Fatalf("save working state v1: %v", err)
+	}
+	if err := SaveWorkingState("s-upsert", `{"CurrentTask":"v2"}`); err != nil {
+		t.Fatalf("save working state v2: %v", err)
+	}
 	got, err := LoadWorkingState("s-upsert")
 	if err != nil {
 		t.Fatal(err)

@@ -944,7 +944,9 @@ func TestListBranches_NilGuard(t *testing.T) {
 	dir := t.TempDir()
 	_, err := ListBranches(dir)
 	// Non-repo errors — just verify no panic.
-	_ = err
+	if err == nil {
+		t.Fatal("expected list branches error for non-repo directory")
+	}
 }
 
 func TestCommit_RevParseError(t *testing.T) {

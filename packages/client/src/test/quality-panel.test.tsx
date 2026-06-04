@@ -345,6 +345,70 @@ describe('QualityPanel', () => {
     expect(screen.getByText('scan failed')).toBeTruthy();
   });
 
+  it('QualityPanel_BlockedRescan_ShowsIssuesTabBannerAndDisablesRescan', () => {
+    useStore.setState({
+      qualityError: 'blocking syntax errors',
+      qualityReport: {
+        projectPath: '/tmp/project',
+        generatedAt: new Date().toISOString(),
+        issueCount: 1,
+        highCount: 1,
+        mediumCount: 0,
+        lowCount: 0,
+        issues: [
+          {
+            id: 'q-blocked',
+            severity: 'high',
+            category: 'cs-principle',
+            message: 'Missing return',
+            file: 'packages/client/src/App.tsx',
+            line: 10,
+          },
+        ],
+      },
+    });
+
+    render(<QualityPanel />);
+
+    expect(screen.getByText('Rescan paused. Fix the blocking syntax or lint issues first, then come back here and scan again.')).toBeTruthy();
+    expect(screen.getByText('Open Issues tab')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Rescan' })).toBeDisabled();
+  });
+
+  it('QualityPanel_Rescan_RequestsQualityRefreshWhenNotBlocked', () => {
+    useStore.setState({
+      qualityError: null,
+      qualityReport: {
+        projectPath: '/tmp/project',
+        generatedAt: new Date().toISOString(),
+        issueCount: 1,
+        highCount: 1,
+        mediumCount: 0,
+        lowCount: 0,
+        issues: [
+          {
+            id: 'q-rescan',
+            severity: 'high',
+            category: 'cs-principle',
+            message: 'Missing return',
+            file: 'packages/client/src/App.tsx',
+            line: 10,
+          },
+        ],
+      },
+    });
+
+    render(<QualityPanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rescan' }));
+
+    expect(wsSendMock).toHaveBeenCalledWith({
+      type: 'quality.report.get',
+      projectPath: '/tmp/project',
+      maxIssues: 0,
+    });
+  });
+
   it('QualityPanel_ClickingIssue_OpensFileInEditorAtIssueLine', () => {
     useStore.setState({
       qualityCompleted: true,

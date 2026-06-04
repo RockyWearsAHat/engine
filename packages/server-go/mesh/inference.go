@@ -116,5 +116,7 @@ func buildUpstreamRequest(ctx context.Context, method, base, path string, body [
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		fmt.Printf("mesh inference encode response failed: %v\n", err)
+	}
 }

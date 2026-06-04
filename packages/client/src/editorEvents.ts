@@ -5,6 +5,7 @@ export const REQUEST_CLOSE_FILE_EVENT = 'engine:request-close-file';
 export const PERFORM_CLOSE_FILE_EVENT = 'engine:perform-close-file';
 export const SAVE_FILES_EVENT = 'engine:save-files';
 export const REVEAL_FILE_LOCATION_EVENT = 'engine:reveal-file-location';
+export const OPEN_ISSUES_TAB_EVENT = 'engine:open-issues-tab';
 
 export interface EditorStatusDetail {
   path: string;

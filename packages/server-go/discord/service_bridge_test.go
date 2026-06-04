@@ -28,7 +28,9 @@ func installDiscordGuildAPIShim(t *testing.T, guildID string, channels map[strin
 		if r.Method == http.MethodGet && strings.HasPrefix(path, "/channels/") {
 			id := strings.TrimPrefix(path, "/channels/")
 			if ch, ok := channels[id]; ok {
-				_ = json.NewEncoder(w).Encode(ch)
+				if err := json.NewEncoder(w).Encode(ch); err != nil {
+					t.Fatalf("encode channel response: %v", err)
+				}
 				return
 			}
 			http.Error(w, "not found", http.StatusNotFound)
@@ -43,7 +45,9 @@ func installDiscordGuildAPIShim(t *testing.T, guildID string, channels map[strin
 				for _, ch := range channels {
 					list = append(list, ch)
 				}
-				_ = json.NewEncoder(w).Encode(list)
+				if err := json.NewEncoder(w).Encode(list); err != nil {
+					t.Fatalf("encode guild channel list: %v", err)
+				}
 				return
 			case http.MethodPost:
 				var req struct {
@@ -57,7 +61,9 @@ func installDiscordGuildAPIShim(t *testing.T, guildID string, channels map[strin
 				id := "created-" + slug(req.Name)
 				ch := &discordgo.Channel{ID: id, Name: req.Name, Type: discordgo.ChannelType(req.Type)}
 				channels[id] = ch
-				_ = json.NewEncoder(w).Encode(ch)
+				if err := json.NewEncoder(w).Encode(ch); err != nil {
+					t.Fatalf("encode created channel: %v", err)
+				}
 				return
 			}
 		}
@@ -66,9 +72,13 @@ func installDiscordGuildAPIShim(t *testing.T, guildID string, channels map[strin
 			var req struct {
 				Content string `json:"content"`
 			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode message request: %v", err)
+			}
 			sent = append(sent, req.Content)
-			_ = json.NewEncoder(w).Encode(map[string]string{"id": "m1", "content": req.Content})
+			if err := json.NewEncoder(w).Encode(map[string]string{"id": "m1", "content": req.Content}); err != nil {
+				t.Fatalf("encode message response: %v", err)
+			}
 			return
 		}
 
@@ -131,7 +141,9 @@ func installDiscordChannelAPIShim(t *testing.T, channels map[string]*discordgo.C
 		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/channels/") {
 			id := strings.TrimPrefix(r.URL.Path, "/channels/")
 			if ch, ok := channels[id]; ok {
-				_ = json.NewEncoder(w).Encode(ch)
+				if err := json.NewEncoder(w).Encode(ch); err != nil {
+					t.Fatalf("encode channel lookup response: %v", err)
+				}
 				return
 			}
 		}
@@ -1193,7 +1205,9 @@ func TestWriteConfig_Success(t *testing.T) {
 
 func TestWriteConfig_MkdirError(t *testing.T) {
 	notADir := t.TempDir() + "/file.txt"
-	_ = os.WriteFile(notADir, []byte("x"), 0600)
+	if err := os.WriteFile(notADir, []byte("x"), 0600); err != nil {
+		t.Fatalf("write sentinel file: %v", err)
+	}
 	err := WriteConfig(filepath.Join(notADir, "subdir"), Config{})
 	if err == nil {
 		t.Fatal("expected error when path is under a file")
@@ -1207,7 +1221,9 @@ func TestClose_WithNonNilDG(t *testing.T) {
 	svc.dg = makeDiscordRESTSession(t)
 	// Close on a never-opened session returns an error or nil — both are OK.
 	// The key is no panic.
-	_ = svc.Close()
+	if err := svc.Close(); err != nil {
+		t.Logf("Close returned expected non-fatal error: %v", err)
+	}
 }
 
 // ── Start enabled path (dg.Open() fails) ─────────────────────────────────────
@@ -1238,7 +1254,9 @@ func TestStart_Enabled_OpenFails(t *testing.T) {
 
 	if err := svc.Start(); err == nil {
 		t.Error("expected error from Start when gateway unreachable")
-		_ = svc.Close()
+		if closeErr := svc.Close(); closeErr != nil {
+			t.Logf("Close returned expected non-fatal error: %v", closeErr)
+		}
 	}
 }
 
@@ -1324,7 +1342,9 @@ func installThreadChannelShim(t *testing.T, channels map[string]*discordgo.Chann
 		if r.Method == http.MethodGet && strings.HasPrefix(path, "/channels/") {
 			id := strings.TrimPrefix(path, "/channels/")
 			if ch, ok := channels[id]; ok {
-				_ = json.NewEncoder(w).Encode(ch)
+				if err := json.NewEncoder(w).Encode(ch); err != nil {
+					t.Fatalf("encode thread channel response: %v", err)
+				}
 				return
 			}
 			http.Error(w, "not found", http.StatusNotFound)
@@ -1332,7 +1352,9 @@ func installThreadChannelShim(t *testing.T, channels map[string]*discordgo.Chann
 		}
 		// Accept message sends and thread starts without error.
 		if r.Method == http.MethodPost {
-			_ = json.NewEncoder(w).Encode(map[string]string{"id": "m1", "content": ""})
+			if err := json.NewEncoder(w).Encode(map[string]string{"id": "m1", "content": ""}); err != nil {
+				t.Fatalf("encode thread post response: %v", err)
+			}
 			return
 		}
 		http.Error(w, "not found", http.StatusNotFound)
@@ -1544,10 +1566,12 @@ func installThreadStartShim(t *testing.T, parentChannelID, newThreadID string) f
 		if r.Method == http.MethodGet && strings.HasPrefix(path, "/channels/") {
 			id := strings.TrimPrefix(path, "/channels/")
 			if id == parentChannelID {
-				_ = json.NewEncoder(w).Encode(&discordgo.Channel{
+				if err := json.NewEncoder(w).Encode(&discordgo.Channel{
 					ID:   parentChannelID,
 					Type: discordgo.ChannelTypeGuildText,
-				})
+				}); err != nil {
+					t.Fatalf("encode parent channel: %v", err)
+				}
 				return
 			}
 			http.Error(w, "not found", http.StatusNotFound)
@@ -1555,16 +1579,20 @@ func installThreadStartShim(t *testing.T, parentChannelID, newThreadID string) f
 		}
 		// POST /channels/{id}/threads — create thread.
 		if r.Method == http.MethodPost && strings.HasSuffix(path, "/threads") {
-			_ = json.NewEncoder(w).Encode(&discordgo.Channel{
+			if err := json.NewEncoder(w).Encode(&discordgo.Channel{
 				ID:       newThreadID,
 				Type:     discordgo.ChannelTypeGuildPublicThread,
 				ParentID: parentChannelID,
-			})
+			}); err != nil {
+				t.Fatalf("encode new thread response: %v", err)
+			}
 			return
 		}
 		// POST /channels/{id}/messages — accept silently.
 		if r.Method == http.MethodPost && strings.HasSuffix(path, "/messages") {
-			_ = json.NewEncoder(w).Encode(map[string]string{"id": "m1", "content": ""})
+			if err := json.NewEncoder(w).Encode(map[string]string{"id": "m1", "content": ""}); err != nil {
+				t.Fatalf("encode thread message response: %v", err)
+			}
 			return
 		}
 		http.Error(w, "not found", http.StatusNotFound)
@@ -1618,10 +1646,12 @@ func TestAcquireChatThread_ThreadStartError(t *testing.T) {
 	// Shim returns the parent as a regular channel but fails POST /threads.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/"+binding.ChannelID) {
-			_ = json.NewEncoder(w).Encode(&discordgo.Channel{
+			if err := json.NewEncoder(w).Encode(&discordgo.Channel{
 				ID:   binding.ChannelID,
 				Type: discordgo.ChannelTypeGuildText,
-			})
+			}); err != nil {
+				t.Fatalf("encode parent channel: %v", err)
+			}
 			return
 		}
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -1874,11 +1904,13 @@ func TestResolveProjectByChannel_ThreadParentNotBound(t *testing.T) {
 
 	// Shim returns a thread with parentID but no project bound to that parent.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(&discordgo.Channel{
+		if err := json.NewEncoder(w).Encode(&discordgo.Channel{
 			ID:       "orphan-thread",
 			Type:     discordgo.ChannelTypeGuildPublicThread,
 			ParentID: "unbound-parent",
-		})
+		}); err != nil {
+			t.Fatalf("encode orphan thread response: %v", err)
+		}
 	}))
 	defer server.Close()
 
@@ -2119,7 +2151,9 @@ func TestReload_StartCalled(t *testing.T) {
 	err := svc.Reload(cfg)
 	// We expect an error from Start() because the token is fake, but the
 	// return s.Start() statement in Reload is covered regardless.
-	_ = err
+	if err == nil {
+		t.Log("Reload unexpectedly succeeded with fake token")
+	}
 }
 
 // (ensureControlChannel GuildChannels error and ensureProjectChannel GuildChannels error are covered by existing tests above)
@@ -2134,7 +2168,9 @@ func installGuildChannelsOKCreateFailShim(t *testing.T, guildID string) (dg *dis
 		guildChanPath := fmt.Sprintf("/guilds/%s/channels", guildID)
 		if path == guildChanPath {
 			if r.Method == http.MethodGet {
-				_ = json.NewEncoder(w).Encode([]*discordgo.Channel{})
+				if err := json.NewEncoder(w).Encode([]*discordgo.Channel{}); err != nil {
+					t.Fatalf("encode guild channels list: %v", err)
+				}
 				return
 			}
 			http.Error(w, "forbidden", http.StatusForbidden)
@@ -2387,14 +2423,16 @@ func TestStart_EnabledSuccess(t *testing.T) {
 	// Create a minimal gateway mock that accepts the connection.
 	gwSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/gateway/bot") {
-			_ = json.NewEncoder(w).Encode(map[string]any{
+			if err := json.NewEncoder(w).Encode(map[string]any{
 				"url":    "wss://fake.ws.example.com",
 				"shards": 1,
 				"session_start_limit": map[string]int{
 					"total":     100,
 					"remaining": 100,
 				},
-			})
+			}); err != nil {
+				t.Fatalf("encode gateway bot response: %v", err)
+			}
 			return
 		}
 		http.Error(w, "not found", http.StatusNotFound)
@@ -2427,7 +2465,9 @@ func TestStart_EnabledSuccess(t *testing.T) {
 		t.Logf("Start() returned error (may be expected if websocket can't connect): %v", err)
 		// The important thing is that the function executed the enabled path.
 	}
-	_ = svc.Close()
+	if err := svc.Close(); err != nil {
+		t.Logf("Close returned expected non-fatal error: %v", err)
+	}
 }
 
 // ── WebSocket / REST gateway mock helpers ─────────────────────────────────────
@@ -2447,14 +2487,18 @@ func startDiscordWSMock(t *testing.T) (wsURL string, cleanup func()) {
 		if err != nil {
 			return
 		}
-		_ = conn.WriteMessage(websocket.TextMessage,
-			[]byte(`{"op":10,"d":{"heartbeat_interval":41250}}`))
+		if err := conn.WriteMessage(websocket.TextMessage,
+			[]byte(`{"op":10,"d":{"heartbeat_interval":41250}}`)); err != nil {
+			return
+		}
 		// Read IDENTIFY
 		if _, _, err := conn.ReadMessage(); err != nil {
 			return
 		}
 		// Send READY
-		_ = conn.WriteMessage(websocket.TextMessage, []byte(ready))
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(ready)); err != nil {
+			return
+		}
 		// Drain
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
@@ -2482,19 +2526,27 @@ func installDiscordValidateMock(t *testing.T, guildID, guildName string, memberI
 		switch {
 		case strings.HasSuffix(path, "/gateway/bot"),
 			strings.HasSuffix(path, "/gateway"):
-			_ = json.NewEncoder(w).Encode(map[string]any{
+			if err := json.NewEncoder(w).Encode(map[string]any{
 				"url":    wsURL,
 				"shards": 1,
-			})
+			}); err != nil {
+				t.Fatalf("encode gateway response: %v", err)
+			}
 		case path == "/users/@me":
-			_ = json.NewEncoder(w).Encode(&discordgo.User{ID: "bot-123", Username: botUser})
+			if err := json.NewEncoder(w).Encode(&discordgo.User{ID: "bot-123", Username: botUser}); err != nil {
+				t.Fatalf("encode bot user response: %v", err)
+			}
 		case path == "/guilds/"+guildID:
-			_ = json.NewEncoder(w).Encode(&discordgo.Guild{ID: guildID, Name: guildName})
+			if err := json.NewEncoder(w).Encode(&discordgo.Guild{ID: guildID, Name: guildName}); err != nil {
+				t.Fatalf("encode guild response: %v", err)
+			}
 		case strings.HasPrefix(path, "/guilds/"+guildID+"/members/"):
 			uid := strings.TrimPrefix(path, "/guilds/"+guildID+"/members/")
 			for _, id := range memberIDs {
 				if id == uid {
-					_ = json.NewEncoder(w).Encode(&discordgo.Member{User: &discordgo.User{ID: uid}})
+					if err := json.NewEncoder(w).Encode(&discordgo.Member{User: &discordgo.User{ID: uid}}); err != nil {
+						t.Fatalf("encode guild member response: %v", err)
+					}
 					return
 				}
 			}
@@ -2537,7 +2589,9 @@ func TestStart_GatewaySuccess(t *testing.T) {
 
 	// Minimal HTTP server just for /gateway/bot.
 	gatewaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"url": wsURL, "shards": 1})
+		if err := json.NewEncoder(w).Encode(map[string]any{"url": wsURL, "shards": 1}); err != nil {
+			t.Fatalf("encode gateway success response: %v", err)
+		}
 	}))
 	defer gatewaySrv.Close()
 
@@ -2578,12 +2632,16 @@ func TestStart_GatewaySuccess(t *testing.T) {
 	if svc.dg != firstSession {
 		t.Fatal("expected second Start() to reuse existing Discord session")
 	}
-	_ = svc.Close()
+	if err := svc.Close(); err != nil {
+		t.Logf("Close returned expected non-fatal error: %v", err)
+	}
 }
 
 func TestStart_GatewayOpenFailureClearsSession(t *testing.T) {
 	gatewaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"url": "ws://127.0.0.1:1", "shards": 1})
+		if err := json.NewEncoder(w).Encode(map[string]any{"url": "ws://127.0.0.1:1", "shards": 1}); err != nil {
+			t.Fatalf("encode gateway failure response: %v", err)
+		}
 	}))
 	defer gatewaySrv.Close()
 
@@ -2623,7 +2681,9 @@ func TestReload_GatewaySuccess(t *testing.T) {
 	defer wsCleanup()
 
 	gatewaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"url": wsURL, "shards": 1})
+		if err := json.NewEncoder(w).Encode(map[string]any{"url": wsURL, "shards": 1}); err != nil {
+			t.Fatalf("encode reload success response: %v", err)
+		}
 	}))
 	defer gatewaySrv.Close()
 
@@ -2657,12 +2717,16 @@ func TestReload_GatewaySuccess(t *testing.T) {
 	if svc.dg == nil {
 		t.Fatal("expected Reload() to establish a Discord session")
 	}
-	_ = svc.Close()
+	if err := svc.Close(); err != nil {
+		t.Logf("Close returned expected non-fatal error: %v", err)
+	}
 }
 
 func TestReload_GatewayOpenFailureClearsSession(t *testing.T) {
 	gatewaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"url": "ws://127.0.0.1:1", "shards": 1})
+		if err := json.NewEncoder(w).Encode(map[string]any{"url": "ws://127.0.0.1:1", "shards": 1}); err != nil {
+			t.Fatalf("encode reload failure response: %v", err)
+		}
 	}))
 	defer gatewaySrv.Close()
 
@@ -2703,7 +2767,9 @@ func TestReload_DisabledClosesExistingSession(t *testing.T) {
 	defer wsCleanup()
 
 	gatewaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"url": wsURL, "shards": 1})
+		if err := json.NewEncoder(w).Encode(map[string]any{"url": wsURL, "shards": 1}); err != nil {
+			t.Fatalf("encode reload-close response: %v", err)
+		}
 	}))
 	defer gatewaySrv.Close()
 
@@ -2755,7 +2821,9 @@ func TestValidate_GuildAccessFails(t *testing.T) {
 		path := r.URL.Path
 		switch {
 		case path == "/users/@me":
-			_ = json.NewEncoder(w).Encode(&discordgo.User{ID: "b", Username: "TestBot"})
+			if err := json.NewEncoder(w).Encode(&discordgo.User{ID: "b", Username: "TestBot"}); err != nil {
+				t.Fatalf("encode validate bot user response: %v", err)
+			}
 		default:
 			http.Error(w, `{"message":"Unknown Guild","code":10004}`, http.StatusNotFound)
 		}
@@ -2763,7 +2831,9 @@ func TestValidate_GuildAccessFails(t *testing.T) {
 	defer restSrv.Close()
 
 	gatewaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"url": wsURL, "shards": 1})
+		if err := json.NewEncoder(w).Encode(map[string]any{"url": wsURL, "shards": 1}); err != nil {
+			t.Fatalf("encode validate gateway response: %v", err)
+		}
 	}))
 	defer gatewaySrv.Close()
 

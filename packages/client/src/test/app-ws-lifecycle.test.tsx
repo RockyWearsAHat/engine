@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../App.js';
 import { useStore } from '../store/index.js';
+import { resetStoreForTests, mockWsClientModule } from './store-test-helpers.js';
+import { OPEN_ISSUES_TAB_EVENT } from '../editorEvents.js';
 
 const wsMocks = vi.hoisted(() => ({
   connect: vi.fn(),
@@ -70,7 +72,7 @@ vi.mock('../bridge.js', () => ({
 }));
 
 vi.mock('../components/FileTree/FileTree.js', () => ({
-  default: () => <div data-testid="file-tree" />,
+  default: ({ activityTab }: { activityTab?: string }) => <div data-testid="file-tree" data-activity-tab={activityTab} />,
 }));
 
 vi.mock('../components/Editor/Editor.js', () => ({
@@ -119,26 +121,7 @@ describe('App websocket lifecycle', () => {
     wsMocks.onOpen.mockClear();
     wsMocks.onClose.mockClear();
 
-    useStore.setState({
-      connected: false,
-      sessions: [],
-      activeSession: null,
-      chatMessages: [],
-      streamingMessageId: null,
-      fileTree: null,
-      openFiles: [],
-      activeFilePath: null,
-      gitStatus: null,
-      githubIssues: [],
-      githubIssuesLoading: false,
-      githubIssuesError: null,
-      searchQuery: '',
-      searchResults: [],
-      searchLoading: false,
-      searchError: null,
-      agentSessions: [],
-      activeAgentSessionId: null,
-    });
+    resetStoreForTests();
   });
 
   afterEach(() => {
@@ -197,6 +180,16 @@ describe('App websocket lifecycle', () => {
     });
 
     expect(screen.getByTestId('preferences-panel')).toBeTruthy();
+  });
+
+  it('OpenIssuesTabEvent_ShowsIssuesSidebar', async () => {
+    render(<App />);
+
+    await act(async () => {
+      window.dispatchEvent(new Event(OPEN_ISSUES_TAB_EVENT));
+    });
+
+    expect(screen.getByTestId('file-tree').getAttribute('data-activity-tab')).toBe('issues');
   });
 
   it('KeyboardShortcuts_CommandPaletteOpenedInFileOrCommandMode', async () => {

@@ -66,8 +66,9 @@ function AnnotatedWrapper({
   );
 }
 
-export default function SyntacticalPreview({ value }: { value: string }) {
-  const components = useMemo<Components>(() => ({
+/** Helper to build markdown component overrides that annotate each element with its syntax */
+function buildMarkdownComponents(): Components {
+  return {
     h1: ({ children, ...props }) => (
       <AnnotatedWrapper tag="h1">
         <h1 {...props}>{children}</h1>
@@ -187,7 +188,11 @@ export default function SyntacticalPreview({ value }: { value: string }) {
         </AnnotatedWrapper>
       );
     },
-  }), []);
+  };
+}
+
+export default function SyntacticalPreview({ value }: { value: string }) {
+  const components = useMemo<Components>(() => buildMarkdownComponents(), []);
 
   return (
     <div className="markdown-preview syntactical-preview">

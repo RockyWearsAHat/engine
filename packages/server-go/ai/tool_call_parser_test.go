@@ -337,7 +337,9 @@ func TestOllamaLoop_SendsNumCtxOption(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"models":[{"name":"qwen3:35b"}]}`))
 		case "/v1/chat/completions":
-			_ = json.NewDecoder(r.Body).Decode(&captured)
+			if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+				t.Fatalf("decode captured chat request: %v", err)
+			}
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n"))
 			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))

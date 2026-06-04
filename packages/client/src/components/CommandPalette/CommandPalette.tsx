@@ -14,6 +14,7 @@ export interface CommandPaletteItem {
   action: () => void | Promise<void>;
 }
 
+/** Displays a modal command and file picker with search and filtering capabilities. */
 export default function CommandPalette({
   open,
   mode,

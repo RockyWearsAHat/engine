@@ -961,7 +961,9 @@ func TestSearchHistoryWithResiduals_Dedup(t *testing.T) {
 	// Insert identical content in both sessions so they deduplicate.
 	content := "uniquededupcontent hello world foo bar"
 	for i := range 10 {
-		_ = db.SaveMessage(fmt.Sprintf("dedup-s%d-m%d", i%2+1, i), fmt.Sprintf("dedup-s%d", i%2+1), "user", content, "main")
+		if err := db.SaveMessage(fmt.Sprintf("dedup-s%d-m%d", i%2+1, i), fmt.Sprintf("dedup-s%d", i%2+1), "user", content, "main"); err != nil {
+			t.Fatalf("save dedup message %d: %v", i, err)
+		}
 	}
 	hits, err := SearchHistoryWithResiduals(projectDir, "dedup-s1", "uniquededupcontent hello world", nil, "project", 2, nil)
 	if err != nil {

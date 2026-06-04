@@ -1,6 +1,6 @@
 ---
 source: ../.github/WORKING_BEHAVIORS.md
-generatedAt: 2026-06-03T20:54:45.152Z
+generatedAt: 2026-06-04T01:26:45.878Z
 sectionCount: 28
 ---
 
@@ -150,6 +150,8 @@ Tabs for Editor, Discord, and GitHub preferences. Control editor font and theme.
 Log in to GitHub directly from the Preferences panel using the **Login with GitHub** button — no copy-pasting tokens needed. The button starts the GitHub Device Authorization Flow: Engine displays a short user code and a link to `github.com/login/device`. After the user enters the code on GitHub the token is saved automatically and the login button disappears. While authorization is pending the panel shows a Cancel button to abort the flow. Requires `GITHUB_CLIENT_ID` to be set in the server environment (register an OAuth App on GitHub to get one). On successful login, Engine also auto-provisions a `GITHUB_WEBHOOK_SECRET` when missing so webhook validation is ready without manual secret setup.
 
 Configure where Engine stores autonomously-cloned repositories using the **Autonomous project save path** field in the GitHub section of Preferences. By default, Engine stores clones in `~/.engine/projects` to avoid nested-repository workspace conflicts. A folder-browse button opens a directory picker for quick selection. The selected path is persisted and synced to the server as the `ENGINE_CLONES_DIR` environment variable.
+
+From Preferences -> Model, users can run a **local fleet quick scanner** that evaluates machine CPU/RAM budgets and recommends efficient llama.cpp fleet settings (backend count, ports, parallelism, threads, batching, context size). The scanner can also write the recommendation directly to `.engine/llama-fleet.env` for easy startup.
 
 ---
 

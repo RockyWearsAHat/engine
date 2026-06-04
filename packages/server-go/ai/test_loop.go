@@ -63,7 +63,7 @@ func CompleteTestRun(tlc *TestLoopController) BehavioralResult {
 		sessionID = tlc.ctx.SessionID
 	}
 	resultID := fmt.Sprintf("vr-%d", time.Now().UnixNano())
-	_ = db.SaveValidationResult(
+	if err := db.SaveValidationResult(
 		resultID,
 		sessionID,
 		tlc.orchestrator.issue,
@@ -74,7 +74,11 @@ func CompleteTestRun(tlc *TestLoopController) BehavioralResult {
 		result.DurationMs,
 		result.Evidence,
 		"",
-	)
+	); err != nil {
+		if tlc.ctx != nil && tlc.ctx.OnError != nil {
+			tlc.ctx.OnError(fmt.Sprintf("persist validation result failed: %v", err))
+		}
+	}
 
 	// Record a learning event from the outcome
 	category := "test-strategy"
@@ -90,7 +94,7 @@ func CompleteTestRun(tlc *TestLoopController) BehavioralResult {
 		confidence = 0.9
 	}
 	learnID := fmt.Sprintf("le-%d", time.Now().UnixNano())
-	_ = db.SaveLearningEvent(
+	if err := db.SaveLearningEvent(
 		learnID,
 		sessionID,
 		fmt.Sprintf("issue:%s → %s", tlc.orchestrator.issue, outcome),
@@ -98,7 +102,11 @@ func CompleteTestRun(tlc *TestLoopController) BehavioralResult {
 		confidence,
 		category,
 		result.Evidence,
-	)
+	); err != nil {
+		if tlc.ctx != nil && tlc.ctx.OnError != nil {
+			tlc.ctx.OnError(fmt.Sprintf("persist learning event failed: %v", err))
+		}
+	}
 
 	return result
 }

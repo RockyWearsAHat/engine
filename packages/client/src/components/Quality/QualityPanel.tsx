@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ChevronRight, FileText, Folder, FolderOpen } from 'lucide-react';
 import { useStore } from '../../store/index.js';
 import { wsClient } from '../../ws/client.js';
-import { REVEAL_FILE_LOCATION_EVENT, type RevealFileLocationDetail } from '../../editorEvents.js';
+import { OPEN_ISSUES_TAB_EVENT, REVEAL_FILE_LOCATION_EVENT, type RevealFileLocationDetail } from '../../editorEvents.js';
 
 type QualityIssue = NonNullable<ReturnType<typeof useStore.getState>['qualityReport']>['issues'][number];
 
@@ -173,8 +173,10 @@ function shouldHideAsLowDuplicateNoise(group: QualityIssueGroup, showLowDuplicat
   return group.category === 'duplicate-content' && group.severity === 'low';
 }
 
+/** Displays code quality issues grouped by severity and category with filtering and navigation. */
 export default function QualityPanel() {
   const {
+    activeSession,
     qualityReport,
     qualityLoading,
     qualityError,
@@ -182,7 +184,21 @@ export default function QualityPanel() {
     openFiles,
     activeFilePath,
     setActiveFile,
+    setQualityError,
+    startQualityScan,
   } = useStore();
+
+  const qualityProjectPath = qualityReport?.projectPath ?? qualityProgress?.projectPath ?? activeSession?.projectPath ?? '';
+  const qualityRescanBlocked = Boolean(qualityError);
+
+  const requestQualityRescan = () => {
+    if (qualityRescanBlocked || !qualityProjectPath) {
+      return;
+    }
+    startQualityScan(qualityProjectPath);
+    setQualityError(null);
+    wsClient.send({ type: 'quality.report.get', projectPath: qualityProjectPath, maxIssues: 0 });
+  };
 
   const groupedIssues = useMemo(() => {
     const groups = new Map<string, QualityIssue[]>();
@@ -458,6 +474,25 @@ export default function QualityPanel() {
         </div>
       )}
 
+      {qualityRescanBlocked && (
+        <div className="quality-rescan-blocked-banner">
+          <div>
+            Rescan paused. Fix the blocking syntax or lint issues first, then come back here and scan again.
+          </div>
+          <div className="quality-rescan-blocked-actions">
+            <button
+              className="quality-toolbar-toggle active"
+              onClick={() => window.dispatchEvent(new Event(OPEN_ISSUES_TAB_EVENT))}
+            >
+              Open Issues tab
+            </button>
+            <span className="quality-rescan-blocked-note">
+              The panel will not start a new scan until the repo errors are cleared.
+            </span>
+          </div>
+        </div>
+      )}
+
       <div className="quality-panel-header">
         <div className="quality-panel-title">Centralized quality index</div>
         <div className="quality-panel-subtitle">File-first view for duplicates, docs drift, dead code, and comment gaps.</div>
@@ -542,6 +577,14 @@ export default function QualityPanel() {
                   title="Toggle low-severity duplicate-content noise"
                 >
                   {showLowDuplicateNoise ? 'Hide' : 'Show'} low duplicate noise
+                </button>
+                <button
+                  className="quality-toolbar-toggle"
+                  onClick={requestQualityRescan}
+                  disabled={qualityRescanBlocked || !qualityProjectPath}
+                  title={qualityRescanBlocked ? 'Open the Issues tab and clear the repo errors before rescanning.' : 'Re-run the quality scan for the current project.'}
+                >
+                  Rescan
                 </button>
                 <span className="quality-toolbar-meta">Task groups: {visibleGroupCount}</span>
               </div>

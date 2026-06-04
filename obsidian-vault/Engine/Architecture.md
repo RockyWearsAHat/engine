@@ -51,6 +51,60 @@ packages/
 - **Test coverage**: 100% client (Vitest), 100% Go (go test), Rust (cargo llvm-cov) — all enforced by completion gate.
 - **Memory OS (always-on)**: append-only hash-chained ledger (`memory_ledger_events`), residual cognition graph (`memory_residual_nodes`, `memory_residual_edges`), deterministic snapshots (`memory_state_snapshots`), deterministic context compilation, and scribe snapshots under `.engine/memory/scribe/`.
 
+## Client & Shared Type Interfaces
+
+For detailed documentation of client and shared types, see:
+- [packages/client/README.md](../../../packages/client/README.md) — client module interfaces and structure
+- [packages/shared/README.md](../../../packages/shared/README.md) — shared type definitions
+- [.github/CLIENT_MODULE_REFERENCE.md](./../CLIENT_MODULE_REFERENCE.md) — quick reference of all exported types
+
+### packages/client/src (Platform Bridge Layer)
+
+**`bridge.ts`**  
+Platform abstraction that unifies Electron IPC, Tauri commands, and plain web APIs. Exports methods for project access, GitHub tokens, local server health checks, and preference persistence.
+
+**`connectionProfiles.ts`**  
+Connection profile management for remote servers.
+- `ConnectionProfile` interface — stores remote server connection details (host, port, token, workspace path, name). Manages localStorage persistence of multiple profiles.
+
+**`editorPreferences.ts`**  
+Editor configuration and font settings.
+- `EditorPreferences` interface — editor settings (font, font size, line height, tab size, word wrap, markdown view mode).
+- `MarkdownViewMode` type — supports 'text', 'preview', 'split', 'syntactical' modes.
+
+**`editorEvents.ts`**  
+Custom DOM events for editor state synchronization across components.
+- `EditorStatusDetail` — current file, language, syntax status, dirty flag.
+- `CloseFileEventDetail` — path of file being closed.
+- `SaveFilesEventDetail` — array of file paths to save.
+- `RevealFileLocationDetail` — path, line, optional column for file location reveal.
+
+### packages/client/src/ws (WebSocket Client)
+
+**`client.ts`**  
+WebSocket client for communication with Go backend.
+- `RemoteConfig` interface — host, port, and token for connecting to a remote Engine server. Manages WebSocket lifecycle and message routing.
+
+### packages/shared/src (Type Definitions)
+
+Shared TypeScript types used across client and server communication boundaries:
+
+**Session & Message Types**
+- `Session` — Project session metadata: id, projectPath, branchName, createdAt, updatedAt, projectDirection, summary, messageCount.
+- `Message` — Chat message record: id, sessionId, role ('user' or 'assistant'), content, optional toolCalls array, createdAt.
+- `ToolCall` — AI tool invocation: id, name, input object, optional result, optional isError flag.
+
+**File System Types**
+- `FileNode` — File tree representation: name, path, type ('file' or 'directory'), optional children array, loaded flag, hasChildren flag, size, modified timestamp.
+- `FileContent` — File buffer: path, content string, language (for syntax highlighting), size in bytes.
+
+**Request & Search Types**
+- `ApprovalRequest` — Pending user approval for dangerous operations: id, sessionId, kind ('shell' or 'git_commit'), title, message, command.
+- `SearchResult` — Code search result: path, line, optional column, preview text.
+
+**Configuration Types**
+- `RuntimeConfig` — Merged environment and storage configuration: GitHub token/owner/repo, Anthropic/OpenAI keys, model provider, Ollama base URL, model name, active team, clones directory, context token limits.
+
 ## Memory OS Module Surface
 
 - `packages/server-go/db/db.go`

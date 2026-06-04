@@ -6,54 +6,19 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store/index.js';
+import { resetStoreForTests, mockWsClientModule } from './store-test-helpers.js';
 
 // ─── Mock wsClient ────────────────────────────────────────────────────────────
 // Must be hoisted so the mock is in place before the store module is imported.
-vi.mock('../ws/client.js', () => ({
-  wsClient: {
-    send: vi.fn(),
-    connect: vi.fn(),
-    disconnect: vi.fn(),
-    onMessage: vi.fn(),
-    onOpen: vi.fn(),
-    onClose: vi.fn(),
-  },
-}));
+vi.mock('../ws/client.js', () => mockWsClientModule());
 
 // Import AFTER the mock so we get the mocked version.
 import { wsClient } from '../ws/client.js';
 
 // ─── Store Reset ──────────────────────────────────────────────────────────────
 
-function resetStore() {
-  useStore.setState({
-    connected: false,
-    sessions: [],
-    activeSession: null,
-    chatMessages: [],
-    streamingMessageId: null,
-    fileTree: null,
-    openFiles: [],
-    activeFilePath: null,
-    gitStatus: null,
-    githubToken: null,
-    githubUser: null,
-    githubAuthFlow: null,
-    githubIssues: [],
-    githubIssuesLoading: false,
-    githubIssuesError: null,
-    searchQuery: '',
-    searchResults: [],
-    searchLoading: false,
-    searchError: null,
-    agentSessions: [],
-    activeAgentSessionId: null,
-    showDotfiles: false,
-  });
-}
-
 beforeEach(() => {
-  resetStore();
+  resetStoreForTests();
   vi.mocked(wsClient.send).mockClear();
 });
 

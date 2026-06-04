@@ -421,7 +421,9 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 
 		state.OuterIterations++
 		state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-		_ = persistOrchestration(cfg.ProjectPath, state)
+		if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
+			emitErr(cfg.OnError, fmt.Sprintf("persist outer iteration: %v", err))
+		}
 
 		if state.OuterIterations > cfg.MaxOuterIterations {
 			err := fmt.Errorf("orchestrator: hit safety cap of %d outer iterations", cfg.MaxOuterIterations)
@@ -430,7 +432,9 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 		}
 
 		if skipped := skipExhaustedSteps(state, OrchestratorMaxStepAttempts); len(skipped) > 0 {
-			_ = persistOrchestration(cfg.ProjectPath, state)
+			if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
+				emitErr(cfg.OnError, fmt.Sprintf("persist skipped steps: %v", err))
+			}
 			for _, idx := range skipped {
 				emit(cfg.OnPhase, "skip", fmt.Sprintf("step %d exhausted %d attempts — skipping; validator will flag", idx, OrchestratorMaxStepAttempts))
 			}
@@ -442,7 +446,9 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 			// into state so the validator hits the deployed instance.
 			if liveURL := readLiveURL(cfg.ProjectPath); liveURL != "" {
 				state.LiveURL = liveURL
-				_ = persistOrchestration(cfg.ProjectPath, state)
+				if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
+					emitErr(cfg.OnError, fmt.Sprintf("persist live URL: %v", err))
+				}
 			}
 			validateTarget := "localhost"
 			if state.LiveURL != "" {
@@ -453,7 +459,9 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 			state.LastValidation = summary
 			if validateErr == nil {
 				state.CompletedAt = time.Now().UTC().Format(time.RFC3339)
-				_ = persistOrchestration(cfg.ProjectPath, state)
+				if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
+					emitErr(cfg.OnError, fmt.Sprintf("persist completion state: %v", err))
+				}
 				emit(cfg.OnPhase, "done", "behavioral validation passed")
 				return state, nil
 			}
@@ -461,7 +469,9 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 			// again with the validation feedback in scope.
 			unchecked := ensureReopenStep(state)
 			unchecked.LastFeedback = "Behavioral validation failed: " + validateErr.Error()
-			_ = persistOrchestration(cfg.ProjectPath, state)
+			if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
+				emitErr(cfg.OnError, fmt.Sprintf("persist reopened step: %v", err))
+			}
 			emit(cfg.OnPhase, "validate", fmt.Sprintf("validation failed, reopening step %d", unchecked.Index))
 			continue
 		}
@@ -469,7 +479,9 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 		step := &state.Plan[nextIdx]
 		step.Attempts++
 		step.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-		_ = persistOrchestration(cfg.ProjectPath, state)
+		if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
+			emitErr(cfg.OnError, fmt.Sprintf("persist step attempt: %v", err))
+		}
 
 		// Honor a pending redirect by prepending it to this step's prompt.
 		redirect := handle.takeRedirect()
@@ -478,7 +490,9 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 		buildErr := orchestratorBuildStep(cfg, state, step, redirect, cancel)
 		if buildErr != nil {
 			step.LastFeedback = "Builder error: " + buildErr.Error()
-			_ = persistOrchestration(cfg.ProjectPath, state)
+			if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
+				emitErr(cfg.OnError, fmt.Sprintf("persist builder error feedback: %v", err))
+			}
 			emitErr(cfg.OnError, fmt.Sprintf("step %d builder error: %v", step.Index, buildErr))
 			// Continue the outer loop — the next iteration retries with feedback.
 			continue
@@ -490,7 +504,9 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 		case ReviewApprove:
 			step.Done = true
 			step.LastFeedback = ""
-			_ = persistOrchestration(cfg.ProjectPath, state)
+			if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
+				emitErr(cfg.OnError, fmt.Sprintf("persist approved step: %v", err))
+			}
 			if cfg.OnPlanUpdate != nil {
 				cfg.OnPlanUpdate(state)
 			}
@@ -502,14 +518,18 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 			emit(cfg.OnPhase, "review", fmt.Sprintf("step %d approved", step.Index))
 		case ReviewReject:
 			step.LastFeedback = reviewMsg
-			_ = persistOrchestration(cfg.ProjectPath, state)
+			if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
+				emitErr(cfg.OnError, fmt.Sprintf("persist rejected step feedback: %v", err))
+			}
 			emit(cfg.OnPhase, "review", fmt.Sprintf("step %d rejected: %s", step.Index, summarise(reviewMsg, 200)))
 			// Outer loop retries with reviewer feedback embedded in the next prompt.
 		default:
 			// Inconclusive review — treat as soft pass but flag.
 			step.Done = true
 			step.LastFeedback = "Review inconclusive, advancing: " + reviewMsg
-			_ = persistOrchestration(cfg.ProjectPath, state)
+			if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
+				emitErr(cfg.OnError, fmt.Sprintf("persist inconclusive review state: %v", err))
+			}
 			emit(cfg.OnPhase, "review", fmt.Sprintf("step %d inconclusive review", step.Index))
 		}
 	}

@@ -134,7 +134,9 @@ func TestDefaultIssueClient_ListIssues_Success(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(issues)
+		if err := json.NewEncoder(w).Encode(issues); err != nil {
+			t.Fatalf("encode issues response: %v", err)
+		}
 	}))
 	defer ts.Close()
 

@@ -570,9 +570,13 @@ func primeAutonomousPublishIntent(repoPath, owner, repo string) {
 	}
 
 	if data, err := json.Marshal(profile); err == nil {
-		_ = db.UpsertProjectProfile(repoPath, string(data))
+		if upsertErr := db.UpsertProjectProfile(repoPath, string(data)); upsertErr != nil {
+			log.Printf("primeAutonomousPublishIntent: upsert project profile failed for %s: %v", repoPath, upsertErr)
+		}
 	}
-	_ = ai.WriteProjectProfileCache(repoPath, &profile)
+	if err := ai.WriteProjectProfileCache(repoPath, &profile); err != nil {
+		log.Printf("primeAutonomousPublishIntent: write profile cache failed for %s: %v", repoPath, err)
+	}
 }
 
 // readRepoReadme returns the README contents from the latest committed copy

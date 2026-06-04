@@ -171,7 +171,12 @@ func (s *IssueCommentStore) Set(owner, repo string, n, commentID int) {
 	defer s.mu.Unlock()
 	s.data[s.key(owner, repo, n)] = commentID
 	if raw, err := json.Marshal(s.data); err == nil {
-		_ = os.MkdirAll(filepath.Dir(s.path), 0700)
-		_ = os.WriteFile(s.path, raw, 0600)
+		if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
+			log.Printf("issue comment store mkdir failed: %v", err)
+			return
+		}
+		if err := os.WriteFile(s.path, raw, 0600); err != nil {
+			log.Printf("issue comment store write failed: %v", err)
+		}
 	}
 }

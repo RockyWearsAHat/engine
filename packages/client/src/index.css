@@ -4079,11 +4079,20 @@ textarea,
   font-size: 10px;
   line-height: 1.2;
   cursor: pointer;
+  white-space: normal;
+  text-align: center;
 }
 
 .quality-toolbar-toggle:hover {
   background: rgba(123, 188, 255, 0.14);
   color: var(--tx-1);
+}
+
+.quality-toolbar-toggle:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: rgba(123, 188, 255, 0.05);
+  color: var(--tx-3);
 }
 
 .quality-toolbar-toggle.active {
@@ -4098,6 +4107,22 @@ textarea,
   white-space: nowrap;
 }
 
+@media (max-width: 1080px) {
+  .quality-toolbar-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .quality-toolbar-toggle {
+    width: 100%;
+  }
+
+  .quality-toolbar-meta {
+    text-align: right;
+  }
+}
+
 .quality-noise-banner {
   margin: 6px 10px 8px;
   border: 1px solid rgba(123, 188, 255, 0.18);
@@ -4107,6 +4132,31 @@ textarea,
   font-size: 10px;
   line-height: 1.35;
   padding: 7px 9px;
+}
+
+.quality-rescan-blocked-banner {
+  margin: 0 8px 8px;
+  padding: 10px 11px;
+  border: 1px solid rgba(249, 115, 115, 0.28);
+  border-radius: 10px;
+  background: rgba(249, 115, 115, 0.08);
+  color: var(--tx-1);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  line-height: 1.35;
+}
+
+.quality-rescan-blocked-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.quality-rescan-blocked-note {
+  font-size: 10px;
+  color: var(--tx-3);
 }
 
 .quality-tree-node {

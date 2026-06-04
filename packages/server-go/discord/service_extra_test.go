@@ -641,9 +641,13 @@ func TestSendDM_WithSession_HappyPath(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/channels"):
-			_ = json.NewEncoder(w).Encode(map[string]string{"id": "dm-ch-1"})
+			if err := json.NewEncoder(w).Encode(map[string]string{"id": "dm-ch-1"}); err != nil {
+				t.Fatalf("encode DM channel response: %v", err)
+			}
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/messages"):
-			_ = json.NewEncoder(w).Encode(map[string]string{"id": "msg-1"})
+			if err := json.NewEncoder(w).Encode(map[string]string{"id": "msg-1"}); err != nil {
+				t.Fatalf("encode DM message response: %v", err)
+			}
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
@@ -701,7 +705,6 @@ func TestSendDM_UserChannelCreateError_ReturnsError(t *testing.T) {
 	}
 }
 
-
 // ── AutoEnrollProject ─────────────────────────────────────────────────────────
 
 func TestAutoEnrollProject_InvalidPath_ReturnsError(t *testing.T) {
@@ -722,19 +725,29 @@ func TestAutoEnrollProject_ValidPath_EnrollsAndAnnounces(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/guilds/"):
 			// channels list
-			_ = json.NewEncoder(w).Encode([]map[string]any{})
+			if err := json.NewEncoder(w).Encode([]map[string]any{}); err != nil {
+				t.Fatalf("encode channels list: %v", err)
+			}
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/guilds/") && strings.HasSuffix(r.URL.Path, "/channels"):
 			var body map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode channel create body: %v", err)
+			}
 			name, _ := body["name"].(string)
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "ch-" + name, "name": name})
+			if err := json.NewEncoder(w).Encode(map[string]any{"id": "ch-" + name, "name": name}); err != nil {
+				t.Fatalf("encode channel create response: %v", err)
+			}
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/channels/") && strings.HasSuffix(r.URL.Path, "/messages"):
 			var body map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode message body: %v", err)
+			}
 			if content, ok := body["content"].(string); ok {
 				sentMessages = append(sentMessages, content)
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "msg-1"})
+			if err := json.NewEncoder(w).Encode(map[string]any{"id": "msg-1"}); err != nil {
+				t.Fatalf("encode message response: %v", err)
+			}
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
@@ -760,10 +773,10 @@ func TestAutoEnrollProject_ValidPath_EnrollsAndAnnounces(t *testing.T) {
 
 	dg, _ := discordgo.New("Bot fake-token")
 	svc := &Service{
-		cfg:             Config{GuildID: "g1", ControlChannelName: "engine-control"},
-		state:           persistedState{Projects: make(map[string]ProjectBinding)},
-		dg:              dg,
-		cloneProjectFn:  func(_, _ string) error { return nil },
+		cfg:            Config{GuildID: "g1", ControlChannelName: "engine-control"},
+		state:          persistedState{Projects: make(map[string]ProjectBinding)},
+		dg:             dg,
+		cloneProjectFn: func(_, _ string) error { return nil },
 	}
 
 	if err := svc.AutoEnrollProject(projectDir, "myowner", "myrepo"); err != nil {
@@ -802,15 +815,21 @@ func TestAutoEnrollProject_ControlChannelFails_ReturnsError(t *testing.T) {
 			getCount++
 			if getCount == 1 {
 				// First call: ensureProjectChannel lists channels — return empty list.
-				_ = json.NewEncoder(w).Encode([]map[string]any{})
+				if err := json.NewEncoder(w).Encode([]map[string]any{}); err != nil {
+					t.Fatalf("encode first channel list: %v", err)
+				}
 			} else {
 				// Second call: ensureControlChannel fails.
 				http.Error(w, "guild error", http.StatusInternalServerError)
 			}
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/guilds/") && strings.HasSuffix(r.URL.Path, "/channels"):
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "ch-proj", "name": "proj-test"})
+			if err := json.NewEncoder(w).Encode(map[string]any{"id": "ch-proj", "name": "proj-test"}); err != nil {
+				t.Fatalf("encode project channel response: %v", err)
+			}
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/channels/") && strings.HasSuffix(r.URL.Path, "/messages"):
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "msg-1"})
+			if err := json.NewEncoder(w).Encode(map[string]any{"id": "msg-1"}); err != nil {
+				t.Fatalf("encode control message response: %v", err)
+			}
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
@@ -855,13 +874,19 @@ func TestAutoEnrollProject_AlreadyEnrolled_IsIdempotent(t *testing.T) {
 		switch {
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/channels/") && strings.HasSuffix(r.URL.Path, "/messages"):
 			var body map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&body)
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode idempotent message body: %v", err)
+			}
 			if content, ok := body["content"].(string); ok {
 				sentMessages = append(sentMessages, content)
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "msg-1"})
+			if err := json.NewEncoder(w).Encode(map[string]any{"id": "msg-1"}); err != nil {
+				t.Fatalf("encode idempotent message response: %v", err)
+			}
 		default:
-			_ = json.NewEncoder(w).Encode([]map[string]any{})
+			if err := json.NewEncoder(w).Encode([]map[string]any{}); err != nil {
+				t.Fatalf("encode default guild list response: %v", err)
+			}
 		}
 	}))
 	t.Cleanup(server.Close)
