@@ -13,8 +13,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-
-
 // TestSetDiscord exercises the Hub.SetDiscord method.
 func TestSetDiscord_NilBridge(t *testing.T) {
 	projectDir := setupWSProject(t)

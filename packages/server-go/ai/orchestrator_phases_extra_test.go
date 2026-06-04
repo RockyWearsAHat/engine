@@ -1,39 +1,20 @@
 package ai
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/engine/server/db"
 )
 
 // setupPhasesDB creates a temporary project directory with config and initializes the DB for tests.
-// Returns the project root path; uses t.TempDir() for cleanup.
+// Alias for setupPhasesDBProject; kept for compatibility within this file.
 func setupPhasesDB(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	stateDir := t.TempDir()
-	t.Setenv("ENGINE_STATE_DIR", stateDir)
-	engineDir := filepath.Join(dir, ".engine")
-	if err := os.MkdirAll(engineDir, 0o755); err != nil {
-		t.Fatalf("mkdir .engine: %v", err)
-	}
-	config := `teams:
-  fast:
-    orchestrator:
-      model: "openai:gpt-4o-mini"
-autonomous:
-  team: "fast"
-`
-	if err := os.WriteFile(filepath.Join(engineDir, "config.yaml"), []byte(config), 0o644); err != nil {
-		t.Fatalf("write config.yaml: %v", err)
-	}
-	if err := db.Init(dir); err != nil {
-		t.Fatalf("db.Init: %v", err)
-	}
-	return dir
+	return setupPhasesDBProject(t)
+}
+
+// noOpOrchestratorCallbacks returns a minimal OrchestratorConfig with no-op callbacks.
+// Used to reduce repetition in tests that don't care about callback output.
+func noOpOrchestratorCallbacks() (func(string, string), func(string), func(string)) {
+	return func(string, string) {}, func(string) {}, func(string) {}
 }
 
 // TestChooseSessionPrefix_Custom verifies non-empty prefix is returned as-is.

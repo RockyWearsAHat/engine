@@ -193,8 +193,7 @@ func TestVerifyRequest_BadSignatureEncoding(t *testing.T) {
 
 // TestHandleExec_MethodNotAllowed tests that /mesh/exec rejects non-POST requests.
 func TestHandleExec_MethodNotAllowed(t *testing.T) {
-	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
-	ts := newMeshServer(t, cfg)
+	ts := newMeshServer(t, defaultMeshTestConfig())
 
 	resp, err := http.Get(ts.URL + "/mesh/exec")
 	if err != nil {
@@ -208,11 +207,10 @@ func TestHandleExec_MethodNotAllowed(t *testing.T) {
 
 // TestHandleExec_BadJSON tests that /mesh/exec returns 400 for malformed request bodies.
 func TestHandleExec_BadJSON(t *testing.T) {
-	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
-	ts := newMeshServer(t, cfg)
+	ts := newMeshServer(t, defaultMeshTestConfig())
 
 	body := []byte("not-json")
-	req := newSignedRequest(t, ts, "/mesh/exec", http.MethodPost, "k", "mac", body)
+	req := newSignedRequest(t, ts, "/mesh/exec", http.MethodPost, testSecret, testClientName, body)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -225,11 +223,10 @@ func TestHandleExec_BadJSON(t *testing.T) {
 
 // TestHandleExec_EmptyCommand tests that /mesh/exec returns 400 for empty commands.
 func TestHandleExec_EmptyCommand(t *testing.T) {
-	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
-	ts := newMeshServer(t, cfg)
+	ts := newMeshServer(t, defaultMeshTestConfig())
 
-	body, _ := json.Marshal(ExecRequest{Command: ""})
-	req := newSignedRequest(t, ts, "/mesh/exec", http.MethodPost, "k", "mac", body)
+	body := marshalExecRequest("")
+	req := newSignedRequest(t, ts, "/mesh/exec", http.MethodPost, testSecret, testClientName, body)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -242,16 +239,10 @@ func TestHandleExec_EmptyCommand(t *testing.T) {
 
 // TestHandleExec_WithCwdAndEnv tests that /mesh/exec executes commands with specified working directory and environment.
 func TestHandleExec_WithCwdAndEnv(t *testing.T) {
-	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
-	ts := newMeshServer(t, cfg)
+	ts := newMeshServer(t, defaultMeshTestConfig())
 
-	body, _ := json.Marshal(ExecRequest{
-		Command: "echo",
-		Args:    []string{"hello"},
-		Cwd:     t.TempDir(),
-		Env:     []string{"MY_VAR=test"},
-	})
-	req := newSignedRequest(t, ts, "/mesh/exec", http.MethodPost, "k", "mac", body)
+	body := marshalExecRequestFull("echo", t.TempDir(), []string{"MY_VAR=test"}, []string{"hello"})
+	req := newSignedRequest(t, ts, "/mesh/exec", http.MethodPost, testSecret, testClientName, body)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -269,11 +260,10 @@ func TestHandleExec_WithCwdAndEnv(t *testing.T) {
 
 // TestHandleExec_ExitError tests that /mesh/exec captures non-zero exit codes.
 func TestHandleExec_ExitError(t *testing.T) {
-	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
-	ts := newMeshServer(t, cfg)
+	ts := newMeshServer(t, defaultMeshTestConfig())
 
-	body, _ := json.Marshal(ExecRequest{Command: "false"})
-	req := newSignedRequest(t, ts, "/mesh/exec", http.MethodPost, "k", "mac", body)
+	body := marshalExecRequest("false")
+	req := newSignedRequest(t, ts, "/mesh/exec", http.MethodPost, testSecret, testClientName, body)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -282,8 +272,7 @@ func TestHandleExec_ExitError(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200 (exec ran but failed), got %d", resp.StatusCode)
 	}
-	var result ExecResponse
-	json.NewDecoder(resp.Body).Decode(&result) //nolint:errcheck
+	result := decodeExecResponse(t, resp.Body)
 	if result.ExitCode == 0 {
 		t.Error("expected non-zero exit code from 'false'")
 	}
@@ -291,11 +280,10 @@ func TestHandleExec_ExitError(t *testing.T) {
 
 // TestHandleExec_NonExistentCommand tests that /mesh/exec reports errors for missing executables.
 func TestHandleExec_NonExistentCommand(t *testing.T) {
-	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
-	ts := newMeshServer(t, cfg)
+	ts := newMeshServer(t, defaultMeshTestConfig())
 
-	body, _ := json.Marshal(ExecRequest{Command: "/no/such/binary/xyzzy"})
-	req := newSignedRequest(t, ts, "/mesh/exec", http.MethodPost, "k", "mac", body)
+	body := marshalExecRequest("/no/such/binary/xyzzy")
+	req := newSignedRequest(t, ts, "/mesh/exec", http.MethodPost, testSecret, testClientName, body)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -304,8 +292,7 @@ func TestHandleExec_NonExistentCommand(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200 (exec returned error info), got %d", resp.StatusCode)
 	}
-	var result ExecResponse
-	json.NewDecoder(resp.Body).Decode(&result) //nolint:errcheck
+	result := decodeExecResponse(t, resp.Body)
 	if result.ExitCode == 0 {
 		t.Error("expected non-zero exit for non-existent command")
 	}
@@ -313,8 +300,7 @@ func TestHandleExec_NonExistentCommand(t *testing.T) {
 
 // TestHandleInference_MethodNotAllowed tests that /mesh/inference rejects non-POST requests.
 func TestHandleInference_MethodNotAllowed(t *testing.T) {
-	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
-	ts := newMeshServer(t, cfg)
+	ts := newMeshServer(t, defaultMeshTestConfig())
 
 	resp, err := http.Get(ts.URL + "/mesh/inference")
 	if err != nil {
@@ -328,11 +314,10 @@ func TestHandleInference_MethodNotAllowed(t *testing.T) {
 
 // TestHandleInference_BadJSON tests that /mesh/inference returns 400 for malformed request bodies.
 func TestHandleInference_BadJSON(t *testing.T) {
-	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
-	ts := newMeshServer(t, cfg)
+	ts := newMeshServer(t, defaultMeshTestConfig())
 
 	body := []byte("not-json")
-	req := newSignedRequest(t, ts, "/mesh/inference", http.MethodPost, "k", "mac", body)
+	req := newSignedRequest(t, ts, "/mesh/inference", http.MethodPost, testSecret, testClientName, body)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -345,11 +330,10 @@ func TestHandleInference_BadJSON(t *testing.T) {
 
 // TestHandleInference_EmptyPath tests that /mesh/inference returns 400 for empty paths.
 func TestHandleInference_EmptyPath(t *testing.T) {
-	cfg := &Config{SelfName: "host", SelfOllamaURL: "http://127.0.0.1:99999", Peers: []Peer{{Name: "mac", Secret: "k"}}}
-	ts := newMeshServer(t, cfg)
+	ts := newMeshServer(t, newTestConfigWithOllamaURL(testOllamaURL404))
 
-	body, _ := json.Marshal(InferenceRequest{Path: "", Body: json.RawMessage(`{}`)})
-	req := newSignedRequest(t, ts, "/mesh/inference", http.MethodPost, "k", "mac", body)
+	body := marshalInferenceRequest("", "", nil)
+	req := newSignedRequest(t, ts, "/mesh/inference", http.MethodPost, testSecret, testClientName, body)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -363,11 +347,10 @@ func TestHandleInference_EmptyPath(t *testing.T) {
 // TestHandleInference_UpstreamConnectionError tests that /mesh/inference handles upstream connection failures gracefully.
 func TestHandleInference_UpstreamConnectionError(t *testing.T) {
 	// Point to a port that's almost certainly not listening.
-	cfg := &Config{SelfName: "host", SelfOllamaURL: "http://127.0.0.1:19999", Peers: []Peer{{Name: "mac", Secret: "k"}}}
-	ts := newMeshServer(t, cfg)
+	ts := newMeshServer(t, newTestConfigWithOllamaURL(testOllamaURL404))
 
-	body, _ := json.Marshal(InferenceRequest{Path: "/v1/chat", Body: json.RawMessage(`{}`)})
-	req := newSignedRequest(t, ts, "/mesh/inference", http.MethodPost, "k", "mac", body)
+	body := marshalInferenceRequest("/v1/chat", "", nil)
+	req := newSignedRequest(t, ts, "/mesh/inference", http.MethodPost, testSecret, testClientName, body)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -388,11 +371,10 @@ func TestHandleInference_WithExplicitMethod(t *testing.T) {
 	}))
 	defer ollama.Close()
 
-	cfg := &Config{SelfName: "host", SelfOllamaURL: ollama.URL, Peers: []Peer{{Name: "mac", Secret: "k"}}}
-	ts := newMeshServer(t, cfg)
+	ts := newMeshServer(t, newTestConfigWithOllamaURL(ollama.URL))
 
-	body, _ := json.Marshal(InferenceRequest{Path: "/v1/chat", Method: "get", Body: json.RawMessage(`{}`)})
-	req := newSignedRequest(t, ts, "/mesh/inference", http.MethodPost, "k", "mac", body)
+	body := marshalInferenceRequest("/v1/chat", "get", nil)
+	req := newSignedRequest(t, ts, "/mesh/inference", http.MethodPost, testSecret, testClientName, body)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -452,15 +434,10 @@ func TestLimitedBuffer_WriteAtCapacity(t *testing.T) {
 
 // TestHandleHealth_WithOllamaURL tests that /mesh/health includes OllamaURL in response when configured.
 func TestHandleHealth_WithOllamaURL(t *testing.T) {
-	cfg := &Config{
-		SelfName:      "host",
-		SelfOllamaURL: "http://localhost:11434",
-		Peers:         []Peer{{Name: "mac", Secret: "k"}},
-	}
-	ts := newMeshServer(t, cfg)
+	ts := newMeshServer(t, newTestConfigWithOllamaURL(testOllamaURL))
 
 	body := []byte{}
-	req := newSignedRequest(t, ts, "/mesh/health", http.MethodPost, "k", "mac", body)
+	req := newSignedRequest(t, ts, "/mesh/health", http.MethodPost, testSecret, testClientName, body)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -469,20 +446,19 @@ func TestHandleHealth_WithOllamaURL(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}
-	var h HealthResponse
-	json.NewDecoder(resp.Body).Decode(&h) //nolint:errcheck
-	if h.OllamaURL != "http://localhost:11434" {
-		t.Errorf("ollamaURL = %q, want http://localhost:11434", h.OllamaURL)
+	h := decodeHealthResponse(t, resp.Body)
+	if h.OllamaURL != testOllamaURL {
+		t.Errorf("ollamaURL = %q, want %s", h.OllamaURL, testOllamaURL)
 	}
 }
 
 // TestAuthenticate_UnknownPeer tests that mesh endpoints reject requests from unknown peers.
 func TestAuthenticate_UnknownPeer(t *testing.T) {
-	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "known", Secret: "k"}}}
+	cfg := &Config{SelfName: testServerName, Peers: []Peer{{Name: "known", Secret: testSecret}}}
 	ts := newMeshServer(t, cfg)
 
 	body := []byte{}
-	req := newSignedRequest(t, ts, "/mesh/health", http.MethodPost, "k", "unknown", body)
+	req := newSignedRequest(t, ts, "/mesh/health", http.MethodPost, testSecret, "unknown", body)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -511,8 +487,8 @@ func TestListenAndServe_ErrFromListener(t *testing.T) {
 // TestClientHealth_NetworkError tests that Health returns an error for unreachable peers.
 func TestClientHealth_NetworkError(t *testing.T) {
 	// Use a port that refuses connections.
-	peer := &Peer{Name: "host", Address: "127.0.0.1:19998", Secret: "k"}
-	c := NewClient("mac")
+	peer := &Peer{Name: testServerName, Address: "127.0.0.1:19998", Secret: testSecret}
+	c := NewClient(testClientName)
 	_, err := c.Health(context.Background(), peer)
 	if err == nil {
 		t.Error("expected error for unreachable peer")
@@ -521,15 +497,14 @@ func TestClientHealth_NetworkError(t *testing.T) {
 
 // TestClientExec_Success tests that the client successfully executes remote commands.
 func TestClientExec_Success(t *testing.T) {
-	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
-	srv := NewServer(cfg)
+	srv := NewServer(defaultMeshTestConfig())
 	mux := http.NewServeMux()
 	srv.Register(mux)
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	peer := &Peer{Name: "host", Address: strings.TrimPrefix(ts.URL, "http://"), Secret: "k"}
-	c := NewClient("mac")
+	peer := &Peer{Name: testServerName, Address: strings.TrimPrefix(ts.URL, "http://"), Secret: testSecret}
+	c := NewClient(testClientName)
 
 	result, err := c.Exec(context.Background(), peer, ExecRequest{Command: "echo", Args: []string{"hi"}})
 	if err != nil {

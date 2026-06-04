@@ -384,10 +384,10 @@ func TestHandleDiscordUnlink_WriteError_ReturnsErrorCode(t *testing.T) {
 	}
 }
 
-// stubLeavingBridge wraps stubDiscordBridge and also satisfies the
+// stubLeavingBridge wraps testDiscordBridge and also satisfies the
 // LeaveGuild interface so that handleDiscordUnlink exercises the leave path.
 type stubLeavingBridge struct {
-	stubDiscordBridge
+	testDiscordBridge
 	leaveErr error
 	leftID   string
 }
@@ -399,7 +399,7 @@ func (s *stubLeavingBridge) LeaveGuild(guildID string) error {
 
 func TestHandleDiscordUnlink_WithBridge_LeaveSuccess(t *testing.T) {
 	stub := &stubLeavingBridge{
-		stubDiscordBridge: stubDiscordBridge{
+		testDiscordBridge: testDiscordBridge{
 			cfg: discord.Config{
 				Enabled:      true,
 				BotToken:     "tok",
@@ -434,7 +434,7 @@ func TestHandleDiscordUnlink_WithBridge_LeaveSuccess(t *testing.T) {
 
 func TestHandleDiscordUnlink_WithBridge_LeaveError_WarningReturned(t *testing.T) {
 	stub := &stubLeavingBridge{
-		stubDiscordBridge: stubDiscordBridge{
+		testDiscordBridge: testDiscordBridge{
 			cfg: discord.Config{
 				Enabled:      true,
 				BotToken:     "tok",
@@ -469,7 +469,7 @@ func TestHandleDiscordUnlink_WithBridge_LeaveError_WarningReturned(t *testing.T)
 func TestHandleDiscordUnlink_WithBridge_ReloadError_WarningReturned(t *testing.T) {
 	// Leave succeeds, but Reload fails → warning should mention reload failure.
 	stub := &stubLeavingBridge{
-		stubDiscordBridge: stubDiscordBridge{
+		testDiscordBridge: testDiscordBridge{
 			cfg: discord.Config{
 				Enabled:      true,
 				BotToken:     "tok",
@@ -504,7 +504,7 @@ func TestHandleDiscordUnlink_WithBridge_ReloadError_WarningReturned(t *testing.T
 func TestHandleDiscordConfigSet_WithBridge_ReloadSuccess(t *testing.T) {
 	// hadBridge=true, config differs (sameDiscordRuntimeConfig=false), Reload succeeds.
 	// This covers the `active = discordBridge.CurrentConfig().Enabled` line.
-	stub := &stubDiscordBridge{
+	stub := &testDiscordBridge{
 		cfg: discord.Config{
 			BotToken: "tok",
 			GuildID:  "guild-1",
@@ -552,7 +552,7 @@ func TestGetDiscordBridge_NilByDefault(t *testing.T) {
 }
 
 func TestGetDiscordBridge_ReturnsRegistered(t *testing.T) {
-	stub := &stubDiscordBridge{}
+	stub := &testDiscordBridge{}
 	SetDiscordBridge(stub)
 	t.Cleanup(func() { SetDiscordBridge(nil) })
 	if got := GetDiscordBridge(); got != stub {

@@ -63,6 +63,8 @@ html, body, #root {
   box-shadow: var(--focus-ring);
 }
 
+/* ==================== GLOBAL: Scrollbars & Typography ==================== */
+
 /* Scrollbars */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -71,14 +73,14 @@ html, body, #root {
 *:hover::-webkit-scrollbar-thumb { background: var(--border-2); }
 ::-webkit-scrollbar-thumb:hover { background: var(--accent) !important; }
 
-/* xterm */
+/* Terminal (xterm) styling */
 .xterm-viewport { overflow-y: auto !important; }
 .xterm-screen   { padding: 8px 12px; }
 .xterm {
   background: var(--terminal-bg);
 }
 
-/* Animations */
+/* Animations and transitions */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -283,6 +285,7 @@ html, body, #root {
   padding-right: 4px;
 }
 
+/* Button and control styles — shared patterns for toolbar buttons */
 .traffic-light,
 .window-control-btn,
 .shell-icon-btn {
@@ -309,6 +312,7 @@ html, body, #root {
 .traffic-light.minimize { background: #febc2e; }
 .traffic-light.maximize { background: #28c840; }
 
+/* window controls and shell icon buttons share common sizing and flexbox layout */
 .window-control-btn,
 .shell-icon-btn {
   width: 28px;
@@ -327,6 +331,7 @@ html, body, #root {
   background: rgba(244,63,94,0.18);
 }
 
+/* shell-action: button style for titlebar and toolbar actions */
 .shell-action {
   height: 28px;
   padding: 0 10px;
@@ -484,7 +489,11 @@ html, body, #root {
   box-shadow: none;
 }
 
+/* ==================== LAYOUT: Activity Bar & Sidebar ==================== */
+
 /* Activity bar */
+/* ==================== LAYOUT: Sidebar & Activity Bar ==================== */
+
 .activity-bar {
   width: 42px;
   min-width: 42px;
@@ -638,6 +647,8 @@ html, body, #root {
 }
 
 .sidebar-body { flex: 1; overflow-y: auto; overflow-x: hidden; }
+
+/* ==================== VIEWS: Usage Dashboard ==================== */
 
 /* Usage dashboard */
 .usage-dashboard {
@@ -1217,6 +1228,8 @@ textarea,
   }
 }
 
+/* ==================== VIEWS: Explorer & File Tree ==================== */
+
 /* Explorer collapsible sections (e.g., Open Editors) */
 .explorer-section-header {
   display: flex;
@@ -1350,6 +1363,8 @@ textarea,
 .tree-git-badge-untracked { color: #73C991; }
 .tree-git-badge-ignored   { color: var(--tx-3); }
 
+/* ==================== LAYOUT: Editor Area & Panels ==================== */
+
 /* Editor area */
 .editor-area {
   flex: 1;
@@ -1470,6 +1485,8 @@ textarea,
   overflow: hidden;
 }
 
+/* ==================== VIEWS: Editor, Tabs & Content ==================== */
+
 .tab-bar {
   height: 36px;
   min-height: 36px;
@@ -1535,7 +1552,11 @@ textarea,
   flex-shrink: 0;
 }
 
+/* ==================== VIEWS: Welcome & Dialogs ==================== */
+
 /* Welcome screen */
+/* ==================== DIALOGS & OVERLAYS: Welcome & Modals ==================== */
+
 .welcome {
   flex: 1;
   display: flex;
@@ -2016,7 +2037,11 @@ textarea,
   color: var(--accent-2);
 }
 
+/* ==================== LAYOUT: Right Panel (Chat & Agent) ==================== */
+
 /* Right panel (AI + Agent) */
+/* ==================== LAYOUT: Right Chat Panel ==================== */
+
 .right-panel {
   width: 300px;
   min-width: 260px;
@@ -2057,7 +2082,7 @@ textarea,
   border: 1px solid rgba(83, 203, 168, 0.38);
 }
 
-/* Chat */
+/* Chat panel */
 .chat-container {
   display: flex; flex-direction: column;
   flex: 1; overflow: hidden;
@@ -2167,7 +2192,11 @@ textarea,
 .tool-badge.error   { border-color: rgba(244,63,94,0.25); color: var(--red); }
 .tool-badge-name { font-weight: 600; font-family: var(--font-mono); }
 
+/* ==================== LAYOUT: Terminal Panel ==================== */
+
 /* Bottom terminal */
+/* ==================== LAYOUT: Terminal & Output ==================== */
+
 .bottom-panel {
   border-top: 1px solid var(--border);
   background: var(--terminal-bg);
@@ -2276,12 +2305,7 @@ textarea,
   padding: 1px;
 }
 
-.bottom-bar {
-  height: 32px; min-height: 32px;
-  display: flex; align-items: center;
-  padding: 0 8px; gap: 4px;
-  border-bottom: 1px solid var(--border);
-}
+/* .bottom-bar removed — replaced by .terminal-tabs (unused selector cleanup) */
 
 .term-tab {
   height: 24px; padding: 0 10px;
@@ -2293,6 +2317,8 @@ textarea,
 }
 .term-tab:hover { color: var(--tx-2); background: var(--surface-3); }
 .term-tab.active { color: var(--tx); background: var(--surface-2); }
+
+/* ==================== LAYOUT: Status Bar ==================== */
 
 /* Status bar */
 .status-bar {
@@ -2357,7 +2383,9 @@ textarea,
   background: transparent;
 }
 
-/* Agent panel */
+/* ==================== VIEWS: Agent & Team Panel ==================== */
+
+/* Agent card panel */
 .agent-card {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
@@ -2534,6 +2562,8 @@ textarea,
   min-width: 0;
   overflow: hidden;
 }
+
+/* ==================== VIEWS: Markdown Editor ==================== */
 
 .markdown-preview-shell {
   flex: 1;
@@ -3019,6 +3049,8 @@ textarea,
   color: #facc15;
 }
 
+/* ==================== DIALOGS: Command Palette ==================== */
+
 .command-palette-overlay {
   position: fixed;
   inset: 0;
@@ -3271,6 +3303,8 @@ textarea,
   font-size: 11px;
 }
 
+/* ==================== DIALOGS: Preferences & Settings ==================== */
+
 .preferences-overlay {
   position: fixed;
   inset: 0;
@@ -3278,6 +3312,9 @@ textarea,
   display: flex;
   justify-content: flex-end;
 }
+
+/* Workspace switch dialog */
+/* ==================== DIALOGS: Workspace & Approval Modals ==================== */
 
 .workspace-switch-overlay {
   position: fixed;
@@ -3359,6 +3396,9 @@ textarea,
   flex-wrap: wrap;
 }
 
+/* ==================== DIALOGS: Approval & Confirmation ==================== */
+
+/* Approval overlay */
 .approval-overlay {
   position: fixed;
   inset: 0;
@@ -3589,6 +3629,7 @@ textarea,
   max-width: 62ch;
 }
 
+/* Consolidate flex layout patterns for preferences sections */
 .preferences-card-header,
 .preferences-row,
 .preferences-toggle-row,
@@ -3598,6 +3639,7 @@ textarea,
   gap: 12px;
 }
 
+/* Sections that align items in row with space-between */
 .preferences-card-header,
 .preferences-toggle-row,
 .preferences-service-status {
@@ -3867,6 +3909,8 @@ textarea,
 .preferences-quality-item small {
   color: var(--tx-3);
 }
+
+/* ==================== PANELS: Quality & Code Analysis ==================== */
 
 .quality-panel-root {
   padding: 0;

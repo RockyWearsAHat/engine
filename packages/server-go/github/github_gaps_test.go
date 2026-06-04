@@ -76,8 +76,7 @@ func TestPostCommitStatus_DoPostError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("GITHUB_API_BASE", srv.URL)
-	t.Setenv("GITHUB_TOKEN", "tok")
+	setupGitHubAPI(t, srv, "tok")
 
 	err := PostCommitStatus("owner", "repo", "abc123", "pending", "", "desc", "")
 	if err == nil {
@@ -93,8 +92,7 @@ func TestPostIssueComment_DoPostError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("GITHUB_API_BASE", srv.URL)
-	t.Setenv("GITHUB_TOKEN", "tok")
+	setupGitHubAPI(t, srv, "tok")
 
 	err := PostIssueComment("owner", "repo", 5, "hello")
 	if err == nil {
@@ -120,8 +118,7 @@ func TestFindHeadSHA_DoGetError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("GITHUB_API_BASE", srv.URL)
-	t.Setenv("GITHUB_TOKEN", "tok")
+	setupGitHubAPI(t, srv, "tok")
 
 	_, err := FindHeadSHA("owner", "repo", "main")
 	if err == nil {
@@ -137,8 +134,7 @@ func TestFindHeadSHA_NoSHAField(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("GITHUB_API_BASE", srv.URL)
-	t.Setenv("GITHUB_TOKEN", "tok")
+	setupGitHubAPI(t, srv, "tok")
 
 	_, err := FindHeadSHA("owner", "repo", "main")
 	if err == nil {
@@ -155,8 +151,7 @@ func TestFindHeadSHA_TruncatedSHA(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("GITHUB_API_BASE", srv.URL)
-	t.Setenv("GITHUB_TOKEN", "tok")
+	setupGitHubAPI(t, srv, "tok")
 
 	_, err := FindHeadSHA("owner", "repo", "main")
 	if err == nil {

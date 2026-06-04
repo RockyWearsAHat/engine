@@ -172,12 +172,15 @@ func (k *KeychainStore) saveStore(store map[string]string) error {
 }
 
 // withStoreMutation loads the store, applies a mutation function, and saves the result.
-// Handles locking and error recovery (empty store on load error).
-func (k *KeychainStore) withStoreMutation(mu sync.Locker, fn func(map[string]string) error) error {
+// When recoverLoadError is true, load errors are treated as an empty store.
+func (k *KeychainStore) withStoreMutation(mu sync.Locker, recoverLoadError bool, fn func(map[string]string) error) error {
 	mu.Lock()
 	defer mu.Unlock()
 	store, err := k.loadStore()
 	if err != nil {
+		if !recoverLoadError {
+			return err
+		}
 		store = map[string]string{}
 	}
 	if err := fn(store); err != nil {
@@ -187,7 +190,7 @@ func (k *KeychainStore) withStoreMutation(mu sync.Locker, fn func(map[string]str
 }
 
 func (k *KeychainStore) fileSet(key, value string) error {
-	return k.withStoreMutation(&k.mu, func(store map[string]string) error {
+	return k.withStoreMutation(&k.mu, true, func(store map[string]string) error {
 		store[key] = value
 		return nil
 	})
@@ -208,7 +211,7 @@ func (k *KeychainStore) fileGet(key string) (string, error) {
 }
 
 func (k *KeychainStore) fileDel(key string) error {
-	return k.withStoreMutation(&k.mu, func(store map[string]string) error {
+	return k.withStoreMutation(&k.mu, false, func(store map[string]string) error {
 		delete(store, key)
 		return nil
 	})

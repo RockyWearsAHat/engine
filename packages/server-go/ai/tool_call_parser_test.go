@@ -13,6 +13,19 @@ import (
 	"github.com/engine/server/db"
 )
 
+// newEmptyChatContext creates a ChatContext with all callbacks set to no-ops.
+// Used in tests to focus on tool call parsing without callback side effects.
+func newEmptyChatContext(projectDir string) *ChatContext {
+	return &ChatContext{
+		ProjectPath:      projectDir,
+		OnSessionUpdated: func(_ *db.Session) {},
+		OnChunk:          func(string, bool) {},
+		OnToolCall:       func(string, any) {},
+		OnToolResult:     func(string, any, bool) {},
+		OnError:          func(string) {},
+	}
+}
+
 func TestParseToolCallsFromText_HermesXML(t *testing.T) {
 	raw := "I will read main.go.\n<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"main.go\"}}\n</tool_call>"
 	calls := parseToolCallsFromText(raw)

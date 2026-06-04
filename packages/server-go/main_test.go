@@ -193,7 +193,9 @@ func withRunDepsReset(t *testing.T) {
 	})
 }
 
-func TestReserveIssueCommentDispatch_DedupesWithinCooldown(t *testing.T) {
+// withIssueCommentStateMutex saves and restores the issue comment dispatch state for test isolation.
+func withIssueCommentStateMutex(t *testing.T) {
+	t.Helper()
 	issueCommentTriggerMu.Lock()
 	orig := issueCommentLastDispatch
 	issueCommentLastDispatch = make(map[string]time.Time)
@@ -203,6 +205,21 @@ func TestReserveIssueCommentDispatch_DedupesWithinCooldown(t *testing.T) {
 		issueCommentLastDispatch = orig
 		issueCommentTriggerMu.Unlock()
 	})
+}
+
+// setupScaffoldTest initializes database, AI mock, and issue comment state for scaffold/issue tests.
+func setupScaffoldTest(t *testing.T, owner, repo, readme string) string {
+	t.Helper()
+	projectPath := t.TempDir()
+	setupTestDB(t, projectPath)
+	withAIMockServer(t)
+	withIssueCommentStateMutex(t)
+	prepareScaffoldTargetRepo(t, projectPath, owner, repo, readme)
+	return projectPath
+}
+
+func TestReserveIssueCommentDispatch_DedupesWithinCooldown(t *testing.T) {
+	withIssueCommentStateMutex(t)
 
 	if ok := reserveIssueCommentDispatch("/tmp/a", "owner/repo", 42, 9001, "@engine please fix"); !ok {
 		t.Fatal("expected first dispatch reservation to pass")
@@ -213,15 +230,7 @@ func TestReserveIssueCommentDispatch_DedupesWithinCooldown(t *testing.T) {
 }
 
 func TestReserveIssueCommentDispatch_DifferentCommentIDAllowsDispatch(t *testing.T) {
-	issueCommentTriggerMu.Lock()
-	orig := issueCommentLastDispatch
-	issueCommentLastDispatch = make(map[string]time.Time)
-	issueCommentTriggerMu.Unlock()
-	t.Cleanup(func() {
-		issueCommentTriggerMu.Lock()
-		issueCommentLastDispatch = orig
-		issueCommentTriggerMu.Unlock()
-	})
+	withIssueCommentStateMutex(t)
 
 	if ok := reserveIssueCommentDispatch("/tmp/a", "owner/repo", 42, 1, "@engine please fix"); !ok {
 		t.Fatal("expected first comment dispatch reservation")
@@ -245,15 +254,7 @@ func TestIssueCommentDispatchKey_TrimsAndTruncates(t *testing.T) {
 }
 
 func TestReserveIssueCommentDispatch_CleansUpExpiredEntries(t *testing.T) {
-	issueCommentTriggerMu.Lock()
-	orig := issueCommentLastDispatch
-	issueCommentLastDispatch = make(map[string]time.Time)
-	issueCommentTriggerMu.Unlock()
-	t.Cleanup(func() {
-		issueCommentTriggerMu.Lock()
-		issueCommentLastDispatch = orig
-		issueCommentTriggerMu.Unlock()
-	})
+	withIssueCommentStateMutex(t)
 
 	issueCommentTriggerMu.Lock()
 	for i := 0; i < 4100; i++ {
@@ -273,20 +274,7 @@ func TestReserveIssueCommentDispatch_CleansUpExpiredEntries(t *testing.T) {
 }
 
 func TestTriggerIssueSession_DuplicateSuppressed(t *testing.T) {
-	projectPath := t.TempDir()
-	setupTestDB(t, projectPath)
-	withAIMockServer(t)
-	prepareScaffoldTargetRepo(t, projectPath, "owner", "repo", "# Demo\n@engine")
-
-	issueCommentTriggerMu.Lock()
-	orig := issueCommentLastDispatch
-	issueCommentLastDispatch = make(map[string]time.Time)
-	issueCommentTriggerMu.Unlock()
-	t.Cleanup(func() {
-		issueCommentTriggerMu.Lock()
-		issueCommentLastDispatch = orig
-		issueCommentTriggerMu.Unlock()
-	})
+	projectPath := setupScaffoldTest(t, "owner", "repo", "# Demo\n@engine")
 
 	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine please fix","user":{"login":"bob"},"id":9001},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`)
 	triggerIssueSession(projectPath, payload)
@@ -435,6 +423,16 @@ func TestBuildAutonomousRepoPath_EmptyOwner(t *testing.T) {
 	}
 }
 
+// withRunCommandMocked temporarily replaces runCommandCombinedOutputFn with the given mock function for test isolation.
+func withRunCommandMocked(t *testing.T, mockFn func(string, ...string) ([]byte, error)) {
+	t.Helper()
+	orig := runCommandCombinedOutputFn
+	runCommandCombinedOutputFn = mockFn
+	t.Cleanup(func() {
+		runCommandCombinedOutputFn = orig
+	})
+}
+
 func TestBuildAutonomousRepoPath_HomeErrorFallsBackToProject(t *testing.T) {
 	base := "/tmp/engine-root"
 	t.Setenv("ENGINE_CLONES_DIR", "")
@@ -557,11 +555,9 @@ func TestEnsureAutonomousRepoWorkspace_FetchError(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dest, ".git"), 0o755); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	orig := runCommandCombinedOutputFn
-	defer func() { runCommandCombinedOutputFn = orig }()
-	runCommandCombinedOutputFn = func(_ string, _ ...string) ([]byte, error) {
+	withRunCommandMocked(t, func(_ string, _ ...string) ([]byte, error) {
 		return []byte("fetch failed"), fmt.Errorf("fetch error")
-	}
+	})
 	_, err := ensureAutonomousRepoWorkspace(base, "octo", "demo")
 	if err == nil {
 		t.Fatal("expected fetch error, got nil")
@@ -579,16 +575,14 @@ func TestEnsureAutonomousRepoWorkspace_PullError(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dest, ".git"), 0o755); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	orig := runCommandCombinedOutputFn
-	defer func() { runCommandCombinedOutputFn = orig }()
 	call := 0
-	runCommandCombinedOutputFn = func(_ string, _ ...string) ([]byte, error) {
+	withRunCommandMocked(t, func(_ string, _ ...string) ([]byte, error) {
 		call++
 		if call == 1 {
-			return []byte("ok"), nil // fetch succeeds
+			return []byte("ok"), nil
 		}
 		return []byte("pull failed"), fmt.Errorf("pull error")
-	}
+	})
 	_, err := ensureAutonomousRepoWorkspace(base, "octo", "demo")
 	if err == nil {
 		t.Fatal("expected pull error, got nil")

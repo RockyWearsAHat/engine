@@ -34,8 +34,8 @@ func (c *Client) Health(ctx context.Context, peer *Peer) (*HealthResponse, error
 		return nil, err
 	}
 	var resp HealthResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("mesh client: parse health: %w", err)
+	if err := unmarshalMeshResponse(body, &resp, "health"); err != nil {
+		return nil, err
 	}
 	return &resp, nil
 }
@@ -53,8 +53,8 @@ func (c *Client) Inference(ctx context.Context, peer *Peer, req InferenceRequest
 		return nil, err
 	}
 	var resp InferenceResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("mesh client: parse inference response: %w", err)
+	if err := unmarshalMeshResponse(body, &resp, "inference response"); err != nil {
+		return nil, err
 	}
 	return &resp, nil
 }
@@ -67,8 +67,8 @@ func (c *Client) Exec(ctx context.Context, peer *Peer, req ExecRequest) (*ExecRe
 		return nil, err
 	}
 	var resp ExecResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("mesh client: parse exec response: %w", err)
+	if err := unmarshalMeshResponse(body, &resp, "exec response"); err != nil {
+		return nil, err
 	}
 	return &resp, nil
 }
@@ -121,4 +121,13 @@ func peerBaseURL(address string) string {
 		return addr
 	}
 	return "http://" + addr
+}
+
+// unmarshalMeshResponse unmarshals a JSON response body into v, wrapping any errors
+// with a standard mesh client error prefix and operation name.
+func unmarshalMeshResponse(body []byte, v any, opName string) error {
+	if err := json.Unmarshal(body, v); err != nil {
+		return fmt.Errorf("mesh client: parse %s: %w", opName, err)
+	}
+	return nil
 }

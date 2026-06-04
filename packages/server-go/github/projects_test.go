@@ -9,14 +9,54 @@ import (
 	"testing"
 )
 
+// errReadCloser is a mock io.ReadCloser that always fails on Read.
 type errReadCloser struct{}
 
 func (errReadCloser) Read(p []byte) (int, error) { return 0, io.ErrUnexpectedEOF }
 func (errReadCloser) Close() error               { return nil }
 
+// roundTripperFunc is a functional adapter for http.RoundTripper.
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// decodeGraphQLRequest unmarshals a GraphQL query from the request body.
+func decodeGraphQLRequest(r *http.Request, dst any) error {
+	return json.NewDecoder(r.Body).Decode(dst)
+}
+
+// setupProjectEnv sets up environment variables for project board testing.
+// Centralizes repeated env setup pattern across tests.
+func setupProjectEnv(t *testing.T, projectNumber int, projectOwner, token, login string) {
+	t.Helper()
+	if projectNumber > 0 {
+		t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", string(rune('0'+projectNumber/10))+""+string(rune('0'+projectNumber%10)))
+	}
+	if projectOwner != "" {
+		t.Setenv("ENGINE_GITHUB_PROJECT_OWNER", projectOwner)
+	}
+	if token != "" {
+		t.Setenv("ENGINE_GITHUB_BOT_TOKEN", token)
+	}
+	if login != "" {
+		t.Setenv("ENGINE_GITHUB_LOGIN", login)
+	}
+}
+
+// setupGraphQLServer creates a test HTTP server and configures the eventsHTTPClient to use it.
+// Server URL is set as GITHUB_API_BASE. Automatically cleaned up via t.Cleanup.
+func setupGraphQLServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Setenv("GITHUB_API_BASE", srv.URL)
+	oldHTTP := eventsHTTPClient
+	eventsHTTPClient = srv.Client()
+	t.Cleanup(func() {
+		eventsHTTPClient = oldHTTP
+		srv.Close()
+	})
+	return srv
+}
 
 // TestProjectOwnerAndProjectNumber verifies project configuration parsing from environment.
 func TestProjectOwnerAndProjectNumber(t *testing.T) {
@@ -47,7 +87,7 @@ func TestGraphqlDo_ErrorPaths(t *testing.T) {
 	t.Setenv("GITHUB_API_BASE", "http://127.0.0.1:1")
 	oldHTTP := eventsHTTPClient
 	eventsHTTPClient = &http.Client{}
-	defer func() { eventsHTTPClient = oldHTTP }()
+	t.Cleanup(func() { eventsHTTPClient = oldHTTP })
 
 	if err := graphqlDo("tok", "query", map[string]any{"bad": make(chan int)}, nil); err == nil {
 		t.Fatal("expected marshal error")
@@ -61,26 +101,20 @@ func TestGraphqlDo_ErrorPaths(t *testing.T) {
 // TestGetProjectV2ID_FallsBackToOrg verifies project lookup falls back from user to organization scope.
 // Tests behavioral side effect (HTTP POST to GitHub GraphQL API).
 func TestGetProjectV2ID_FallsBackToOrg(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Query string `json:"query"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeGraphQLRequest(r, &req); err != nil {
 			t.Fatalf("decode graphql request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(req.Query, "user(login") {
-			_, _ = w.Write([]byte(`{"errors":[{"message":"user not found"}]}`))
+			io.WriteString(w, `{"errors":[{"message":"user not found"}]}`)
 			return
 		}
-		_, _ = w.Write([]byte(`{"data":{"organization":{"projectV2":{"id":"P_ORG"}}}}`))
+		io.WriteString(w, `{"data":{"organization":{"projectV2":{"id":"P_ORG"}}}}`)
 	}))
-	defer srv.Close()
-
-	t.Setenv("GITHUB_API_BASE", srv.URL)
-	oldHTTP := eventsHTTPClient
-	eventsHTTPClient = srv.Client()
-	defer func() { eventsHTTPClient = oldHTTP }()
 
 	id, err := getProjectV2ID("tok", "octo", 3)
 	if err != nil {
@@ -94,16 +128,10 @@ func TestGetProjectV2ID_FallsBackToOrg(t *testing.T) {
 // TestGetIssueNodeID_NotFound verifies error when issue node ID cannot be resolved.
 // Tests behavioral side effect (HTTP POST to GitHub GraphQL API).
 func TestGetIssueNodeID_NotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"repository":{"issue":{"id":""}}}}`))
+		io.WriteString(w, `{"data":{"repository":{"issue":{"id":""}}}}`)
 	}))
-	defer srv.Close()
-
-	t.Setenv("GITHUB_API_BASE", srv.URL)
-	oldHTTP := eventsHTTPClient
-	eventsHTTPClient = srv.Client()
-	defer func() { eventsHTTPClient = oldHTTP }()
 
 	_, err := getIssueNodeID("tok", "owner", "repo", 99)
 	if err == nil {
@@ -113,11 +141,7 @@ func TestGetIssueNodeID_NotFound(t *testing.T) {
 
 // TestAddIssueToEngineProject_BestEffortWhenNotConfigured verifies function gracefully handles unconfigured project.
 func TestAddIssueToEngineProject_BestEffortWhenNotConfigured(t *testing.T) {
-	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "")
-	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
-	t.Setenv("GITHUB_TOKEN", "")
-	t.Setenv("ENGINE_GITHUB_PROJECT_OWNER", "")
-	t.Setenv("ENGINE_GITHUB_LOGIN", "")
+	setupProjectEnv(t, 0, "", "", "")
 
 	itemID, err := AddIssueToEngineProject("owner", "repo", 1)
 	if err != nil {
@@ -131,38 +155,27 @@ func TestAddIssueToEngineProject_BestEffortWhenNotConfigured(t *testing.T) {
 // TestAddIssueToEngineProject_Success verifies issue is successfully added to GitHub project.
 // Tests behavioral side effect (HTTP POST to GitHub GraphQL mutations).
 func TestAddIssueToEngineProject_Success(t *testing.T) {
-	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "3")
-	t.Setenv("ENGINE_GITHUB_PROJECT_OWNER", "octo")
-	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
-	t.Setenv("ENGINE_GITHUB_LOGIN", "engine-bot")
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	setupProjectEnv(t, 3, "octo", "tok", "engine-bot")
+	setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Query string `json:"query"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeGraphQLRequest(r, &req); err != nil {
 			t.Fatalf("decode add-project request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-
 		switch {
 		case strings.Contains(req.Query, "projectV2(number"):
-			_, _ = w.Write([]byte(`{"data":{"user":{"projectV2":{"id":"P1"}}}}`))
+			io.WriteString(w, `{"data":{"user":{"projectV2":{"id":"P1"}}}}`)
 		case strings.Contains(req.Query, "issue(number"):
-			_, _ = w.Write([]byte(`{"data":{"repository":{"issue":{"id":"I1"}}}}`))
+			io.WriteString(w, `{"data":{"repository":{"issue":{"id":"I1"}}}}`)
 		case strings.Contains(req.Query, "addProjectV2ItemById"):
-			_, _ = w.Write([]byte(`{"data":{"addProjectV2ItemById":{"item":{"id":"ITEM1"}}}}`))
+			io.WriteString(w, `{"data":{"addProjectV2ItemById":{"item":{"id":"ITEM1"}}}}`)
 		default:
 			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"errors":[{"message":"unexpected query"}]}`))
+			io.WriteString(w, `{"errors":[{"message":"unexpected query"}]}`)
 		}
 	}))
-	defer srv.Close()
-
-	t.Setenv("GITHUB_API_BASE", srv.URL)
-	oldHTTP := eventsHTTPClient
-	eventsHTTPClient = srv.Client()
-	defer func() { eventsHTTPClient = oldHTTP }()
 
 	itemID, err := AddIssueToEngineProject("owner", "repo", 7)
 	if err != nil {
@@ -174,40 +187,31 @@ func TestAddIssueToEngineProject_Success(t *testing.T) {
 }
 
 func TestUpdateProjectItemStatus_SuccessAndSkip(t *testing.T) {
-	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "9")
-	t.Setenv("ENGINE_GITHUB_PROJECT_OWNER", "octo")
-	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
-	t.Setenv("ENGINE_GITHUB_LOGIN", "engine-bot")
+	setupProjectEnv(t, 9, "octo", "tok", "engine-bot")
 
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		var req struct {
 			Query string `json:"query"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeGraphQLRequest(r, &req); err != nil {
 			t.Fatalf("decode update-status request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
 
 		switch {
 		case strings.Contains(req.Query, "projectV2(number"):
-			_, _ = w.Write([]byte(`{"data":{"user":{"projectV2":{"id":"P1"}}}}`))
+			io.WriteString(w, `{"data":{"user":{"projectV2":{"id":"P1"}}}}`)
 		case strings.Contains(req.Query, "fields(first"):
-			_, _ = w.Write([]byte(`{"data":{"node":{"fields":{"nodes":[{"id":"F1","name":"Status","options":[{"id":"OPT1","name":"Done"},{"id":"OPT2","name":"In Progress"}]}]}}}}`))
+			io.WriteString(w, `{"data":{"node":{"fields":{"nodes":[{"id":"F1","name":"Status","options":[{"id":"OPT1","name":"Done"},{"id":"OPT2","name":"In Progress"}]}]}}}}`)
 		case strings.Contains(req.Query, "updateProjectV2ItemFieldValue"):
-			_, _ = w.Write([]byte(`{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"ITEM1"}}}}`))
+			io.WriteString(w, `{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"ITEM1"}}}}`)
 		default:
 			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"errors":[{"message":"unexpected query"}]}`))
+			io.WriteString(w, `{"errors":[{"message":"unexpected query"}]}`)
 		}
 	}))
-	defer srv.Close()
-
-	t.Setenv("GITHUB_API_BASE", srv.URL)
-	oldHTTP := eventsHTTPClient
-	eventsHTTPClient = srv.Client()
-	defer func() { eventsHTTPClient = oldHTTP }()
 
 	if err := UpdateProjectItemStatus("owner", "ITEM1", "Done"); err != nil {
 		t.Fatalf("UpdateProjectItemStatus: %v", err)
@@ -223,34 +227,26 @@ func TestUpdateProjectItemStatus_SuccessAndSkip(t *testing.T) {
 }
 
 func TestUpdateProjectItemStatus_FieldOrOptionMissingSkips(t *testing.T) {
-	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "9")
-	t.Setenv("ENGINE_GITHUB_PROJECT_OWNER", "octo")
-	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
+	setupProjectEnv(t, 9, "octo", "tok", "")
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Query string `json:"query"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeGraphQLRequest(r, &req); err != nil {
 			t.Fatalf("decode field/option request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(req.Query, "projectV2(number") {
-			_, _ = w.Write([]byte(`{"data":{"user":{"projectV2":{"id":"P1"}}}}`))
+			io.WriteString(w, `{"data":{"user":{"projectV2":{"id":"P1"}}}}`)
 			return
 		}
 		if strings.Contains(req.Query, "fields(first") {
-			_, _ = w.Write([]byte(`{"data":{"node":{"fields":{"nodes":[{"id":"X","name":"Priority","options":[{"id":"P1","name":"High"}]}]}}}}`))
+			io.WriteString(w, `{"data":{"node":{"fields":{"nodes":[{"id":"X","name":"Priority","options":[{"id":"P1","name":"High"}]}]}}}}`)
 			return
 		}
-		_, _ = w.Write([]byte(`{"data":{}}`))
+		io.WriteString(w, `{"data":{}}`)
 	}))
-	defer srv.Close()
-
-	t.Setenv("GITHUB_API_BASE", srv.URL)
-	oldHTTP := eventsHTTPClient
-	eventsHTTPClient = srv.Client()
-	defer func() { eventsHTTPClient = oldHTTP }()
 
 	if err := UpdateProjectItemStatus("owner", "ITEM1", "Done"); err != nil {
 		t.Fatalf("expected nil when status option missing, got %v", err)
@@ -266,9 +262,7 @@ func TestGraphqlDo_StatusAndParseErrors(t *testing.T) {
 		defer srv.Close()
 
 		t.Setenv("GITHUB_API_BASE", srv.URL)
-		oldHTTP := eventsHTTPClient
-		eventsHTTPClient = srv.Client()
-		defer func() { eventsHTTPClient = oldHTTP }()
+		withEventsHTTPClient(t, srv)
 
 		if err := graphqlDo("tok", "query { ping }", nil, nil); err == nil {
 			t.Fatal("expected status error")
@@ -283,9 +277,7 @@ func TestGraphqlDo_StatusAndParseErrors(t *testing.T) {
 		defer srv.Close()
 
 		t.Setenv("GITHUB_API_BASE", srv.URL)
-		oldHTTP := eventsHTTPClient
-		eventsHTTPClient = srv.Client()
-		defer func() { eventsHTTPClient = oldHTTP }()
+		withEventsHTTPClient(t, srv)
 
 		if err := graphqlDo("tok", "query { ping }", nil, nil); err == nil {
 			t.Fatal("expected parse error")
@@ -294,16 +286,10 @@ func TestGraphqlDo_StatusAndParseErrors(t *testing.T) {
 }
 
 func TestGetProjectV2ID_BothLookupsFail(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"errors":[{"message":"nope"}]}`))
+		io.WriteString(w, `{"errors":[{"message":"nope"}]}`)
 	}))
-	defer srv.Close()
-
-	t.Setenv("GITHUB_API_BASE", srv.URL)
-	oldHTTP := eventsHTTPClient
-	eventsHTTPClient = srv.Client()
-	defer func() { eventsHTTPClient = oldHTTP }()
 
 	if _, err := getProjectV2ID("tok", "octo", 3); err == nil {
 		t.Fatal("expected both-lookups-failed error")
@@ -311,16 +297,10 @@ func TestGetProjectV2ID_BothLookupsFail(t *testing.T) {
 }
 
 func TestGetProjectV2ID_NotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"user":{"projectV2":{"id":""}}}}`))
+		io.WriteString(w, `{"data":{"user":{"projectV2":{"id":""}}}}`)
 	}))
-	defer srv.Close()
-
-	t.Setenv("GITHUB_API_BASE", srv.URL)
-	oldHTTP := eventsHTTPClient
-	eventsHTTPClient = srv.Client()
-	defer func() { eventsHTTPClient = oldHTTP }()
 
 	if _, err := getProjectV2ID("tok", "octo", 3); err == nil {
 		t.Fatal("expected not found error")
@@ -328,16 +308,10 @@ func TestGetProjectV2ID_NotFound(t *testing.T) {
 }
 
 func TestGetIssueNodeID_GraphqlError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`boom`))
+		io.WriteString(w, `boom`)
 	}))
-	defer srv.Close()
-
-	t.Setenv("GITHUB_API_BASE", srv.URL)
-	oldHTTP := eventsHTTPClient
-	eventsHTTPClient = srv.Client()
-	defer func() { eventsHTTPClient = oldHTTP }()
 
 	if _, err := getIssueNodeID("tok", "owner", "repo", 1); err == nil {
 		t.Fatal("expected graphql error")
@@ -346,20 +320,11 @@ func TestGetIssueNodeID_GraphqlError(t *testing.T) {
 
 func TestAddIssueToEngineProject_ErrorBranches(t *testing.T) {
 	t.Run("project lookup error", func(t *testing.T) {
-		t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "3")
-		t.Setenv("ENGINE_GITHUB_PROJECT_OWNER", "octo")
-		t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
-
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setupProjectEnv(t, 3, "octo", "tok", "")
+		setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"errors":[{"message":"no project"}]}`))
+			io.WriteString(w, `{"errors":[{"message":"no project"}]}`)
 		}))
-		defer srv.Close()
-		t.Setenv("GITHUB_API_BASE", srv.URL)
-
-		oldHTTP := eventsHTTPClient
-		eventsHTTPClient = srv.Client()
-		defer func() { eventsHTTPClient = oldHTTP }()
 
 		if _, err := AddIssueToEngineProject("owner", "repo", 1); err == nil {
 			t.Fatal("expected project lookup error")
@@ -367,33 +332,24 @@ func TestAddIssueToEngineProject_ErrorBranches(t *testing.T) {
 	})
 
 	t.Run("issue lookup error", func(t *testing.T) {
-		t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "3")
-		t.Setenv("ENGINE_GITHUB_PROJECT_OWNER", "octo")
-		t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
-
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setupProjectEnv(t, 3, "octo", "tok", "")
+		setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req struct {
 				Query string `json:"query"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			if err := decodeGraphQLRequest(r, &req); err != nil {
 				t.Fatalf("decode issue lookup request: %v", err)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			switch {
 			case strings.Contains(req.Query, "projectV2(number"):
-				_, _ = w.Write([]byte(`{"data":{"user":{"projectV2":{"id":"P1"}}}}`))
+				io.WriteString(w, `{"data":{"user":{"projectV2":{"id":"P1"}}}}`)
 			case strings.Contains(req.Query, "issue(number"):
-				_, _ = w.Write([]byte(`{"errors":[{"message":"no issue"}]}`))
+				io.WriteString(w, `{"errors":[{"message":"no issue"}]}`)
 			default:
-				_, _ = w.Write([]byte(`{"data":{}}`))
+				io.WriteString(w, `{"data":{}}`)
 			}
 		}))
-		defer srv.Close()
-		t.Setenv("GITHUB_API_BASE", srv.URL)
-
-		oldHTTP := eventsHTTPClient
-		eventsHTTPClient = srv.Client()
-		defer func() { eventsHTTPClient = oldHTTP }()
 
 		if _, err := AddIssueToEngineProject("owner", "repo", 1); err == nil {
 			t.Fatal("expected issue lookup error")
@@ -401,35 +357,26 @@ func TestAddIssueToEngineProject_ErrorBranches(t *testing.T) {
 	})
 
 	t.Run("mutation error", func(t *testing.T) {
-		t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "3")
-		t.Setenv("ENGINE_GITHUB_PROJECT_OWNER", "octo")
-		t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
-
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setupProjectEnv(t, 3, "octo", "tok", "")
+		setupGraphQLServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req struct {
 				Query string `json:"query"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			if err := decodeGraphQLRequest(r, &req); err != nil {
 				t.Fatalf("decode mutation request: %v", err)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			switch {
 			case strings.Contains(req.Query, "projectV2(number"):
-				_, _ = w.Write([]byte(`{"data":{"user":{"projectV2":{"id":"P1"}}}}`))
+				io.WriteString(w, `{"data":{"user":{"projectV2":{"id":"P1"}}}}`)
 			case strings.Contains(req.Query, "issue(number"):
-				_, _ = w.Write([]byte(`{"data":{"repository":{"issue":{"id":"I1"}}}}`))
+				io.WriteString(w, `{"data":{"repository":{"issue":{"id":"I1"}}}}`)
 			case strings.Contains(req.Query, "addProjectV2ItemById"):
-				_, _ = w.Write([]byte(`{"errors":[{"message":"mutation fail"}]}`))
+				io.WriteString(w, `{"errors":[{"message":"mutation fail"}]}`)
 			default:
-				_, _ = w.Write([]byte(`{"data":{}}`))
+				io.WriteString(w, `{"data":{}}`)
 			}
 		}))
-		defer srv.Close()
-		t.Setenv("GITHUB_API_BASE", srv.URL)
-
-		oldHTTP := eventsHTTPClient
-		eventsHTTPClient = srv.Client()
-		defer func() { eventsHTTPClient = oldHTTP }()
 
 		if _, err := AddIssueToEngineProject("owner", "repo", 1); err == nil {
 			t.Fatal("expected mutation error")
@@ -462,9 +409,7 @@ func TestUpdateProjectItemStatus_EarlyAndErrorPaths(t *testing.T) {
 		defer srv.Close()
 		t.Setenv("GITHUB_API_BASE", srv.URL)
 
-		oldHTTP := eventsHTTPClient
-		eventsHTTPClient = srv.Client()
-		defer func() { eventsHTTPClient = oldHTTP }()
+		withEventsHTTPClient(t, srv)
 
 		if err := UpdateProjectItemStatus("owner", "ITEM1", "Done"); err == nil {
 			t.Fatal("expected project lookup error")
@@ -493,9 +438,7 @@ func TestUpdateProjectItemStatus_EarlyAndErrorPaths(t *testing.T) {
 		defer srv.Close()
 		t.Setenv("GITHUB_API_BASE", srv.URL)
 
-		oldHTTP := eventsHTTPClient
-		eventsHTTPClient = srv.Client()
-		defer func() { eventsHTTPClient = oldHTTP }()
+		withEventsHTTPClient(t, srv)
 
 		if err := UpdateProjectItemStatus("owner", "ITEM1", "Done"); err == nil {
 			t.Fatal("expected field list error")
@@ -508,7 +451,7 @@ func TestGraphqlDo_RequestAndReadErrors(t *testing.T) {
 		t.Setenv("GITHUB_API_BASE", "://bad")
 		oldHTTP := eventsHTTPClient
 		eventsHTTPClient = &http.Client{}
-		defer func() { eventsHTTPClient = oldHTTP }()
+		t.Cleanup(func() { eventsHTTPClient = oldHTTP })
 
 		if err := graphqlDo("tok", "query { ping }", nil, nil); err == nil {
 			t.Fatal("expected request construction error")
@@ -521,7 +464,7 @@ func TestGraphqlDo_RequestAndReadErrors(t *testing.T) {
 		eventsHTTPClient = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: http.StatusOK, Body: errReadCloser{}}, nil
 		})}
-		defer func() { eventsHTTPClient = oldHTTP }()
+		t.Cleanup(func() { eventsHTTPClient = oldHTTP })
 
 		if err := graphqlDo("tok", "query { ping }", nil, nil); err == nil {
 			t.Fatal("expected body read error")

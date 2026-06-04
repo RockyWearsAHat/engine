@@ -3,21 +3,12 @@ package ai
 import (
 	"strings"
 	"testing"
-
-	"github.com/engine/server/db"
 )
 
 // setupIntakeDB creates a temporary project directory and initializes the DB for intake tests.
-// Returns the project root path; uses t.TempDir() for cleanup.
+// Alias for setupTempDBProject; kept for compatibility within this file.
 func setupIntakeDB(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	stateDir := t.TempDir()
-	t.Setenv("ENGINE_STATE_DIR", stateDir)
-	if err := db.Init(dir); err != nil {
-		t.Fatalf("db.Init: %v", err)
-	}
-	return dir
+	return setupTempDBProject(t)
 }
 
 // TestBuildGrillerPrompt verifies the brief appears in the output.

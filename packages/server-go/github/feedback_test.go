@@ -1,8 +1,6 @@
 package github
 
 import (
-	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -61,12 +59,7 @@ func TestPostCommitStatus_MissingFieldsReturnsError(t *testing.T) {
 // Tests behavioral side effect (HTTP POST to GitHub commit status API).
 func TestPostCommitStatus_PostsExpectedPayload(t *testing.T) {
 	var captured map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &captured)
-		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte("{}"))
-	}))
+	server := httptest.NewServer(captureHTTPPayload(&captured))
 	defer server.Close()
 	t.Setenv("GITHUB_API_BASE", server.URL)
 	t.Setenv("GITHUB_TOKEN", "fake")
@@ -99,12 +92,7 @@ func TestPostIssueComment_MissingFieldsReturnsError(t *testing.T) {
 // Tests behavioral side effect (HTTP POST to GitHub issue comment API).
 func TestPostIssueComment_PostsExpectedPayload(t *testing.T) {
 	var captured map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &captured)
-		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte("{}"))
-	}))
+	server := httptest.NewServer(captureHTTPPayload(&captured))
 	defer server.Close()
 	t.Setenv("GITHUB_API_BASE", server.URL)
 	t.Setenv("GITHUB_TOKEN", "fake")
