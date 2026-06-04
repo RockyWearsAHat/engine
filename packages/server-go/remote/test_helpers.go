@@ -90,3 +90,31 @@ func mustDecodeJSON(t *testing.T, body io.Reader, v interface{}) {
 		t.Fatalf("decode response: %v", err)
 	}
 }
+
+// decodeJSONResponse decodes a JSON response body and returns it as a map.
+func decodeJSONResponse(t *testing.T, body io.Reader, _ map[string]any) map[string]any {
+	t.Helper()
+	var resp map[string]any
+	if err := json.NewDecoder(body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	return resp
+}
+
+// assertJSONField checks if a JSON response field equals expected value.
+func assertJSONField(t *testing.T, resp map[string]any, field string, expected interface{}) {
+	t.Helper()
+	got := resp[field]
+	if got != expected {
+		t.Errorf("%s = %v, want %v", field, got, expected)
+	}
+}
+
+// assertJSONFieldNotEmpty checks if a JSON response field is non-empty string.
+func assertJSONFieldNotEmpty(t *testing.T, resp map[string]any, field string) {
+	t.Helper()
+	val := resp[field]
+	if str, ok := val.(string); !ok || str == "" {
+		t.Errorf("%s = %v, want non-empty string", field, val)
+	}
+}

@@ -2,7 +2,6 @@ package ai
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,33 +12,8 @@ import (
 
 func setupHistoryTestProject(t *testing.T) string {
 	t.Helper()
-
-	stateDir := t.TempDir()
-	projectDir := filepath.Join(t.TempDir(), "project")
-	if err := os.MkdirAll(filepath.Join(projectDir, ".github", "references"), 0755); err != nil {
-		t.Fatalf("mkdir project refs: %v", err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(projectDir, "PROJECT_GOAL.md"),
-		[]byte("Engine should preserve project direction and retrieve the right history when the AI needs it."),
-		0644,
-	); err != nil {
-		t.Fatalf("write project goal: %v", err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(projectDir, ".github", "references", "architecture.md"),
-		[]byte("Persistent context, autonomous validation, and agent orchestration are first-class architecture goals."),
-		0644,
-	); err != nil {
-		t.Fatalf("write architecture doc: %v", err)
-	}
-
-	t.Setenv("ENGINE_STATE_DIR", stateDir)
-	if err := db.Init(projectDir); err != nil {
-		t.Fatalf("db init: %v", err)
-	}
-
-	return projectDir
+	// Use consolidated helper that handles directory structure + DB init
+	return setupHistoryDBProject(t)
 }
 
 func seedHistoryFixtures(t *testing.T, projectDir string) {

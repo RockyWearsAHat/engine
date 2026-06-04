@@ -42,6 +42,18 @@ func projectNumber() int {
 	return n
 }
 
+// validateProjectConfig returns the configured project owner, token, and number.
+// Returns zero values when project is not configured (best-effort mode).
+func validateProjectConfig() (owner, token string, number int) {
+	number = projectNumber()
+	if number == 0 {
+		return "", "", 0
+	}
+	owner = projectOwner()
+	token = EngineToken()
+	return owner, token, number
+}
+
 // graphqlDo executes a GraphQL query/mutation against the GitHub GraphQL API.
 // Automatically sets authentication, content-type, and API version headers.
 // The response is unmarshaled into the out parameter (if non-nil).
@@ -166,14 +178,9 @@ func getIssueNodeID(token, owner, repo string, issueNumber int) (string, error) 
 // Returns the project item ID (used later to update status). Best-effort:
 // returns ("", nil) when the project is not configured.
 func AddIssueToEngineProject(owner, repo string, issueNumber int) (itemID string, _ error) {
-	num := projectNumber()
-	if num == 0 {
+	ownerLogin, tok, num := validateProjectConfig()
+	if num == 0 || tok == "" || ownerLogin == "" {
 		return "", nil // project board not configured
-	}
-	ownerLogin := projectOwner()
-	tok := EngineToken()
-	if tok == "" || ownerLogin == "" {
-		return "", nil
 	}
 
 	projectID, err := getProjectV2ID(tok, ownerLogin, num)
@@ -205,26 +212,9 @@ func AddIssueToEngineProject(owner, repo string, issueNumber int) (itemID string
 	return data.AddProjectV2ItemById.Item.ID, nil
 }
 
-// UpdateProjectItemStatus sets the "Status" single-select field on a project
-// board item to the given status name (e.g. "In Progress", "Done").
-// Best-effort — no-ops when the status field or value cannot be resolved.
-func UpdateProjectItemStatus(owner string, itemID, statusValue string) error {
-	num := projectNumber()
-	if num == 0 || itemID == "" {
-		return nil
-	}
-	ownerLogin := projectOwner()
-	tok := EngineToken()
-	if tok == "" || ownerLogin == "" {
-		return nil
-	}
-
-	projectID, err := getProjectV2ID(tok, ownerLogin, num)
-	if err != nil {
-		return fmt.Errorf("update status: get project: %w", err)
-	}
-
-	// Resolve the Status field ID and the option ID for statusValue.
+// findStatusFieldAndOption resolves the Status field ID and option ID for the given status value.
+// Returns empty strings when the field or option cannot be found (best-effort).
+func findStatusFieldAndOption(token, projectID, statusValue string) (fieldID, optionID string, _ error) {
 	fieldQuery := `query($projectId: ID!) {
   node(id: $projectId) {
     ... on ProjectV2 {
@@ -253,11 +243,10 @@ func UpdateProjectItemStatus(owner string, itemID, statusValue string) error {
 			} `json:"fields"`
 		} `json:"node"`
 	}
-	if err := graphqlDo(tok, fieldQuery, map[string]any{"projectId": projectID}, &fieldData); err != nil {
-		return fmt.Errorf("update status: list fields: %w", err)
+	if err := graphqlDo(token, fieldQuery, map[string]any{"projectId": projectID}, &fieldData); err != nil {
+		return "", "", fmt.Errorf("list fields: %w", err)
 	}
 
-	var fieldID, optionID string
 	for _, f := range fieldData.Node.Fields.Nodes {
 		if strings.EqualFold(f.Name, "status") {
 			fieldID = f.ID
@@ -269,6 +258,32 @@ func UpdateProjectItemStatus(owner string, itemID, statusValue string) error {
 			}
 			break
 		}
+	}
+	return fieldID, optionID, nil
+}
+
+// UpdateProjectItemStatus sets the "Status" single-select field on a project
+// board item to the given status name (e.g. "In Progress", "Done").
+// Best-effort — no-ops when the status field or value cannot be resolved.
+func UpdateProjectItemStatus(owner string, itemID, statusValue string) error {
+	num := projectNumber()
+	if num == 0 || itemID == "" {
+		return nil
+	}
+	ownerLogin := projectOwner()
+	tok := EngineToken()
+	if tok == "" || ownerLogin == "" {
+		return nil
+	}
+
+	projectID, err := getProjectV2ID(tok, ownerLogin, num)
+	if err != nil {
+		return fmt.Errorf("update status: get project: %w", err)
+	}
+
+	fieldID, optionID, err := findStatusFieldAndOption(tok, projectID, statusValue)
+	if err != nil {
+		return fmt.Errorf("update status: %w", err)
 	}
 	if fieldID == "" || optionID == "" {
 		return nil // field or option not found — skip silently

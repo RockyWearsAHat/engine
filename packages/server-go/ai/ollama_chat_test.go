@@ -10,6 +10,39 @@ import (
 	"github.com/engine/server/db"
 )
 
+// newTestChatContext creates a ChatContext for Ollama tests with streaming output collection.
+// Collects chunks and tool calls for assertion. SessionID and ProjectPath are set to provided values.
+func newTestChatContext(sessionID, projectDir string) *ChatContext {
+	return &ChatContext{
+		ProjectPath:      projectDir,
+		SessionID:        sessionID,
+		OnSessionUpdated: func(_ *db.Session) {},
+		OnChunk:          func(string, bool) {},
+		OnToolCall:       func(string, any) {},
+		OnToolResult:     func(string, any, bool) {},
+		OnError:          func(string) {},
+	}
+}
+
+// newOllamaTestServer creates an httptest.Server mocking Ollama endpoints.
+// If modelName is empty, "qwen2.5:1.5b" is used as default.
+func newOllamaTestServer(modelName string) *httptest.Server {
+	if modelName == "" {
+		modelName = "qwen2.5:1.5b"
+	}
+	finalModel := modelName // capture for closure
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/ps":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":[{"name":"` + finalModel + `"}]}
+`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
+
 func TestChat_OllamaProvider_UsesRunningModelAndPersistsMessages(t *testing.T) {
 	projectDir := setupHistoryTestProject(t)
 	if err := db.CreateSession("session-ollama", projectDir, "main"); err != nil {

@@ -464,6 +464,20 @@ func (c *conn) sendCommitResultAndRefresh(hash, message, projectPath string) {
 	}
 }
 
+// initializeSessionData builds the initial summary and ensures the session worktree, updating paths as needed.
+// Returns the resolved project path (which may differ from the input if worktree was created).
+func (c *conn) initializeSessionData(sessionID, projectPath string) string {
+	if summary := aiBuildInitialSummary(projectPath); summary != "" {
+		db.UpdateSessionSummary(sessionID, summary) //nolint:errcheck
+	}
+	if wtPath, wtErr := aiEnsureSessionWorktree(sessionID, projectPath); wtErr == nil && wtPath != projectPath {
+		projectPath = wtPath
+		c.projectPath = wtPath
+		db.UpdateSessionProjectPath(sessionID, wtPath) //nolint:errcheck
+	}
+	return projectPath
+}
+
 // run manages the per-connection message loop. It reads incoming WebSocket messages,
 // parses the message type, and dispatches to handler functions. Handles panics to prevent
 // crashes. Closes the connection and signals all send goroutines when the loop exits.
@@ -542,9 +556,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 				c.sendErr(err.Error(), "DB_ERROR")
 				return
 			}
-			if summary := aiBuildInitialSummary(msg.Path); summary != "" {
-				db.UpdateSessionSummary(id, summary) //nolint:errcheck
-			}
+			msg.Path = c.initializeSessionData(id, msg.Path)
 			sessionID = id
 		}
 
@@ -599,14 +611,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			return
 		}
 		ai.EnsureProjectDirection(projectPath)
-		if summary := aiBuildInitialSummary(projectPath); summary != "" {
-			db.UpdateSessionSummary(id, summary) //nolint:errcheck
-		}
-		if wtPath, wtErr := aiEnsureSessionWorktree(id, projectPath); wtErr == nil && wtPath != projectPath {
-			projectPath = wtPath
-			c.projectPath = wtPath
-			db.UpdateSessionProjectPath(id, wtPath) //nolint:errcheck
-		}
+		projectPath = c.initializeSessionData(id, projectPath)
 		c.sessionID = id
 		session, _ := db.GetSession(id)
 		c.send(map[string]any{"type": "session.created", "session": session})

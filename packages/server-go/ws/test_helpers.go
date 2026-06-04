@@ -5,6 +5,7 @@ package ws
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,7 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/engine/server/ai"
 	"github.com/engine/server/db"
+	"github.com/engine/server/discord"
 	"github.com/gorilla/websocket"
 )
 
@@ -167,4 +170,109 @@ func drainWSUntilType(t *testing.T, conn *websocket.Conn, targetType string) map
 	}
 	t.Fatalf("timed out waiting for %q", targetType)
 	return nil
+}
+// ─── Discord bridge test mocks ───────────────────────────────────────────────
+
+// testDiscordBridge provides a basic DiscordBridge implementation for testing.
+type testDiscordBridge struct {
+	cfg        discord.Config
+	reloadErr  error
+	searchHits []db.DiscordSearchHit
+	searchErr  error
+	recentRows []db.DiscordMessage
+	recentErr  error
+}
+
+func (t *testDiscordBridge) CurrentConfig() discord.Config { return t.cfg }
+func (t *testDiscordBridge) Reload(_ discord.Config) error { return t.reloadErr }
+func (t *testDiscordBridge) SearchHistory(_, _, _ string, _ int) ([]db.DiscordSearchHit, error) {
+	return t.searchHits, t.searchErr
+}
+func (t *testDiscordBridge) RecentHistory(_, _, _ string, _ int) ([]db.DiscordMessage, error) {
+	return t.recentRows, t.recentErr
+}
+func (t *testDiscordBridge) SendDMToOwner(_ string) error      { return nil }
+func (t *testDiscordBridge) NotifyProjectProgress(_, _ string) {}
+
+// ─── HTTP transport test mocks ───────────────────────────────────────────────
+
+// fixedHTTPTransport returns a fixed HTTP response for testing.
+type fixedHTTPTransport struct {
+	statusCode int
+	body       string
+}
+
+func (t *fixedHTTPTransport) RoundTrip(_ *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: t.statusCode,
+		Body:       io.NopCloser(strings.NewReader(t.body)),
+		Header:     make(http.Header),
+	}, nil
+}
+
+// ─── AI invocation capture helpers ──────────────────────────────────────────
+
+// CapturedAIInvocation records AI chat invocation details for verification in tests.
+type CapturedAIInvocation struct {
+	ProjectPath string
+	SessionID   string
+	Message     string
+	OpenTabs    []ai.TabInfo
+	Provider    string
+	Model       string
+	OllamaURL   string
+}
+
+// setupAIChatCapture sets up runAIChat to capture invocations into the provided channel.
+// Returns the original runAIChat function to restore in cleanup.
+func setupAIChatCapture(invocations chan<- CapturedAIInvocation) func(*ai.ChatContext, string) {
+	original := runAIChat
+	runAIChat = func(ctx *ai.ChatContext, userMessage string) {
+		tabs := ctx.GetOpenTabs()
+		tabCopy := append([]ai.TabInfo(nil), tabs...)
+		invocations <- CapturedAIInvocation{
+			ProjectPath: ctx.ProjectPath,
+			SessionID:   ctx.SessionID,
+			Message:     userMessage,
+			OpenTabs:    tabCopy,
+			Provider:    os.Getenv("ENGINE_MODEL_PROVIDER"),
+			Model:       os.Getenv("ENGINE_MODEL"),
+			OllamaURL:   os.Getenv("OLLAMA_BASE_URL"),
+		}
+	}
+	return original
+}
+
+// setupAIOrchestratorRunDefault sets up runAutonomousProject with interactive mode.
+// Returns the original runAutonomousProject function to restore in cleanup.
+func setupAIOrchestratorRunDefault() func(ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+	original := runAutonomousProject
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		if cfg.InteractiveChat != nil {
+			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+		}
+		return &ai.OrchestrationState{Conversational: true}, nil
+	}
+	return original
+}
+
+// setupAIChatFunc sets up runAIChat with a custom handler and returns the original.
+func setupAIChatFunc(handler func(*ai.ChatContext, string)) func(*ai.ChatContext, string) {
+	original := runAIChat
+	runAIChat = handler
+	return original
+}
+
+// setupAIChatAndOrchestratorScoped sets up both runAIChat and runAutonomousProject with provided handlers.
+// Returns a cleanup function that restores the original functions when called.
+// Designed for use with defer or t.Cleanup().
+func setupAIChatAndOrchestratorScoped(chatHandler func(*ai.ChatContext, string), orchHandler func(ai.OrchestratorConfig) (*ai.OrchestrationState, error)) func() {
+	originalChat := runAIChat
+	originalOrch := runAutonomousProject
+	runAIChat = chatHandler
+	runAutonomousProject = orchHandler
+	return func() {
+		runAIChat = originalChat
+		runAutonomousProject = originalOrch
+	}
 }

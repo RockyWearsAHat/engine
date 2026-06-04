@@ -27,42 +27,11 @@ import (
 
 // ─── stub Discord bridge ──────────────────────────────────────────────────────
 
-// stubDiscordBridge implements DiscordBridge for testing.
-type stubDiscordBridge struct {
-	cfg        discord.Config
-	reloadErr  error
-	searchHits []db.DiscordSearchHit
-	searchErr  error
-	recentRows []db.DiscordMessage
-	recentErr  error
-}
-
-func (s *stubDiscordBridge) CurrentConfig() discord.Config { return s.cfg }
-func (s *stubDiscordBridge) Reload(_ discord.Config) error { return s.reloadErr }
-func (s *stubDiscordBridge) SearchHistory(_, _, _ string, _ int) ([]db.DiscordSearchHit, error) {
-	return s.searchHits, s.searchErr
-}
-func (s *stubDiscordBridge) RecentHistory(_, _, _ string, _ int) ([]db.DiscordMessage, error) {
-	return s.recentRows, s.recentErr
-}
-func (s *stubDiscordBridge) SendDMToOwner(_ string) error      { return nil }
-func (s *stubDiscordBridge) NotifyProjectProgress(_, _ string) {}
+// Note: Use testDiscordBridge from test_helpers.go for stub bridge instances.
 
 // ─── stub HTTP transport ──────────────────────────────────────────────────────
 
-// fixedResponseTransport returns a fixed HTTP response for testing.
-type fixedResponseTransport struct {
-	statusCode int
-	body       string
-}
-
-func (t *fixedResponseTransport) RoundTrip(_ *http.Request) (*http.Response, error) {
-	return &http.Response{
-		StatusCode: t.statusCode,
-		Body:       io.NopCloser(strings.NewReader(t.body)),
-		Header:     make(http.Header),
-	}, nil
-}
+// Note: Use fixedHTTPTransport from test_helpers.go for fixed response transport instances.
 
 //go:linkname registerAIOrchestratorHandle github.com/engine/server/ai.registerOrchestratorHandle
 func registerAIOrchestratorHandle(projectPath string, h *ai.OrchestratorHandle)
@@ -88,7 +57,7 @@ func TestHandler_DiscordConfigGet_NilBridge(t *testing.T) {
 
 // TestHandler_DiscordConfigGet_WithBridge verifies discord.config.get returns active config when bridge is set.
 func TestHandler_DiscordConfigGet_WithBridge(t *testing.T) {
-	stub := &stubDiscordBridge{cfg: discord.Config{Enabled: true, BotToken: "tok"}}
+	stub := &testDiscordBridge{cfg: discord.Config{Enabled: true, BotToken: "tok"}}
 	SetDiscordBridge(stub)
 	defer SetDiscordBridge(nil)
 
@@ -125,7 +94,7 @@ func TestHandler_DiscordHistorySearch_NilBridge(t *testing.T) {
 
 // TestHandler_DiscordHistorySearch_WithBridge_Success verifies search returns hits when bridge is available.
 func TestHandler_DiscordHistorySearch_WithBridge_Success(t *testing.T) {
-	stub := &stubDiscordBridge{
+	stub := &testDiscordBridge{
 		searchHits: []db.DiscordSearchHit{{DiscordMessage: db.DiscordMessage{ID: "m1", Content: "cave AI"}}},
 	}
 	SetDiscordBridge(stub)
@@ -150,7 +119,7 @@ func TestHandler_DiscordHistorySearch_WithBridge_Success(t *testing.T) {
 
 // TestHandler_DiscordHistorySearch_WithBridge_Error verifies search error is forwarded to client.
 func TestHandler_DiscordHistorySearch_WithBridge_Error(t *testing.T) {
-	stub := &stubDiscordBridge{searchErr: fmt.Errorf("db failure")}
+	stub := &testDiscordBridge{searchErr: fmt.Errorf("db failure")}
 	SetDiscordBridge(stub)
 	defer SetDiscordBridge(nil)
 
@@ -192,7 +161,7 @@ func TestHandler_DiscordHistoryRecent_NilBridge(t *testing.T) {
 
 // TestHandler_DiscordHistoryRecent_WithBridge_Success verifies recent returns message rows when bridge is available.
 func TestHandler_DiscordHistoryRecent_WithBridge_Success(t *testing.T) {
-	stub := &stubDiscordBridge{
+	stub := &testDiscordBridge{
 		recentRows: []db.DiscordMessage{{ID: "r1", Content: "hello"}},
 	}
 	SetDiscordBridge(stub)
@@ -217,7 +186,7 @@ func TestHandler_DiscordHistoryRecent_WithBridge_Success(t *testing.T) {
 
 // TestHandler_DiscordHistoryRecent_WithBridge_Error verifies recent error is forwarded to client.
 func TestHandler_DiscordHistoryRecent_WithBridge_Error(t *testing.T) {
-	stub := &stubDiscordBridge{recentErr: fmt.Errorf("db err")}
+	stub := &testDiscordBridge{recentErr: fmt.Errorf("db err")}
 	SetDiscordBridge(stub)
 	defer SetDiscordBridge(nil)
 
@@ -260,7 +229,7 @@ func TestHandler_DiscordConfigSet_NilBridgeDisabledConfig(t *testing.T) {
 
 // TestHandler_DiscordConfigSet_WithBridge_ReloadError verifies reload errors are reported as warnings.
 func TestHandler_DiscordConfigSet_WithBridge_ReloadError(t *testing.T) {
-	stub := &stubDiscordBridge{reloadErr: fmt.Errorf("reload fail")}
+	stub := &testDiscordBridge{reloadErr: fmt.Errorf("reload fail")}
 	SetDiscordBridge(stub)
 	defer SetDiscordBridge(nil)
 
@@ -283,7 +252,7 @@ func TestHandler_DiscordConfigSet_WithBridge_ReloadError(t *testing.T) {
 
 // TestHandler_DiscordConfigSet_WithBridge_ReloadOK verifies successful config reload returns no warning.
 func TestHandler_DiscordConfigSet_WithBridge_ReloadOK(t *testing.T) {
-	stub := &stubDiscordBridge{cfg: discord.Config{Enabled: true}}
+	stub := &testDiscordBridge{cfg: discord.Config{Enabled: true}}
 	SetDiscordBridge(stub)
 	defer SetDiscordBridge(nil)
 
@@ -327,7 +296,7 @@ func TestHandler_GitHubUser_MockHTTP_Success(t *testing.T) {
 
 	origClient := wsHTTPClient
 	wsHTTPClient = &http.Client{
-		Transport: &fixedResponseTransport{
+		Transport: &fixedHTTPTransport{
 			statusCode: 200,
 			body:       `{"login":"caveman","name":"Cave Man","avatar_url":"http://example.com/av"}`,
 		},
@@ -449,7 +418,7 @@ func TestHandler_GitHubUser_MockHTTP_APIError(t *testing.T) {
 
 	origClient := wsHTTPClient
 	wsHTTPClient = &http.Client{
-		Transport: &fixedResponseTransport{statusCode: 401, body: `{"message":"Bad credentials"}`},
+		Transport: &fixedHTTPTransport{statusCode: 401, body: `{"message":"Bad credentials"}`},
 	}
 	defer func() { wsHTTPClient = origClient }()
 
@@ -495,7 +464,7 @@ func TestHandler_GitHubIssues_MockHTTP_Success(t *testing.T) {
 
 	origClient := wsHTTPClient
 	wsHTTPClient = &http.Client{
-		Transport: &fixedResponseTransport{
+		Transport: &fixedHTTPTransport{
 			statusCode: 200,
 			body:       `[{"number":1,"title":"bug","body":"desc","html_url":"http://gh.com/1","state":"open","user":{"login":"dev"},"labels":[],"created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z","pull_request":null}]`,
 		},
@@ -523,7 +492,7 @@ func TestHandler_GitHubIssues_MockHTTP_APIError(t *testing.T) {
 
 	origClient := wsHTTPClient
 	wsHTTPClient = &http.Client{
-		Transport: &fixedResponseTransport{statusCode: 403, body: `{"message":"Forbidden"}`},
+		Transport: &fixedHTTPTransport{statusCode: 403, body: `{"message":"Forbidden"}`},
 	}
 	defer func() { wsHTTPClient = origClient }()
 
@@ -2246,7 +2215,7 @@ func TestHandler_DiscordDM_WithBridge_CallsSendDMToOwner(t *testing.T) {
 }
 
 type stubDiscordBridgeWithDM struct {
-	stubDiscordBridge
+	testDiscordBridge
 	captureMsg *string
 }
 
@@ -2257,7 +2226,7 @@ func (s *stubDiscordBridgeWithDM) SendDMToOwner(message string) error {
 func (s *stubDiscordBridgeWithDM) NotifyProjectProgress(_, _ string) {}
 
 type stubDiscordBridgeWithProgress struct {
-	stubDiscordBridge
+	testDiscordBridge
 	capturedPath *string
 	capturedMsg  *string
 }

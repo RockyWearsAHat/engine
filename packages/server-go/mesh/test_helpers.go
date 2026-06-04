@@ -9,6 +9,15 @@ import (
 	"testing"
 )
 
+// Test fixture constants to reduce duplication.
+const (
+	testServerName   = "host"
+	testClientName   = "mac"
+	testSecret       = "k"
+	testOllamaURL    = "http://localhost:11434"
+	testOllamaURL404 = "http://127.0.0.1:19999"
+)
+
 // newMeshServer creates an httptest server with mesh handlers.
 func newMeshServer(t *testing.T, cfg *Config) *httptest.Server {
 	t.Helper()
@@ -67,5 +76,93 @@ func doSignedRequest(t *testing.T, ts *httptest.Server, path, method, secret, or
 		t.Fatalf("request: %v", err)
 	}
 	return resp
+}
+
+// newTestConfigWithOllamaURL creates a test config with an Ollama URL.
+func newTestConfigWithOllamaURL(url string) *Config {
+	return &Config{
+		SelfName:      testServerName,
+		SelfOllamaURL: url,
+		Peers:         []Peer{{Name: testClientName, Secret: testSecret}},
+	}
+}
+
+// marshalExecRequest encodes an ExecRequest to JSON.
+func marshalExecRequest(cmd string, args ...string) []byte {
+	req := ExecRequest{Command: cmd}
+	if len(args) > 0 {
+		req.Args = args
+	}
+	b, _ := json.Marshal(req)
+	return b
+}
+
+// marshalExecRequestFull encodes an ExecRequest with all fields set.
+func marshalExecRequestFull(cmd string, cwd string, env []string, args []string) []byte {
+	req := ExecRequest{
+		Command: cmd,
+		Cwd:     cwd,
+		Env:     env,
+		Args:    args,
+	}
+	b, _ := json.Marshal(req)
+	return b
+}
+
+// marshalInferenceRequest encodes an InferenceRequest to JSON.
+func marshalInferenceRequest(path string, method string, body interface{}) []byte {
+	var bodyJSON json.RawMessage
+	if body != nil {
+		bodyJSON, _ = json.Marshal(body)
+	} else {
+		bodyJSON = json.RawMessage(`{}`)
+	}
+	req := InferenceRequest{
+		Path:   path,
+		Method: method,
+		Body:   bodyJSON,
+	}
+	b, _ := json.Marshal(req)
+	return b
+}
+
+// decodeExecResponse unmarshals an ExecResponse from resp.Body.
+func decodeExecResponse(t *testing.T, body io.Reader) *ExecResponse {
+	t.Helper()
+	var result ExecResponse
+	if err := json.NewDecoder(body).Decode(&result); err != nil {
+		t.Fatalf("decode ExecResponse: %v", err)
+	}
+	return &result
+}
+
+// decodeInferenceResponse unmarshals an InferenceResponse from resp.Body.
+func decodeInferenceResponse(t *testing.T, body io.Reader) *InferenceResponse {
+	t.Helper()
+	var result InferenceResponse
+	if err := json.NewDecoder(body).Decode(&result); err != nil {
+		t.Fatalf("decode InferenceResponse: %v", err)
+	}
+	return &result
+}
+
+// decodeHealthResponse unmarshals a HealthResponse from resp.Body.
+func decodeHealthResponse(t *testing.T, body io.Reader) *HealthResponse {
+	t.Helper()
+	var result HealthResponse
+	if err := json.NewDecoder(body).Decode(&result); err != nil {
+		t.Fatalf("decode HealthResponse: %v", err)
+	}
+	return &result
+}
+
+// doSignedExecRequestAndDecode executes a signed exec request and decodes response.
+func doSignedExecRequestAndDecode(t *testing.T, ts *httptest.Server, cmd string, args ...string) *ExecResponse {
+	t.Helper()
+	body := marshalExecRequest(cmd, args...)
+	resp := doSignedRequest(t, ts, "/mesh/exec", http.MethodPost, testSecret, testClientName, body)
+	defer resp.Body.Close()
+	assertStatusCode(t, resp.StatusCode, http.StatusOK)
+	return decodeExecResponse(t, resp.Body)
 }
 

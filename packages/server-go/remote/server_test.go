@@ -46,16 +46,9 @@ func TestRemoteStatus_Handler(t *testing.T) {
 	req := httptest.NewRequest("GET", "/remote/status", nil)
 	rr := testRequest(t, s, req)
 
-	if rr.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", rr.Code)
-	}
-	var resp map[string]any
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp["engine"] != true {
-		t.Error("expected engine=true in status")
-	}
+	assertStatusCode(t, rr.Code, http.StatusOK)
+	resp := decodeJSONResponse(t, rr.Body, map[string]any{})
+	assertJSONField(t, resp, "engine", true)
 }
 
 func TestHealth_Handler(t *testing.T) {
@@ -63,16 +56,9 @@ func TestHealth_Handler(t *testing.T) {
 	req := httptest.NewRequest("GET", "/health", nil)
 	rr := testRequest(t, s, req)
 
-	if rr.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", rr.Code)
-	}
-	var resp map[string]any
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp["status"] != "ok" {
-		t.Error("expected status=ok in health")
-	}
+	assertStatusCode(t, rr.Code, http.StatusOK)
+	resp := decodeJSONResponse(t, rr.Body, map[string]any{})
+	assertJSONField(t, resp, "status", "ok")
 }
 
 func TestHandlePair_WrongMethod(t *testing.T) {
@@ -92,16 +78,9 @@ func TestHandlePair_InvalidCode(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr := testRequest(t, s, req)
 
-	if rr.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", rr.Code)
-	}
-	var resp map[string]any
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp["ok"] != false {
-		t.Error("expected ok=false for invalid code")
-	}
+	assertStatusCode(t, rr.Code, http.StatusOK)
+	resp := decodeJSONResponse(t, rr.Body, map[string]any{})
+	assertJSONField(t, resp, "ok", false)
 }
 
 func TestHandlePair_ValidCode(t *testing.T) {
@@ -116,19 +95,10 @@ func TestHandlePair_ValidCode(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr := testRequest(t, s, req)
 
-	if rr.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", rr.Code)
-	}
-	var resp map[string]any
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp["ok"] != true {
-		t.Errorf("expected ok=true, got %v", resp["ok"])
-	}
-	if resp["token"] == "" {
-		t.Error("expected non-empty token")
-	}
+	assertStatusCode(t, rr.Code, http.StatusOK)
+	resp := decodeJSONResponse(t, rr.Body, map[string]any{})
+	assertJSONField(t, resp, "ok", true)
+	assertJSONFieldNotEmpty(t, resp, "token")
 }
 
 func TestHandlePair_BadJSON(t *testing.T) {
@@ -153,16 +123,9 @@ func TestHandleRefresh_ValidToken(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	rr := testRequest(t, s, req)
 
-	if rr.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", rr.Code)
-	}
-	var resp map[string]any
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if resp["ok"] != true {
-		t.Errorf("ok = %v, want true", resp["ok"])
-	}
+	assertStatusCode(t, rr.Code, http.StatusOK)
+	resp := decodeJSONResponse(t, rr.Body, map[string]any{})
+	assertJSONField(t, resp, "ok", true)
 }
 
 func TestHandleRefresh_InvalidToken(t *testing.T) {

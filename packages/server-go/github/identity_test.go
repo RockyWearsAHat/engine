@@ -39,7 +39,7 @@ func TestEngineLogin_FromEnv(t *testing.T) {
 // Tests behavioral side effect (HTTP GET to GitHub user API).
 func TestEngineLogin_ViaAPI(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_LOGIN", "")
-	engineLoginCached = "" // reset cache
+	resetEngineLoginCache(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"login":"engine-bot"}`))
@@ -136,7 +136,7 @@ func TestConfigureRepoIdentity_SetsConfig(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_LOGIN", "engine-bot")
 	t.Setenv("ENGINE_GITHUB_DISPLAY_NAME", "Engine")
 	t.Setenv("ENGINE_GITHUB_BOT_EMAIL", "")
-	engineLoginCached = "" // ensure we use the env
+	resetEngineLoginCache(t)
 
 	ConfigureRepoIdentity("/fake/repo")
 
@@ -159,16 +159,14 @@ func TestConfigureRepoIdentity_SetsConfig(t *testing.T) {
 // TestEngineLogin_CacheHit verifies EngineLogin returns cached login without making API call.
 func TestEngineLogin_CacheHit(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_LOGIN", "")
-
+	resetEngineLoginCache(t)
+	// Set cache directly after reset
 	engineLoginMu.Lock()
 	engineLoginCached = "cached-bot"
 	engineLoginAt = time.Now()
 	engineLoginMu.Unlock()
 	t.Cleanup(func() {
-		engineLoginMu.Lock()
-		engineLoginCached = ""
-		engineLoginAt = time.Time{}
-		engineLoginMu.Unlock()
+		resetEngineLoginCache(t)
 	})
 
 	if got := EngineLogin(); got != "cached-bot" {
@@ -201,11 +199,7 @@ func TestConfigureRepoIdentity_NoLogin_Noop(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("ENGINE_GITHUB_BOT_EMAIL", "")
-
-	engineLoginMu.Lock()
-	engineLoginCached = ""
-	engineLoginAt = time.Time{}
-	engineLoginMu.Unlock()
+	resetEngineLoginCache(t)
 
 	ConfigureRepoIdentity("/fake/repo")
 	if called != 0 {

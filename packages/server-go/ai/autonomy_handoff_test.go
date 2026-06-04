@@ -11,10 +11,7 @@ import (
 
 func initAutonomyHandoffTestDB(t *testing.T, projectPath string) {
 	t.Helper()
-	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
-	if err := db.Init(projectPath); err != nil {
-		t.Fatalf("db.Init: %v", err)
-	}
+	setupTestDBWithStateDir(t, projectPath)
 }
 
 func TestBuildAutonomyHandoff_MinimumFields(t *testing.T) {

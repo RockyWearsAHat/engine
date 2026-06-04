@@ -454,6 +454,23 @@ func newChatContextForRole(cfg OrchestratorConfig, sessionID string, role AgentR
 	return ctx, oc
 }
 
+// shouldExitTurnLoop checks whether the agentic loop should exit based on turn limits.
+// Returns true if max turns exceeded (with error logging for autonomous builder role),
+// false if the loop should continue.
+func (ctx *ChatContext) shouldExitTurnLoop(turns int, isAutonomousBuilder bool) bool {
+	turnLimit := ctx.MaxTurns
+	if turnLimit <= 0 && isAutonomousBuilder {
+		turnLimit = autonomousBuilderMaxTurns
+	}
+	if turnLimit <= 0 || turns <= turnLimit {
+		return false
+	}
+	if isAutonomousBuilder {
+		ctx.OnError(fmt.Sprintf("autonomous builder stopped after %d turns without signal_done", turnLimit))
+	}
+	return true
+}
+
 // TabInfo represents an open editor tab pushed by the client.
 type TabInfo struct {
 	// Path is the absolute file path of the tab.
@@ -2647,13 +2664,9 @@ func runAnthropicLoop(
 			return
 		}
 		turns++
-		turnLimit := ctx.MaxTurns
-		if turnLimit <= 0 && ctx.Role == RoleAutonomousBuilder {
-			turnLimit = autonomousBuilderMaxTurns
-		}
-		if turnLimit > 0 && turns > turnLimit {
-			if ctx.Role == RoleAutonomousBuilder {
-				ctx.OnError(fmt.Sprintf("autonomous builder stopped after %d turns without signal_done", turnLimit))
+		isAutonomous := ctx.Role == RoleAutonomousBuilder
+		if ctx.shouldExitTurnLoop(turns, isAutonomous) {
+			if isAutonomous {
 				return
 			}
 			break
@@ -3092,13 +3105,9 @@ func runOpenAICompatibleLoop(
 			return
 		}
 		turns++
-		turnLimit := ctx.MaxTurns
-		if turnLimit <= 0 && ctx.Role == RoleAutonomousBuilder {
-			turnLimit = autonomousBuilderMaxTurns
-		}
-		if turnLimit > 0 && turns > turnLimit {
-			if ctx.Role == RoleAutonomousBuilder {
-				ctx.OnError(fmt.Sprintf("autonomous builder stopped after %d turns without signal_done", turnLimit))
+		isAutonomous := ctx.Role == RoleAutonomousBuilder
+		if ctx.shouldExitTurnLoop(turns, isAutonomous) {
+			if isAutonomous {
 				return
 			}
 			break

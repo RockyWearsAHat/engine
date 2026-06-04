@@ -12,10 +12,15 @@ import (
 
 func initContextProfileTestDB(t *testing.T, projectPath string) {
 	t.Helper()
-	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
-	if err := db.Init(projectPath); err != nil {
-		t.Fatalf("db.Init: %v", err)
-	}
+	setupTestDBWithStateDir(t, projectPath)
+}
+
+// initContextTestDB is a shorthand for tests that need a tempdir with DB initialized.
+func initContextTestDB(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	initContextProfileTestDB(t, dir)
+	return dir
 }
 
 func TestResolveProjectDirection_UsesExisting(t *testing.T) {

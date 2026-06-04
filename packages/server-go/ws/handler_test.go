@@ -24,16 +24,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-type capturedAIInvocation struct {
-	projectPath string
-	sessionID   string
-	message     string
-	openTabs    []ai.TabInfo
-	provider    string
-	model       string
-	ollamaURL   string
-}
-
 // TestMain installs the default chat routing for ws tests. The orchestrator's
 // real triage reasoning needs a live model, so by default every chat brief is
 // routed straight to the handler's fully-wired interactive executor (the same
@@ -94,37 +84,32 @@ func TestHandler_ChatMessage_InvokesAIRunnerWithTabsAndRuntimeConfig(t *testing.
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	originalRunAIChat := runAIChat
-	originalRunAutonomousProject := runAutonomousProject
-	defer func() {
-		runAIChat = originalRunAIChat
-		runAutonomousProject = originalRunAutonomousProject
-	}()
-	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
-		if cfg.InteractiveChat != nil {
-			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
-		}
-		return &ai.OrchestrationState{Conversational: true}, nil
-	}
-
-	invocations := make(chan capturedAIInvocation, 1)
-	runAIChat = func(ctx *ai.ChatContext, userMessage string) {
-		tabs := ctx.GetOpenTabs()
-		tabCopy := append([]ai.TabInfo(nil), tabs...)
-		invocations <- capturedAIInvocation{
-			projectPath: ctx.ProjectPath,
-			sessionID:   ctx.SessionID,
-			message:     userMessage,
-			openTabs:    tabCopy,
-			provider:    os.Getenv("ENGINE_MODEL_PROVIDER"),
-			model:       os.Getenv("ENGINE_MODEL"),
-			ollamaURL:   os.Getenv("OLLAMA_BASE_URL"),
-		}
-		ctx.OnToolCall("list_open_tabs", map[string]any{})
-		ctx.OnToolResult("list_open_tabs", "[]", false)
-		ctx.OnChunk("pong", false)
-		ctx.OnChunk("", true)
-	}
+	invocations := make(chan CapturedAIInvocation, 1)
+	defer setupAIChatAndOrchestratorScoped(
+		func(ctx *ai.ChatContext, userMessage string) {
+			tabs := ctx.GetOpenTabs()
+			tabCopy := append([]ai.TabInfo(nil), tabs...)
+			invocations <- CapturedAIInvocation{
+				ProjectPath: ctx.ProjectPath,
+				SessionID:   ctx.SessionID,
+				Message:     userMessage,
+				OpenTabs:    tabCopy,
+				Provider:    os.Getenv("ENGINE_MODEL_PROVIDER"),
+				Model:       os.Getenv("ENGINE_MODEL"),
+				OllamaURL:   os.Getenv("OLLAMA_BASE_URL"),
+			}
+			ctx.OnToolCall("list_open_tabs", map[string]any{})
+			ctx.OnToolResult("list_open_tabs", "[]", false)
+			ctx.OnChunk("pong", false)
+			ctx.OnChunk("", true)
+		},
+		func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+			if cfg.InteractiveChat != nil {
+				cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+			}
+			return &ai.OrchestrationState{Conversational: true}, nil
+		},
+	)()
 
 	writeWSMessage(t, conn, map[string]any{
 		"type": "config.sync",
@@ -161,23 +146,23 @@ func TestHandler_ChatMessage_InvokesAIRunnerWithTabsAndRuntimeConfig(t *testing.
 	})
 
 	invocation := <-invocations
-	if invocation.projectPath != projectDir {
-		t.Fatalf("expected project path %q, got %q", projectDir, invocation.projectPath)
+	if invocation.ProjectPath != projectDir {
+		t.Fatalf("expected project path %q, got %q", projectDir, invocation.ProjectPath)
 	}
-	if invocation.sessionID != sessionID {
-		t.Fatalf("expected session id %q, got %q", sessionID, invocation.sessionID)
+	if invocation.SessionID != sessionID {
+		t.Fatalf("expected session id %q, got %q", sessionID, invocation.SessionID)
 	}
-	if invocation.message != "hello cave ai" {
-		t.Fatalf("expected forwarded message, got %q", invocation.message)
+	if invocation.Message != "hello cave ai" {
+		t.Fatalf("expected forwarded message, got %q", invocation.Message)
 	}
-	if invocation.provider != "ollama" || invocation.model != "gemma4:31b" || invocation.ollamaURL != "http://127.0.0.1:11434" {
+	if invocation.Provider != "ollama" || invocation.Model != "gemma4:31b" || invocation.OllamaURL != "http://127.0.0.1:11434" {
 		t.Fatalf("expected runtime config to reach AI boundary, got %+v", invocation)
 	}
 	if got := os.Getenv("ENGINE_ACTIVE_TEAM"); got != "engine" {
 		t.Fatalf("expected active team to reach AI boundary, got %q", got)
 	}
-	if len(invocation.openTabs) != 1 || invocation.openTabs[0].Path != openTabPath || !invocation.openTabs[0].IsActive {
-		t.Fatalf("expected open tab context to reach AI boundary, got %+v", invocation.openTabs)
+	if len(invocation.OpenTabs) != 1 || invocation.OpenTabs[0].Path != openTabPath || !invocation.OpenTabs[0].IsActive {
+		t.Fatalf("expected open tab context to reach AI boundary, got %+v", invocation.OpenTabs)
 	}
 	started := readWSMessageOfType(t, conn, "chat.started")
 	if started["sessionId"] != sessionID {
@@ -229,29 +214,24 @@ func TestHandler_ChatMessage_UsesPayloadSessionWhenConnectionStateWasLost(t *tes
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	originalRunAIChat := runAIChat
-	originalRunAutonomousProject := runAutonomousProject
-	defer func() {
-		runAIChat = originalRunAIChat
-		runAutonomousProject = originalRunAutonomousProject
-	}()
-	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
-		if cfg.InteractiveChat != nil {
-			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
-		}
-		return &ai.OrchestrationState{Conversational: true}, nil
-	}
-
-	invocations := make(chan capturedAIInvocation, 1)
-	runAIChat = func(ctx *ai.ChatContext, userMessage string) {
-		invocations <- capturedAIInvocation{
-			projectPath: ctx.ProjectPath,
-			sessionID:   ctx.SessionID,
-			message:     userMessage,
-		}
-		ctx.OnChunk("still alive", false)
-		ctx.OnChunk("", true)
-	}
+	invocations := make(chan CapturedAIInvocation, 1)
+	defer setupAIChatAndOrchestratorScoped(
+		func(ctx *ai.ChatContext, userMessage string) {
+			invocations <- CapturedAIInvocation{
+				ProjectPath: ctx.ProjectPath,
+				SessionID:   ctx.SessionID,
+				Message:     userMessage,
+			}
+			ctx.OnChunk("still alive", false)
+			ctx.OnChunk("", true)
+		},
+		func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+			if cfg.InteractiveChat != nil {
+				cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+			}
+			return &ai.OrchestrationState{Conversational: true}, nil
+		},
+	)()
 
 	writeWSMessage(t, conn, map[string]any{
 		"type":      "chat",
@@ -260,10 +240,10 @@ func TestHandler_ChatMessage_UsesPayloadSessionWhenConnectionStateWasLost(t *tes
 	})
 
 	invocation := <-invocations
-	if invocation.sessionID != sessionID {
+	if invocation.SessionID != sessionID {
 		t.Fatalf("expected payload session id %q, got %+v", sessionID, invocation)
 	}
-	if invocation.projectPath != projectDir {
+	if invocation.ProjectPath != projectDir {
 		t.Fatalf("expected project path %q, got %+v", projectDir, invocation)
 	}
 
@@ -279,45 +259,40 @@ func TestHandler_ChatMessage_CanWriteAndOpenFileThroughAITools(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	originalRunAIChat := runAIChat
-	originalRunAutonomousProject := runAutonomousProject
-	defer func() {
-		runAIChat = originalRunAIChat
-		runAutonomousProject = originalRunAutonomousProject
-	}()
-	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
-		if cfg.InteractiveChat != nil {
-			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
-		}
-		return &ai.OrchestrationState{Conversational: true}, nil
-	}
-
 	targetPath := filepath.Join(projectDir, "generated", "engine-note.ts")
-	runAIChat = func(ctx *ai.ChatContext, userMessage string) {
-		ctx.OnToolCall("write_file", map[string]any{"path": targetPath})
-		if result, isError := ai.ExecuteToolForTest("write_file", map[string]any{
-			"path":    targetPath,
-			"content": "export const engineNote = 'cave';\n",
-		}, ctx); isError {
-			ctx.OnToolResult("write_file", result, true)
-			ctx.OnError(result)
-			return
-		} else {
-			ctx.OnToolResult("write_file", result, false)
-		}
+	defer setupAIChatAndOrchestratorScoped(
+		func(ctx *ai.ChatContext, userMessage string) {
+			ctx.OnToolCall("write_file", map[string]any{"path": targetPath})
+			if result, isError := ai.ExecuteToolForTest("write_file", map[string]any{
+				"path":    targetPath,
+				"content": "export const engineNote = 'cave';\n",
+			}, ctx); isError {
+				ctx.OnToolResult("write_file", result, true)
+				ctx.OnError(result)
+				return
+			} else {
+				ctx.OnToolResult("write_file", result, false)
+			}
 
-		ctx.OnToolCall("open_file", map[string]any{"path": targetPath})
-		if result, isError := ai.ExecuteToolForTest("open_file", map[string]any{"path": targetPath}, ctx); isError {
-			ctx.OnToolResult("open_file", result, true)
-			ctx.OnError(result)
-			return
-		} else {
-			ctx.OnToolResult("open_file", result, false)
-		}
+			ctx.OnToolCall("open_file", map[string]any{"path": targetPath})
+			if result, isError := ai.ExecuteToolForTest("open_file", map[string]any{"path": targetPath}, ctx); isError {
+				ctx.OnToolResult("open_file", result, true)
+				ctx.OnError(result)
+				return
+			} else {
+				ctx.OnToolResult("open_file", result, false)
+			}
 
-		ctx.OnChunk("done", false)
-		ctx.OnChunk("", true)
-	}
+			ctx.OnChunk("done", false)
+			ctx.OnChunk("", true)
+		},
+		func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+			if cfg.InteractiveChat != nil {
+				cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+			}
+			return &ai.OrchestrationState{Conversational: true}, nil
+		},
+	)()
 
 	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
@@ -459,21 +434,7 @@ func TestFetchGitHubIssues_BadJSON(t *testing.T) {
 
 // ── additional coverage tests ─────────────────────────────────────────────────
 
-// mockDiscordBridge implements DiscordBridge for tests.
-type mockDiscordBridge struct {
-	cfg discord.Config
-}
-
-func (m *mockDiscordBridge) CurrentConfig() discord.Config { return m.cfg }
-func (m *mockDiscordBridge) Reload(_ discord.Config) error { return nil }
-func (m *mockDiscordBridge) SearchHistory(_, _, _ string, _ int) ([]db.DiscordSearchHit, error) {
-	return nil, nil
-}
-func (m *mockDiscordBridge) RecentHistory(_, _, _ string, _ int) ([]db.DiscordMessage, error) {
-	return nil, nil
-}
-func (m *mockDiscordBridge) SendDMToOwner(_ string) error    { return nil }
-func (m *mockDiscordBridge) NotifyProjectProgress(_, _ string) {}
+// Note: Use testDiscordBridge from test_helpers.go for test Discord bridge instances.
 
 // panicDiscordBridge panics on CurrentConfig, used to trigger the run() panic handler.
 type panicDiscordBridge struct{}
@@ -720,25 +681,20 @@ func TestHandler_Chat_CancelPrevious(t *testing.T) {
 	projectDir := setupWSProject(t)
 
 	blocked := make(chan struct{})
-	unblock := make(chan struct{})
-	originalRunAIChat := runAIChat
-	originalRunAutonomousProject := runAutonomousProject
-	runAIChat = func(ctx *ai.ChatContext, content string) {
-		if content == "first" {
-			close(blocked)
-			<-ctx.Cancel // wait for cancel
-		}
-	}
-	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
-		if cfg.InteractiveChat != nil {
-			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
-		}
-		return &ai.OrchestrationState{Conversational: true}, nil
-	}
-	defer func() {
-		runAIChat = originalRunAIChat
-		runAutonomousProject = originalRunAutonomousProject
-	}()
+	defer setupAIChatAndOrchestratorScoped(
+		func(ctx *ai.ChatContext, content string) {
+			if content == "first" {
+				close(blocked)
+				<-ctx.Cancel // wait for cancel
+			}
+		},
+		func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+			if cfg.InteractiveChat != nil {
+				cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+			}
+			return &ai.OrchestrationState{Conversational: true}, nil
+		},
+	)()
 
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
@@ -756,7 +712,6 @@ func TestHandler_Chat_CancelPrevious(t *testing.T) {
 	// Send second chat message → old() is called to cancel first
 	writeWSMessage(t, conn, map[string]any{"type": "chat", "sessionId": sessionID, "content": "second"})
 	readWSMessageOfType(t, conn, "chat.started")
-	_ = unblock
 }
 
 // TestHandler_Chat_BuildRoute_EmitsPhaseAndSummary covers the build (non
@@ -882,7 +837,7 @@ func TestHandler_GithubIssues_ResolvesRepo(t *testing.T) {
 // ─── discord.validate with active bridge ──────────────────────────────────────
 
 func TestHandler_DiscordValidate_WithBridgeNoOverride(t *testing.T) {
-	SetDiscordBridge(&mockDiscordBridge{cfg: discord.Config{Enabled: true}})
+	SetDiscordBridge(&testDiscordBridge{cfg: discord.Config{Enabled: true}})
 	defer SetDiscordBridge(nil)
 
 	projectDir := setupWSProject(t)
@@ -898,7 +853,7 @@ func TestHandler_DiscordValidate_WithBridgeNoOverride(t *testing.T) {
 }
 
 func TestHandler_DiscordValidate_WithBridgeAndOverride(t *testing.T) {
-	SetDiscordBridge(&mockDiscordBridge{cfg: discord.Config{Enabled: true}})
+	SetDiscordBridge(&testDiscordBridge{cfg: discord.Config{Enabled: true}})
 	defer SetDiscordBridge(nil)
 
 	projectDir := setupWSProject(t)

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -483,6 +484,43 @@ func setupEngineEnv(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
 	t.Setenv("ENGINE_GITHUB_LOGIN", "engine-bot")
 	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "")
+}
+
+// resetEngineLoginCache clears the cached engine login state (for identity_test.go).
+func resetEngineLoginCache(t *testing.T) {
+	t.Helper()
+	engineLoginMu.Lock()
+	defer engineLoginMu.Unlock()
+	engineLoginCached = ""
+	engineLoginAt = time.Time{}
+}
+
+// withEventsHTTPClient temporarily replaces eventsHTTPClient for testing (for projects_test.go).
+func withEventsHTTPClient(t *testing.T, srv *httptest.Server) {
+	t.Helper()
+	oldHTTP := eventsHTTPClient
+	eventsHTTPClient = srv.Client()
+	t.Cleanup(func() {
+		eventsHTTPClient = oldHTTP
+	})
+}
+
+// captureHTTPPayload creates an HTTP handler that captures JSON request body into dst.
+// Responds with 201 Created and empty JSON object on success.
+func captureHTTPPayload(dst *map[string]any) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, dst)
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte("{}"))
+	}
+}
+
+// setupGitHubAPI configures GITHUB_API_BASE and GITHUB_TOKEN for testing against a mock server.
+func setupGitHubAPI(t *testing.T, srv *httptest.Server, token string) {
+	t.Helper()
+	t.Setenv("GITHUB_API_BASE", srv.URL)
+	t.Setenv("GITHUB_TOKEN", token)
 }
 
 // ── RepoMonitor ───────────────────────────────────────────────────────────────
