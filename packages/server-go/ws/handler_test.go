@@ -506,16 +506,15 @@ func TestHandler_FileRead_Error(t *testing.T) {
 	}
 }
 
+// Note: TestHandler_FileSave_Error, TestHandler_FileCreate_Error, TestHandler_FolderCreate_Error
+// consolidated to use testFileOperationError(t, conn, "type") helper.
+
 func TestHandler_FileSave_Error(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]any{"type": "file.save", "path": "/dev/null/nope/file.txt", "content": "hi"})
-	msg := readWSMessageOfType(t, conn, "error")
-	if msg["code"] != "FILE_ERROR" {
-		t.Fatalf("expected FILE_ERROR, got %+v", msg)
-	}
+	testFileOperationError(t, conn, "file.save")
 }
 
 func TestHandler_FileCreate_Error(t *testing.T) {
@@ -523,11 +522,7 @@ func TestHandler_FileCreate_Error(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]any{"type": "file.create", "path": "/dev/null/nope/file.txt"})
-	msg := readWSMessageOfType(t, conn, "error")
-	if msg["code"] != "FILE_ERROR" {
-		t.Fatalf("expected FILE_ERROR, got %+v", msg)
-	}
+	testFileOperationError(t, conn, "file.create")
 }
 
 func TestHandler_FolderCreate_Error(t *testing.T) {
@@ -535,11 +530,7 @@ func TestHandler_FolderCreate_Error(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]any{"type": "folder.create", "path": "/dev/null/nope"})
-	msg := readWSMessageOfType(t, conn, "error")
-	if msg["code"] != "FILE_ERROR" {
-		t.Fatalf("expected FILE_ERROR, got %+v", msg)
-	}
+	testFileOperationError(t, conn, "folder.create")
 }
 
 func TestHandler_FileTree_Error(t *testing.T) {
@@ -822,12 +813,8 @@ func TestHandler_Chat_InteractiveRoute_EmptyOnErrorIsIgnored(t *testing.T) {
 func TestHandler_GithubIssues_ResolvesRepo(t *testing.T) {
 	// When no override is configured and project is a git repo, resolves owner/repo from remote.
 	// With non-git dir, the resolve fails and we get github.issues with error.
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup, _ := openProjectAndGetSession(t, setupWSProject(t))
 	defer cleanup()
-
-	writeWSMessage(t, conn, map[string]any{"type": "project.open", "path": projectDir})
-	readWSMessageOfType(t, conn, "session.created")
 
 	writeWSMessage(t, conn, map[string]any{"type": "github.issues"})
 	msg := readWSMessageOfType(t, conn, "github.issues")

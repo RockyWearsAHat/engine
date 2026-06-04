@@ -207,6 +207,7 @@ func TestConfigureRepoIdentity_NoLogin_Noop(t *testing.T) {
 	}
 }
 
+// TestConfigureRepoIdentity_GitConfigErrors_AreBestEffort verifies ConfigureRepoIdentity attempts git config even if calls fail.
 func TestConfigureRepoIdentity_GitConfigErrors_AreBestEffort(t *testing.T) {
 	old := gitLocalConfigFn
 	defer func() { gitLocalConfigFn = old }()
@@ -225,6 +226,7 @@ func TestConfigureRepoIdentity_GitConfigErrors_AreBestEffort(t *testing.T) {
 	}
 }
 
+// TestGitLocalConfigFn_Default_ReturnsErrorOnNonRepo verifies gitLocalConfigFn fails outside a git repository.
 func TestGitLocalConfigFn_Default_ReturnsErrorOnNonRepo(t *testing.T) {
 	err := gitLocalConfigFn(t.TempDir(), "user.name", "Engine")
 	if err == nil {

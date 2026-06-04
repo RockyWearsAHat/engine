@@ -1332,7 +1332,6 @@ textarea,
 .tree-node.tree-loading { color: var(--tx-3); cursor: default; }
 .tree-node.tree-loading:hover { background: transparent; color: var(--tx-3); }
 
-.tree-icon { flex-shrink: 0; opacity: 0.85; }
 .tree-name { overflow: hidden; text-overflow: ellipsis; flex: 1; }
 .tree-chevron { flex-shrink: 0; color: var(--tx-3); transition: transform 120ms; }
 .tree-chevron.open { transform: rotate(90deg); }
@@ -1344,8 +1343,7 @@ textarea,
 .tree-git-untracked > .tree-name { color: #73C991; }
 .tree-git-ignored  > .tree-name  { color: var(--tx-3); }
 
-.tree-dimmed { opacity: 0.5; }
-.tree-dimmed:hover { opacity: 0.75; }
+
 
 .tree-git-badge {
   flex-shrink: 0;
@@ -2447,8 +2445,7 @@ textarea,
 }
 
 .workspace-drop-kicker,
-.preferences-kicker,
-.preferences-drawer-kicker {
+.preferences-kicker {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.16em;
@@ -2457,8 +2454,7 @@ textarea,
 }
 
 .workspace-drop-title,
-.preferences-title,
-.preferences-drawer-title {
+.preferences-title {
   margin-top: 10px;
   font-size: 24px;
   line-height: 1.08;
@@ -3305,14 +3301,6 @@ textarea,
 
 /* ==================== DIALOGS: Preferences & Settings ==================== */
 
-.preferences-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 180;
-  display: flex;
-  justify-content: flex-end;
-}
-
 /* Workspace switch dialog */
 /* ==================== DIALOGS: Workspace & Approval Modals ==================== */
 
@@ -3485,37 +3473,7 @@ textarea,
   flex-wrap: wrap;
 }
 
-.preferences-backdrop {
-  position: absolute;
-  inset: 0;
-  border: none;
-  background: rgba(3, 8, 9, 0.8);
-  backdrop-filter: none;
-  cursor: pointer;
-}
 
-.preferences-drawer {
-  position: relative;
-  width: min(780px, calc(100vw - 24px));
-  height: calc(100vh - 24px);
-  margin: 12px;
-  border-radius: 0;
-  border: 1px solid var(--border);
-  background: rgba(10, 15, 18, 0.97);
-  box-shadow: none;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.preferences-drawer-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 18px 20px 14px;
-  border-bottom: 1px solid var(--border);
-}
 
 .preferences-layout {
   flex: 1;
@@ -3897,6 +3855,51 @@ textarea,
 
 .preferences-quality-item.low {
   border-left-color: #7bbcff;
+}
+
+/* Repository registry */
+.preferences-repo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.preferences-repo-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-radius: 0;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--tx);
+  text-align: left;
+  cursor: default;
+}
+
+.preferences-repo-item:last-child {
+  border-bottom: none;
+}
+
+.preferences-repo-name {
+  flex: 0 1 auto;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tx);
+}
+
+.preferences-repo-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
 }
 
 .preferences-quality-meta {
@@ -4305,8 +4308,7 @@ textarea,
   color: #d3ecff;
 }
 
-.quality-issue-category,
-.quality-issue-location {
+.quality-issue-category {
   font-size: 11px;
   color: var(--tx-3);
 }
@@ -4418,11 +4420,7 @@ textarea,
     display: none;
   }
 
-  .preferences-drawer {
-    width: calc(100vw - 16px);
-    height: calc(100vh - 16px);
-    margin: 8px;
-  }
+
 
   .preferences-hero,
   .preferences-card-header,

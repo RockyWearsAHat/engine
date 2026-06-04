@@ -1,11 +1,13 @@
 package remote
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -117,4 +119,27 @@ func assertJSONFieldNotEmpty(t *testing.T, resp map[string]any, field string) {
 	if str, ok := val.(string); !ok || str == "" {
 		t.Errorf("%s = %v, want non-empty string", field, val)
 	}
+}
+
+// newJSONPostRequest creates a POST request with JSON body and proper content-type header.
+func newJSONPostRequest(path string, body interface{}) *http.Request {
+	bodyBytes, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", path, bytes.NewBuffer(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+// newJSONPostRequestFromString creates a POST request from a raw JSON string.
+func newJSONPostRequestFromString(path, jsonBody string) *http.Request {
+	req := httptest.NewRequest("POST", path, strings.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+// requestAndExpectStatus executes a request against the server and asserts the status.
+func requestAndExpectStatus(t *testing.T, s *Server, req *http.Request, expectedStatus int) *httptest.ResponseRecorder {
+	t.Helper()
+	rr := testRequest(t, s, req)
+	assertStatusCode(t, rr.Code, expectedStatus)
+	return rr
 }
