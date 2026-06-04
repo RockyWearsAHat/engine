@@ -281,10 +281,8 @@ func TestHandler_GitHubUser_MockHTTP_Success(t *testing.T) {
 }
 
 // TestHandler_QualityReportGet_Success verifies quality report is returned with correct structure.
-// TestHandler_QualityReportGet_Success verifies quality report is returned with correct structure.
 func TestHandler_QualityReportGet_Success(t *testing.T) {
-	original := qualityScanWithProgressFn
-	qualityScanWithProgressFn = func(projectPath string, maxIssues int, _ quality.ProgressCallback) (quality.Report, error) {
+	defer setupQualityScanFunc(t, func(projectPath string, maxIssues int, _ quality.ProgressCallback) (quality.Report, error) {
 		return quality.Report{
 			ProjectPath: projectPath,
 			IssueCount:  1,
@@ -293,8 +291,7 @@ func TestHandler_QualityReportGet_Success(t *testing.T) {
 				{ID: "i1", Severity: "high", Category: "cs-principle", Message: "bad", File: "a.go", Line: 7},
 			},
 		}, nil
-	}
-	defer func() { qualityScanWithProgressFn = original }()
+	})()
 
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
@@ -312,13 +309,10 @@ func TestHandler_QualityReportGet_Success(t *testing.T) {
 }
 
 // TestHandler_QualityReportGet_Error verifies quality scan errors are reported in response.
-// TestHandler_QualityReportGet_Error verifies quality scan errors are reported in response.
 func TestHandler_QualityReportGet_Error(t *testing.T) {
-	original := qualityScanWithProgressFn
-	qualityScanWithProgressFn = func(_ string, _ int, _ quality.ProgressCallback) (quality.Report, error) {
+	defer setupQualityScanFunc(t, func(_ string, _ int, _ quality.ProgressCallback) (quality.Report, error) {
 		return quality.Report{}, fmt.Errorf("scan failed")
-	}
-	defer func() { qualityScanWithProgressFn = original }()
+	})()
 
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
@@ -333,8 +327,7 @@ func TestHandler_QualityReportGet_Error(t *testing.T) {
 
 // TestHandler_QualityReportGet_ProgressEvent verifies progress events are streamed to client during scan.
 func TestHandler_QualityReportGet_ProgressEvent(t *testing.T) {
-	original := qualityScanWithProgressFn
-	qualityScanWithProgressFn = func(projectPath string, _ int, onProgress quality.ProgressCallback) (quality.Report, error) {
+	defer setupQualityScanFunc(t, func(projectPath string, _ int, onProgress quality.ProgressCallback) (quality.Report, error) {
 		onProgress(quality.ScanProgress{
 			ProjectPath:     projectPath,
 			Phase:           "scan",
@@ -346,8 +339,7 @@ func TestHandler_QualityReportGet_ProgressEvent(t *testing.T) {
 			Section:         "scan",
 		})
 		return quality.Report{ProjectPath: projectPath, IssueCount: 0, Issues: []quality.Issue{}}, nil
-	}
-	defer func() { qualityScanWithProgressFn = original }()
+	})()
 
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
@@ -554,16 +546,9 @@ func TestHandler_RequestApproval_Allow(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	origRunAIChat := runAIChat
-	origRunAutonomousProject := runAutonomousProject
-	defer func() {
-		runAIChat = origRunAIChat
-		runAutonomousProject = origRunAutonomousProject
-	}()
-
 	allowedResult := make(chan bool, 1)
 	errResult := make(chan error, 1)
-	runAIChat = func(ctx *ai.ChatContext, _ string) {
+	defer setupAIChatAndOrchestratorWithDefaults(t, func(ctx *ai.ChatContext, _ string) {
 		allowed, err := ctx.RequestApproval("shell", "Run command", "exec ls", "ls")
 		if err != nil {
 			errResult <- err
@@ -571,13 +556,7 @@ func TestHandler_RequestApproval_Allow(t *testing.T) {
 		}
 		allowedResult <- allowed
 		errResult <- nil
-	}
-	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
-		if cfg.InteractiveChat != nil {
-			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
-		}
-		return &ai.OrchestrationState{Conversational: true}, nil
-	}
+	})()
 
 	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
@@ -591,13 +570,7 @@ func TestHandler_RequestApproval_Allow(t *testing.T) {
 	})
 	readWSMessageOfType(t, conn, "chat.started")
 
-	// Read approval.request message.
-	approvalMsg := readWSMessageOfType(t, conn, "approval.request")
-	req, _ := approvalMsg["request"].(map[string]any)
-	approvalID, _ := req["id"].(string)
-	if approvalID == "" {
-		t.Fatalf("expected approval id in request, got %+v", approvalMsg)
-	}
+	approvalID := readApprovalRequest(t, conn)
 
 	// Respond with allow=true.
 	writeWSMessage(t, conn, map[string]any{
@@ -619,16 +592,9 @@ func TestHandler_RequestApproval_Deny(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	origRunAIChat := runAIChat
-	origRunAutonomousProject := runAutonomousProject
-	defer func() {
-		runAIChat = origRunAIChat
-		runAutonomousProject = origRunAutonomousProject
-	}()
-
 	allowedResult := make(chan bool, 1)
 	errResult := make(chan error, 1)
-	runAIChat = func(ctx *ai.ChatContext, _ string) {
+	defer setupAIChatAndOrchestratorWithDefaults(t, func(ctx *ai.ChatContext, _ string) {
 		allowed, err := ctx.RequestApproval("shell", "Run", "exec", "rm")
 		if err != nil {
 			errResult <- err
@@ -636,13 +602,7 @@ func TestHandler_RequestApproval_Deny(t *testing.T) {
 		}
 		allowedResult <- allowed
 		errResult <- nil
-	}
-	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
-		if cfg.InteractiveChat != nil {
-			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
-		}
-		return &ai.OrchestrationState{Conversational: true}, nil
-	}
+	})()
 
 	writeWSMessage(t, conn, map[string]any{
 		"type": "project.open",
@@ -656,9 +616,7 @@ func TestHandler_RequestApproval_Deny(t *testing.T) {
 	})
 	readWSMessageOfType(t, conn, "chat.started")
 
-	approvalMsg := readWSMessageOfType(t, conn, "approval.request")
-	req, _ := approvalMsg["request"].(map[string]any)
-	approvalID, _ := req["id"].(string)
+	approvalID := readApprovalRequest(t, conn)
 
 	writeWSMessage(t, conn, map[string]any{
 		"type":  "approval.respond",

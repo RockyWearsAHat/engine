@@ -2303,19 +2303,6 @@ textarea,
   padding: 1px;
 }
 
-/* .bottom-bar removed — replaced by .terminal-tabs (unused selector cleanup) */
-
-.term-tab {
-  height: 24px; padding: 0 10px;
-  display: flex; align-items: center; gap: 6px;
-  border-radius: 4px; cursor: pointer;
-  color: var(--tx-3); font-size: 12px;
-  background: transparent; border: none;
-  transition: color 100ms, background 100ms;
-}
-.term-tab:hover { color: var(--tx-2); background: var(--surface-3); }
-.term-tab.active { color: var(--tx); background: var(--surface-2); }
-
 /* ==================== LAYOUT: Status Bar ==================== */
 
 /* Status bar */
@@ -2383,19 +2370,7 @@ textarea,
 
 /* ==================== VIEWS: Agent & Team Panel ==================== */
 
-/* Agent card panel */
-.agent-card {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-  cursor: pointer;
-  transition: background 80ms;
-}
-.agent-card:hover { background: var(--surface-2); }
-.agent-card.active { background: var(--surface-3); }
-
 /* Misc utilities */
-.icon-file-color { flex-shrink: 0; }
-
 .empty-state {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   flex: 1; gap: 8px; color: var(--tx-3);
@@ -2486,30 +2461,6 @@ textarea,
   .mission-strip-header {
     flex-direction: column;
   }
-}
-
-.editor-view-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid rgba(255,255,255,0.08);
-  background: rgba(255,255,255,0.03);
-}
-
-.editor-view-toggle-btn {
-  border: none;
-  background: transparent;
-  color: var(--tx-3);
-  font-size: 11px;
-  font-family: inherit;
-  padding: 4px 8px;
-  cursor: pointer;
-}
-
-.editor-view-toggle-btn.active {
-  background: rgba(124,140,255,0.12);
-  color: var(--tx);
 }
 
 .editor-code-shell {
@@ -3809,54 +3760,6 @@ textarea,
   line-height: 1.6;
 }
 
-.preferences-quality-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--tx-3);
-}
-
-.preferences-quality-stats span {
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 999px;
-  padding: 4px 8px;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.preferences-quality-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.preferences-quality-item {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-left-width: 3px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-}
-
-.preferences-quality-item.high {
-  border-left-color: #f97373;
-}
-
-.preferences-quality-item.medium {
-  border-left-color: #f3c96f;
-}
-
-.preferences-quality-item.low {
-  border-left-color: #7bbcff;
-}
-
 /* Repository registry */
 .preferences-repo-list {
   list-style: none;
@@ -3900,17 +3803,6 @@ textarea,
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
-}
-
-.preferences-quality-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  color: var(--tx-3);
-}
-
-.preferences-quality-item small {
-  color: var(--tx-3);
 }
 
 /* ==================== PANELS: Quality & Code Analysis ==================== */
@@ -4096,12 +3988,7 @@ textarea,
   background: rgba(255, 255, 255, 0.08);
 }
 
-.quality-explorer-view {
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+
 
 .quality-tree-list {
   list-style: none;
