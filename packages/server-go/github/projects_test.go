@@ -18,6 +18,7 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+// TestProjectOwnerAndProjectNumber verifies project configuration parsing from environment.
 func TestProjectOwnerAndProjectNumber(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_PROJECT_OWNER", "  octo-org  ")
 	if got := projectOwner(); got != "octo-org" {
@@ -41,6 +42,7 @@ func TestProjectOwnerAndProjectNumber(t *testing.T) {
 	}
 }
 
+// TestGraphqlDo_ErrorPaths verifies error handling for malformed GraphQL requests.
 func TestGraphqlDo_ErrorPaths(t *testing.T) {
 	t.Setenv("GITHUB_API_BASE", "http://127.0.0.1:1")
 	oldHTTP := eventsHTTPClient
@@ -56,6 +58,8 @@ func TestGraphqlDo_ErrorPaths(t *testing.T) {
 	}
 }
 
+// TestGetProjectV2ID_FallsBackToOrg verifies project lookup falls back from user to organization scope.
+// Tests behavioral side effect (HTTP POST to GitHub GraphQL API).
 func TestGetProjectV2ID_FallsBackToOrg(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -87,6 +91,8 @@ func TestGetProjectV2ID_FallsBackToOrg(t *testing.T) {
 	}
 }
 
+// TestGetIssueNodeID_NotFound verifies error when issue node ID cannot be resolved.
+// Tests behavioral side effect (HTTP POST to GitHub GraphQL API).
 func TestGetIssueNodeID_NotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -105,6 +111,7 @@ func TestGetIssueNodeID_NotFound(t *testing.T) {
 	}
 }
 
+// TestAddIssueToEngineProject_BestEffortWhenNotConfigured verifies function gracefully handles unconfigured project.
 func TestAddIssueToEngineProject_BestEffortWhenNotConfigured(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "")
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
@@ -121,6 +128,8 @@ func TestAddIssueToEngineProject_BestEffortWhenNotConfigured(t *testing.T) {
 	}
 }
 
+// TestAddIssueToEngineProject_Success verifies issue is successfully added to GitHub project.
+// Tests behavioral side effect (HTTP POST to GitHub GraphQL mutations).
 func TestAddIssueToEngineProject_Success(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "3")
 	t.Setenv("ENGINE_GITHUB_PROJECT_OWNER", "octo")
@@ -363,7 +372,9 @@ func TestAddIssueToEngineProject_ErrorBranches(t *testing.T) {
 		t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
 
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var req struct{ Query string `json:"query"` }
+			var req struct {
+				Query string `json:"query"`
+			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode issue lookup request: %v", err)
 			}
@@ -395,7 +406,9 @@ func TestAddIssueToEngineProject_ErrorBranches(t *testing.T) {
 		t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
 
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var req struct{ Query string `json:"query"` }
+			var req struct {
+				Query string `json:"query"`
+			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode mutation request: %v", err)
 			}
@@ -464,7 +477,9 @@ func TestUpdateProjectItemStatus_EarlyAndErrorPaths(t *testing.T) {
 		t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
 
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var req struct{ Query string `json:"query"` }
+			var req struct {
+				Query string `json:"query"`
+			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode field list error request: %v", err)
 			}

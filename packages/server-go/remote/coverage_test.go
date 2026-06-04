@@ -346,17 +346,9 @@ func TestLoadOrCreateTLSConfig_LoadX509Error(t *testing.T) {
 
 // ── server.go ─────────────────────────────────────────────────────────────────
 
-func newTestServerCov(t *testing.T) *Server {
-	t.Helper()
-	srv, err := NewServer(Config{StoragePath: t.TempDir(), Port: "0"}, nil)
-	if err != nil {
-		t.Fatalf("NewServer: %v", err)
-	}
-	return srv
-}
 
 func TestHandlePair_RandReadError(t *testing.T) {
-	srv := newTestServerCov(t)
+	srv := newTestServer(t)
 	code, _ := srv.Pairing.GenerateCode()
 	orig := randReadFn2
 	randReadFn2 = func(b []byte) (int, error) { return 0, errors.New("injected rand error") }
@@ -371,7 +363,7 @@ func TestHandlePair_RandReadError(t *testing.T) {
 }
 
 func TestHandlePair_IssueTokenError(t *testing.T) {
-	srv := newTestServerCov(t)
+	srv := newTestServer(t)
 	code, _ := srv.Pairing.GenerateCode()
 	orig := jsonMarshalFn
 	jsonMarshalFn = func(v any) ([]byte, error) { return nil, errors.New("injected marshal error") }
@@ -386,7 +378,7 @@ func TestHandlePair_IssueTokenError(t *testing.T) {
 }
 
 func TestHandleRefresh_IssueTokenError(t *testing.T) {
-	srv := newTestServerCov(t)
+	srv := newTestServer(t)
 	token, _ := srv.Auth.IssueToken("dev1", time.Hour)
 	orig := jsonMarshalFn
 	jsonMarshalFn = func(v any) ([]byte, error) { return nil, errors.New("injected marshal error") }
@@ -401,7 +393,7 @@ func TestHandleRefresh_IssueTokenError(t *testing.T) {
 }
 
 func TestListenAndServeTLS_PairingCodeError(t *testing.T) {
-	srv := newTestServerCov(t)
+	srv := newTestServer(t)
 	orig := serverGenPairingCodeFn
 	serverGenPairingCodeFn = func(_ *PairingManager) (string, error) {
 		return "", errors.New("injected pairing code error")
@@ -413,7 +405,7 @@ func TestListenAndServeTLS_PairingCodeError(t *testing.T) {
 }
 
 func TestListenAndServeTLS_ServeSuccess(t *testing.T) {
-	srv := newTestServerCov(t)
+	srv := newTestServer(t)
 	origTimer := serverPairingCleanupTimerFn
 	serverPairingCleanupTimerFn = func() {}
 	defer func() { serverPairingCleanupTimerFn = origTimer }()

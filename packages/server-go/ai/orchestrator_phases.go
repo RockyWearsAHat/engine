@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/engine/server/db"
@@ -30,27 +29,7 @@ func orchestratorPlanPhase(cfg OrchestratorConfig, state *OrchestrationState, ca
 		return fmt.Errorf("create plan session: %w", err)
 	}
 
-	var (
-		outMu sync.Mutex
-		out   strings.Builder
-	)
-	ctx := &ChatContext{
-		ProjectPath: cfg.ProjectPath,
-		SessionID:   sessionID,
-		Role:        RolePlanner,
-		Cancel:      cancel,
-		OnChunk: func(content string, _ bool) {
-			if content == "" {
-				return
-			}
-			outMu.Lock()
-			out.WriteString(content)
-			outMu.Unlock()
-		},
-		OnError:      func(string) {},
-		OnToolCall:   func(string, any) {},
-		OnToolResult: func(string, any, bool) {},
-	}
+	ctx, oc := newChatContextForRole(cfg, sessionID, RolePlanner, cancel)
 
 	// Planner reads the design-concept + vocabulary + PRD layers — every
 	// piece of documentation the orchestrator built before this phase.
@@ -61,12 +40,12 @@ func orchestratorPlanPhase(cfg OrchestratorConfig, state *OrchestrationState, ca
 	prompt := buildPlannerPromptWithContext(state.Brief, contextDoc)
 	cfg.chatFnFor()(ctx, prompt)
 
-	steps := parsePlanFromText(out.String())
+	steps := parsePlanFromText(oc.String())
 	if len(steps) == 0 {
-		return fmt.Errorf("plan output empty or unparsable; got %d chars", out.Len())
+		return fmt.Errorf("plan output empty or unparsable; got %d chars", len(oc.String()))
 	}
 	if err := validatePlanQuality(steps); err != nil {
-		repaired, repairErr := orchestratorRepairPlanPhase(cfg, state, out.String(), cancel)
+		repaired, repairErr := orchestratorRepairPlanPhase(cfg, state, oc.String(), cancel)
 		if repairErr != nil {
 			return fmt.Errorf("plan rejected (chatbot output detected): %w; repair pass failed: %v", err, repairErr)
 		}
@@ -85,34 +64,14 @@ func orchestratorRepairPlanPhase(cfg OrchestratorConfig, state *OrchestrationSta
 		return nil, fmt.Errorf("create plan repair session: %w", err)
 	}
 
-	var (
-		outMu sync.Mutex
-		out   strings.Builder
-	)
-	ctx := &ChatContext{
-		ProjectPath: cfg.ProjectPath,
-		SessionID:   sessionID,
-		Role:        RolePlanner,
-		Cancel:      cancel,
-		OnChunk: func(content string, _ bool) {
-			if content == "" {
-				return
-			}
-			outMu.Lock()
-			out.WriteString(content)
-			outMu.Unlock()
-		},
-		OnError:      func(string) {},
-		OnToolCall:   func(string, any) {},
-		OnToolResult: func(string, any, bool) {},
-	}
+	ctx, oc := newChatContextForRole(cfg, sessionID, RolePlanner, cancel)
 
 	prompt := buildPlannerRepairPrompt(state.Brief, badPlan)
 	cfg.chatFnFor()(ctx, prompt)
 
-	steps := parsePlanFromText(out.String())
+	steps := parsePlanFromText(oc.String())
 	if len(steps) == 0 {
-		return nil, fmt.Errorf("repair output empty or unparsable; got %d chars", out.Len())
+		return nil, fmt.Errorf("repair output empty or unparsable; got %d chars", len(oc.String()))
 	}
 	if err := validatePlanQuality(steps); err != nil {
 		synthesizeMissingAcceptance(steps)
@@ -345,32 +304,11 @@ func orchestratorBuildStep(cfg OrchestratorConfig, state *OrchestrationState, st
 	policy.AutoCommit = true
 	policy.AutoPush = true
 
-	var (
-		outMu sync.Mutex
-		out   strings.Builder
-	)
-	ctx := &ChatContext{
-		ProjectPath:      cfg.ProjectPath,
-		SessionID:        sessionID,
-		Role:             RoleAutonomousBuilder,
-		AutonomousPolicy: &policy,
-		Cancel:           cancel,
-		MaxTurns:         OrchestratorStepMaxTurns,
-		OnChunk: func(content string, _ bool) {
-			if content == "" {
-				return
-			}
-			outMu.Lock()
-			out.WriteString(content)
-			outMu.Unlock()
-		},
-		OnError: func(msg string) {
-			outMu.Lock()
-			out.WriteString("\n[error] " + msg)
-			outMu.Unlock()
-		},
-		OnToolCall:   func(string, any) {},
-		OnToolResult: func(string, any, bool) {},
+	ctx, oc := newChatContextForRole(cfg, sessionID, RoleAutonomousBuilder, cancel)
+	ctx.AutonomousPolicy = &policy
+	ctx.MaxTurns = OrchestratorStepMaxTurns
+	ctx.OnError = func(msg string) {
+		oc.Write("\n[error] " + msg)
 	}
 
 	// Builder reads vocabulary + PRD + the current module map so it knows
@@ -383,7 +321,7 @@ func orchestratorBuildStep(cfg OrchestratorConfig, state *OrchestrationState, st
 	prompt := buildStepPromptWithContext(state, step, redirect, contextDoc)
 	cfg.chatFnFor()(ctx, prompt)
 
-	if strings.TrimSpace(out.String()) == "" {
+	if strings.TrimSpace(oc.String()) == "" {
 		return fmt.Errorf("builder produced no output for step %d", step.Index)
 	}
 	return nil
@@ -447,29 +385,9 @@ func orchestratorReviewStep(cfg OrchestratorConfig, state *OrchestrationState, s
 	// trivial review findings without bouncing back to the builder.
 	policy.AutoCommit = true
 
-	var (
-		outMu sync.Mutex
-		out   strings.Builder
-	)
-	ctx := &ChatContext{
-		ProjectPath:      cfg.ProjectPath,
-		SessionID:        sessionID,
-		Role:             RoleReviewer,
-		AutonomousPolicy: &policy,
-		Cancel:           cancel,
-		MaxTurns:         12,
-		OnChunk: func(content string, _ bool) {
-			if content == "" {
-				return
-			}
-			outMu.Lock()
-			out.WriteString(content)
-			outMu.Unlock()
-		},
-		OnError:      func(string) {},
-		OnToolCall:   func(string, any) {},
-		OnToolResult: func(string, any, bool) {},
-	}
+	ctx, oc := newChatContextForRole(cfg, sessionID, RoleReviewer, cancel)
+	ctx.AutonomousPolicy = &policy
+	ctx.MaxTurns = 12
 
 	// Reviewer reads vocabulary + PRD + module map. Design concept is omitted
 	// — by review time the concept is implemented; what matters is whether
@@ -481,7 +399,7 @@ func orchestratorReviewStep(cfg OrchestratorConfig, state *OrchestrationState, s
 	prompt := buildReviewerPromptWithContext(state, step, contextDoc)
 	cfg.chatFnFor()(ctx, prompt)
 
-	verdict, feedback := parseReviewerVerdict(out.String())
+	verdict, feedback := parseReviewerVerdict(oc.String())
 	return verdict, feedback
 }
 
@@ -557,37 +475,18 @@ func orchestratorValidatePhase(cfg OrchestratorConfig, state *OrchestrationState
 	policy := ResolveAutonomousPolicy(cfg.ProjectPath)
 	policy.AutoCommit = false // validation only — should not be writing code
 
-	var (
-		outMu sync.Mutex
-		out   strings.Builder
-	)
-	ctx := &ChatContext{
-		ProjectPath:      cfg.ProjectPath,
-		SessionID:        sessionID,
-		Role:             RoleReviewer, // reviewer already has shell + screenshot + open_url
-		AutonomousPolicy: &policy,
-		Cancel:           cancel,
-		MaxTurns:         16,
-		OnChunk: func(content string, _ bool) {
-			if content == "" {
-				return
-			}
-			outMu.Lock()
-			out.WriteString(content)
-			outMu.Unlock()
-		},
-		OnError:      func(string) {},
-		OnToolCall:   func(string, any) {},
-		OnToolResult: func(string, any, bool) {},
-	}
+	ctx, oc := newChatContextForRole(cfg, sessionID, RoleReviewer, cancel)
+	ctx.AutonomousPolicy = &policy
+	ctx.MaxTurns = 16
+
 	prompt := buildBehavioralValidatorPrompt(state)
 	cfg.chatFnFor()(ctx, prompt)
 
-	verdict, feedback := parseReviewerVerdict(out.String())
+	verdict, feedback := parseReviewerVerdict(oc.String())
 	if verdict == ReviewApprove {
-		return strings.TrimSpace(out.String()), nil
+		return strings.TrimSpace(oc.String()), nil
 	}
-	return strings.TrimSpace(out.String()), fmt.Errorf("%s", strings.TrimSpace(feedback))
+	return strings.TrimSpace(oc.String()), fmt.Errorf("%s", strings.TrimSpace(feedback))
 }
 
 func buildBehavioralValidatorPrompt(state *OrchestrationState) string {

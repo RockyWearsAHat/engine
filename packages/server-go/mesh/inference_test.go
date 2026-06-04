@@ -32,11 +32,7 @@ func TestInferenceProxy_RoundTrips(t *testing.T) {
 		SelfOllamaURL: fakeOllama.URL,
 		Peers:         []Peer{{Name: "mac", Secret: "k"}},
 	}
-	srv := NewServer(cfg)
-	mux := http.NewServeMux()
-	srv.Register(mux)
-	meshServer := httptest.NewServer(mux)
-	defer meshServer.Close()
+	meshServer := newMeshServer(t, cfg)
 
 	peer := &Peer{Name: "host", Address: strings.TrimPrefix(meshServer.URL, "http://"), Secret: "k"}
 	client := NewClient("mac")
@@ -59,16 +55,13 @@ func TestInferenceProxy_RoundTrips(t *testing.T) {
 	}
 }
 
+// TestInferenceProxy_NoSelfOllamaURL tests that inference requests fail without an upstream Ollama URL configured.
 func TestInferenceProxy_NoSelfOllamaURL(t *testing.T) {
 	cfg := &Config{
 		SelfName: "host",
 		Peers:    []Peer{{Name: "mac", Secret: "k"}},
 	}
-	srv := NewServer(cfg)
-	mux := http.NewServeMux()
-	srv.Register(mux)
-	meshServer := httptest.NewServer(mux)
-	defer meshServer.Close()
+	meshServer := newMeshServer(t, cfg)
 
 	peer := &Peer{Name: "host", Address: strings.TrimPrefix(meshServer.URL, "http://"), Secret: "k"}
 	client := NewClient("mac")
@@ -82,13 +75,10 @@ func TestInferenceProxy_NoSelfOllamaURL(t *testing.T) {
 	}
 }
 
+// TestInferenceProxy_RequiresAuth tests that /mesh/inference requires valid authentication.
 func TestInferenceProxy_RequiresAuth(t *testing.T) {
 	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
-	srv := NewServer(cfg)
-	mux := http.NewServeMux()
-	srv.Register(mux)
-	meshServer := httptest.NewServer(mux)
-	defer meshServer.Close()
+	meshServer := newMeshServer(t, cfg)
 
 	resp, err := http.Post(meshServer.URL+"/mesh/inference", "application/json", strings.NewReader("{}"))
 	if err != nil {
@@ -100,13 +90,10 @@ func TestInferenceProxy_RequiresAuth(t *testing.T) {
 	}
 }
 
+// TestInferenceProxy_RejectsBadPath tests that inference requests with empty paths are rejected.
 func TestInferenceProxy_RejectsBadPath(t *testing.T) {
 	cfg := &Config{SelfName: "host", SelfOllamaURL: "http://nowhere", Peers: []Peer{{Name: "mac", Secret: "k"}}}
-	srv := NewServer(cfg)
-	mux := http.NewServeMux()
-	srv.Register(mux)
-	meshServer := httptest.NewServer(mux)
-	defer meshServer.Close()
+	meshServer := newMeshServer(t, cfg)
 
 	peer := &Peer{Name: "host", Address: strings.TrimPrefix(meshServer.URL, "http://"), Secret: "k"}
 	client := NewClient("mac")

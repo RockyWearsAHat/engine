@@ -33,6 +33,7 @@ type llamaFleetScanResult struct {
 	Notes        []string `json:"notes"`
 }
 
+// runLlamaFleetScan detects system capabilities and recommends optimal llama.cpp fleet settings.
 func runLlamaFleetScan(projectPath string, writeFile bool) (llamaFleetScanResult, error) {
 	cpuCores := runtime.NumCPU()
 	if cpuCores < 1 {

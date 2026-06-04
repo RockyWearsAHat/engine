@@ -7,6 +7,7 @@ import (
 	"testing"
 )
 
+// TestRemoveAssignees_EmptyNoop verifies RemoveAssignees is a no-op on empty assignee list.
 func TestRemoveAssignees_EmptyNoop(t *testing.T) {
 	c := newClientWithBase("http://example.com")
 	if err := c.RemoveAssignees(1, nil); err != nil {
@@ -14,6 +15,7 @@ func TestRemoveAssignees_EmptyNoop(t *testing.T) {
 	}
 }
 
+// TestAddAssignees_EmptyNoop verifies AddAssignees is a no-op on empty assignee list.
 func TestAddAssignees_EmptyNoop(t *testing.T) {
 	c := newClientWithBase("http://example.com")
 	if err := c.AddAssignees(1, nil); err != nil {
@@ -21,6 +23,8 @@ func TestAddAssignees_EmptyNoop(t *testing.T) {
 	}
 }
 
+// TestRemoveAssignees_Success verifies RemoveAssignees sends DELETE request with correct payload.
+// Tests behavioral side effect (HTTP DELETE to GitHub API).
 func TestRemoveAssignees_Success(t *testing.T) {
 	var method string
 	var payload map[string]any
@@ -47,6 +51,7 @@ func TestRemoveAssignees_Success(t *testing.T) {
 	}
 }
 
+// TestRemoveAssignees_InvalidBase_RequestError verifies error handling for invalid API base URL.
 func TestRemoveAssignees_InvalidBase_RequestError(t *testing.T) {
 	t.Setenv("GITHUB_API_BASE", "://bad")
 	c := NewClientWithToken("owner", "repo", "tok")
@@ -56,6 +61,8 @@ func TestRemoveAssignees_InvalidBase_RequestError(t *testing.T) {
 	}
 }
 
+// TestCreatePR_Success verifies CreatePR successfully parses PR response from GitHub API.
+// Tests behavioral side effect (HTTP POST to GitHub PR creation endpoint).
 func TestCreatePR_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -73,6 +80,7 @@ func TestCreatePR_Success(t *testing.T) {
 	}
 }
 
+// TestCreatePR_ParseError verifies CreatePR returns error when response is not valid JSON.
 func TestCreatePR_ParseError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -86,6 +94,8 @@ func TestCreatePR_ParseError(t *testing.T) {
 	}
 }
 
+// TestUnassignEngine_Success verifies UnassignEngine sends DELETE request to GitHub API.
+// Tests behavioral side effect (HTTP DELETE to remove assignee).
 func TestUnassignEngine_Success(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_LOGIN", "engine-bot")
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")

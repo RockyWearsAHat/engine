@@ -1,7 +1,6 @@
 package mesh
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -15,6 +14,7 @@ import (
 
 // ── config.go gaps ────────────────────────────────────────────────────────────
 
+// TestLoadConfig_EmptyPath_UsesDefault tests that LoadConfig uses DefaultConfigPath when path is empty.
 func TestLoadConfig_EmptyPath_UsesDefault(t *testing.T) {
 	tmp := t.TempDir()
 	cfgPath := filepath.Join(tmp, "mesh.json")
@@ -32,6 +32,7 @@ func TestLoadConfig_EmptyPath_UsesDefault(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_BadJSON_ReturnsError tests that LoadConfig rejects malformed JSON.
 func TestLoadConfig_BadJSON_ReturnsError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bad.json")
 	os.WriteFile(path, []byte("not-json{{{"), 0o600) //nolint:errcheck
@@ -41,6 +42,7 @@ func TestLoadConfig_BadJSON_ReturnsError(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_NonExistentError_NonErrNotExist tests LoadConfig with permission errors (not just missing file).
 func TestLoadConfig_NonExistentError_NonErrNotExist(t *testing.T) {
 	// Pass a path whose *parent* does not exist so os.ReadFile gives an error
 	// that is NOT os.ErrNotExist at the file level – it will be a path error
@@ -59,6 +61,7 @@ func TestLoadConfig_NonExistentError_NonErrNotExist(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_EmptyListenAddr_Defaults tests that LoadConfig applies default listen address.
 func TestLoadConfig_EmptyListenAddr_Defaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mesh.json")
 	os.WriteFile(path, []byte(`{"selfName":"host"}`), 0o600) //nolint:errcheck
@@ -71,6 +74,7 @@ func TestLoadConfig_EmptyListenAddr_Defaults(t *testing.T) {
 	}
 }
 
+// TestSaveConfig_EmptyPath_UsesDefault tests that SaveConfig uses DefaultConfigPath when path is empty.
 func TestSaveConfig_EmptyPath_UsesDefault(t *testing.T) {
 	tmp := t.TempDir()
 	cfgPath := filepath.Join(tmp, "mesh.json")
@@ -88,6 +92,7 @@ func TestSaveConfig_EmptyPath_UsesDefault(t *testing.T) {
 	}
 }
 
+// TestSaveConfig_MkdirCreatesParent tests that SaveConfig creates missing parent directories.
 func TestSaveConfig_MkdirCreatesParent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "deep", "nested", "mesh.json")
 	src := &Config{SelfName: "nest"}
@@ -96,6 +101,7 @@ func TestSaveConfig_MkdirCreatesParent(t *testing.T) {
 	}
 }
 
+// TestDefaultConfigPath_CustomEnvPath tests that DefaultConfigPath respects ENGINE_MESH_CONFIG environment variable.
 func TestDefaultConfigPath_CustomEnvPath(t *testing.T) {
 	t.Setenv("ENGINE_MESH_CONFIG", "/custom/gap/path/mesh.json")
 	got := DefaultConfigPath()
@@ -104,6 +110,7 @@ func TestDefaultConfigPath_CustomEnvPath(t *testing.T) {
 	}
 }
 
+// TestFindPeer_NilConfig tests that FindPeer returns nil when called on nil config.
 func TestFindPeer_NilConfig(t *testing.T) {
 	var c *Config
 	if got := c.FindPeer("any"); got != nil {
@@ -111,6 +118,7 @@ func TestFindPeer_NilConfig(t *testing.T) {
 	}
 }
 
+// TestPeerWithRole_NilConfig tests that PeerWithRole returns nil when called on nil config.
 func TestPeerWithRole_NilConfig(t *testing.T) {
 	var c *Config
 	if got := c.PeerWithRole("inference"); got != nil {
@@ -118,6 +126,7 @@ func TestPeerWithRole_NilConfig(t *testing.T) {
 	}
 }
 
+// TestPeerWithRole_EmptyRole tests that PeerWithRole returns nil for empty role strings.
 func TestPeerWithRole_EmptyRole(t *testing.T) {
 	c := &Config{Peers: []Peer{{Name: "a", Roles: []string{"inference"}}}}
 	if got := c.PeerWithRole(""); got != nil {
@@ -125,6 +134,7 @@ func TestPeerWithRole_EmptyRole(t *testing.T) {
 	}
 }
 
+// TestPeerWithRole_NotFound tests that PeerWithRole returns nil when role is not found.
 func TestPeerWithRole_NotFound(t *testing.T) {
 	c := &Config{Peers: []Peer{{Name: "a", Roles: []string{"build"}}}}
 	if got := c.PeerWithRole("inference"); got != nil {
@@ -134,30 +144,35 @@ func TestPeerWithRole_NotFound(t *testing.T) {
 
 // ── sig.go gaps ───────────────────────────────────────────────────────────────
 
+// TestVerifyRequest_EmptySecret tests that verifyRequest rejects empty secrets.
 func TestVerifyRequest_EmptySecret(t *testing.T) {
 	if err := verifyRequest("", []byte("body"), "ts", "sig"); err == nil {
 		t.Error("expected error for empty secret")
 	}
 }
 
+// TestVerifyRequest_EmptySignature tests that verifyRequest rejects empty signatures.
 func TestVerifyRequest_EmptySignature(t *testing.T) {
 	if err := verifyRequest("secret", []byte("body"), "ts", ""); err == nil {
 		t.Error("expected error for empty signature")
 	}
 }
 
+// TestVerifyRequest_EmptyTimestamp tests that verifyRequest rejects empty timestamps.
 func TestVerifyRequest_EmptyTimestamp(t *testing.T) {
 	if err := verifyRequest("secret", []byte("body"), "", "sig"); err == nil {
 		t.Error("expected error for empty timestamp")
 	}
 }
 
+// TestVerifyRequest_BadTimestampFormat tests that verifyRequest rejects malformed timestamps.
 func TestVerifyRequest_BadTimestampFormat(t *testing.T) {
 	if err := verifyRequest("secret", []byte("body"), "not-a-timestamp", "sig"); err == nil {
 		t.Error("expected error for bad timestamp format")
 	}
 }
 
+// TestVerifyRequest_ExpiredTimestamp tests that verifyRequest rejects old timestamps.
 func TestVerifyRequest_ExpiredTimestamp(t *testing.T) {
 	old := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
 	_, sig := signRequest("secret", "origin", []byte("body"))
@@ -166,6 +181,7 @@ func TestVerifyRequest_ExpiredTimestamp(t *testing.T) {
 	}
 }
 
+// TestVerifyRequest_BadSignatureEncoding tests that verifyRequest rejects non-hex signatures.
 func TestVerifyRequest_BadSignatureEncoding(t *testing.T) {
 	ts := time.Now().UTC().Format(time.RFC3339)
 	if err := verifyRequest("secret", []byte("body"), ts, "not-hex!!!"); err == nil {
@@ -175,30 +191,7 @@ func TestVerifyRequest_BadSignatureEncoding(t *testing.T) {
 
 // ── server.go gaps ────────────────────────────────────────────────────────────
 
-func newSignedRequest(t *testing.T, ts *httptest.Server, path, method, secret, origin string, body []byte) *http.Request {
-	t.Helper()
-	timestamp, sig := signRequest(secret, origin, body)
-	req, err := http.NewRequest(method, ts.URL+path, bytes.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(originHeader, origin)
-	req.Header.Set(timestampHeader, timestamp)
-	req.Header.Set(signatureHeader, sig)
-	return req
-}
-
-func newMeshServer(t *testing.T, cfg *Config) *httptest.Server {
-	t.Helper()
-	srv := NewServer(cfg)
-	mux := http.NewServeMux()
-	srv.Register(mux)
-	ts := httptest.NewServer(mux)
-	t.Cleanup(ts.Close)
-	return ts
-}
-
+// TestHandleExec_MethodNotAllowed tests that /mesh/exec rejects non-POST requests.
 func TestHandleExec_MethodNotAllowed(t *testing.T) {
 	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
 	ts := newMeshServer(t, cfg)
@@ -213,6 +206,7 @@ func TestHandleExec_MethodNotAllowed(t *testing.T) {
 	}
 }
 
+// TestHandleExec_BadJSON tests that /mesh/exec returns 400 for malformed request bodies.
 func TestHandleExec_BadJSON(t *testing.T) {
 	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
 	ts := newMeshServer(t, cfg)
@@ -229,6 +223,7 @@ func TestHandleExec_BadJSON(t *testing.T) {
 	}
 }
 
+// TestHandleExec_EmptyCommand tests that /mesh/exec returns 400 for empty commands.
 func TestHandleExec_EmptyCommand(t *testing.T) {
 	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
 	ts := newMeshServer(t, cfg)
@@ -245,6 +240,7 @@ func TestHandleExec_EmptyCommand(t *testing.T) {
 	}
 }
 
+// TestHandleExec_WithCwdAndEnv tests that /mesh/exec executes commands with specified working directory and environment.
 func TestHandleExec_WithCwdAndEnv(t *testing.T) {
 	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
 	ts := newMeshServer(t, cfg)
@@ -271,6 +267,7 @@ func TestHandleExec_WithCwdAndEnv(t *testing.T) {
 	}
 }
 
+// TestHandleExec_ExitError tests that /mesh/exec captures non-zero exit codes.
 func TestHandleExec_ExitError(t *testing.T) {
 	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
 	ts := newMeshServer(t, cfg)
@@ -292,6 +289,7 @@ func TestHandleExec_ExitError(t *testing.T) {
 	}
 }
 
+// TestHandleExec_NonExistentCommand tests that /mesh/exec reports errors for missing executables.
 func TestHandleExec_NonExistentCommand(t *testing.T) {
 	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
 	ts := newMeshServer(t, cfg)
@@ -313,6 +311,7 @@ func TestHandleExec_NonExistentCommand(t *testing.T) {
 	}
 }
 
+// TestHandleInference_MethodNotAllowed tests that /mesh/inference rejects non-POST requests.
 func TestHandleInference_MethodNotAllowed(t *testing.T) {
 	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
 	ts := newMeshServer(t, cfg)
@@ -327,6 +326,7 @@ func TestHandleInference_MethodNotAllowed(t *testing.T) {
 	}
 }
 
+// TestHandleInference_BadJSON tests that /mesh/inference returns 400 for malformed request bodies.
 func TestHandleInference_BadJSON(t *testing.T) {
 	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
 	ts := newMeshServer(t, cfg)
@@ -343,6 +343,7 @@ func TestHandleInference_BadJSON(t *testing.T) {
 	}
 }
 
+// TestHandleInference_EmptyPath tests that /mesh/inference returns 400 for empty paths.
 func TestHandleInference_EmptyPath(t *testing.T) {
 	cfg := &Config{SelfName: "host", SelfOllamaURL: "http://127.0.0.1:99999", Peers: []Peer{{Name: "mac", Secret: "k"}}}
 	ts := newMeshServer(t, cfg)
@@ -359,6 +360,7 @@ func TestHandleInference_EmptyPath(t *testing.T) {
 	}
 }
 
+// TestHandleInference_UpstreamConnectionError tests that /mesh/inference handles upstream connection failures gracefully.
 func TestHandleInference_UpstreamConnectionError(t *testing.T) {
 	// Point to a port that's almost certainly not listening.
 	cfg := &Config{SelfName: "host", SelfOllamaURL: "http://127.0.0.1:19999", Peers: []Peer{{Name: "mac", Secret: "k"}}}
@@ -377,6 +379,7 @@ func TestHandleInference_UpstreamConnectionError(t *testing.T) {
 	// Either way, we get a response (not a test failure).
 }
 
+// TestHandleInference_WithExplicitMethod tests that /mesh/inference uses the specified HTTP method for upstream calls.
 func TestHandleInference_WithExplicitMethod(t *testing.T) {
 	var upstreamMethod string
 	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -403,6 +406,7 @@ func TestHandleInference_WithExplicitMethod(t *testing.T) {
 	}
 }
 
+// TestBuildUpstreamRequest_BuildsURL tests that buildUpstreamRequest correctly constructs upstream URLs.
 func TestBuildUpstreamRequest_BuildsURL(t *testing.T) {
 	ctx := context.Background()
 	req, err := buildUpstreamRequest(ctx, "POST", "http://127.0.0.1:11434", "/v1/chat", []byte(`{}`))
@@ -414,6 +418,7 @@ func TestBuildUpstreamRequest_BuildsURL(t *testing.T) {
 	}
 }
 
+// TestLimitedBuffer_Overflow tests that limitedBuffer truncates writes exceeding Max.
 func TestLimitedBuffer_Overflow(t *testing.T) {
 	buf := &limitedBuffer{Max: 5}
 	n, err := buf.Write([]byte("hello world overflow"))
@@ -428,6 +433,7 @@ func TestLimitedBuffer_Overflow(t *testing.T) {
 	}
 }
 
+// TestLimitedBuffer_WriteAtCapacity tests that limitedBuffer silently discards writes when full.
 func TestLimitedBuffer_WriteAtCapacity(t *testing.T) {
 	buf := &limitedBuffer{Max: 5}
 	buf.Write([]byte("hello")) //nolint:errcheck
@@ -444,6 +450,7 @@ func TestLimitedBuffer_WriteAtCapacity(t *testing.T) {
 	}
 }
 
+// TestHandleHealth_WithOllamaURL tests that /mesh/health includes OllamaURL in response when configured.
 func TestHandleHealth_WithOllamaURL(t *testing.T) {
 	cfg := &Config{
 		SelfName:      "host",
@@ -469,6 +476,7 @@ func TestHandleHealth_WithOllamaURL(t *testing.T) {
 	}
 }
 
+// TestAuthenticate_UnknownPeer tests that mesh endpoints reject requests from unknown peers.
 func TestAuthenticate_UnknownPeer(t *testing.T) {
 	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "known", Secret: "k"}}}
 	ts := newMeshServer(t, cfg)
@@ -485,6 +493,7 @@ func TestAuthenticate_UnknownPeer(t *testing.T) {
 	}
 }
 
+// TestListenAndServe_ErrFromListener tests that ListenAndServe reports binding errors.
 func TestListenAndServe_ErrFromListener(t *testing.T) {
 	// Bind an invalid address to force an error from ListenAndServe.
 	s := NewServer(&Config{ListenAddr: "invalid:::addr"})
@@ -499,6 +508,7 @@ func TestListenAndServe_ErrFromListener(t *testing.T) {
 
 // ── client.go gaps ────────────────────────────────────────────────────────────
 
+// TestClientHealth_NetworkError tests that Health returns an error for unreachable peers.
 func TestClientHealth_NetworkError(t *testing.T) {
 	// Use a port that refuses connections.
 	peer := &Peer{Name: "host", Address: "127.0.0.1:19998", Secret: "k"}
@@ -509,6 +519,7 @@ func TestClientHealth_NetworkError(t *testing.T) {
 	}
 }
 
+// TestClientExec_Success tests that the client successfully executes remote commands.
 func TestClientExec_Success(t *testing.T) {
 	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
 	srv := NewServer(cfg)

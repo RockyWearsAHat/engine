@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// PostCommitStatus writes a status to a commit SHA in owner/repo.
+// PostCommitStatus writes a commit status to owner/repo at the given SHA.
 // state must be one of: pending, success, failure, error.
 // context is the status check name (e.g. "engine/orchestrator").
 // Returns nil even when GITHUB_TOKEN is unset so feedback is best-effort.
@@ -36,6 +36,7 @@ func PostCommitStatus(owner, repo, sha, state, statusContext, description, targe
 
 // PostIssueComment posts a comment to the issue/PR number in owner/repo.
 // Used to keep humans informed on the GitHub side without checking Discord.
+// Returns nil when GITHUB_TOKEN is unset (best-effort).
 func PostIssueComment(owner, repo string, issueNumber int, body string) error {
 	if strings.TrimSpace(owner) == "" || strings.TrimSpace(repo) == "" || issueNumber <= 0 {
 		return fmt.Errorf("issue-comment: owner, repo and issue number are required")
@@ -85,6 +86,11 @@ func FindHeadSHA(owner, repo, ref string) (string, error) {
 	return rest[:end], nil
 }
 
+// ── Status normalization and formatting (internal) ────────────────────────────────────
+// Helper functions to normalize and format status values for GitHub API calls.
+
+// normaliseStatusState normalizes a status state string to GitHub's canonical values.
+// Accepts variants like "in_progress", "plan", "execute" and maps them to standard states.
 func normaliseStatusState(s string) string {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "pending", "in_progress", "plan", "execute", "review", "validate":
@@ -100,6 +106,7 @@ func normaliseStatusState(s string) string {
 	}
 }
 
+// clampDescription truncates a status description to GitHub's 140-character limit.
 func clampDescription(s string) string {
 	const githubDescLimit = 140
 	s = strings.TrimSpace(s)
@@ -109,6 +116,7 @@ func clampDescription(s string) string {
 	return s[:githubDescLimit-1] + "…"
 }
 
+// defaultIfEmpty returns the fallback string if s is empty or whitespace-only.
 func defaultIfEmpty(s, fallback string) string {
 	if strings.TrimSpace(s) == "" {
 		return fallback

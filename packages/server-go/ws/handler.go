@@ -183,7 +183,12 @@ func (h *Hub) SetDiscord(d DiscordBridge) {
 	SetDiscordBridge(d)
 }
 
-// ServeWS upgrades an HTTP request to a WebSocket connection and handles it.
+// ServeWS upgrades an HTTP request to a WebSocket connection and spawns a message handler goroutine.
+// Side effects: authenticates against localAuthToken (if set), spawns a persistent goroutine that runs until
+// the connection closes or an error occurs. That goroutine dispatches incoming messages, which may trigger
+// file I/O, database writes, git operations, and AI chat orchestration. Errors during upgrade are logged;
+// the connection is closed on failures. This function does not return errors — callers must assume the
+// connection state is managed by the spawned goroutine.
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	if h.localAuthToken != "" {
 		token := remote.ExtractToken(r)
@@ -250,6 +255,8 @@ type runtimeConfig struct {
 	ListDirectoryMaxChars *string `json:"listDirectoryMaxChars"`
 }
 
+// resolveChatSession resolves the session ID to an active database session, updating connection state.
+// If the requested session ID is empty, falls back to the connection's current session ID.
 func (c *conn) resolveChatSession(requestedSessionID string) (*db.Session, error) {
 	sessionID := strings.TrimSpace(requestedSessionID)
 	if sessionID == "" {
@@ -271,6 +278,7 @@ func (c *conn) resolveChatSession(requestedSessionID string) (*db.Session, error
 	return session, nil
 }
 
+// latestScaffoldStatusLine retrieves the most recent scaffold session status for a project.
 func latestScaffoldStatusLine(projectPath string) string {
 	sessions, err := dbListSessions(projectPath)
 	if err != nil {
@@ -293,6 +301,7 @@ func latestScaffoldStatusLine(projectPath string) string {
 	return ""
 }
 
+// shortID truncates an ID to its first 8 characters if longer than 8 chars.
 func shortID(id string) string {
 	id = strings.TrimSpace(id)
 	if len(id) <= 8 {
@@ -301,6 +310,7 @@ func shortID(id string) string {
 	return id[:8]
 }
 
+// truncate trims a string to at most n runes, appending "..." if truncated.
 func truncate(s string, n int) string {
 	if n <= 0 {
 		return ""
@@ -315,6 +325,7 @@ func truncate(s string, n int) string {
 	return string(r[:n-3]) + "..."
 }
 
+// promptWithProjectStatusContext decorates a user prompt with project and session context from Discord.
 func promptWithProjectStatusContext(projectPath, prompt string) string {
 	status := latestScaffoldStatusLine(projectPath)
 	if status == "" {
@@ -327,6 +338,7 @@ func promptWithProjectStatusContext(projectPath, prompt string) string {
 	return strings.TrimSpace(fmt.Sprintf("Discord project context:\n- Project: %s\n- %s\n- This message came from the project channel, so answer with awareness of existing project/session history. Do not claim setup is just starting if scaffold sessions already exist.\n\nUser message:\n%s", repoName, status, prompt))
 }
 
+// newConn initializes a new per-connection state for a WebSocket client.
 func newConn(ws *websocket.Conn, projectPath string) *conn {
 	return &conn{
 		ws:              ws,
@@ -367,10 +379,13 @@ func (c *conn) send(v any) {
 	}
 }
 
+// sendErr marshals and sends an error message to the client.
 func (c *conn) sendErr(message, code string) {
 	c.send(map[string]string{"type": "error", "message": message, "code": code})
 }
 
+// requestApproval sends an approval request to the client and waits for a response (with timeout).
+// Returns (allow, nil) if approved/denied before timeout, or (false, error) if timeout occurs.
 func (c *conn) requestApproval(sessionID, kind, title, message, command string) (bool, error) {
 	id := newID()
 	waiter := make(chan bool, 1)
@@ -402,6 +417,7 @@ func (c *conn) requestApproval(sessionID, kind, title, message, command string) 
 	}
 }
 
+// resolveApproval resolves a pending approval request by ID.
 func (c *conn) resolveApproval(id string, allow bool) {
 	c.approvalMu.Lock()
 	waiter, ok := c.approvalWaiters[id]
@@ -416,6 +432,7 @@ func (c *conn) resolveApproval(id string, allow bool) {
 	close(waiter)
 }
 
+// resolveAllApprovals resolves all pending approval requests with the same response.
 func (c *conn) resolveAllApprovals(allow bool) {
 	c.approvalMu.Lock()
 	waiters := c.approvalWaiters
@@ -428,6 +445,11 @@ func (c *conn) resolveAllApprovals(allow bool) {
 	}
 }
 
+// run manages the per-connection message loop. It reads incoming WebSocket messages,
+// parses the message type, and dispatches to handler functions. Handles panics to prevent
+// crashes. Closes the connection and signals all send goroutines when the loop exits.
+// This function runs in its own goroutine spawned by ServeWS and blocks indefinitely
+// until the connection is closed or a read error occurs.
 func (c *conn) run() {
 	defer func() {
 		// Recover any panic so a single bad connection can't crash the server.
@@ -462,6 +484,11 @@ func (c *conn) run() {
 	}
 }
 
+// dispatch routes incoming WebSocket messages to handler functions based on message type.
+// Side effects: this function and its callees may perform file I/O, database writes, git operations,
+// spawn AI chat goroutines, manage terminals, and send back multiple response messages via c.send().
+// All errors are communicated back to the client via sendErr() or explicit error response payloads.
+// The function does not return errors — the connection remains open after handling each message.
 func (c *conn) dispatch(msgType string, raw []byte) {
 	projectPath := c.projectPath
 
@@ -1341,6 +1368,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 
 // ── Repository Registry ────────────────────────────────────────────────────────
 
+// handleRepoList retrieves and sends the list of registered repositories.
 func (c *conn) handleRepoList() {
 	entries, err := repoRegistryLoadFn(c.projectPath)
 	if err != nil {
@@ -1353,6 +1381,7 @@ func (c *conn) handleRepoList() {
 	})
 }
 
+// handleRepoAdd registers a new repository by URL or path.
 func (c *conn) handleRepoAdd(urlOrPath string) {
 	entry, err := repoRegistryAddFn(c.projectPath, urlOrPath)
 	if err != nil {
@@ -1365,6 +1394,7 @@ func (c *conn) handleRepoAdd(urlOrPath string) {
 	})
 }
 
+// handleRepoRemove unregisters a repository from the registry.
 func (c *conn) handleRepoRemove(name string) {
 	if err := repoRegistryRemoveFn(c.projectPath, name); err != nil {
 		c.sendErr("Failed to remove repository: "+err.Error(), "REPO_REMOVE_ERROR")
@@ -1377,6 +1407,7 @@ func (c *conn) handleRepoRemove(name string) {
 }
 
 // handleRemotePairCodeGenerate generates a one-time pairing code and sends it back.
+// handleRemotePairCodeGenerate generates a one-time pairing code for remote access.
 func (c *conn) handleRemotePairCodeGenerate() {
 	pm := localPairingManager
 	if pm == nil {
@@ -1395,6 +1426,7 @@ func (c *conn) handleRemotePairCodeGenerate() {
 	})
 }
 
+// handleGitHubIssues fetches GitHub issues for a project and sends them to the client.
 func (c *conn) handleGitHubIssues(projectPath string) {
 	owner, repo, overrideConfigured := githubRepoOverride()
 	switch {
@@ -1422,6 +1454,7 @@ func (c *conn) handleGitHubIssues(projectPath string) {
 	c.send(map[string]any{"type": "github.issues", "issues": issues})
 }
 
+// handleGitHubUser retrieves the authenticated GitHub user and sends info to the client.
 func (c *conn) handleGitHubUser() {
 	user, err := fetchGitHubUser()
 	if err != nil {
@@ -1438,6 +1471,7 @@ func (c *conn) handleGitHubUser() {
 //  2. Poll GitHub in background → send github.auth.status updates
 //  3. On success: set GITHUB_TOKEN env var, send github.auth.done
 //  4. On failure: send github.auth.error
+// handleGitHubAuthStart initiates a GitHub OAuth device flow and polls for the access token.
 func (c *conn) handleGitHubAuthStart() {
 	clientID := githubClientIDFn()
 	if clientID == "" {

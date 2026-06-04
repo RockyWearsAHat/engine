@@ -22,6 +22,7 @@ type discordConfigPayload struct {
 	HasToken           bool     `json:"hasToken"`
 }
 
+// maskToken masks a bot token, showing only first 4 and last 4 characters.
 func maskToken(raw string) string {
 	t := strings.TrimSpace(raw)
 	if t == "" {
@@ -33,6 +34,7 @@ func maskToken(raw string) string {
 	return t[:4] + "…" + t[len(t)-4:]
 }
 
+// toPayload converts an internal Discord config to the wire format for clients.
 func toPayload(cfg discord.Config) discordConfigPayload {
 	allowed := make([]string, 0, len(cfg.AllowedUsers))
 	for id := range cfg.AllowedUsers {
@@ -50,6 +52,7 @@ func toPayload(cfg discord.Config) discordConfigPayload {
 	}
 }
 
+// fromPayload converts a client Discord payload back to internal config, preserving existing values.
 func fromPayload(p discordConfigPayload, existing discord.Config) discord.Config {
 	out := existing
 	out.Enabled = p.Enabled
@@ -76,6 +79,7 @@ func fromPayload(p discordConfigPayload, existing discord.Config) discord.Config
 	return out
 }
 
+// sameStringSet checks if two string sets are equal.
 func sameStringSet(a map[string]bool, b map[string]bool) bool {
 	if len(a) != len(b) {
 		return false
@@ -88,6 +92,7 @@ func sameStringSet(a map[string]bool, b map[string]bool) bool {
 	return true
 }
 
+// sameDiscordRuntimeConfig checks if two Discord configs have the same runtime values.
 func sameDiscordRuntimeConfig(a discord.Config, b discord.Config) bool {
 	if a.Enabled != b.Enabled {
 		return false
@@ -107,6 +112,7 @@ func sameDiscordRuntimeConfig(a discord.Config, b discord.Config) bool {
 	return sameStringSet(a.AllowedUsers, b.AllowedUsers)
 }
 
+// handleDiscordConfigGet sends the current Discord configuration to the client (masked secrets unless revealed).
 func (c *conn) handleDiscordConfigGet() {
 	if discordBridge == nil {
 		// Still return the on-disk config so the UI can show values even if
@@ -127,6 +133,7 @@ func (c *conn) handleDiscordConfigGet() {
 	})
 }
 
+// handleDiscordConfigSet updates the Discord config on disk and reloads the service if running.
 func (c *conn) handleDiscordConfigSet(payload discordConfigPayload) {
 	var existing discord.Config
 	hadBridge := discordBridge != nil
@@ -194,6 +201,7 @@ func (c *conn) handleDiscordConfigSet(payload discordConfigPayload) {
 	})
 }
 
+// handleDiscordUnlink disables Discord, optionally leaves the guild, and saves the updated config.
 func (c *conn) handleDiscordUnlink(leaveGuild bool) {
 	var cfg discord.Config
 	if discordBridge != nil {
@@ -241,6 +249,7 @@ func (c *conn) handleDiscordUnlink(leaveGuild bool) {
 	c.send(out)
 }
 
+// handleDiscordValidate validates a Discord config (override or current) and returns validation results.
 func (c *conn) handleDiscordValidate(override *discordConfigPayload) {
 	var cfg discord.Config
 	if override != nil {
@@ -263,6 +272,7 @@ func (c *conn) handleDiscordValidate(override *discordConfigPayload) {
 	})
 }
 
+// handleDiscordHistorySearch searches Discord message history and sends results to the client.
 func (c *conn) handleDiscordHistorySearch(projectPath, query, since string, limit int) {
 	if discordBridge == nil {
 		c.sendErr("Discord service not running", "DISCORD_UNAVAILABLE")
@@ -284,6 +294,7 @@ func (c *conn) handleDiscordHistorySearch(projectPath, query, since string, limi
 	})
 }
 
+// handleDiscordHistoryRecent retrieves recent Discord message history for a thread and sends results to the client.
 func (c *conn) handleDiscordHistoryRecent(projectPath, threadID, since string, limit int) {
 	if discordBridge == nil {
 		c.sendErr("Discord service not running", "DISCORD_UNAVAILABLE")

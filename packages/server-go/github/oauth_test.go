@@ -31,6 +31,8 @@ func mockOAuthClient(statusCode int, body string) *http.Client {
 
 // ─── StartDeviceFlow ──────────────────────────────────────────────────────────
 
+// TestStartDeviceFlow_Success verifies device flow initiation returns correct credentials.
+// Tests behavioral side effect (HTTP POST to GitHub OAuth endpoint).
 func TestStartDeviceFlow_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-www-form-urlencoded")
@@ -64,6 +66,7 @@ func TestStartDeviceFlow_Success(t *testing.T) {
 	}
 }
 
+// TestStartDeviceFlow_DefaultExpiresAndInterval verifies default values when response omits expirations.
 func TestStartDeviceFlow_DefaultExpiresAndInterval(t *testing.T) {
 	// Response with no expires_in / interval → defaults applied.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -91,6 +94,7 @@ func TestStartDeviceFlow_DefaultExpiresAndInterval(t *testing.T) {
 	}
 }
 
+// TestStartDeviceFlow_EmptyDeviceCode_JSONFallback verifies fallback to JSON parsing for GitHub Enterprise.
 func TestStartDeviceFlow_EmptyDeviceCode_JSONFallback(t *testing.T) {
 	// Response body is JSON (GitHub Enterprise style).
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -122,6 +126,7 @@ func TestStartDeviceFlow_EmptyDeviceCode_JSONFallback(t *testing.T) {
 	}
 }
 
+// TestStartDeviceFlow_EmptyDeviceCode_Error verifies error when device code cannot be parsed.
 func TestStartDeviceFlow_EmptyDeviceCode_Error(t *testing.T) {
 	// Response returns no device_code and invalid JSON.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -1039,3 +1039,64 @@ func TestScanProject_BehavioralShift_FindsRiskAcrossSiblingBranches(t *testing.T
 		t.Fatalf("expected behavioral shift to be found across sibling branch traversal")
 	}
 }
+
+func TestScanProject_Maintainability_FlagsLongFiles(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+
+	lines := make([]string, 0, 725)
+	lines = append(lines, "package demo", "", "func VeryLongFile() int {", "\ttotal := 0")
+	for i := 0; i < 710; i++ {
+		lines = append(lines, "\ttotal += 1")
+	}
+	lines = append(lines, "\treturn total", "}")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "very_long.go"), strings.Join(lines, "\n"))
+
+	report, err := ScanProject(project, 500)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Rule == "maintainability.long-file" && issue.File == "packages/demo/very_long.go" {
+			found = true
+			if !strings.Contains(issue.Message, "has") || !strings.Contains(issue.Message, "lines") {
+				t.Fatalf("expected line count context in long-file message, got %+v", issue)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected maintainability.long-file issue, got %+v", report.Issues)
+	}
+}
+
+func TestScanProject_Maintainability_WarnsWhenTestsSitNextToSource(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "sample.go"), "package demo\nfunc Sample() int { return 1 }\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "sample_test.go"), "package demo\nfunc TestSample() {}\n")
+
+	report, err := ScanProject(project, 500)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Rule == "maintainability.test-source-colocation" {
+			found = true
+			if issue.File != "packages/demo" {
+				t.Fatalf("expected colocation warning at directory scope, got %+v", issue)
+			}
+			if !strings.Contains(issue.Message, "colocated") {
+				t.Fatalf("expected colocation language in message, got %+v", issue)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected maintainability.test-source-colocation issue, got %+v", report.Issues)
+	}
+}

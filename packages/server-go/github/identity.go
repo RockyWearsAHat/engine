@@ -17,13 +17,14 @@ import (
 // Set ENGINE_GITHUB_BOT_EMAIL to configure git commit authorship in cloned repos.
 
 var (
-	engineLoginMu  sync.Mutex
+	engineLoginMu     sync.Mutex
 	engineLoginCached string
-	engineLoginAt  time.Time
-	engineLoginTTL = time.Hour
+	engineLoginAt     time.Time
+	engineLoginTTL    = time.Hour
 )
 
 // EngineToken returns the GitHub token for Engine's bot identity.
+// Prefers ENGINE_GITHUB_BOT_TOKEN over GITHUB_TOKEN environment variable.
 func EngineToken() string {
 	if tok := strings.TrimSpace(os.Getenv("ENGINE_GITHUB_BOT_TOKEN")); tok != "" {
 		return tok
@@ -32,6 +33,7 @@ func EngineToken() string {
 }
 
 // EngineClient returns a GitHub client authenticated as Engine's bot identity.
+// Reads token from EngineToken() and creates a client for the given owner/repo.
 func EngineClient(owner, repo string) (*Client, error) {
 	tok := EngineToken()
 	if tok == "" {

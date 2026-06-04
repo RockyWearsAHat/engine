@@ -9,19 +9,20 @@ import (
 	"testing"
 )
 
+// TestNormaliseStatusState_Mapping verifies all status state transitions conform to contract.
 func TestNormaliseStatusState_Mapping(t *testing.T) {
 	cases := map[string]string{
-		"plan":      "pending",
-		"execute":   "pending",
-		"review":    "pending",
-		"validate":  "pending",
-		"approve":   "success",
-		"done":      "success",
-		"failure":   "failure",
-		"blocked":   "failure",
-		"reject":    "failure",
-		"":          "pending",
-		"garbage":   "pending",
+		"plan":     "pending",
+		"execute":  "pending",
+		"review":   "pending",
+		"validate": "pending",
+		"approve":  "success",
+		"done":     "success",
+		"failure":  "failure",
+		"blocked":  "failure",
+		"reject":   "failure",
+		"":         "pending",
+		"garbage":  "pending",
 	}
 	for in, want := range cases {
 		if got := normaliseStatusState(in); got != want {
@@ -30,6 +31,7 @@ func TestNormaliseStatusState_Mapping(t *testing.T) {
 	}
 }
 
+// TestClampDescription_Limit verifies description clamping respects GitHub's character limit.
 func TestClampDescription_Limit(t *testing.T) {
 	long := strings.Repeat("x", 500)
 	got := clampDescription(long)
@@ -42,6 +44,7 @@ func TestClampDescription_Limit(t *testing.T) {
 	}
 }
 
+// TestPostCommitStatus_MissingFieldsReturnsError verifies input validation for commit status.
 func TestPostCommitStatus_MissingFieldsReturnsError(t *testing.T) {
 	if err := PostCommitStatus("", "r", "sha", "pending", "ctx", "d", ""); err == nil {
 		t.Error("expected error on empty owner")
@@ -54,6 +57,8 @@ func TestPostCommitStatus_MissingFieldsReturnsError(t *testing.T) {
 	}
 }
 
+// TestPostCommitStatus_PostsExpectedPayload verifies commit status payload structure.
+// Tests behavioral side effect (HTTP POST to GitHub commit status API).
 func TestPostCommitStatus_PostsExpectedPayload(t *testing.T) {
 	var captured map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -80,6 +85,7 @@ func TestPostCommitStatus_PostsExpectedPayload(t *testing.T) {
 	}
 }
 
+// TestPostIssueComment_MissingFieldsReturnsError verifies input validation for issue comment.
 func TestPostIssueComment_MissingFieldsReturnsError(t *testing.T) {
 	if err := PostIssueComment("o", "r", 0, "hello"); err == nil {
 		t.Error("expected error on issue 0")
@@ -89,6 +95,8 @@ func TestPostIssueComment_MissingFieldsReturnsError(t *testing.T) {
 	}
 }
 
+// TestPostIssueComment_PostsExpectedPayload verifies issue comment payload structure.
+// Tests behavioral side effect (HTTP POST to GitHub issue comment API).
 func TestPostIssueComment_PostsExpectedPayload(t *testing.T) {
 	var captured map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +117,8 @@ func TestPostIssueComment_PostsExpectedPayload(t *testing.T) {
 	}
 }
 
+// TestFindHeadSHA_ParsesShaField verifies SHA extraction from GitHub API response.
+// Tests behavioral side effect (HTTP GET to GitHub commits API).
 func TestFindHeadSHA_ParsesShaField(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"sha":"deadbeefdeadbeef","commit":{}}`))
@@ -126,6 +136,7 @@ func TestFindHeadSHA_ParsesShaField(t *testing.T) {
 	}
 }
 
+// TestFindHeadSHA_EmptyRef_DefaultsToHEAD verifies empty ref defaults to HEAD branch.
 func TestFindHeadSHA_EmptyRef_DefaultsToHEAD(t *testing.T) {
 	var gotPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -144,6 +155,7 @@ func TestFindHeadSHA_EmptyRef_DefaultsToHEAD(t *testing.T) {
 	}
 }
 
+// TestFindHeadSHA_NewClientError_NoToken verifies graceful handling when GitHub token is missing.
 func TestFindHeadSHA_NewClientError_NoToken(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")

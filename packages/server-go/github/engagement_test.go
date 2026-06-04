@@ -15,6 +15,7 @@ import (
 // /assignees) and comment (POST /issues/N/comments, PATCH /comments/N) calls.
 func setupFakeGitHub(t *testing.T) (serverURL string, assignCalled *bool, commentBody *string, editBody *string) {
 	t.Helper()
+	// Registers test HTTP server handling GitHub API calls for testing engagement functions.
 	assigned := false
 	var lastComment, lastEdit string
 
@@ -56,6 +57,8 @@ func setupFakeGitHub(t *testing.T) (serverURL string, assignCalled *bool, commen
 	return srv.URL, &assigned, &lastComment, &lastEdit
 }
 
+// TestEngageOnIssuePickup_AssignsAndComments verifies kickoff engagement assigns Engine and posts comment.
+// Tests behavioral side effects (HTTP POST for assign and comment).
 func TestEngageOnIssuePickup_AssignsAndComments(t *testing.T) {
 	url, assigned, comment, _ := setupFakeGitHub(t)
 	t.Setenv("GITHUB_API_BASE", url)
@@ -86,6 +89,8 @@ func TestEngageOnIssuePickup_AssignsAndComments(t *testing.T) {
 	}
 }
 
+// TestEngageOnIssueProgress_EditsComment verifies progress updates edit the pinned comment.
+// Tests behavioral side effect (HTTP PATCH to update comment).
 func TestEngageOnIssueProgress_EditsComment(t *testing.T) {
 	url, _, _, editBody := setupFakeGitHub(t)
 	t.Setenv("GITHUB_API_BASE", url)
@@ -108,6 +113,8 @@ func TestEngageOnIssueProgress_EditsComment(t *testing.T) {
 	}
 }
 
+// TestEngageOnIssueComplete_EditsComment verifies completion updates the pinned comment with Done status.
+// Tests behavioral side effect (HTTP PATCH to update comment).
 func TestEngageOnIssueComplete_EditsComment(t *testing.T) {
 	url, _, _, editBody := setupFakeGitHub(t)
 	t.Setenv("GITHUB_API_BASE", url)
@@ -130,6 +137,7 @@ func TestEngageOnIssueComplete_EditsComment(t *testing.T) {
 	}
 }
 
+// TestEngageOnIssueBlocked_EditsComment verifies blocked status is communicated via pinned comment update.
 func TestEngageOnIssueBlocked_EditsComment(t *testing.T) {
 	url, _, _, editBody := setupFakeGitHub(t)
 	t.Setenv("GITHUB_API_BASE", url)

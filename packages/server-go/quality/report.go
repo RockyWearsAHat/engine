@@ -108,6 +108,7 @@ type fileIndexEntry struct {
 	Path             string            `json:"path"`
 	ModTimeUnixNano  int64             `json:"modTimeUnixNano"`
 	Size             int64             `json:"size"`
+	RawLines         int               `json:"rawLines"`
 	BaseName         string            `json:"baseName"`
 	IsTest           bool              `json:"isTest"`
 	NormalizedLines  int               `json:"normalizedLines"`
@@ -150,11 +151,13 @@ type ruleDefinition struct {
 	DocURL          string
 }
 
-const qualityIndexVersion = 20
+const qualityIndexVersion = 21
 const duplicateChunkMinLines = 1
 const structuralDuplicateChunkMinLines = 3
 const duplicateIssuesPerFileCap = 12
 const behavioralIssuesPerFileCap = 3
+const sourceLongFileThresholdLines = 700
+const testLongFileThresholdLines = 900
 const qualityRuleDocsBase = "https://github.com/fallow-rs/fallow"
 
 const (
@@ -170,6 +173,8 @@ const (
 	ruleCSSUnused              = "css.unused-selector"
 	ruleDeadCodeSymbol         = "dead-code.unreferenced-symbol"
 	ruleLargeUncommentedBlock  = "maintainability.large-uncommented-block"
+	ruleLongFile               = "maintainability.long-file"
+	ruleTestSourceColocation   = "maintainability.test-source-colocation"
 	ruleLongFunction           = "cs.single-responsibility.long-function"
 	ruleEmptyCatch             = "cs.error-handling.empty-catch"
 	ruleIgnoredError           = "cs.error-handling.ignored-error-assignment"
@@ -192,6 +197,8 @@ var ruleCatalog = map[string]ruleDefinition{
 	ruleCSSUnused:              {ID: ruleCSSUnused, Category: "css-usage", DefaultSeverity: "low", DocURL: qualityRuleDocsBase},
 	ruleDeadCodeSymbol:         {ID: ruleDeadCodeSymbol, Category: "dead-code", DefaultSeverity: "low", DocURL: qualityRuleDocsBase},
 	ruleLargeUncommentedBlock:  {ID: ruleLargeUncommentedBlock, Category: "large-block-without-comment", DefaultSeverity: "medium", DocURL: qualityRuleDocsBase},
+	ruleLongFile:               {ID: ruleLongFile, Category: "maintainability", DefaultSeverity: "low", DocURL: qualityRuleDocsBase},
+	ruleTestSourceColocation:   {ID: ruleTestSourceColocation, Category: "maintainability", DefaultSeverity: "low", DocURL: qualityRuleDocsBase},
 	ruleLongFunction:           {ID: ruleLongFunction, Category: "cs-principle", DefaultSeverity: "medium", DocURL: qualityRuleDocsBase},
 	ruleEmptyCatch:             {ID: ruleEmptyCatch, Category: "cs-principle", DefaultSeverity: "high", DocURL: qualityRuleDocsBase},
 	ruleIgnoredError:           {ID: ruleIgnoredError, Category: "cs-principle", DefaultSeverity: "medium", DocURL: qualityRuleDocsBase},
@@ -411,6 +418,8 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 	}
 
 	issues = append(issues, behavioralShiftIssues(index, paths)...)
+	issues = append(issues, longFileIssues(index, paths)...)
+	issues = append(issues, testSourceColocationIssues(index, paths)...)
 
 	for _, run := range collectLargestDuplicateRuns(matchesByPair) {
 		leftNormalized := index.Files[run.LeftFile].NormalizedLines
@@ -572,6 +581,7 @@ func analyzeFile(source sourceFileInfo) (fileIndexEntry, error) {
 		Path:             source.RelPath,
 		ModTimeUnixNano:  source.ModTimeUnixNano,
 		Size:             source.Size,
+		RawLines:         len(lines),
 		BaseName:         strings.TrimSuffix(strings.ToLower(filepath.Base(source.RelPath)), strings.ToLower(filepath.Ext(source.RelPath))),
 		IsTest:           isTestSourcePath(source.RelPath),
 		NormalizedLines:  len(normalizedLines),
@@ -1412,6 +1422,84 @@ func behavioralShiftIssues(index projectIndex, paths []string) []Issue {
 	return issues
 }
 
+func longFileIssues(index projectIndex, paths []string) []Issue {
+	issues := make([]Issue, 0, 16)
+	for _, relPath := range paths {
+		entry := index.Files[relPath]
+		if entry.RawLines <= 0 {
+			continue
+		}
+
+		threshold := sourceLongFileThresholdLines
+		if entry.IsTest {
+			threshold = testLongFileThresholdLines
+		}
+		if entry.RawLines < threshold {
+			continue
+		}
+
+		severity := "low"
+		if !entry.IsTest && entry.RawLines >= sourceLongFileThresholdLines+500 {
+			severity = "medium"
+		}
+
+		message := fmt.Sprintf("Long file detected: %s has %d lines. Consider decomposition for maintainability.", relPath, entry.RawLines)
+		suggestion := "Split this file into focused modules/components so responsibilities and tests are easier to navigate."
+		issues = append(issues, issueWithRuleSeverity(ruleLongFile, severity, relPath, 1, "long-file", message, suggestion))
+	}
+	return issues
+}
+
+func testSourceColocationIssues(index projectIndex, paths []string) []Issue {
+	type dirState struct {
+		hasTests  bool
+		hasSource bool
+		testFiles []string
+	}
+
+	byDir := make(map[string]*dirState)
+	for _, relPath := range paths {
+		dir := filepath.ToSlash(filepath.Dir(relPath))
+		if dir == "." {
+			continue
+		}
+		state := byDir[dir]
+		if state == nil {
+			state = &dirState{}
+			byDir[dir] = state
+		}
+		entry := index.Files[relPath]
+		if entry.IsTest {
+			state.hasTests = true
+			state.testFiles = append(state.testFiles, filepath.Base(relPath))
+		} else {
+			state.hasSource = true
+		}
+	}
+
+	dirs := make([]string, 0, len(byDir))
+	for dir, state := range byDir {
+		if state.hasTests && state.hasSource {
+			dirs = append(dirs, dir)
+		}
+	}
+	sort.Strings(dirs)
+
+	issues := make([]Issue, 0, len(dirs))
+	for _, dir := range dirs {
+		state := byDir[dir]
+		sort.Strings(state.testFiles)
+		preview := strings.Join(state.testFiles, ", ")
+		if len(preview) > 160 {
+			preview = preview[:157] + "..."
+		}
+		message := fmt.Sprintf("Tests are colocated with source files in %s (examples: %s).", dir, preview)
+		suggestion := "Prefer separating tests into a dedicated test directory, or document the colocation convention to keep structure intentional."
+		issues = append(issues, issueWithRule(ruleTestSourceColocation, dir, 1, "test-source-colocation", message, suggestion))
+	}
+	return issues
+}
+
 func resolveRiskyCallChain(local map[string]functionProfile, name string, seen map[string]bool, depth int, maxDepth int) ([]string, bool) {
 	if depth > maxDepth {
 		return []string{name}, false
@@ -1731,7 +1819,7 @@ func isRulePrincipleAligned(ruleID, category string) bool {
 	if strings.HasPrefix(ruleID, "duplicate.") || strings.HasPrefix(ruleID, "documentation.") || strings.HasPrefix(ruleID, "dead-code.") || strings.HasPrefix(ruleID, "maintainability.") || strings.HasPrefix(ruleID, "css.") {
 		return true
 	}
-	if category == "cs-principle" || category == "behavioral-shift" || category == "duplicate-content" || category == "documentation-gap" || category == "dead-code" || category == "large-block-without-comment" || category == "css-usage" {
+	if category == "cs-principle" || category == "behavioral-shift" || category == "duplicate-content" || category == "documentation-gap" || category == "dead-code" || category == "large-block-without-comment" || category == "css-usage" || category == "maintainability" {
 		return true
 	}
 	return false

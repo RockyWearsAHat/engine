@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/engine/server/db"
@@ -48,32 +47,12 @@ func orchestratorIntakePhase(cfg OrchestratorConfig, state *OrchestrationState, 
 		return "", fmt.Errorf("create intake session: %w", err)
 	}
 
-	var (
-		outMu sync.Mutex
-		out   strings.Builder
-	)
-	ctx := &ChatContext{
-		ProjectPath: cfg.ProjectPath,
-		SessionID:   sessionID,
-		Role:        RoleGriller,
-		Cancel:      cancel,
-		OnChunk: func(content string, _ bool) {
-			if content == "" {
-				return
-			}
-			outMu.Lock()
-			out.WriteString(content)
-			outMu.Unlock()
-		},
-		OnError:      func(string) {},
-		OnToolCall:   func(string, any) {},
-		OnToolResult: func(string, any, bool) {},
-	}
+	ctx, oc := newChatContextForRole(cfg, sessionID, RoleGriller, cancel)
 
 	prompt := buildGrillerPrompt(state.Brief)
 	cfg.chatFnFor()(ctx, prompt)
 
-	design := strings.TrimSpace(out.String())
+	design := strings.TrimSpace(oc.String())
 	if design == "" {
 		return "", fmt.Errorf("grill phase produced no design document")
 	}
@@ -101,32 +80,12 @@ func orchestratorPRDPhase(cfg OrchestratorConfig, cancel <-chan struct{}) error 
 		return fmt.Errorf("create PRD session: %w", err)
 	}
 
-	var (
-		outMu sync.Mutex
-		out   strings.Builder
-	)
-	ctx := &ChatContext{
-		ProjectPath: cfg.ProjectPath,
-		SessionID:   sessionID,
-		Role:        RolePRDWriter,
-		Cancel:      cancel,
-		OnChunk: func(content string, _ bool) {
-			if content == "" {
-				return
-			}
-			outMu.Lock()
-			out.WriteString(content)
-			outMu.Unlock()
-		},
-		OnError:      func(string) {},
-		OnToolCall:   func(string, any) {},
-		OnToolResult: func(string, any, bool) {},
-	}
+	ctx, oc := newChatContextForRole(cfg, sessionID, RolePRDWriter, cancel)
 
 	prompt := fmt.Sprintf("Design concept to distill (.engine/design.md):\n\n%s\n\nProduce the two sections separated by ---SPLIT--- as instructed.", design)
 	cfg.chatFnFor()(ctx, prompt)
 
-	vocab, prd, ok := splitPRDOutput(out.String())
+	vocab, prd, ok := splitPRDOutput(oc.String())
 	if !ok {
 		return fmt.Errorf("PRD phase: output did not contain ---SPLIT--- separator")
 	}
@@ -166,32 +125,12 @@ func orchestratorModuleIndexPhase(cfg OrchestratorConfig, cancel <-chan struct{}
 		return fmt.Errorf("create module-index session: %w", err)
 	}
 
-	var (
-		outMu sync.Mutex
-		out   strings.Builder
-	)
-	ctx := &ChatContext{
-		ProjectPath: cfg.ProjectPath,
-		SessionID:   sessionID,
-		Role:        RoleModuleIndexer,
-		Cancel:      cancel,
-		MaxTurns:    6,
-		OnChunk: func(content string, _ bool) {
-			if content == "" {
-				return
-			}
-			outMu.Lock()
-			out.WriteString(content)
-			outMu.Unlock()
-		},
-		OnError:      func(string) {},
-		OnToolCall:   func(string, any) {},
-		OnToolResult: func(string, any, bool) {},
-	}
+	ctx, oc := newChatContextForRole(cfg, sessionID, RoleModuleIndexer, cancel)
+	ctx.MaxTurns = 6
 
 	cfg.chatFnFor()(ctx, "Rescan the project and emit the updated module index table per your instructions.")
 
-	body := strings.TrimSpace(out.String())
+	body := strings.TrimSpace(oc.String())
 	if body == "" {
 		return fmt.Errorf("module-index phase produced no output")
 	}
@@ -239,34 +178,15 @@ func orchestratorArchitectReview(cfg OrchestratorConfig, state *OrchestrationSta
 		return ReviewInconclusive, "create architect session: " + err.Error()
 	}
 	policy := ResolveAutonomousPolicy(cfg.ProjectPath)
-	var (
-		outMu sync.Mutex
-		out   strings.Builder
-	)
-	ctx := &ChatContext{
-		ProjectPath:      cfg.ProjectPath,
-		SessionID:        sessionID,
-		Role:             RoleArchitect,
-		AutonomousPolicy: &policy,
-		Cancel:           cancel,
-		MaxTurns:         8,
-		OnChunk: func(content string, _ bool) {
-			if content == "" {
-				return
-			}
-			outMu.Lock()
-			out.WriteString(content)
-			outMu.Unlock()
-		},
-		OnError:      func(string) {},
-		OnToolCall:   func(string, any) {},
-		OnToolResult: func(string, any, bool) {},
-	}
+	ctx, oc := newChatContextForRole(cfg, sessionID, RoleArchitect, cancel)
+	ctx.AutonomousPolicy = &policy
+	ctx.MaxTurns = 8
+
 	prompt := fmt.Sprintf(
 		"Review the latest change set for step %d (%q) in %s/%s. Apply the deep-modules rubric and respond per your instructions.",
 		step.Index, step.Title, state.Owner, state.Repo,
 	)
 	cfg.chatFnFor()(ctx, prompt)
-	verdict, feedback := parseReviewerVerdict(out.String())
+	verdict, feedback := parseReviewerVerdict(oc.String())
 	return verdict, feedback
 }

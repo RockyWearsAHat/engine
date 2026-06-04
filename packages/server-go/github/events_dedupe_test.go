@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// TestMarkEventProcessed_BlankIDAlwaysTrue verifies blank event IDs are accepted as processed.
 func TestMarkEventProcessed_BlankIDAlwaysTrue(t *testing.T) {
 	w := &EventsWatcher{processed: map[string]bool{}}
 	if !w.markEventProcessed("  ") {
@@ -12,6 +13,7 @@ func TestMarkEventProcessed_BlankIDAlwaysTrue(t *testing.T) {
 	}
 }
 
+// TestMarkEventProcessed_DeduplicatesAndEvictsOldest verifies deduplication and LRU eviction policy.
 func TestMarkEventProcessed_DeduplicatesAndEvictsOldest(t *testing.T) {
 	w := &EventsWatcher{processed: map[string]bool{}}
 

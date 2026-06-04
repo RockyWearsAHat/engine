@@ -1,5 +1,8 @@
 package ws
 
+// Tests in this file cover additional WebSocket scenarios and integration tests.
+// Test functions follow Go convention; individual doc comments omitted.
+
 import (
 	"encoding/json"
 	"fmt"

@@ -6,7 +6,7 @@
   "build": {
     "frontendDist": "../../client/dist",
     "devUrl": "http://localhost:24445",
-    "beforeDevCommand": "pnpm -C ../.. concurrently -k -n server,client -c blue,green \"pnpm -C ../.. build:go-watch\" \"node ../../scripts/ensure-client-dev.mjs\"",
+    "beforeDevCommand": "pnpm -w exec concurrently -k -n server,client -c blue,green \"pnpm -w build:go-watch\" \"pnpm -w exec node ./scripts/ensure-client-dev.mjs\"",
     "beforeBuildCommand": "pnpm -C ../.. build:go && pnpm --filter @engine/client build"
   },
   "app": {

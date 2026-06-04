@@ -1,5 +1,8 @@
 package ws
 
+// Tests in this file cover offline message queue behavior, including enqueue, drain, and expiration.
+// Test functions follow Go convention; individual doc comments omitted.
+
 import (
 	"encoding/json"
 	"fmt"

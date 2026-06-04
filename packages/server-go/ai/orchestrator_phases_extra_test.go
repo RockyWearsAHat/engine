@@ -9,7 +9,8 @@ import (
 	"github.com/engine/server/db"
 )
 
-// setupPhasesDB initialises the DB for phase tests.
+// setupPhasesDB creates a temporary project directory with config and initializes the DB for tests.
+// Returns the project root path; uses t.TempDir() for cleanup.
 func setupPhasesDB(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

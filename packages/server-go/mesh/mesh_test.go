@@ -1,6 +1,7 @@
 package mesh
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"testing"
 )
 
+// TestLoadConfig_MissingFileReturnsDefaults tests that LoadConfig creates a default config for missing files.
 func TestLoadConfig_MissingFileReturnsDefaults(t *testing.T) {
 	tmp := filepath.Join(t.TempDir(), "no-such.json")
 	cfg, err := LoadConfig(tmp)
@@ -22,6 +24,7 @@ func TestLoadConfig_MissingFileReturnsDefaults(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_RoundTrip tests that configs round-trip correctly through save and load.
 func TestLoadConfig_RoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mesh.json")
 	src := &Config{
@@ -49,6 +52,7 @@ func TestLoadConfig_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestSignVerify_RoundTrip tests that signed requests verify correctly.
 func TestSignVerify_RoundTrip(t *testing.T) {
 	body := []byte(`{"command":"go","args":["test","./..."]}`)
 	timestamp, sig := signRequest("topsecret", "mac", body)
@@ -57,6 +61,7 @@ func TestSignVerify_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestVerifyRequest_RejectsTamper tests that verifyRequest detects body tampering.
 func TestVerifyRequest_RejectsTamper(t *testing.T) {
 	body := []byte(`{"command":"go"}`)
 	timestamp, sig := signRequest("topsecret", "mac", body)
@@ -66,6 +71,7 @@ func TestVerifyRequest_RejectsTamper(t *testing.T) {
 	}
 }
 
+// TestVerifyRequest_RejectsWrongSecret tests that verifyRequest detects wrong secrets.
 func TestVerifyRequest_RejectsWrongSecret(t *testing.T) {
 	body := []byte(`{}`)
 	timestamp, sig := signRequest("topsecret", "mac", body)
@@ -74,16 +80,13 @@ func TestVerifyRequest_RejectsWrongSecret(t *testing.T) {
 	}
 }
 
+// TestServer_HealthEndpointRequiresOrigin tests that /mesh/health requires authentication.
 func TestServer_HealthEndpointRequiresOrigin(t *testing.T) {
 	cfg := &Config{
 		SelfName: "host",
 		Peers:    []Peer{{Name: "mac", Secret: "k"}},
 	}
-	srv := NewServer(cfg)
-	mux := http.NewServeMux()
-	srv.Register(mux)
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
+	ts := newMeshServer(t, cfg)
 
 	resp, err := http.Post(ts.URL+"/mesh/health", "application/json", strings.NewReader(""))
 	if err != nil {
@@ -95,23 +98,16 @@ func TestServer_HealthEndpointRequiresOrigin(t *testing.T) {
 	}
 }
 
+// TestServer_HealthEndpointAcceptsSignedRequest tests that /mesh/health accepts properly signed requests.
 func TestServer_HealthEndpointAcceptsSignedRequest(t *testing.T) {
 	cfg := &Config{
 		SelfName: "host",
 		Peers:    []Peer{{Name: "mac", Secret: "k"}},
 	}
-	srv := NewServer(cfg)
-	mux := http.NewServeMux()
-	srv.Register(mux)
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
+	ts := newMeshServer(t, cfg)
 
 	body := []byte{}
-	timestamp, sig := signRequest("k", "mac", body)
-	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/mesh/health", strings.NewReader(""))
-	req.Header.Set(timestampHeader, timestamp)
-	req.Header.Set(signatureHeader, sig)
-	req.Header.Set(originHeader, "mac")
+	req := newSignedRequest(t, ts, "/mesh/health", http.MethodPost, "k", "mac", body)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -133,16 +129,13 @@ func TestServer_HealthEndpointAcceptsSignedRequest(t *testing.T) {
 	}
 }
 
+// TestServer_ExecRunsCommand tests that /mesh/exec successfully executes remote commands.
 func TestServer_ExecRunsCommand(t *testing.T) {
 	cfg := &Config{
 		SelfName: "host",
 		Peers:    []Peer{{Name: "mac", Secret: "k"}},
 	}
-	srv := NewServer(cfg)
-	mux := http.NewServeMux()
-	srv.Register(mux)
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
+	ts := newMeshServer(t, cfg)
 
 	peer := &Peer{Name: "host", Address: strings.TrimPrefix(ts.URL, "http://"), Secret: "k"}
 	client := NewClient("mac")
@@ -158,23 +151,16 @@ func TestServer_ExecRunsCommand(t *testing.T) {
 	}
 }
 
+// TestServer_ExecRejectsUnknownOrigin tests that /mesh/exec rejects requests from unknown peers.
 func TestServer_ExecRejectsUnknownOrigin(t *testing.T) {
 	cfg := &Config{
 		SelfName: "host",
 		Peers:    []Peer{{Name: "mac", Secret: "k"}},
 	}
-	srv := NewServer(cfg)
-	mux := http.NewServeMux()
-	srv.Register(mux)
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
+	ts := newMeshServer(t, cfg)
 
 	body := []byte(`{"command":"echo"}`)
-	timestamp, sig := signRequest("k", "rogue", body)
-	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/mesh/exec", strings.NewReader(string(body)))
-	req.Header.Set(timestampHeader, timestamp)
-	req.Header.Set(signatureHeader, sig)
-	req.Header.Set(originHeader, "rogue")
+	req := newSignedRequest(t, ts, "/mesh/exec", http.MethodPost, "k", "rogue", body)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -186,6 +172,7 @@ func TestServer_ExecRejectsUnknownOrigin(t *testing.T) {
 	}
 }
 
+// TestDefaultConfigPath_EnvOverride tests that DefaultConfigPath respects ENGINE_MESH_CONFIG.
 func TestDefaultConfigPath_EnvOverride(t *testing.T) {
 	t.Setenv("ENGINE_MESH_CONFIG", "/tmp/special.json")
 	if got := DefaultConfigPath(); got != "/tmp/special.json" {
@@ -193,6 +180,33 @@ func TestDefaultConfigPath_EnvOverride(t *testing.T) {
 	}
 }
 
+// newSignedRequest is a test helper that constructs an HTTP request with mesh signature headers.
+func newSignedRequest(t *testing.T, ts *httptest.Server, path, method, secret, origin string, body []byte) *http.Request {
+	t.Helper()
+	timestamp, sig := signRequest(secret, origin, body)
+	req, err := http.NewRequest(method, ts.URL+path, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(originHeader, origin)
+	req.Header.Set(timestampHeader, timestamp)
+	req.Header.Set(signatureHeader, sig)
+	return req
+}
+
+// newMeshServer is a test helper that creates an httptest server with mesh handlers.
+func newMeshServer(t *testing.T, cfg *Config) *httptest.Server {
+	t.Helper()
+	srv := NewServer(cfg)
+	mux := http.NewServeMux()
+	srv.Register(mux)
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// TestLimitedBuffer_TruncatesPastMax tests that limitedBuffer truncates oversized writes.
 func TestLimitedBuffer_TruncatesPastMax(t *testing.T) {
 	b := &limitedBuffer{Max: 10}
 	_, _ = b.Write([]byte("0123456789ABCDEF"))
@@ -201,6 +215,7 @@ func TestLimitedBuffer_TruncatesPastMax(t *testing.T) {
 	}
 }
 
+// TestSaveConfig_DefaultPathRespectsHome tests that SaveConfig uses HOME directory when path is empty.
 func TestSaveConfig_DefaultPathRespectsHome(t *testing.T) {
 	t.Setenv("ENGINE_MESH_CONFIG", "")
 	tmp := t.TempDir()

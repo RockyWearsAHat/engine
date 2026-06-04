@@ -12,11 +12,13 @@ import (
 	"testing"
 )
 
+// failingReadCloser is a test helper that simulates I/O errors.
 type failingReadCloser struct{}
 
 func (failingReadCloser) Read(p []byte) (int, error) { return 0, errors.New("read failed") }
 func (failingReadCloser) Close() error               { return nil }
 
+// TestClientInference_MarshalError_InvalidRawJSON tests that Inference rejects invalid JSON payloads.
 func TestClientInference_MarshalError_InvalidRawJSON(t *testing.T) {
 	c := NewClient("self")
 	peer := &Peer{Name: "p1", Address: "localhost:9999", Secret: "s"}
@@ -26,6 +28,7 @@ func TestClientInference_MarshalError_InvalidRawJSON(t *testing.T) {
 	}
 }
 
+// TestClientExec_NilPeer_Error tests that Exec returns an error for nil peers.
 func TestClientExec_NilPeer_Error(t *testing.T) {
 	c := NewClient("self")
 	_, err := c.Exec(context.Background(), nil, ExecRequest{Command: "echo"})
@@ -34,6 +37,7 @@ func TestClientExec_NilPeer_Error(t *testing.T) {
 	}
 }
 
+// TestSignedRequest_NewRequestError tests that signedRequest reports malformed URL errors.
 func TestSignedRequest_NewRequestError(t *testing.T) {
 	c := NewClient("self")
 	peer := &Peer{Name: "p1", Address: "http://[::1", Secret: "s"}
@@ -43,6 +47,7 @@ func TestSignedRequest_NewRequestError(t *testing.T) {
 	}
 }
 
+// TestSaveConfig_MkdirError tests that SaveConfig reports directory creation failures.
 func TestSaveConfig_MkdirError(t *testing.T) {
 	base := t.TempDir()
 	fileParent := filepath.Join(base, "as-file")
@@ -56,6 +61,7 @@ func TestSaveConfig_MkdirError(t *testing.T) {
 	}
 }
 
+// TestHandleInferenceProxy_ReadBodyError tests that /mesh/inference handles request body read errors gracefully.
 func TestHandleInferenceProxy_ReadBodyError(t *testing.T) {
 	s := NewServer(&Config{SelfName: "host", Peers: []Peer{{Name: "peer", Secret: "k"}}})
 	req := httptest.NewRequest(http.MethodPost, "/mesh/inference", nil)
@@ -67,6 +73,7 @@ func TestHandleInferenceProxy_ReadBodyError(t *testing.T) {
 	}
 }
 
+// TestHandleInferenceProxy_BuildUpstreamRequestError tests that /mesh/inference reports errors building upstream requests.
 func TestHandleInferenceProxy_BuildUpstreamRequestError(t *testing.T) {
 	cfg := &Config{SelfName: "host", SelfOllamaURL: "://bad", Peers: []Peer{{Name: "peer", Secret: "k"}}}
 	ts := newMeshServer(t, cfg)
@@ -82,6 +89,7 @@ func TestHandleInferenceProxy_BuildUpstreamRequestError(t *testing.T) {
 	}
 }
 
+// TestBuildUpstreamRequest_InvalidMethod tests that buildUpstreamRequest rejects invalid HTTP methods.
 func TestBuildUpstreamRequest_InvalidMethod(t *testing.T) {
 	_, err := buildUpstreamRequest(context.Background(), "BAD METHOD", "http://localhost:11434", "/api/chat", nil)
 	if err == nil {
@@ -89,6 +97,7 @@ func TestBuildUpstreamRequest_InvalidMethod(t *testing.T) {
 	}
 }
 
+// TestHandleHealth_ReadBodyError tests that /mesh/health handles request body read errors gracefully.
 func TestHandleHealth_ReadBodyError(t *testing.T) {
 	s := NewServer(&Config{SelfName: "host", Peers: []Peer{{Name: "peer", Secret: "k"}}})
 	req := httptest.NewRequest(http.MethodGet, "/mesh/health", nil)
@@ -100,6 +109,7 @@ func TestHandleHealth_ReadBodyError(t *testing.T) {
 	}
 }
 
+// TestHandleExec_ReadBodyError tests that /mesh/exec handles request body read errors gracefully.
 func TestHandleExec_ReadBodyError(t *testing.T) {
 	s := NewServer(&Config{SelfName: "host", Peers: []Peer{{Name: "peer", Secret: "k"}}})
 	req := httptest.NewRequest(http.MethodPost, "/mesh/exec", nil)
@@ -111,6 +121,7 @@ func TestHandleExec_ReadBodyError(t *testing.T) {
 	}
 }
 
+// TestAuthenticate_VerifyError tests that authenticate rejects requests with invalid signatures.
 func TestAuthenticate_VerifyError(t *testing.T) {
 	s := NewServer(&Config{SelfName: "host", Peers: []Peer{{Name: "peer", Secret: "k"}}})
 	req := httptest.NewRequest(http.MethodPost, "/mesh/exec", strings.NewReader(`{}`))
@@ -122,6 +133,7 @@ func TestAuthenticate_VerifyError(t *testing.T) {
 	}
 }
 
+// TestListenAndServe_EmptyListenAddr_DefaultsThenCancels tests that ListenAndServe uses default address and respects context.
 func TestListenAndServe_EmptyListenAddr_DefaultsThenCancels(t *testing.T) {
 	s := NewServer(&Config{SelfName: "host", ListenAddr: ""})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -132,6 +144,7 @@ func TestListenAndServe_EmptyListenAddr_DefaultsThenCancels(t *testing.T) {
 	}
 }
 
+// TestDefaultConfigPath_FallbackWhenHomeUnavailable tests that DefaultConfigPath handles home directory lookup failures.
 func TestDefaultConfigPath_FallbackWhenHomeUnavailable(t *testing.T) {
 	old := userHomeDirFn
 	defer func() { userHomeDirFn = old }()

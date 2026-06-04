@@ -12,6 +12,7 @@ import (
 
 // ── feedback.go gaps ──────────────────────────────────────────────────────────
 
+// TestDefaultIfEmpty_NonEmpty verifies that defaultIfEmpty returns the first non-empty value.
 func TestDefaultIfEmpty_NonEmpty(t *testing.T) {
 	got := defaultIfEmpty("custom", "fallback")
 	if got != "custom" {
@@ -19,48 +20,57 @@ func TestDefaultIfEmpty_NonEmpty(t *testing.T) {
 	}
 }
 
+// TestNormaliseStatusState_ErrorBranch verifies error state is passed through unchanged.
 func TestNormaliseStatusState_ErrorBranch(t *testing.T) {
 	if got := normaliseStatusState("error"); got != "error" {
 		t.Errorf("error → %q, want error", got)
 	}
 }
 
+// TestNormaliseStatusState_InProgress verifies in_progress maps to pending.
 func TestNormaliseStatusState_InProgress(t *testing.T) {
 	if got := normaliseStatusState("in_progress"); got != "pending" {
 		t.Errorf("in_progress → %q, want pending", got)
 	}
 }
 
+// TestNormaliseStatusState_Success verifies success state is passed through unchanged.
 func TestNormaliseStatusState_Success(t *testing.T) {
 	if got := normaliseStatusState("success"); got != "success" {
 		t.Errorf("success → %q, want success", got)
 	}
 }
 
+// TestNormaliseStatusState_Approved verifies approved maps to success.
 func TestNormaliseStatusState_Approved(t *testing.T) {
 	if got := normaliseStatusState("approved"); got != "success" {
 		t.Errorf("approved → %q, want success", got)
 	}
 }
 
+// TestNormaliseStatusState_Fail verifies fail maps to failure.
 func TestNormaliseStatusState_Fail(t *testing.T) {
 	if got := normaliseStatusState("fail"); got != "failure" {
 		t.Errorf("fail → %q, want failure", got)
 	}
 }
 
+// TestNormaliseStatusState_Rejected verifies rejected maps to failure.
 func TestNormaliseStatusState_Rejected(t *testing.T) {
 	if got := normaliseStatusState("rejected"); got != "failure" {
 		t.Errorf("rejected → %q, want failure", got)
 	}
 }
 
+// TestNormaliseStatusState_Pending verifies pending state is passed through unchanged.
 func TestNormaliseStatusState_Pending(t *testing.T) {
 	if got := normaliseStatusState("pending"); got != "pending" {
 		t.Errorf("pending → %q, want pending", got)
 	}
 }
 
+// TestPostCommitStatus_DoPostError verifies PostCommitStatus returns error on non-2xx response.
+// Tests behavioral side effect (HTTP POST to commit status API).
 func TestPostCommitStatus_DoPostError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -77,6 +87,8 @@ func TestPostCommitStatus_DoPostError(t *testing.T) {
 	}
 }
 
+// TestPostIssueComment_DoPostError verifies PostIssueComment returns error on non-2xx response.
+// Tests behavioral side effect (HTTP POST to issue comment API).
 func TestPostIssueComment_DoPostError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -101,6 +113,8 @@ func TestPostIssueComment_NoToken(t *testing.T) {
 	}
 }
 
+// TestFindHeadSHA_DoGetError verifies FindHeadSHA returns error on 404 response.
+// Tests behavioral side effect (HTTP GET to branch API).
 func TestFindHeadSHA_DoGetError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -117,6 +131,7 @@ func TestFindHeadSHA_DoGetError(t *testing.T) {
 	}
 }
 
+// TestFindHeadSHA_NoSHAField verifies FindHeadSHA returns error when sha field is missing.
 func TestFindHeadSHA_NoSHAField(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -133,6 +148,7 @@ func TestFindHeadSHA_NoSHAField(t *testing.T) {
 	}
 }
 
+// TestFindHeadSHA_TruncatedSHA verifies FindHeadSHA returns error for truncated JSON response.
 func TestFindHeadSHA_TruncatedSHA(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

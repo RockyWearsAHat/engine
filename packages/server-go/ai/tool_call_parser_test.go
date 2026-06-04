@@ -378,6 +378,7 @@ func TestOllamaLoop_SendsNumCtxOption(t *testing.T) {
 	}
 }
 
+// writeFileForTest is a test helper that writes content to a file in the project directory.
 func writeFileForTest(projectDir, name, content string) error {
 	return os.WriteFile(filepath.Join(projectDir, name), []byte(content), 0644)
 }

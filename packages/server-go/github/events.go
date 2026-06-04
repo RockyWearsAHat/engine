@@ -46,13 +46,13 @@ type EventsWatcher struct {
 	token   string
 	monitor *RepoMonitor
 
-	mu        sync.Mutex
-	startedAt time.Time
-	etag      string
-	seen      map[string]bool   // full_name → README contained @engine last check
-	processed map[string]bool   // event.ID → already dispatched
-	processedOrder []string     // FIFO of processed IDs (bounded to ~1k)
-	processedIssueComments map[int64]bool
+	mu                         sync.Mutex
+	startedAt                  time.Time
+	etag                       string
+	seen                       map[string]bool // full_name → README contained @engine last check
+	processed                  map[string]bool // event.ID → already dispatched
+	processedOrder             []string        // FIFO of processed IDs (bounded to ~1k)
+	processedIssueComments     map[int64]bool
 	processedIssueCommentOrder []int64
 
 	// Injectable for tests.
@@ -67,17 +67,17 @@ type EventsWatcher struct {
 // NewEventsWatcher creates a watcher that forwards @engine triggers to monitor.
 func NewEventsWatcher(token string, monitor *RepoMonitor) *EventsWatcher {
 	return &EventsWatcher{
-		token:         token,
-		monitor:       monitor,
-		startedAt:     time.Now().UTC(),
-		seen:          make(map[string]bool),
-		processed:     make(map[string]bool),
+		token:                  token,
+		monitor:                monitor,
+		startedAt:              time.Now().UTC(),
+		seen:                   make(map[string]bool),
+		processed:              make(map[string]bool),
 		processedIssueComments: make(map[int64]bool),
-		tickFn:        time.After,
-		loginFn:       defaultEventsLoginFn,
-		listReposFn:   defaultEventsListReposFn,
-		fetchEventsFn: defaultFetchEventsFn,
-		fetchReadmeFn: defaultEventsReadmeFn,
+		tickFn:                 time.After,
+		loginFn:                defaultEventsLoginFn,
+		listReposFn:            defaultEventsListReposFn,
+		fetchEventsFn:          defaultFetchEventsFn,
+		fetchReadmeFn:          defaultEventsReadmeFn,
 	}
 }
 
@@ -157,11 +157,11 @@ var ghCLITokenFn = ghTokenFromCLI
 // preference. launchd processes run with a bare PATH (/usr/bin:/bin) so the
 // Homebrew and MacPorts locations would not be found via plain PATH lookup.
 var ghCandidatePaths = []string{
-	"gh", // works when PATH is extended (e.g. from a shell or with EnvironmentVariables)
-	"/opt/homebrew/bin/gh",  // Apple-Silicon Homebrew
-	"/usr/local/bin/gh",     // Intel Homebrew / manual install
-	"/opt/local/bin/gh",     // MacPorts
-	"/usr/bin/gh",           // system install
+	"gh",                   // works when PATH is extended (e.g. from a shell or with EnvironmentVariables)
+	"/opt/homebrew/bin/gh", // Apple-Silicon Homebrew
+	"/usr/local/bin/gh",    // Intel Homebrew / manual install
+	"/opt/local/bin/gh",    // MacPorts
+	"/usr/bin/gh",          // system install
 }
 
 // ghTokenFromCLI tries `gh auth token` at each candidate path and returns the
@@ -201,6 +201,7 @@ func (w *EventsWatcher) Start(ctx context.Context) {
 }
 
 // ── default implementations ──────────────────────────────────────────────────
+// Injectable functions that implement the core GitHub API calls for testing.
 
 func defaultEventsLoginFn(token string) (string, error) {
 	return NewProfileClient(token).GetAuthenticatedLogin()
@@ -210,7 +211,8 @@ func defaultEventsListReposFn(token string, perPage int) ([]UserRepo, error) {
 	return NewProfileClient(token).ListUserRepos(perPage)
 }
 
-// defaultFetchEventsFn calls GET /users/{login}/events with ETag.
+// defaultFetchEventsFn calls GET /users/{login}/events with ETag conditional request.
+// Returns new ETag, poll interval in seconds, and whether the response was unchanged (304).
 func defaultFetchEventsFn(token, login, etag string) (events []eventEntry, newEtag string, pollSecs int, unchanged bool, err error) {
 	url := fmt.Sprintf("%s/users/%s/events?per_page=100", apiBase(), login)
 	req, err := http.NewRequest("GET", url, nil)
@@ -260,6 +262,7 @@ func defaultEventsReadmeFn(fullName, branch, token string) ([]byte, error) {
 }
 
 // ── internal loop ─────────────────────────────────────────────────────────────
+// Core event polling and dispatch logic.
 
 func (w *EventsWatcher) run(ctx context.Context) {
 	login, err := w.loginFn(w.token)
@@ -304,6 +307,7 @@ func (w *EventsWatcher) run(ctx context.Context) {
 	}
 }
 
+// initialScan runs a full scan of user repos at startup to catch any that already carry @engine.
 func (w *EventsWatcher) initialScan() {
 	repos, err := w.listReposFn(w.token, 100)
 	if err != nil {
@@ -315,6 +319,8 @@ func (w *EventsWatcher) initialScan() {
 	}
 }
 
+// processEvents filters and routes events: collects unique repos that need README checks,
+// and dispatches issue/issue_comment events for already-tagged repos.
 func (w *EventsWatcher) processEvents(events []eventEntry) {
 	// Collect unique repos that need a README check, along with a branch hint.
 	type target struct{ fullName, branch string }
@@ -378,6 +384,7 @@ func (w *EventsWatcher) processEvents(events []eventEntry) {
 	}
 }
 
+// eventPushTouchesReadme checks if a push event's commits modified README file (case-insensitive).
 func eventPushTouchesReadme(commits []struct {
 	Added    []string `json:"added"`
 	Modified []string `json:"modified"`
@@ -393,8 +400,8 @@ func eventPushTouchesReadme(commits []struct {
 	return false
 }
 
-// checkRepo fetches the README for fullName/branch and fires OnReadmeChange
-// the first time the @engine tag appears (edge-triggered; resets when removed).
+// checkRepo fetches the README for fullName/branch and fires OnReadmeChange when @engine tag
+// is first detected (edge-triggered on 0→1 transition; resets when tag is removed).
 func (w *EventsWatcher) checkRepo(fullName, branch string) {
 	if branch == "" {
 		branch = "HEAD"
@@ -513,13 +520,13 @@ func (w *EventsWatcher) dispatchIssueCommentEvent(fullName string, payload json.
 		return
 	}
 	var p struct {
-		Action  string `json:"action"`
+		Action  string          `json:"action"`
 		Issue   json.RawMessage `json:"issue"`
 		Comment struct {
-			ID int64 `json:"id"`
-			Body string `json:"body"`
+			ID        int64  `json:"id"`
+			Body      string `json:"body"`
 			CreatedAt string `json:"created_at"`
-			User struct {
+			User      struct {
 				Login string `json:"login"`
 			} `json:"user"`
 		} `json:"comment"`

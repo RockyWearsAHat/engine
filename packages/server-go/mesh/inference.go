@@ -103,6 +103,7 @@ func (s *Server) handleInferenceProxy(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// buildUpstreamRequest constructs an HTTP request to forward to the upstream Ollama server.
 func buildUpstreamRequest(ctx context.Context, method, base, path string, body []byte) (*http.Request, error) {
 	target := strings.TrimRight(base, "/") + "/" + strings.TrimLeft(path, "/")
 	req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
@@ -113,6 +114,7 @@ func buildUpstreamRequest(ctx context.Context, method, base, path string, body [
 	return req, nil
 }
 
+// writeJSON writes a JSON response to the client with the specified status code.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

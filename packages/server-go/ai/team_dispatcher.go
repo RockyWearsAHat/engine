@@ -115,15 +115,60 @@ func (d *TeamDispatcher) DispatchTeam(teamID string) error {
 	return nil
 }
 
-// run executes the team's work on assigned steps.
-func (w *TeamWorker) run() {
-	// Mark team as running
+// markTeamRunning updates status and notifies comms that the team is running.
+func (w *TeamWorker) markTeamRunning() {
 	if err := w.brain.UpdateTeamStatus(w.teamID, "running"); err != nil {
 		log.Printf("team dispatcher: failed to mark team %s running: %v", w.teamID, err)
 	}
 	if w.comms != nil {
 		w.comms.Register(w.teamID, w.role, "running")
 	}
+}
+
+// markTeamFailed consolidates the error-handling side-effect chain:
+// updates status, persists feedback, notifies comms, and emits failure event.
+func (w *TeamWorker) markTeamFailed(err error, stepIdx int) {
+	if updateErr := w.brain.UpdateTeamStatus(w.teamID, "failed"); updateErr != nil {
+		log.Printf("team dispatcher: failed to mark team %s failed: %v", w.teamID, updateErr)
+	}
+	if feedbackErr := w.brain.UpdateTeamFeedback(w.teamID, fmt.Sprintf("Error on step %d: %v", stepIdx, err)); feedbackErr != nil {
+		log.Printf("team dispatcher: failed to persist team %s feedback: %v", w.teamID, feedbackErr)
+	}
+	if w.comms != nil {
+		w.comms.Register(w.teamID, w.role, "failed")
+	}
+	w.bus.Emit(Event{
+		Type:      EventTeamFailed,
+		Timestamp: time.Now(),
+		TeamID:    w.teamID,
+		Payload: EventPayload(
+			"error", err.Error(),
+			"step_index", stepIdx,
+		),
+	})
+}
+
+// markTeamDone consolidates the completion side-effect chain:
+// updates status, notifies comms, and emits done event.
+func (w *TeamWorker) markTeamDone() {
+	if err := w.brain.UpdateTeamStatus(w.teamID, "done"); err != nil {
+		log.Printf("team dispatcher: failed to mark team %s done: %v", w.teamID, err)
+	}
+	if w.comms != nil {
+		w.comms.Register(w.teamID, w.role, "done")
+	}
+	w.bus.Emit(Event{
+		Type:      EventTeamDone,
+		Timestamp: time.Now(),
+		TeamID:    w.teamID,
+		Payload:   EventPayload("team_id", w.teamID),
+	})
+}
+
+// run executes the team's work on assigned steps.
+func (w *TeamWorker) run() {
+	// Mark team as running
+	w.markTeamRunning()
 
 	for _, stepIdx := range w.steps {
 		plan := w.brain.GetPlan()
@@ -137,25 +182,7 @@ func (w *TeamWorker) run() {
 		err := w.runStep(&step, stepIdx)
 		if err != nil {
 			// Mark as failed and stop this team
-			if updateErr := w.brain.UpdateTeamStatus(w.teamID, "failed"); updateErr != nil {
-				log.Printf("team dispatcher: failed to mark team %s failed: %v", w.teamID, updateErr)
-			}
-			if feedbackErr := w.brain.UpdateTeamFeedback(w.teamID, fmt.Sprintf("Error on step %d: %v", stepIdx, err)); feedbackErr != nil {
-				log.Printf("team dispatcher: failed to persist team %s feedback: %v", w.teamID, feedbackErr)
-			}
-			if w.comms != nil {
-				w.comms.Register(w.teamID, w.role, "failed")
-			}
-
-			w.bus.Emit(Event{
-				Type:      EventTeamFailed,
-				Timestamp: time.Now(),
-				TeamID:    w.teamID,
-				Payload: EventPayload(
-					"error", err.Error(),
-					"step_index", stepIdx,
-				),
-			})
+			w.markTeamFailed(err, stepIdx)
 			return
 		}
 
@@ -181,19 +208,7 @@ func (w *TeamWorker) run() {
 	}
 
 	// Mark team as done
-	if err := w.brain.UpdateTeamStatus(w.teamID, "done"); err != nil {
-		log.Printf("team dispatcher: failed to mark team %s done: %v", w.teamID, err)
-	}
-	if w.comms != nil {
-		w.comms.Register(w.teamID, w.role, "done")
-	}
-
-	w.bus.Emit(Event{
-		Type:      EventTeamDone,
-		Timestamp: time.Now(),
-		TeamID:    w.teamID,
-		Payload:   EventPayload("team_id", w.teamID),
-	})
+	w.markTeamDone()
 }
 
 // runStep executes one plan step with the team's role (builder → reviewer pipeline).
