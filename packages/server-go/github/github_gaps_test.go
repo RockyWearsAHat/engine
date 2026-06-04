@@ -8,13 +8,8 @@ import (
 	"testing"
 )
 
-// newServerWithStatus creates a test server that responds with the given status.
-func newServerWithStatus(t *testing.T, status int) *httptest.Server {
-	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(status)
-	}))
-}
+// Test gaps for feedback.go, github.go (client methods), engagement.go.
+// See github_test.go for shared helpers: newServerWithStatus, setupGitHubAPI, newEngineDir, setupEngineEnv, resetEngineLoginCache.
 
 // ── feedback.go gaps ──────────────────────────────────────────────────────────
 

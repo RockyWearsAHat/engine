@@ -199,3 +199,28 @@ func doSignedHealthAndDecode(t *testing.T, ts *httptest.Server) *HealthResponse 
 	return decodeHealthResponse(t, resp.Body)
 }
 
+// testMethodNotAllowed verifies that an endpoint rejects non-POST requests.
+func testMethodNotAllowed(t *testing.T, ts *httptest.Server, endpoint string) {
+	t.Helper()
+	resp, err := http.Get(ts.URL + endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertStatusCode(t, resp.StatusCode, http.StatusMethodNotAllowed)
+}
+
+// testSignedBadJSON verifies that an endpoint rejects malformed JSON with 400.
+func testSignedBadJSON(t *testing.T, ts *httptest.Server, endpoint string) {
+	t.Helper()
+	doSignedRequestAndClose(t, ts, endpoint, http.MethodPost, testSecret, testClientName,
+		[]byte("not-json"), http.StatusBadRequest)
+}
+
+// testSignedInferenceValidation verifies empty path validation.
+func testSignedInferenceValidation(t *testing.T, ts *httptest.Server) {
+	t.Helper()
+	body := marshalInferenceRequest("", "", nil)
+	doSignedRequestAndClose(t, ts, "/mesh/inference", http.MethodPost, testSecret, testClientName, body, http.StatusBadRequest)
+}
+

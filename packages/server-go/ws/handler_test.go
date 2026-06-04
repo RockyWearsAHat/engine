@@ -186,8 +186,7 @@ func TestHandler_ChatMessage_InvokesAIRunnerWithTabsAndRuntimeConfig(t *testing.
 
 // TestHandler_ChatMessage_WithoutSession_ReturnsChatError verifies chat without session returns error.
 func TestHandler_ChatMessage_WithoutSession_ReturnsChatError(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -330,8 +329,7 @@ func TestHandler_ChatMessage_CanWriteAndOpenFileThroughAITools(t *testing.T) {
 // TestHandler_RemotePairCodeGenerate_WhenNotEnabled_ReturnsError verifies pairing fails when not configured.
 func TestHandler_RemotePairCodeGenerate_WhenNotEnabled_ReturnsError(t *testing.T) {
 	SetPairingManager(nil)
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{"type": "remote.pair.code.generate"})
@@ -347,8 +345,7 @@ func TestHandler_RemotePairCodeGenerate_ReturnsCode(t *testing.T) {
 	SetPairingManager(pm)
 	defer SetPairingManager(nil)
 
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{"type": "remote.pair.code.generate"})
@@ -510,32 +507,28 @@ func TestHandler_FileRead_Error(t *testing.T) {
 // consolidated to use testFileOperationError(t, conn, "type") helper.
 
 func TestHandler_FileSave_Error(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	testFileOperationError(t, conn, "file.save")
 }
 
 func TestHandler_FileCreate_Error(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	testFileOperationError(t, conn, "file.create")
 }
 
 func TestHandler_FolderCreate_Error(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	testFileOperationError(t, conn, "folder.create")
 }
 
 func TestHandler_FileTree_Error(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{"type": "file.tree", "path": "/nonexistent/xyz/dir"})
@@ -546,8 +539,7 @@ func TestHandler_FileTree_Error(t *testing.T) {
 }
 
 func TestHandler_GitStatus_NonGitDir(t *testing.T) {
-	projectDir := setupWSProject(t) // not a git repo
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{"type": "git.status"})
@@ -558,8 +550,7 @@ func TestHandler_GitStatus_NonGitDir(t *testing.T) {
 }
 
 func TestHandler_GitCommit_Error(t *testing.T) {
-	projectDir := setupWSProject(t) // not a git repo
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{"type": "git.commit", "message": "test commit"})
@@ -570,11 +561,9 @@ func TestHandler_GitCommit_Error(t *testing.T) {
 }
 
 func TestHandler_FileSearch_UsesProjectPath(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
-	// Bad regex with no root → uses projectPath, returns error in search.results
 	writeWSMessage(t, conn, map[string]any{"type": "file.search", "query": "(?P<bad"})
 	msg := readWSMessageOfType(t, conn, "search.results")
 	if msg["error"] == nil {
@@ -583,8 +572,7 @@ func TestHandler_FileSearch_UsesProjectPath(t *testing.T) {
 }
 
 func TestHandler_WorkspaceTasks_WithPath(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{"type": "workspace.tasks", "path": projectDir})
@@ -595,8 +583,7 @@ func TestHandler_WorkspaceTasks_WithPath(t *testing.T) {
 }
 
 func TestHandler_TerminalCreate_NoCwd(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{"type": "terminal.create"})
@@ -607,8 +594,7 @@ func TestHandler_TerminalCreate_NoCwd(t *testing.T) {
 }
 
 func TestHandler_TestSummaryGet_NoObserver(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{"type": "test.summary.get", "sessionId": "nosuch-session"})

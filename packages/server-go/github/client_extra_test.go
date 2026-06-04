@@ -7,6 +7,9 @@ import (
 	"testing"
 )
 
+// Test gaps for github.go client methods and integration scenarios.
+// Shared helpers: newServerWithStatus, newClientWithBase (see github_test.go).
+
 // TestRemoveAssignees_EmptyNoop verifies RemoveAssignees is a no-op on empty assignee list.
 func TestRemoveAssignees_EmptyNoop(t *testing.T) {
 	c := newClientWithBase("http://example.com")
@@ -51,6 +54,9 @@ func TestRemoveAssignees_Success(t *testing.T) {
 	}
 }
 
+// TestRemoveAssignees_DoRequestError (behavior tested in github_gaps_test.go).
+// TestAddAssignees_DoPostError (behavior tested in github_gaps_test.go).
+
 // TestRemoveAssignees_InvalidBase_RequestError verifies error handling for invalid API base URL.
 func TestRemoveAssignees_InvalidBase_RequestError(t *testing.T) {
 	t.Setenv("GITHUB_API_BASE", "://bad")
@@ -69,6 +75,8 @@ func TestCreatePR_Success(t *testing.T) {
 		_, _ = w.Write([]byte(`{"number":17,"html_url":"https://example/pr/17","state":"open"}`))
 	}))
 	defer srv.Close()
+
+	// TestCreatePR_DoPostError (behavior tested in github_gaps_test.go).
 
 	c := newClientWithBase(srv.URL)
 	pr, err := c.CreatePR("title", "body", "feature", "main")
@@ -100,13 +108,7 @@ func TestUnassignEngine_Success(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_LOGIN", "engine-bot")
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodDelete {
-			t.Fatalf("method = %s, want DELETE", r.Method)
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{}`))
-	}))
+	srv := newServerWithStatus(t, http.StatusOK)
 	defer srv.Close()
 
 	t.Setenv("GITHUB_API_BASE", srv.URL)

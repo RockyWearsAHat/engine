@@ -18,6 +18,7 @@ import (
 	"github.com/engine/server/ai"
 	"github.com/engine/server/db"
 	"github.com/engine/server/discord"
+	"github.com/engine/server/quality"
 	"github.com/gorilla/websocket"
 )
 
@@ -425,4 +426,62 @@ func testSimpleWSMessageFlow(t *testing.T, payload map[string]any, expectedRespo
 	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 	return sendAndReceive(t, conn, payload, expectedResponseType)
+}
+
+// setupQualityScanFunc sets up qualityScanWithProgressFn with a custom handler and returns cleanup.
+// Handles the common pattern of: original := qualityScanWithProgressFn; qualityScanWithProgressFn = handler; defer restore
+func setupQualityScanFunc(t *testing.T, handler func(string, int, quality.ProgressCallback) (quality.Report, error)) func() {
+	t.Helper()
+	original := qualityScanWithProgressFn
+	qualityScanWithProgressFn = handler
+	return func() { qualityScanWithProgressFn = original }
+}
+
+// readApprovalRequest reads an approval.request message from the websocket and returns the approval ID.
+// Extracts the approval ID from the request object for convenience.
+func readApprovalRequest(t *testing.T, conn *websocket.Conn) string {
+	t.Helper()
+	approvalMsg := readWSMessageOfType(t, conn, "approval.request")
+	req, _ := approvalMsg["request"].(map[string]any)
+	approvalID, _ := req["id"].(string)
+	if approvalID == "" {
+		t.Fatalf("expected approval id in request, got %+v", approvalMsg)
+	}
+	return approvalID
+}
+
+// setupAIChatAndOrchestratorWithDefaults is a convenience wrapper around setupAIChatAndOrchestratorScoped
+// that pre-fills the orchestrator handler with default interactive mode if handler is nil.
+// Returns cleanup function.
+func setupAIChatAndOrchestratorWithDefaults(t *testing.T, chatHandler func(*ai.ChatContext, string)) func() {
+	t.Helper()
+	return setupAIChatAndOrchestratorScoped(
+		chatHandler,
+		func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+			if cfg.InteractiveChat != nil {
+				cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
+			}
+			return &ai.OrchestrationState{Conversational: true}, nil
+		},
+	)
+}
+
+// testProjectOpenAndChat consolidates the pattern: open project → read session → send chat → read chat.started.
+// Returns projectDir, connection, cleanup, sessionID, and nothing else is expected to be read.
+// Caller provides chatHandler for AI chat execution.
+func testProjectOpenAndChat(t *testing.T, chatHandler func(*ai.ChatContext, string), content string) (string, *websocket.Conn, func(), string) {
+	t.Helper()
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+
+	defer setupAIChatAndOrchestratorWithDefaults(t, chatHandler)()
+
+	writeWSMessage(t, conn, map[string]any{"type": "project.open", "path": projectDir})
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sessionID := sessionMsg["session"].(map[string]any)["id"].(string)
+
+	writeWSMessage(t, conn, map[string]any{"type": "chat", "sessionId": sessionID, "content": content})
+	readWSMessageOfType(t, conn, "chat.started")
+
+	return projectDir, conn, cleanup, sessionID
 }

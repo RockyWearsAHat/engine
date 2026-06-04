@@ -492,6 +492,38 @@ func setupRunModeBaseDeps(t *testing.T) {
 	}
 }
 
+// makeScaffoldPayload returns a standard scaffold trigger payload for testing.
+func makeScaffoldPayload() json.RawMessage {
+	return json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`)
+}
+
+// makeIssueCommentPayload returns a standard issue comment trigger payload for testing.
+func makeIssueCommentPayload() json.RawMessage {
+	return json.RawMessage(`{"action":"created","comment":{"body":"@engine please fix","user":{"login":"bob"},"id":9001},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`)
+}
+
+// makeIssueOpenedPayload returns a standard issue opened trigger payload for testing.
+func makeIssueOpenedPayload() json.RawMessage {
+	return json.RawMessage(`{"action":"opened","issue":{"number":43,"title":"Feature","body":"Please add X"},"repository":{"full_name":"owner/repo"},"sender":{"login":"alice"}}`)
+}
+
+// makeCIPayload returns a standard CI analysis trigger payload for testing.
+func makeCIPayload() json.RawMessage {
+	return json.RawMessage(`{"workflow_run":{"name":"CI","html_url":"https://example.com","conclusion":"failure"},"repository":{"full_name":"owner/repo"}}`)
+}
+
+// assertSessionsCreated verifies that at least one session exists in the database at projectPath.
+func assertSessionsCreated(t *testing.T, projectPath string) {
+	t.Helper()
+	sessions, err := db.ListSessions(projectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) == 0 {
+		t.Error("expected at least one session to be created")
+	}
+}
+
 func TestBuildAutonomousRepoPath_HomeErrorFallsBackToProject(t *testing.T) {
 	base := "/tmp/engine-root"
 	t.Setenv("ENGINE_CLONES_DIR", "")
@@ -900,8 +932,7 @@ func TestTriggerScaffoldSession_ValidPayloadCreatesSession(t *testing.T) {
 	projectPath, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
 	setupTriggerTestWithAIEnv(t)
 
-	payload := json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`)
-	triggerAndAssertSessionCreated(t, triggerScaffoldSession, projectPath, targetPath, payload)
+	triggerAndAssertSessionCreated(t, triggerScaffoldSession, projectPath, targetPath, makeScaffoldPayload())
 }
 
 func TestTriggerCIAnalysisSession_ValidPayloadCreatesSession(t *testing.T) {
@@ -910,8 +941,7 @@ func TestTriggerCIAnalysisSession_ValidPayloadCreatesSession(t *testing.T) {
 	setupTriggerTestWithAIEnv(t)
 
 	before := countSessions(t, projectPath)
-	payload := json.RawMessage(`{"workflow_run":{"name":"CI","html_url":"https://example.com/run/1","conclusion":"failure"},"repository":{"full_name":"owner/repo"}}`)
-	triggerCIAnalysisSession(projectPath, payload)
+	triggerCIAnalysisSession(projectPath, makeCIPayload())
 	assertSessionCreated(t, projectPath, before)
 }
 
@@ -919,16 +949,14 @@ func TestTriggerIssueSession_ValidPayloadCreatesSession(t *testing.T) {
 	projectPath, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
 	setupTriggerTestWithAIEnv(t)
 
-	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine please fix","user":{"login":"bob"}},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`)
-	triggerAndAssertSessionCreated(t, triggerIssueSession, projectPath, targetPath, payload)
+	triggerAndAssertSessionCreated(t, triggerIssueSession, projectPath, targetPath, makeIssueCommentPayload())
 }
 
 func TestTriggerIssueOpenedSession_ValidPayloadCreatesSession(t *testing.T) {
 	projectPath, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
 	setupTriggerTestWithAIEnv(t)
 
-	payload := json.RawMessage(`{"action":"opened","issue":{"number":43,"title":"Feature","body":"Please add X"},"repository":{"full_name":"owner/repo"},"sender":{"login":"alice"}}`)
-	triggerAndAssertSessionCreated(t, triggerIssueOpenedSession, projectPath, targetPath, payload)
+	triggerAndAssertSessionCreated(t, triggerIssueOpenedSession, projectPath, targetPath, makeIssueOpenedPayload())
 }
 
 func TestRun_DBInitError(t *testing.T) {
@@ -1348,17 +1376,10 @@ func TestDefaultNewDiscordServiceFn_Call(t *testing.T) {
 func TestTriggerScaffoldSession_OnChunkCalled(t *testing.T) {
 	projectPath, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
 
-	payload := json.RawMessage(`{"repository":{"full_name":"owner/repo"}}`)
-	triggerScaffoldSession(projectPath, payload)
+	triggerScaffoldSession(projectPath, makeScaffoldPayload())
 	// If OnChunk was not called, the session message count would still be from ai.Chat.
 	// Just verify no panic and session was created.
-	sessions, err := db.ListSessions(targetPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sessions) == 0 {
-		t.Error("expected at least one session to be created")
-	}
+	assertSessionsCreated(t, targetPath)
 }
 
 func TestTriggerCIAnalysisSession_OnChunkCalled(t *testing.T) {
@@ -1366,29 +1387,15 @@ func TestTriggerCIAnalysisSession_OnChunkCalled(t *testing.T) {
 	setupTestDB(t, projectPath)
 	withAIMockServer(t)
 
-	payload := json.RawMessage(`{"workflow_run":{"name":"CI","html_url":"https://example.com","conclusion":"failure"},"repository":{"full_name":"owner/repo"}}`)
-	triggerCIAnalysisSession(projectPath, payload)
-	sessions, err := db.ListSessions(projectPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sessions) == 0 {
-		t.Error("expected at least one session to be created")
-	}
+	triggerCIAnalysisSession(projectPath, makeCIPayload())
+	assertSessionsCreated(t, projectPath)
 }
 
 func TestTriggerIssueSession_OnChunkCalled(t *testing.T) {
 	projectPath, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
 
-	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine please fix","user":{"login":"bob"}},"issue":{"number":42,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`)
-	triggerIssueSession(projectPath, payload)
-	sessions, err := db.ListSessions(targetPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sessions) == 0 {
-		t.Error("expected at least one session to be created")
-	}
+	triggerIssueSession(projectPath, makeIssueCommentPayload())
+	assertSessionsCreated(t, targetPath)
 }
 
 func TestTriggerIssueOpenedSession_OnChunkCalled(t *testing.T) {

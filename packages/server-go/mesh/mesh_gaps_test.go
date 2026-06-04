@@ -194,20 +194,13 @@ func TestVerifyRequest_BadSignatureEncoding(t *testing.T) {
 // TestHandleExec_MethodNotAllowed tests that /mesh/exec rejects non-POST requests.
 func TestHandleExec_MethodNotAllowed(t *testing.T) {
 	ts := newMeshServer(t, defaultMeshTestConfig())
-
-	resp, err := http.Get(ts.URL + "/mesh/exec")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	assertStatusCode(t, resp.StatusCode, http.StatusMethodNotAllowed)
+	testMethodNotAllowed(t, ts, "/mesh/exec")
 }
 
 // TestHandleExec_BadJSON tests that /mesh/exec returns 400 for malformed request bodies.
 func TestHandleExec_BadJSON(t *testing.T) {
 	ts := newMeshServer(t, defaultMeshTestConfig())
-	doSignedRequestAndClose(t, ts, "/mesh/exec", http.MethodPost, testSecret, testClientName,
-		[]byte("not-json"), http.StatusBadRequest)
+	testSignedBadJSON(t, ts, "/mesh/exec")
 }
 
 // TestHandleExec_EmptyCommand tests that /mesh/exec returns 400 for empty commands.
@@ -253,28 +246,19 @@ func TestHandleExec_NonExistentCommand(t *testing.T) {
 // TestHandleInference_MethodNotAllowed tests that /mesh/inference rejects non-POST requests.
 func TestHandleInference_MethodNotAllowed(t *testing.T) {
 	ts := newMeshServer(t, defaultMeshTestConfig())
-
-	resp, err := http.Get(ts.URL + "/mesh/inference")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	assertStatusCode(t, resp.StatusCode, http.StatusMethodNotAllowed)
+	testMethodNotAllowed(t, ts, "/mesh/inference")
 }
 
 // TestHandleInference_BadJSON tests that /mesh/inference returns 400 for malformed request bodies.
 func TestHandleInference_BadJSON(t *testing.T) {
 	ts := newMeshServer(t, defaultMeshTestConfig())
-	doSignedRequestAndClose(t, ts, "/mesh/inference", http.MethodPost, testSecret, testClientName,
-		[]byte("not-json"), http.StatusBadRequest)
+	testSignedBadJSON(t, ts, "/mesh/inference")
 }
 
 // TestHandleInference_EmptyPath tests that /mesh/inference returns 400 for empty paths.
 func TestHandleInference_EmptyPath(t *testing.T) {
 	ts := newMeshServer(t, newTestConfigWithOllamaURL(testOllamaURL404))
-
-	body := marshalInferenceRequest("", "", nil)
-	doSignedRequestAndClose(t, ts, "/mesh/inference", http.MethodPost, testSecret, testClientName, body, http.StatusBadRequest)
+	testSignedInferenceValidation(t, ts)
 }
 
 // TestHandleInference_UpstreamConnectionError tests that /mesh/inference handles upstream connection failures gracefully.
@@ -402,11 +386,7 @@ func TestClientHealth_NetworkError(t *testing.T) {
 
 // TestClientExec_Success tests that the client successfully executes remote commands.
 func TestClientExec_Success(t *testing.T) {
-	srv := NewServer(defaultMeshTestConfig())
-	mux := http.NewServeMux()
-	srv.Register(mux)
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
+	ts := newMeshServer(t, defaultMeshTestConfig())
 
 	peer := &Peer{Name: testServerName, Address: strings.TrimPrefix(ts.URL, "http://"), Secret: testSecret}
 	c := NewClient(testClientName)

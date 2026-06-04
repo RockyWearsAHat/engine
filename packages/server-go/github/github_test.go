@@ -516,6 +516,15 @@ func captureHTTPPayload(dst *map[string]any) http.HandlerFunc {
 	}
 }
 
+// newServerWithStatus creates a test server that responds with the given status code.
+// Useful for testing HTTP error conditions.
+func newServerWithStatus(t *testing.T, status int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+	}))
+}
+
 // setupGitHubAPI configures GITHUB_API_BASE and GITHUB_TOKEN for testing against a mock server.
 func setupGitHubAPI(t *testing.T, srv *httptest.Server, token string) {
 	t.Helper()

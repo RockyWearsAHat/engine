@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// Test gaps for identity.go: EngineClient, NewProfileClient.
+// Shared helpers: setupGitHubAPI, newEngineDir, resetEngineLoginCache, newServerWithStatus (see github_test.go).
+
 // TestEngineToken_PrefersBot verifies ENGINE_GITHUB_BOT_TOKEN takes precedence over GITHUB_TOKEN.
 func TestEngineToken_PrefersBot(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "bot-tok")
@@ -42,7 +45,8 @@ func TestEngineLogin_ViaAPI(t *testing.T) {
 	resetEngineLoginCache(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"login":"engine-bot"}`))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"login":"engine-bot"}`))
 	}))
 	defer srv.Close()
 	t.Setenv("GITHUB_API_BASE", srv.URL)
@@ -85,9 +89,9 @@ func TestAssignEngine_NoToken(t *testing.T) {
 func TestAssignEngine_Posts(t *testing.T) {
 	var captured map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&captured) //nolint:errcheck
+		_ = json.NewDecoder(r.Body).Decode(&captured)
 		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte("{}"))
+		_, _ = w.Write([]byte("{}"))
 	}))
 	defer srv.Close()
 	t.Setenv("GITHUB_API_BASE", srv.URL)
@@ -233,3 +237,6 @@ func TestGitLocalConfigFn_Default_ReturnsErrorOnNonRepo(t *testing.T) {
 		t.Fatal("expected gitLocalConfigFn to fail outside a git repo")
 	}
 }
+
+// Test gaps: NewProfileClient (public type/methods).
+// EngineClient (public function) tested indirectly via AssignEngine, UnassignEngine, engagement functions.
