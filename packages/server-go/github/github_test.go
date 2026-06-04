@@ -10,6 +10,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -463,6 +465,24 @@ func (t *rebaseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		newReq.Header[k] = v
 	}
 	return http.DefaultTransport.RoundTrip(newReq)
+}
+
+// newEngineDir creates a temporary directory with .engine subdirectory.
+// Returned string is the temp directory path.
+func newEngineDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(dir, ".engine"), 0o700)
+	return dir
+}
+
+// setupEngineEnv sets standard ENGINE_GITHUB environment variables for testing.
+// Sets TOKEN="tok", LOGIN="engine-bot", PROJECT_NUMBER="".
+func setupEngineEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
+	t.Setenv("ENGINE_GITHUB_LOGIN", "engine-bot")
+	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "")
 }
 
 // ── RepoMonitor ───────────────────────────────────────────────────────────────

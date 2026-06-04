@@ -1,11 +1,9 @@
 package mesh
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -178,32 +176,6 @@ func TestDefaultConfigPath_EnvOverride(t *testing.T) {
 	if got := DefaultConfigPath(); got != "/tmp/special.json" {
 		t.Errorf("env override not honoured: %q", got)
 	}
-}
-
-// newSignedRequest is a test helper that constructs an HTTP request with mesh signature headers.
-func newSignedRequest(t *testing.T, ts *httptest.Server, path, method, secret, origin string, body []byte) *http.Request {
-	t.Helper()
-	timestamp, sig := signRequest(secret, origin, body)
-	req, err := http.NewRequest(method, ts.URL+path, bytes.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(originHeader, origin)
-	req.Header.Set(timestampHeader, timestamp)
-	req.Header.Set(signatureHeader, sig)
-	return req
-}
-
-// newMeshServer is a test helper that creates an httptest server with mesh handlers.
-func newMeshServer(t *testing.T, cfg *Config) *httptest.Server {
-	t.Helper()
-	srv := NewServer(cfg)
-	mux := http.NewServeMux()
-	srv.Register(mux)
-	ts := httptest.NewServer(mux)
-	t.Cleanup(ts.Close)
-	return ts
 }
 
 // TestLimitedBuffer_TruncatesPastMax tests that limitedBuffer truncates oversized writes.

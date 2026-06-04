@@ -172,6 +172,12 @@ func (s *IssueCommentStore) Set(owner, repo string, n, commentID int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data[s.key(owner, repo, n)] = commentID
+	s.persistData()
+}
+
+// persistData marshals the store data and writes it to disk.
+// Errors are logged but not returned, following the parent function's pattern.
+func (s *IssueCommentStore) persistData() {
 	if raw, err := json.Marshal(s.data); err == nil {
 		if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
 			log.Printf("issue comment store mkdir failed: %v", err)

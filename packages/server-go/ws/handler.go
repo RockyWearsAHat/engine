@@ -445,6 +445,25 @@ func (c *conn) resolveAllApprovals(allow bool) {
 	}
 }
 
+// refreshProjectQualityAndReply refreshes the quality index for the project and sends a file operation response.
+// This encapsulates the side-effect chain of: async quality refresh → response send.
+func (c *conn) refreshProjectQualityAndReply(msgType, path string) {
+	go qualityRefreshFn(c.projectPath)
+	c.send(map[string]any{"type": msgType, "path": path})
+}
+
+// sendCommitResultAndRefresh sends the commit result and follows up with status and log updates.
+// This encapsulates the side-effect chain of: commit result → status fetch → log fetch.
+func (c *conn) sendCommitResultAndRefresh(hash, message, projectPath string) {
+	c.send(map[string]any{"type": "git.commit.result", "ok": true, "hash": hash, "message": message})
+	if status, err := gogit.GetStatus(projectPath); err == nil {
+		c.send(map[string]any{"type": "git.status", "status": status})
+	}
+	if commits, err := gogit.GetLog(projectPath, 8); err == nil {
+		c.send(map[string]any{"type": "git.log", "commits": commits})
+	}
+}
+
 // run manages the per-connection message loop. It reads incoming WebSocket messages,
 // parses the message type, and dispatches to handler functions. Handles panics to prevent
 // crashes. Closes the connection and signals all send goroutines when the loop exits.
@@ -862,8 +881,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr(err.Error(), "FILE_ERROR")
 			return
 		}
-		go qualityRefreshFn(c.projectPath)
-		c.send(map[string]any{"type": "file.saved", "path": msg.Path})
+		c.refreshProjectQualityAndReply("file.saved", msg.Path)
 
 	case "file.create":
 		var msg struct {
@@ -874,8 +892,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr(err.Error(), "FILE_ERROR")
 			return
 		}
-		go qualityRefreshFn(c.projectPath)
-		c.send(map[string]any{"type": "file.created", "path": msg.Path})
+		c.refreshProjectQualityAndReply("file.created", msg.Path)
 
 	case "folder.create":
 		var msg struct {
@@ -971,13 +988,7 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.send(map[string]any{"type": "git.commit.result", "ok": false, "message": err.Error()})
 			return
 		}
-		c.send(map[string]any{"type": "git.commit.result", "ok": true, "hash": hash, "message": message})
-		if status, err := gogit.GetStatus(projectPath); err == nil {
-			c.send(map[string]any{"type": "git.status", "status": status})
-		}
-		if commits, err := gogit.GetLog(projectPath, 8); err == nil {
-			c.send(map[string]any{"type": "git.log", "commits": commits})
-		}
+		c.sendCommitResultAndRefresh(hash, message, projectPath)
 
 	case "workspace.tasks":
 		var msg struct {

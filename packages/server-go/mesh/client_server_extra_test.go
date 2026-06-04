@@ -15,11 +15,7 @@ import (
 // TestClientHealth_SuccessAndParseError tests that Health succeeds on valid responses and reports parse errors.
 func TestClientHealth_SuccessAndParseError(t *testing.T) {
 	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
-	srv := NewServer(cfg)
-	mux := http.NewServeMux()
-	srv.Register(mux)
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
+	ts := newMeshServer(t, cfg)
 
 	peer := &Peer{Name: "host", Address: strings.TrimPrefix(ts.URL, "http://"), Secret: "k"}
 	c := NewClient("mac")

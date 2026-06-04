@@ -50,6 +50,17 @@ func RunCriticGate(ctx *ChatContext, diff string) CriticResult {
 		return CriticResult{Verdict: CriticApprove}
 	}
 
+	var reviewOutput strings.Builder
+	reviewerCtx := buildReviewerContext(ctx, &reviewOutput)
+	reviewerInput := "Review this diff:\n\n```diff\n" + diff + "\n```"
+	runCriticChatFn(reviewerCtx, reviewerInput)
+
+	return parseCriticOutput(reviewOutput.String(), diff)
+}
+
+// buildReviewerContext constructs a focused ChatContext for code review.
+// The context is read-only with no tool mutations, suitable for the RoleReviewer.
+func buildReviewerContext(ctx *ChatContext, output *strings.Builder) *ChatContext {
 	// Guard against nil Cancel and OnError — Chat requires both.
 	cancelChan := ctx.Cancel
 	if cancelChan == nil {
@@ -72,16 +83,10 @@ func RunCriticGate(ctx *ChatContext, diff string) CriticResult {
 		SendToClient: ctx.SendToClient,
 		OnError:      onErr,
 	}
-
-	var reviewOutput strings.Builder
 	reviewerCtx.OnChunk = func(content string, done bool) {
-		reviewOutput.WriteString(content)
+		output.WriteString(content)
 	}
-
-	reviewerInput := "Review this diff:\n\n```diff\n" + diff + "\n```"
-	runCriticChatFn(reviewerCtx, reviewerInput)
-
-	return parseCriticOutput(reviewOutput.String(), diff)
+	return reviewerCtx
 }
 
 // parseCriticOutput extracts the verdict and findings from the reviewer's response.

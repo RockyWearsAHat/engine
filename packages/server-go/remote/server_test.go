@@ -28,33 +28,6 @@ func TestEnsureStorageDir(t *testing.T) {
 	}
 }
 
-// newTestServer creates a test Server with a temporary storage directory and mock WebSocket handler.
-func newTestServer(t *testing.T) *Server {
-	t.Helper()
-	dir := t.TempDir()
-	cfg := Config{
-		Enabled:     true,
-		Port:        "0",
-		StoragePath: dir,
-	}
-	wsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusSwitchingProtocols)
-	})
-	s, err := NewServer(cfg, wsHandler)
-	if err != nil {
-		t.Fatalf("NewServer: %v", err)
-	}
-	return s
-}
-
-// testRequest executes an HTTP request against the server and returns the response recorder.
-func testRequest(t *testing.T, s *Server, req *http.Request) *httptest.ResponseRecorder {
-	t.Helper()
-	rr := httptest.NewRecorder()
-	s.mux.ServeHTTP(rr, req)
-	return rr
-}
-
 func TestNewServer_CreatesServer(t *testing.T) {
 	s := newTestServer(t)
 	if s == nil {

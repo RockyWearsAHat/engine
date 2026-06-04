@@ -4,57 +4,16 @@ package ws
 // Test functions follow Go convention; individual doc comments omitted.
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-// readWSMessageOfAnyType reads one message and returns it, regardless of type.
-func readWSMessageOfAnyType(t *testing.T, conn *websocket.Conn) map[string]any {
-	t.Helper()
-	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
-		t.Fatalf("set deadline: %v", err)
-	}
-	_, raw, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("read ws: %v", err)
-	}
-	var msg map[string]any
-	if err := json.Unmarshal(raw, &msg); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	return msg
-}
 
-// drainWSUntilType reads messages until it finds the target type or times out.
-func drainWSUntilType(t *testing.T, conn *websocket.Conn, targetType string) map[string]any {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
-			break
-		}
-		_, raw, err := conn.ReadMessage()
-		if err != nil {
-			break
-		}
-		var msg map[string]any
-		if err := json.Unmarshal(raw, &msg); err != nil {
-			continue
-		}
-		if msg["type"] == targetType {
-			return msg
-		}
-	}
-	t.Fatalf("timed out waiting for %q", targetType)
-	return nil
-}
 
 // TestSetDiscord exercises the Hub.SetDiscord method.
 func TestSetDiscord_NilBridge(t *testing.T) {

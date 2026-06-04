@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -106,8 +105,7 @@ func TestAssignEngine_Posts(t *testing.T) {
 
 // TestIssueCommentStore_GetSetRoundtrip verifies comment store persists to disk and reloads correctly.
 func TestIssueCommentStore_GetSetRoundtrip(t *testing.T) {
-	dir := t.TempDir()
-	_ = os.MkdirAll(filepath.Join(dir, ".engine"), 0700)
+	dir := newEngineDir(t)
 	s := IssueCommentStoreFor(dir)
 
 	if _, ok := s.Get("o", "r", 1); ok {
