@@ -168,6 +168,50 @@ describe('PreferencesPanel — section navigation', () => {
   });
 });
 
+describe('PreferencesPanel — llama fleet quick scanner', () => {
+  beforeEach(setupStore);
+
+  it('ScannerButtonClicked_SendsScanMessage', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/model/i));
+    vi.mocked(wsClient.send).mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /scan local fleet settings/i }));
+
+    expect(vi.mocked(wsClient.send)).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'llama.fleet.scan', writeFile: false }),
+    );
+  });
+
+  it('ScanResultMessage_RendersRecommendationSummary', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/model/i));
+
+    sendWsMessage({
+      type: 'llama.fleet.scan.result',
+      result: {
+        machine: { cpuCores: 8, memoryGiB: 16 },
+        recommendation: {
+          basePort: 8081,
+          backends: 2,
+          parallel: 2,
+          threads: 4,
+          threadsBatch: 4,
+          threadsHttp: 4,
+          ctx: 8192,
+          batch: 512,
+          ubatch: 128,
+        },
+        envPreview: 'LLAMA_BASE_PORT=8081',
+        notes: [],
+      },
+    });
+
+    expect(screen.getByText(/8 CPU cores, 16 GiB RAM/i)).toBeTruthy();
+    expect(screen.getByText(/Recommended: 2 backends/i)).toBeTruthy();
+  });
+});
+
 describe('PreferencesPanel — Editor Appearance section (PreviewCode)', () => {
   beforeEach(setupStore);
 

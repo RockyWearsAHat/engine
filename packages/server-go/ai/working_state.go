@@ -85,9 +85,14 @@ func PersistWorkingState(sessionID string, ws *WorkingState) {
 	if sessionID == "" || ws == nil {
 		return
 	}
-	// WorkingState contains only basic types and slices of strings — Marshal never fails.
-	data, _ := json.Marshal(ws)
-	_ = saveWorkingStateFn(sessionID, string(data))
+	data, err := json.Marshal(ws)
+	if err != nil {
+		fmt.Printf("working state marshal failed for session %s: %v\n", sessionID, err)
+		return
+	}
+	if err := saveWorkingStateFn(sessionID, string(data)); err != nil {
+		fmt.Printf("working state persist failed for session %s: %v\n", sessionID, err)
+	}
 }
 
 // LoadWorkingState retrieves the most recent working state for a session.

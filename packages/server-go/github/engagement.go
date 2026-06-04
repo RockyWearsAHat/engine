@@ -10,6 +10,7 @@ package github
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"time"
 )
@@ -25,8 +26,12 @@ func EngageOnIssuePickup(projectPath, owner, repo string, issueNumber int, sessi
 	}
 
 	// 2. Add to project board.
-	_, _ = AddIssueToEngineProject(owner, repo, issueNumber)
-	_ = UpdateProjectItemStatus(owner, "", "In Progress")
+	if _, err := AddIssueToEngineProject(owner, repo, issueNumber); err != nil {
+		log.Printf("engagement: add issue %s/%s#%d to project failed: %v", owner, repo, issueNumber, err)
+	}
+	if err := UpdateProjectItemStatus(owner, "", "In Progress"); err != nil {
+		log.Printf("engagement: set project item status In Progress failed for %s/%s#%d: %v", owner, repo, issueNumber, err)
+	}
 
 	// 3. Pin kickoff comment.
 	body := kickoffCommentBody(owner, repo, issueNumber, sessionID)
@@ -55,8 +60,12 @@ func EngageOnIssueProgress(projectPath, owner, repo string, issueNumber int, pha
 		return
 	}
 	body := progressCommentBody(phase, detail, stepsDone, stepsTotal)
-	_ = c.EditComment(commentID, body)
-	_ = UpdateProjectItemStatus(owner, "", phaseToProjectStatus(phase))
+	if err := c.EditComment(commentID, body); err != nil {
+		log.Printf("engagement: edit progress comment failed for %s/%s#%d: %v", owner, repo, issueNumber, err)
+	}
+	if err := UpdateProjectItemStatus(owner, "", phaseToProjectStatus(phase)); err != nil {
+		log.Printf("engagement: update project item status failed for %s/%s#%d: %v", owner, repo, issueNumber, err)
+	}
 }
 
 // EngageOnIssueComplete posts a final comment, unassigns Engine (optional),
@@ -76,7 +85,9 @@ func EngageOnIssueComplete(projectPath, owner, repo string, issueNumber, stepsTo
 			store.Set(owner, repo, issueNumber, comment.ID)
 		}
 	}
-	_ = UpdateProjectItemStatus(owner, "", "Done")
+	if err := UpdateProjectItemStatus(owner, "", "Done"); err != nil {
+		log.Printf("engagement: set project item Done failed for %s/%s#%d: %v", owner, repo, issueNumber, err)
+	}
 }
 
 // EngageOnIssueBlocked posts a "help needed" update to the pinned comment.

@@ -4,6 +4,7 @@ package terminal
 
 import (
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"sync"
@@ -132,13 +133,19 @@ func (m *Manager) Kill(id string) {
 	if ok {
 		t.once.Do(func() {
 			if t.cmd.Process != nil {
-				_ = t.cmd.Process.Kill()
+				if err := t.cmd.Process.Kill(); err != nil {
+					log.Printf("terminal(windows): failed to kill process for %s: %v", id, err)
+				}
 			}
 			if t.stdin != nil {
-				_ = t.stdin.Close()
+				if err := t.stdin.Close(); err != nil {
+					log.Printf("terminal(windows): failed to close stdin for %s: %v", id, err)
+				}
 			}
 			for _, output := range t.outputs {
-				_ = output.Close()
+				if err := output.Close(); err != nil {
+					log.Printf("terminal(windows): failed to close output for %s: %v", id, err)
+				}
 			}
 			if t.onExit != nil {
 				t.onExit()

@@ -471,7 +471,9 @@ func (s *Service) addProject(replyChannelID string, inputPath string) error {
 		Paused:      false,
 	}
 	s.stateMu.Unlock()
-	_ = s.saveState()
+	if err := s.saveState(); err != nil {
+		log.Printf("discord: save state after addProject failed: %v", err)
+	}
 
 	branch, _ := gogit.GetCurrentBranch(abs)
 	s.send(replyChannelID, fmt.Sprintf("Project enrolled: %s\\nChannel: <#%s>\\nBranch: %s", abs, ch.ID, branch))
@@ -604,7 +606,9 @@ func (s *Service) removeProject(replyChannelID, name string) error {
 	s.stateMu.Lock()
 	delete(s.state.Projects, path)
 	s.stateMu.Unlock()
-	_ = s.saveState()
+	if err := s.saveState(); err != nil {
+		log.Printf("discord: save state after removeProject failed: %v", err)
+	}
 
 	s.send(replyChannelID, fmt.Sprintf("Removed project %s (channel kept: <#%s>).", binding.RepoName, binding.ChannelID))
 	return nil
@@ -782,7 +786,9 @@ func (s *Service) handlePauseResume(m *discordgo.MessageCreate, pause bool, args
 	updated.Paused = pause
 	s.state.Projects[binding.ProjectPath] = updated
 	s.stateMu.Unlock()
-	_ = s.saveState()
+	if err := s.saveState(); err != nil {
+		log.Printf("discord: save state after pause toggle failed: %v", err)
+	}
 
 	s.applyPauseToOrchestrator(binding.ProjectPath, pause)
 
@@ -1066,8 +1072,12 @@ func (s *Service) acquireChatThread(m *discordgo.MessageCreate, binding ProjectB
 func (s *Service) newSessionForThread(projectPath, threadID, channelID string) string {
 	id := fmt.Sprintf("discord-%d", time.Now().UnixNano())
 	branch, _ := gogit.GetCurrentBranch(projectPath)
-	_ = db.CreateSession(id, projectPath, branch)
-	_ = db.DiscordBindSessionThread(id, projectPath, threadID, channelID)
+	if err := db.CreateSession(id, projectPath, branch); err != nil {
+		log.Printf("discord: create session %s failed: %v", id, err)
+	}
+	if err := db.DiscordBindSessionThread(id, projectPath, threadID, channelID); err != nil {
+		log.Printf("discord: bind session thread %s failed: %v", id, err)
+	}
 	return id
 }
 
@@ -1151,7 +1161,7 @@ func (s *Service) recordInbound(m *discordgo.MessageCreate) {
 	if strings.HasPrefix(strings.TrimSpace(m.Content), s.cfg.CommandPrefix) {
 		kind = "command"
 	}
-	_ = db.DiscordRecordMessage(db.DiscordMessage{
+	if err := db.DiscordRecordMessage(db.DiscordMessage{
 		ID:          "dm-in-" + m.ID,
 		ProjectPath: projectPath,
 		ChannelID:   channelID,
@@ -1162,7 +1172,9 @@ func (s *Service) recordInbound(m *discordgo.MessageCreate) {
 		Direction:   "in",
 		Kind:        kind,
 		Content:     m.Content,
-	})
+	}); err != nil {
+		log.Printf("discord: record inbound message failed: %v", err)
+	}
 }
 
 func (s *Service) recordOutbound(channelID, content, kind, sessionIDHint string) {
@@ -1174,7 +1186,7 @@ func (s *Service) recordOutbound(channelID, content, kind, sessionIDHint string)
 	if sessionID == "" {
 		sessionID = resolvedSession
 	}
-	_ = db.DiscordRecordMessage(db.DiscordMessage{
+	if err := db.DiscordRecordMessage(db.DiscordMessage{
 		ProjectPath: projectPath,
 		ChannelID:   srcChannel,
 		ThreadID:    threadID,
@@ -1183,7 +1195,9 @@ func (s *Service) recordOutbound(channelID, content, kind, sessionIDHint string)
 		Direction:   "out",
 		Kind:        kind,
 		Content:     content,
-	})
+	}); err != nil {
+		log.Printf("discord: record outbound message failed: %v", err)
+	}
 }
 
 // sendTagged is like send but records the outbound with an explicit kind and
@@ -1380,7 +1394,9 @@ func (s *Service) ensureControlChannel() (string, error) {
 			s.stateMu.Lock()
 			s.state.ControlChannelID = ch.ID
 			s.stateMu.Unlock()
-			_ = s.saveState()
+			if saveErr := s.saveState(); saveErr != nil {
+				log.Printf("save discord state after finding control channel failed: %v", saveErr)
+			}
 			return ch.ID, nil
 		}
 	}
@@ -1392,7 +1408,9 @@ func (s *Service) ensureControlChannel() (string, error) {
 	s.stateMu.Lock()
 	s.state.ControlChannelID = ch.ID
 	s.stateMu.Unlock()
-	_ = s.saveState()
+	if saveErr := s.saveState(); saveErr != nil {
+		log.Printf("save discord state after creating control channel failed: %v", saveErr)
+	}
 	s.send(ch.ID, "Engine Discord control plane ready. Use !help.")
 	return ch.ID, nil
 }
@@ -1514,19 +1532,19 @@ func (s *Service) handleIdentityCommand(m *discordgo.MessageCreate) {
 
 // injectable shims so tests can mock GitHub API calls.
 var (
-	githubEngineLoginFn    = func() string { return engineLoginFn() }
-	githubEngineTokenFn    = func() string { return engineTokenFn() }
-	githubProjectNumberFn  = func() int { return projectNumberFn() }
-	githubListAssignedFn   = listAssignedIssues
+	githubEngineLoginFn   = func() string { return engineLoginFn() }
+	githubEngineTokenFn   = func() string { return engineTokenFn() }
+	githubProjectNumberFn = func() int { return projectNumberFn() }
+	githubListAssignedFn  = listAssignedIssues
 )
 
 // engineLoginFn / engineTokenFn / projectNumberFn forward to the github package
 // without creating a hard import cycle. They are set via the github package's
 // exported helpers in service_bridge.go.
 var (
-	engineLoginFn     func() string
-	engineTokenFn     func() string
-	projectNumberFn   func() int
+	engineLoginFn   func() string
+	engineTokenFn   func() string
+	projectNumberFn func() int
 )
 
 // extractGitHubURL tries to derive a "owner/repo" GitHub URL from the local
@@ -1789,7 +1807,9 @@ func ensureSession(projectPath string) (string, error) {
 	}
 	id := fmt.Sprintf("discord-%d", time.Now().UnixNano())
 	branch, _ := gogit.GetCurrentBranch(projectPath)
-	_ = db.CreateSession(id, projectPath, branch)
+	if err := db.CreateSession(id, projectPath, branch); err != nil {
+		return "", err
+	}
 	return id, nil
 }
 
@@ -1969,7 +1989,11 @@ func Validate(cfg Config) ValidationResult {
 		result.Errors = append(result.Errors, "Cannot open gateway: "+err.Error())
 		return result
 	}
-	defer dg.Close() //nolint:errcheck
+	defer func() {
+		if err := dg.Close(); err != nil {
+			log.Printf("discord: validate close failed: %v", err)
+		}
+	}()
 
 	if self, err := dg.User("@me"); err == nil {
 		result.BotTag = self.Username
@@ -2007,7 +2031,9 @@ func (s *Service) Reload(cfg Config) error {
 	}
 
 	if s.dg != nil {
-		_ = s.dg.Close()
+		if err := s.dg.Close(); err != nil {
+			log.Printf("discord: close existing gateway session failed during reload: %v", err)
+		}
 		s.dg = nil
 	}
 	s.cfg = cfg

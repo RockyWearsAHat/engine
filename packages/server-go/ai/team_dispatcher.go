@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -117,7 +118,9 @@ func (d *TeamDispatcher) DispatchTeam(teamID string) error {
 // run executes the team's work on assigned steps.
 func (w *TeamWorker) run() {
 	// Mark team as running
-	_ = w.brain.UpdateTeamStatus(w.teamID, "running")
+	if err := w.brain.UpdateTeamStatus(w.teamID, "running"); err != nil {
+		log.Printf("team dispatcher: failed to mark team %s running: %v", w.teamID, err)
+	}
 	if w.comms != nil {
 		w.comms.Register(w.teamID, w.role, "running")
 	}
@@ -134,8 +137,12 @@ func (w *TeamWorker) run() {
 		err := w.runStep(&step, stepIdx)
 		if err != nil {
 			// Mark as failed and stop this team
-			_ = w.brain.UpdateTeamStatus(w.teamID, "failed")
-			_ = w.brain.UpdateTeamFeedback(w.teamID, fmt.Sprintf("Error on step %d: %v", stepIdx, err))
+			if updateErr := w.brain.UpdateTeamStatus(w.teamID, "failed"); updateErr != nil {
+				log.Printf("team dispatcher: failed to mark team %s failed: %v", w.teamID, updateErr)
+			}
+			if feedbackErr := w.brain.UpdateTeamFeedback(w.teamID, fmt.Sprintf("Error on step %d: %v", stepIdx, err)); feedbackErr != nil {
+				log.Printf("team dispatcher: failed to persist team %s feedback: %v", w.teamID, feedbackErr)
+			}
 			if w.comms != nil {
 				w.comms.Register(w.teamID, w.role, "failed")
 			}
@@ -156,7 +163,9 @@ func (w *TeamWorker) run() {
 		if stepIdx < len(plan) {
 			plan[stepIdx].Done = true
 			plan[stepIdx].UpdatedAt = time.Now().Format(time.RFC3339)
-			_ = w.brain.UpdatePlan(plan)
+			if err := w.brain.UpdatePlan(plan); err != nil {
+				log.Printf("team dispatcher: failed to persist updated plan for team %s step %d: %v", w.teamID, stepIdx, err)
+			}
 		}
 
 		w.bus.Emit(Event{
@@ -172,7 +181,9 @@ func (w *TeamWorker) run() {
 	}
 
 	// Mark team as done
-	_ = w.brain.UpdateTeamStatus(w.teamID, "done")
+	if err := w.brain.UpdateTeamStatus(w.teamID, "done"); err != nil {
+		log.Printf("team dispatcher: failed to mark team %s done: %v", w.teamID, err)
+	}
 	if w.comms != nil {
 		w.comms.Register(w.teamID, w.role, "done")
 	}

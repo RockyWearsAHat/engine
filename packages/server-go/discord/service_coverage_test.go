@@ -607,16 +607,6 @@ func collectSends(_ *Service) *[]string {
 	return &[]string{}
 }
 
-func containsAny(msgs []string, substr string) bool {
-	lower := strings.ToLower(substr)
-	for _, m := range msgs {
-		if strings.Contains(strings.ToLower(m), lower) {
-			return true
-		}
-	}
-	return false
-}
-
 // timeAfter returns a channel that closes after ms milliseconds.
 func timeAfter(ms int) <-chan time.Time {
 	return time.After(time.Duration(ms) * time.Millisecond)

@@ -134,7 +134,9 @@ func ensureProjectProfileCacheFromDB(projectPath string) {
 	if profile.ProjectPath == "" {
 		profile.ProjectPath = projectPath
 	}
-	_ = WriteProjectProfileCache(projectPath, profile)
+	if err := WriteProjectProfileCache(projectPath, profile); err != nil {
+		fmt.Printf("[completion-gate] failed to hydrate project profile cache: %v\n", err)
+	}
 }
 
 func firstLine(s string) string {
@@ -156,9 +158,10 @@ func WriteProjectProfileCache(projectPath string, profile *ProjectProfile) error
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return fmt.Errorf("create cache dir: %w", err)
 	}
-	// ProjectProfile is a concrete serialisable struct; marshal errors are not
-	// expected in practice, so treat it as a guaranteed encode path.
-	data, _ := json.MarshalIndent(profile, "", "  ")
+	data, err := json.MarshalIndent(profile, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal project profile: %w", err)
+	}
 	dest := filepath.Join(cacheDir, "project-profile.json")
 	if err := os.WriteFile(dest, data, 0o644); err != nil {
 		return fmt.Errorf("write project-profile.json: %w", err)

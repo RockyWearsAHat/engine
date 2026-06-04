@@ -921,8 +921,9 @@ func TestRunAutonomousProject_Success(t *testing.T) {
 	state, err := RunAutonomousProject(cfg)
 	// RunAutonomousProject should return either a valid state or error
 	// It might hit max iterations limit which is not an error
-	_ = state
-	_ = err
+	if state == nil && err == nil {
+		t.Fatal("expected orchestrator to return state or error")
+	}
 }
 
 // TestPersistOrchestrationState tests persist with valid state.

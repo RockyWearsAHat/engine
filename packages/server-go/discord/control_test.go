@@ -86,8 +86,12 @@ func TestHandlePlanCommand_NoPlanFile(t *testing.T) {
 func TestHandlePlanCommand_PrintsPlanFile(t *testing.T) {
 	var sent []string
 	tmp := t.TempDir()
-	_ = os.MkdirAll(filepath.Join(tmp, ".engine"), 0o755)
-	_ = os.WriteFile(filepath.Join(tmp, ".engine", "plan.md"), []byte("# Plan\n- step one\n"), 0o644)
+	if err := os.MkdirAll(filepath.Join(tmp, ".engine"), 0o755); err != nil {
+		t.Fatalf("mkdir .engine: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".engine", "plan.md"), []byte("# Plan\n- step one\n"), 0o644); err != nil {
+		t.Fatalf("write plan.md: %v", err)
+	}
 
 	svc := newTestServiceForControl(map[string]ProjectBinding{
 		tmp: {ProjectPath: tmp, RepoName: "demo", ChannelID: "ch-1"},

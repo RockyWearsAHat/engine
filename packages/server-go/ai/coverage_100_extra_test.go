@@ -92,12 +92,16 @@ func TestChat_LocalFirstRoutingBranch(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/ps":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"models":[{"name":"local-first-model"}]}`))
+			if _, err := w.Write([]byte(`{"models":[{"name":"local-first-model"}]}`)); err != nil {
+				t.Fatalf("write /api/ps response: %v", err)
+			}
 		case "/v1/chat/completions":
 			var req struct {
 				Model string `json:"model"`
 			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
 			requestedModel = req.Model
 			sendSSEDone(w)
 		default:
@@ -140,12 +144,16 @@ func TestChat_ForcedEngineOllamaModelBranch(t *testing.T) {
 			var req struct {
 				Model string `json:"model"`
 			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
 			requestedModel = req.Model
 			sendSSEDone(w)
 		default:
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"models":[]}`))
+			if _, err := w.Write([]byte(`{"models":[]}`)); err != nil {
+				t.Fatalf("write models response: %v", err)
+			}
 		}
 	}))
 	defer server.Close()
@@ -180,12 +188,16 @@ func TestRunPlannerPrePass_ForcedEngineOllamaModelBranch(t *testing.T) {
 			var req struct {
 				Model string `json:"model"`
 			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
 			requestedModel = req.Model
 			sendSSEDone(w)
 		default:
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"models":[]}`))
+			if _, err := w.Write([]byte(`{"models":[]}`)); err != nil {
+				t.Fatalf("write models response: %v", err)
+			}
 		}
 	}))
 	defer server.Close()
@@ -365,7 +377,9 @@ func TestOrchestratorIntake_CallbackNoOpBranches(t *testing.T) {
 func TestOrchestratorPRDPhase_CreateSessionAndPersistErrorBranches(t *testing.T) {
 	// create session error
 	dirNoDB := t.TempDir()
-	_ = WriteDoc(dirNoDB, DocDesign, "design")
+	if err := WriteDoc(dirNoDB, DocDesign, "design"); err != nil {
+		t.Fatalf("write design doc: %v", err)
+	}
 	err := orchestratorPRDPhase(OrchestratorConfig{ProjectPath: dirNoDB, SessionIDPrefix: "t"}, make(chan struct{}))
 	if err == nil || !strings.Contains(err.Error(), "create PRD session") {
 		t.Fatalf("expected create PRD session error, got %v", err)
@@ -518,8 +532,12 @@ func TestRunAutonomousProject_PersistPlanErrorBranch(t *testing.T) {
 				c.OnChunk("vocab---SPLIT---prd", false)
 			case RolePlanner:
 				enginePath := filepath.Join(dir, ".engine")
-				_ = os.RemoveAll(enginePath)
-				_ = os.WriteFile(enginePath, []byte("blocked"), 0o644)
+				if err := os.RemoveAll(enginePath); err != nil {
+					t.Fatalf("remove .engine path: %v", err)
+				}
+				if err := os.WriteFile(enginePath, []byte("blocked"), 0o644); err != nil {
+					t.Fatalf("write blocking file: %v", err)
+				}
 				c.OnChunk("1. Step\n   build\n   Acceptance: `echo ok`", false)
 			}
 		},

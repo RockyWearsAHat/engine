@@ -15,12 +15,14 @@ import (
 
 type Issue struct {
 	ID         string `json:"id"`
+	Rule       string `json:"rule,omitempty"`
 	Severity   string `json:"severity"`
 	Category   string `json:"category"`
 	Message    string `json:"message"`
 	File       string `json:"file"`
 	Line       int    `json:"line"`
 	Suggestion string `json:"suggestion,omitempty"`
+	DocURL     string `json:"docUrl,omitempty"`
 }
 
 type Report struct {
@@ -48,10 +50,20 @@ type ScanProgress struct {
 type ProgressCallback func(ScanProgress)
 
 type symbolDef struct {
-	Name string
-	File string
-	Line int
+	Name   string
+	File   string
+	Line   int
 	Public bool
+}
+
+type functionProfile struct {
+	Name        string   `json:"name"`
+	File        string   `json:"file"`
+	Line        int      `json:"line"`
+	Public      bool     `json:"public"`
+	Calls       []string `json:"calls,omitempty"`
+	DirectRisk  bool     `json:"directRisk,omitempty"`
+	RiskyCallee string   `json:"riskyCallee,omitempty"`
 }
 
 type chunkLoc struct {
@@ -93,19 +105,21 @@ type chunkRecord struct {
 }
 
 type fileIndexEntry struct {
-	Path             string         `json:"path"`
-	ModTimeUnixNano  int64          `json:"modTimeUnixNano"`
-	Size             int64          `json:"size"`
-	BaseName         string         `json:"baseName"`
-	IsTest           bool           `json:"isTest"`
-	NormalizedLines  int            `json:"normalizedLines"`
-	Symbols          []symbolDef    `json:"symbols"`
-	InterfaceNames   []string       `json:"interfaceNames,omitempty"`
-	IdentifierCounts map[string]int `json:"identifierCounts"`
-	CSSClassDefs     []string       `json:"cssClassDefs,omitempty"`
-	ClassReferences  map[string]int `json:"classReferences,omitempty"`
-	Chunks           []chunkRecord  `json:"chunks"`
-	BaseIssues       []Issue        `json:"baseIssues"`
+	Path             string            `json:"path"`
+	ModTimeUnixNano  int64             `json:"modTimeUnixNano"`
+	Size             int64             `json:"size"`
+	BaseName         string            `json:"baseName"`
+	IsTest           bool              `json:"isTest"`
+	NormalizedLines  int               `json:"normalizedLines"`
+	Symbols          []symbolDef       `json:"symbols"`
+	FunctionProfiles []functionProfile `json:"functionProfiles,omitempty"`
+	InterfaceNames   []string          `json:"interfaceNames,omitempty"`
+	IdentifierCounts map[string]int    `json:"identifierCounts"`
+	CSSClassDefs     []string          `json:"cssClassDefs,omitempty"`
+	ClassReferences  map[string]int    `json:"classReferences,omitempty"`
+	Chunks           []chunkRecord     `json:"chunks"`
+	ShapeChunks      []chunkRecord     `json:"shapeChunks,omitempty"`
+	BaseIssues       []Issue           `json:"baseIssues"`
 }
 
 type projectIndex struct {
@@ -122,26 +136,95 @@ type sourceFileInfo struct {
 	Size            int64
 }
 
-const qualityIndexVersion = 6
+type functionSignature struct {
+	Name        string
+	Public      bool
+	SpanMode    string
+	StartIndent int
+}
+
+type ruleDefinition struct {
+	ID              string
+	Category        string
+	DefaultSeverity string
+	DocURL          string
+}
+
+const qualityIndexVersion = 20
 const duplicateChunkMinLines = 1
+const structuralDuplicateChunkMinLines = 3
 const duplicateIssuesPerFileCap = 12
+const behavioralIssuesPerFileCap = 3
+const qualityRuleDocsBase = "https://github.com/fallow-rs/fallow"
+
+const (
+	ruleDuplicateLargest       = "duplicate.largest-overlap"
+	ruleDuplicateStructural    = "duplicate.structural-overlap"
+	ruleDuplicateCompaction    = "duplicate.compaction"
+	ruleDocumentationFile      = "documentation.file-reference-gap"
+	ruleDocumentationInterface = "documentation.interface-reference-gap"
+	ruleDocumentationPublicFn  = "documentation.public-function-comment-gap"
+	ruleDocumentationGroupFile = "documentation.grouped-file-reference-gap"
+	ruleDocumentationGroupFn   = "documentation.grouped-public-function-comment-gap"
+	ruleDocumentationGroupIntf = "documentation.grouped-interface-reference-gap"
+	ruleCSSUnused              = "css.unused-selector"
+	ruleDeadCodeSymbol         = "dead-code.unreferenced-symbol"
+	ruleLargeUncommentedBlock  = "maintainability.large-uncommented-block"
+	ruleLongFunction           = "cs.single-responsibility.long-function"
+	ruleEmptyCatch             = "cs.error-handling.empty-catch"
+	ruleIgnoredError           = "cs.error-handling.ignored-error-assignment"
+	ruleDiscardedResult        = "cs.error-handling.discarded-result"
+	rulePythonEmptyExcept      = "cs.error-handling.python-empty-except"
+	ruleBehavioralShiftChain   = "behavioral-shift.side-effect-chain"
+	ruleBehavioralShiftCompact = "behavioral-shift.compaction"
+)
+
+var ruleCatalog = map[string]ruleDefinition{
+	ruleDuplicateLargest:       {ID: ruleDuplicateLargest, Category: "duplicate-content", DefaultSeverity: "medium", DocURL: qualityRuleDocsBase},
+	ruleDuplicateStructural:    {ID: ruleDuplicateStructural, Category: "duplicate-content", DefaultSeverity: "medium", DocURL: qualityRuleDocsBase},
+	ruleDuplicateCompaction:    {ID: ruleDuplicateCompaction, Category: "duplicate-content", DefaultSeverity: "low", DocURL: qualityRuleDocsBase},
+	ruleDocumentationFile:      {ID: ruleDocumentationFile, Category: "documentation-gap", DefaultSeverity: "low", DocURL: qualityRuleDocsBase},
+	ruleDocumentationInterface: {ID: ruleDocumentationInterface, Category: "documentation-gap", DefaultSeverity: "medium", DocURL: qualityRuleDocsBase},
+	ruleDocumentationPublicFn:  {ID: ruleDocumentationPublicFn, Category: "documentation-gap", DefaultSeverity: "medium", DocURL: qualityRuleDocsBase},
+	ruleDocumentationGroupFile: {ID: ruleDocumentationGroupFile, Category: "documentation-gap", DefaultSeverity: "low", DocURL: qualityRuleDocsBase},
+	ruleDocumentationGroupFn:   {ID: ruleDocumentationGroupFn, Category: "documentation-gap", DefaultSeverity: "medium", DocURL: qualityRuleDocsBase},
+	ruleDocumentationGroupIntf: {ID: ruleDocumentationGroupIntf, Category: "documentation-gap", DefaultSeverity: "medium", DocURL: qualityRuleDocsBase},
+	ruleCSSUnused:              {ID: ruleCSSUnused, Category: "css-usage", DefaultSeverity: "low", DocURL: qualityRuleDocsBase},
+	ruleDeadCodeSymbol:         {ID: ruleDeadCodeSymbol, Category: "dead-code", DefaultSeverity: "low", DocURL: qualityRuleDocsBase},
+	ruleLargeUncommentedBlock:  {ID: ruleLargeUncommentedBlock, Category: "large-block-without-comment", DefaultSeverity: "medium", DocURL: qualityRuleDocsBase},
+	ruleLongFunction:           {ID: ruleLongFunction, Category: "cs-principle", DefaultSeverity: "medium", DocURL: qualityRuleDocsBase},
+	ruleEmptyCatch:             {ID: ruleEmptyCatch, Category: "cs-principle", DefaultSeverity: "high", DocURL: qualityRuleDocsBase},
+	ruleIgnoredError:           {ID: ruleIgnoredError, Category: "cs-principle", DefaultSeverity: "medium", DocURL: qualityRuleDocsBase},
+	ruleDiscardedResult:        {ID: ruleDiscardedResult, Category: "cs-principle", DefaultSeverity: "medium", DocURL: qualityRuleDocsBase},
+	rulePythonEmptyExcept:      {ID: rulePythonEmptyExcept, Category: "cs-principle", DefaultSeverity: "high", DocURL: qualityRuleDocsBase},
+	ruleBehavioralShiftChain:   {ID: ruleBehavioralShiftChain, Category: "behavioral-shift", DefaultSeverity: "medium", DocURL: qualityRuleDocsBase},
+	ruleBehavioralShiftCompact: {ID: ruleBehavioralShiftCompact, Category: "behavioral-shift", DefaultSeverity: "low", DocURL: qualityRuleDocsBase},
+}
 
 var (
-	goFuncPattern       = regexp.MustCompile(`^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
-	jsFuncPattern       = regexp.MustCompile(`^\s*(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
-	jsConstFuncPattern  = regexp.MustCompile(`^\s*(?:export\s+(?:default\s+)?)?const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s*)?\(`)
-	goIgnoredErrPattern = regexp.MustCompile(`_\s*=\s*[A-Za-z0-9_\.]+\([^\n]*\)`)
-	emptyCatchPattern   = regexp.MustCompile(`catch\s*\([^)]*\)\s*\{\s*\}`)
-	identifierPattern   = regexp.MustCompile(`\b[A-Za-z_][A-Za-z0-9_]*\b`)
-	goInterfacePattern  = regexp.MustCompile(`^\s*type\s+([A-Za-z_][A-Za-z0-9_]*)\s+interface\s*\{`)
-	tsInterfacePattern  = regexp.MustCompile(`^\s*(?:export\s+)?interface\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
+	goFuncPattern            = regexp.MustCompile(`^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+	jsFuncPattern            = regexp.MustCompile(`^\s*(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+	jsConstFuncPattern       = regexp.MustCompile(`^\s*(?:export\s+(?:default\s+)?)?const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s*)?\(`)
+	rustFuncPattern          = regexp.MustCompile(`^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+	pythonFuncPattern        = regexp.MustCompile(`^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+	javaLikeFuncPattern      = regexp.MustCompile(`^\s*(?:(?:public|private|protected|internal|static|final|virtual|override|abstract|synchronized|native|unsafe|async|sealed|partial|readonly)\s+)+[A-Za-z_][A-Za-z0-9_<>,\[\]\.\?]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*\)\s*(?:\{|=>)`)
+	kotlinFuncPattern        = regexp.MustCompile(`^\s*(?:(?:public|private|protected|internal|open|override|suspend|inline|tailrec|operator|infix|external|abstract|final|sealed|data|expect|actual)\s+)*fun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+	swiftFuncPattern         = regexp.MustCompile(`^\s*(?:(?:public|private|fileprivate|internal|open|final|override|static|class|mutating|nonmutating|convenience|required)\s+)*func\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+	goIgnoredErrPattern      = regexp.MustCompile(`(?mi)^\s*_\s*=\s*(?:err|[A-Za-z_][A-Za-z0-9_]*err)\s*$`)
+	discardAssignmentPattern = regexp.MustCompile(`^\s*(?:(?:const|let|var)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(?:await\s+)?([A-Za-z_][A-Za-z0-9_\.]*)\s*\(`)
+	emptyCatchPattern        = regexp.MustCompile(`catch\s*\([^)]*\)\s*\{\s*\}`)
+	identifierPattern        = regexp.MustCompile(`\b[A-Za-z_][A-Za-z0-9_]*\b`)
+	goInterfacePattern       = regexp.MustCompile(`^\s*type\s+([A-Za-z_][A-Za-z0-9_]*)\s+interface\s*\{`)
+	tsInterfacePattern       = regexp.MustCompile(`^\s*(?:export\s+)?interface\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
 	cssClassSelectorPattern  = regexp.MustCompile(`(?:^|[\s,{>+~])\.([A-Za-z_-][A-Za-z0-9_-]*)`)
 	classAttrPattern         = regexp.MustCompile(`(?i)\bclass(?:Name)?\s*=\s*(?:"([^"]*)"|'([^']*)')`)
 	classTemplateAttrPattern = regexp.MustCompile("(?i)\\bclass(?:Name)?\\s*=\\s*\\{\\s*`([^`]*)`\\s*\\}")
 	templateExprPattern      = regexp.MustCompile(`\$\{[^}]*\}`)
 	cssModuleRefPattern      = regexp.MustCompile(`\b(?:styles|style)\.([A-Za-z_][A-Za-z0-9_-]*)\b`)
-	reactIndexKeyPattern     = regexp.MustCompile(`(?i)\bkey\s*=\s*\{?\s*(?:index|idx|i)\s*\}?`)
-	reactInlineHandlerPattern = regexp.MustCompile(`(?i)\bon[A-Z][A-Za-z0-9_]*\s*=\s*\{\s*(?:\([^)]*\)|[A-Za-z_][A-Za-z0-9_]*)\s*=>`)
+	pythonExceptLinePattern  = regexp.MustCompile(`^\s*except(?:\s+[^:]+)?\s*:\s*$`)
+	pythonCommentLinePattern = regexp.MustCompile(`^\s*#`)
+	genericCallPattern       = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+	memberCallPattern        = regexp.MustCompile(`\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
 )
 
 func ScanProject(projectPath string, maxIssues int) (Report, error) {
@@ -300,16 +383,8 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 		}
 		symbols = append(symbols, entry.Symbols...)
 		hasDocGapIssue := fileHasCategory(entry.BaseIssues, "documentation-gap")
-		if !entry.IsTest && !hasDocGapIssue && fileNeedsDocReference(entry) && !documentationMentionsFile(docText, entry) {
-			issues = append(issues, Issue{
-				ID:         stableID(relPath, 1, "doc-gap"),
-				Severity:   "low",
-				Category:   "documentation-gap",
-				Message:    "File is not referenced anywhere in workspace documentation (.md, .mdx, .txt, or .dx).",
-				File:       relPath,
-				Line:       1,
-				Suggestion: "Add a short note in behavior, architecture, or module docs if this file is user-visible.",
-			})
+		if !hasDocGapIssue && fileNeedsDocReference(entry) && !documentationMentionsFile(docText, entry) {
+			issues = append(issues, issueWithRule(ruleDocumentationFile, relPath, 1, "doc-gap", "File is not referenced anywhere in workspace documentation (.md, .mdx, .txt, or .dx).", "Add a short note in behavior, architecture, or module docs if this file is user-visible."))
 		}
 		missingInterfaces := undocumentedInterfaces(docText, entry.InterfaceNames)
 		if len(missingInterfaces) > 0 {
@@ -317,15 +392,7 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 			if len(preview) > 180 {
 				preview = preview[:177] + "..."
 			}
-			issues = append(issues, Issue{
-				ID:         stableID(relPath, 1, "interface-doc-gap"),
-				Severity:   "medium",
-				Category:   "documentation-gap",
-				Message:    fmt.Sprintf("%d public interfaces in this file are missing workspace documentation references: %s", len(missingInterfaces), preview),
-				File:       relPath,
-				Line:       1,
-				Suggestion: "Document these interfaces in module-level docs (.md/.mdx/.txt/.dx) with responsibilities and usage expectations.",
-			})
+			issues = append(issues, issueWithRule(ruleDocumentationInterface, relPath, 1, "interface-doc-gap", fmt.Sprintf("%d public interfaces in this file are missing workspace documentation references: %s", len(missingInterfaces), preview), "Document these interfaces in module-level docs (.md/.mdx/.txt/.dx) with responsibilities and usage expectations."))
 		}
 		for _, chunk := range entry.Chunks {
 			for _, first := range chunks[chunk.Hash] {
@@ -342,6 +409,8 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 			chunks[chunk.Hash] = append(chunks[chunk.Hash], chunkLocExt{File: relPath, Line: chunk.Line, DeclarationLike: chunk.DeclarationLike})
 		}
 	}
+
+	issues = append(issues, behavioralShiftIssues(index, paths)...)
 
 	for _, run := range collectLargestDuplicateRuns(matchesByPair) {
 		leftNormalized := index.Files[run.LeftFile].NormalizedLines
@@ -372,15 +441,7 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 			message = fmt.Sprintf("Low-confidence duplicate snippet: this file repeats %d normalized line(s) from %s:%d (%.1f%% overlap of the smaller file). Verify whether this is shared intent or incidental similarity.", run.NormalizedLines, run.LeftFile, run.LeftLine, overlapPct)
 			suggestion = "If intentional, keep it. If accidental duplication is growing, extract a helper before divergence starts."
 		}
-		issue := Issue{
-			ID:         stableID(run.RightFile, run.RightLine, "duplicate-largest|"+run.LeftFile),
-			Severity:   severity,
-			Category:   "duplicate-content",
-			Message:    message,
-			File:       run.RightFile,
-			Line:       run.RightLine,
-			Suggestion: suggestion,
-		}
+		issue := issueWithRuleSeverity(ruleDuplicateLargest, severity, run.RightFile, run.RightLine, "duplicate-largest|"+run.LeftFile, message, suggestion)
 		if duplicateIssueCountByFile[run.RightFile] < duplicateIssuesPerFileCap {
 			issues = append(issues, issue)
 			duplicateIssueCountByFile[run.RightFile]++
@@ -397,15 +458,7 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 		if suppressed > 100 {
 			severity = "medium"
 		}
-		issues = append(issues, Issue{
-			ID:         stableID(file, 1, "duplicate-compaction"),
-			Severity:   severity,
-			Category:   "duplicate-content",
-			Message:    fmt.Sprintf("%d additional duplicate matches were compacted for this file to keep the report actionable.", suppressed),
-			File:       file,
-			Line:       1,
-			Suggestion: "Review top duplicate findings first; resolve repeated root blocks and re-scan to reduce this compacted count.",
-		})
+		issues = append(issues, issueWithRuleSeverity(ruleDuplicateCompaction, severity, file, 1, "duplicate-compaction", fmt.Sprintf("%d additional duplicate matches were compacted for this file to keep the report actionable.", suppressed), "Review top duplicate findings first; resolve repeated root blocks and re-scan to reduce this compacted count."))
 	}
 
 	for _, relPath := range paths {
@@ -417,19 +470,12 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 			if className == "" || classReferenceCounts[className] > 0 {
 				continue
 			}
-			issues = append(issues, Issue{
-				ID:         stableID(relPath, 1, "css-unused|"+className),
-				Severity:   "low",
-				Category:   "css-usage",
-				Message:    fmt.Sprintf("CSS selector .%s was not matched by any class/className usage across indexed source files.", className),
-				File:       relPath,
-				Line:       1,
-				Suggestion: "If this selector is intentionally dynamic, keep it; otherwise remove it or align JSX/HTML class names.",
-			})
+			issues = append(issues, issueWithRule(ruleCSSUnused, relPath, 1, "css-unused|"+className, fmt.Sprintf("CSS selector .%s was not matched by any class/className usage across indexed source files.", className), "If this selector is intentionally dynamic, keep it; otherwise remove it or align JSX/HTML class names."))
 		}
 	}
 
 	issues = append(issues, deadCodeHeuristics(symbols, identifierCounts)...)
+	issues = applyRuleEnginePolicy(projectPath, issues)
 	issues = dedupeIssues(issues)
 	issues = compressDocumentationGapIssues(issues)
 	sort.SliceStable(issues, func(i, j int) bool {
@@ -490,7 +536,7 @@ func gatherSourceFiles(projectPath string, generatedIndex map[string]bool) ([]so
 		}
 		ext := strings.ToLower(filepath.Ext(d.Name()))
 		switch ext {
-		case ".go", ".ts", ".tsx", ".js", ".jsx", ".rs", ".py", ".sh", ".css", ".scss", ".sass", ".less":
+		case ".go", ".ts", ".tsx", ".js", ".jsx", ".rs", ".py", ".sh", ".css", ".scss", ".sass", ".less", ".java", ".kt", ".kts", ".swift", ".cs", ".cpp", ".c", ".hpp", ".h", ".php":
 			info, statErr := d.Info()
 			if statErr != nil {
 				return nil
@@ -518,18 +564,19 @@ func analyzeFile(source sourceFileInfo) (fileIndexEntry, error) {
 	baseIssues = append(baseIssues, largeUncommentedBlocks(source.RelPath, lines)...)
 	funcIssues, defs := functionComplexityIssues(source.RelPath, lines)
 	baseIssues = append(baseIssues, funcIssues...)
-	baseIssues = append(baseIssues, principleViolations(source.RelPath, content)...)
-	baseIssues = append(baseIssues, reactPitfallIssues(source.RelPath, content, ext)...)
+	baseIssues = append(baseIssues, principleViolations(source.RelPath, lines, content)...)
 	normalizedLines, _ := normalizedLinesOnly(lines)
+	profiles := functionCallProfiles(source.RelPath, lines)
 
 	return fileIndexEntry{
 		Path:             source.RelPath,
 		ModTimeUnixNano:  source.ModTimeUnixNano,
 		Size:             source.Size,
 		BaseName:         strings.TrimSuffix(strings.ToLower(filepath.Base(source.RelPath)), strings.ToLower(filepath.Ext(source.RelPath))),
-		IsTest:           strings.Contains(source.RelPath, "/test") || strings.Contains(source.RelPath, "_test."),
+		IsTest:           isTestSourcePath(source.RelPath),
 		NormalizedLines:  len(normalizedLines),
 		Symbols:          defs,
+		FunctionProfiles: profiles,
 		InterfaceNames:   collectPublicInterfaceNames(lines),
 		IdentifierCounts: countIdentifiers(content),
 		CSSClassDefs:     collectCSSClassDefinitions(content, ext),
@@ -617,52 +664,6 @@ func normalizeClassToken(token string) string {
 	return b.String()
 }
 
-func reactPitfallIssues(rel, content, ext string) []Issue {
-	if ext != ".tsx" && ext != ".jsx" {
-		return nil
-	}
-	issues := make([]Issue, 0, 2)
-	if reactIndexKeyPattern.MatchString(content) {
-		line := firstMatchLine(content, reactIndexKeyPattern)
-		issues = append(issues, Issue{
-			ID:         stableID(rel, line, "react-index-key"),
-			Severity:   "medium",
-			Category:   "react-pitfall",
-			Message:    "React list item uses index as key. This can cause unstable rendering when item order changes.",
-			File:       rel,
-			Line:       line,
-			Suggestion: "Prefer a stable, data-derived key (id/slug) instead of the array index.",
-		})
-	}
-	if reactInlineHandlerPattern.MatchString(content) {
-		line := firstMatchLine(content, reactInlineHandlerPattern)
-		issues = append(issues, Issue{
-			ID:         stableID(rel, line, "react-inline-handler"),
-			Severity:   "low",
-			Category:   "react-pitfall",
-			Message:    "Inline JSX event handler detected. Frequent re-renders can create avoidable allocations/noise.",
-			File:       rel,
-			Line:       line,
-			Suggestion: "Extract a named callback (or memoized handler) when this runs in large or frequently rerendered trees.",
-		})
-	}
-	return issues
-}
-
-func firstMatchLine(content string, pattern *regexp.Regexp) int {
-	loc := pattern.FindStringIndex(content)
-	if len(loc) < 1 {
-		return 1
-	}
-	line := 1
-	for _, r := range content[:loc[0]] {
-		if r == '\n' {
-			line++
-		}
-	}
-	return line
-}
-
 func loadProjectIndex(projectPath string) projectIndex {
 	path := qualityIndexPath(projectPath)
 	content, err := os.ReadFile(path)
@@ -685,7 +686,9 @@ func saveProjectIndex(projectPath string, index projectIndex) {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(qualityIndexPath(projectPath), content, 0o644)
+	if err := os.WriteFile(qualityIndexPath(projectPath), content, 0o644); err != nil {
+		return
+	}
 }
 
 func qualityIndexPath(projectPath string) string {
@@ -1171,15 +1174,7 @@ func largeUncommentedBlocks(rel string, lines []string) []Issue {
 			if start != -1 {
 				length := idx - start
 				if length >= 55 && !hasComment {
-					issues = append(issues, Issue{
-						ID:         stableID(rel, start+1, "long-block"),
-						Severity:   "medium",
-						Category:   "large-block-without-comment",
-						Message:    fmt.Sprintf("Large code block (%d lines) has no guiding comments.", length),
-						File:       rel,
-						Line:       start + 1,
-						Suggestion: "Split into smaller helpers and annotate non-obvious intent.",
-					})
+					issues = append(issues, issueWithRule(ruleLargeUncommentedBlock, rel, start+1, "long-block", fmt.Sprintf("Large code block (%d lines) has no guiding comments.", length), "Split into smaller helpers and annotate non-obvious intent."))
 				}
 				start = -1
 				hasComment = false
@@ -1197,15 +1192,7 @@ func largeUncommentedBlocks(rel string, lines []string) []Issue {
 	if start != -1 {
 		length := len(lines) - start
 		if length >= 55 && !hasComment {
-			issues = append(issues, Issue{
-				ID:         stableID(rel, start+1, "long-block"),
-				Severity:   "medium",
-				Category:   "large-block-without-comment",
-				Message:    fmt.Sprintf("Large code block (%d lines) has no guiding comments.", length),
-				File:       rel,
-				Line:       start + 1,
-				Suggestion: "Split into smaller helpers and annotate non-obvious intent.",
-			})
+			issues = append(issues, issueWithRule(ruleLargeUncommentedBlock, rel, start+1, "long-block", fmt.Sprintf("Large code block (%d lines) has no guiding comments.", length), "Split into smaller helpers and annotate non-obvious intent."))
 		}
 	}
 	return issues
@@ -1215,36 +1202,24 @@ func functionComplexityIssues(rel string, lines []string) ([]Issue, []symbolDef)
 	issues := make([]Issue, 0, 8)
 	symbols := make([]symbolDef, 0, 16)
 	missingPublicDocs := make([]string, 0, 8)
+	ext := strings.ToLower(filepath.Ext(rel))
 	for idx := 0; idx < len(lines); idx++ {
-		line := lines[idx]
-		name := ""
-		if m := goFuncPattern.FindStringSubmatch(line); len(m) == 2 {
-			name = m[1]
-		} else if m := jsFuncPattern.FindStringSubmatch(line); len(m) == 2 {
-			name = m[1]
-		} else if m := jsConstFuncPattern.FindStringSubmatch(line); len(m) == 2 {
-			name = m[1]
-		}
-		if name == "" {
+		sig := parseFunctionSignature(rel, lines[idx], ext)
+		if sig.Name == "" {
 			continue
 		}
-		public := isPublicFunctionSignature(line, name)
-		symbols = append(symbols, symbolDef{Name: name, File: rel, Line: idx + 1, Public: public})
-		if public && !hasLeadingDocumentationComment(lines, idx) {
-			missingPublicDocs = append(missingPublicDocs, name)
+		symbols = append(symbols, symbolDef{Name: sig.Name, File: rel, Line: idx + 1, Public: sig.Public})
+		if sig.Public && !hasLeadingDocumentationComment(lines, idx) {
+			missingPublicDocs = append(missingPublicDocs, sig.Name)
 		}
 
 		span := functionSpan(lines, idx)
-		if span >= 85 {
-			issues = append(issues, Issue{
-				ID:         stableID(rel, idx+1, "long-func"),
-				Severity:   "medium",
-				Category:   "cs-principle",
-				Message:    fmt.Sprintf("Function %s spans %d lines; likely violating single responsibility.", name, span),
-				File:       rel,
-				Line:       idx + 1,
-				Suggestion: "Extract focused helpers so each method has one clear responsibility.",
-			})
+		if sig.SpanMode == "indent" {
+			span = functionSpanByIndent(lines, idx, sig.StartIndent)
+		}
+		decisionCount := functionDecisionCount(lines, idx, span)
+		if shouldFlagLongFunction(rel, sig.Name, span, decisionCount) {
+			issues = append(issues, issueWithRule(ruleLongFunction, rel, idx+1, "long-func", fmt.Sprintf("Function %s spans %d lines with %d decision points; likely violating single responsibility.", sig.Name, span, decisionCount), "Extract focused helpers so each method has one clear responsibility."))
 		}
 	}
 	if len(missingPublicDocs) > 0 {
@@ -1253,28 +1228,283 @@ func functionComplexityIssues(rel string, lines []string) ([]Issue, []symbolDef)
 		if len(preview) > 180 {
 			preview = preview[:177] + "..."
 		}
-		issues = append(issues, Issue{
-			ID:         stableID(rel, 1, "public-doc"),
-			Severity:   "medium",
-			Category:   "documentation-gap",
-			Message:    fmt.Sprintf("%d public functions in this file lack adjacent doc comments: %s", len(missingPublicDocs), preview),
-			File:       rel,
-			Line:       1,
-			Suggestion: "Add concise contract comments for each exported/public function in this file.",
-		})
+		issues = append(issues, issueWithRule(ruleDocumentationPublicFn, rel, 1, "public-doc", fmt.Sprintf("%d public functions in this file lack adjacent doc comments: %s", len(missingPublicDocs), preview), "Add concise contract comments for each exported/public function in this file."))
 	}
 	return issues, symbols
 }
 
-func isPublicFunctionSignature(line, name string) bool {
+func parseFunctionSignature(rel, line, ext string) functionSignature {
+	if m := goFuncPattern.FindStringSubmatch(line); len(m) == 2 {
+		name := m[1]
+		return functionSignature{Name: name, Public: isPublicFunctionSignature(line, name, ext), SpanMode: "brace"}
+	}
+	if m := rustFuncPattern.FindStringSubmatch(line); len(m) == 2 {
+		name := m[1]
+		return functionSignature{Name: name, Public: isPublicFunctionSignature(line, name, ext), SpanMode: "brace"}
+	}
+	if m := jsFuncPattern.FindStringSubmatch(line); len(m) == 2 {
+		name := m[1]
+		return functionSignature{Name: name, Public: isPublicFunctionSignature(line, name, ext), SpanMode: "brace"}
+	}
+	if m := jsConstFuncPattern.FindStringSubmatch(line); len(m) == 2 {
+		name := m[1]
+		return functionSignature{Name: name, Public: isPublicFunctionSignature(line, name, ext), SpanMode: "brace"}
+	}
+	if m := pythonFuncPattern.FindStringSubmatch(line); len(m) == 2 {
+		name := m[1]
+		return functionSignature{Name: name, Public: isPublicFunctionSignature(line, name, ext), SpanMode: "indent", StartIndent: leadingIndentWidth(line)}
+	}
+	if m := kotlinFuncPattern.FindStringSubmatch(line); len(m) == 2 {
+		name := m[1]
+		return functionSignature{Name: name, Public: isPublicFunctionSignature(line, name, ext), SpanMode: "brace"}
+	}
+	if m := swiftFuncPattern.FindStringSubmatch(line); len(m) == 2 {
+		name := m[1]
+		return functionSignature{Name: name, Public: isPublicFunctionSignature(line, name, ext), SpanMode: "brace"}
+	}
+	if m := javaLikeFuncPattern.FindStringSubmatch(line); len(m) == 2 {
+		name := m[1]
+		if isControlKeyword(name) {
+			return functionSignature{}
+		}
+		return functionSignature{Name: name, Public: isPublicFunctionSignature(line, name, ext), SpanMode: "brace"}
+	}
+	return functionSignature{}
+}
+
+func isControlKeyword(name string) bool {
+	switch strings.ToLower(name) {
+	case "if", "for", "while", "switch", "catch", "else", "do", "return", "func", "def", "async", "await", "function":
+		return true
+	default:
+		return false
+	}
+}
+
+func functionCallProfiles(rel string, lines []string) []functionProfile {
+	out := make([]functionProfile, 0, 16)
+	ext := strings.ToLower(filepath.Ext(rel))
+	for idx := 0; idx < len(lines); idx++ {
+		sig := parseFunctionSignature(rel, lines[idx], ext)
+		if sig.Name == "" {
+			continue
+		}
+		span := functionSpan(lines, idx)
+		if sig.SpanMode == "indent" {
+			span = functionSpanByIndent(lines, idx, sig.StartIndent)
+		}
+		if span <= 0 {
+			continue
+		}
+		end := minInt(len(lines), idx+span)
+		calls := extractCalls(lines[idx:end], sig.Name)
+		riskyCallee, directRisk := firstBehavioralRiskyCall(calls)
+		out = append(out, functionProfile{
+			Name:        sig.Name,
+			File:        rel,
+			Line:        idx + 1,
+			Public:      sig.Public,
+			Calls:       calls,
+			DirectRisk:  directRisk,
+			RiskyCallee: riskyCallee,
+		})
+	}
+	return out
+}
+
+func extractCalls(lines []string, self string) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, 16)
+	for _, line := range lines {
+		for _, m := range genericCallPattern.FindAllStringSubmatch(line, -1) {
+			if len(m) != 2 {
+				continue
+			}
+			name := m[1]
+			if name == "" || name == self || isControlKeyword(name) {
+				continue
+			}
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			out = append(out, name)
+		}
+		for _, m := range memberCallPattern.FindAllStringSubmatch(line, -1) {
+			if len(m) != 2 {
+				continue
+			}
+			name := m[1]
+			if name == "" || name == self || isControlKeyword(name) {
+				continue
+			}
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func firstBehavioralRiskyCall(calls []string) (string, bool) {
+	for _, call := range calls {
+		if behavioralCallNameLooksRisky(call) {
+			return call, true
+		}
+	}
+	return "", false
+}
+
+func behavioralCallNameLooksRisky(callee string) bool {
+	parts := strings.Split(callee, ".")
+	name := strings.ToLower(parts[len(parts)-1])
+	if name == "setstate" || name == "setvalue" || name == "set" || name == "update" {
+		return false
+	}
+	risky := []string{"write", "save", "persist", "commit", "rollback", "migrate", "upsert", "insert", "publish"}
+	for _, token := range risky {
+		if strings.HasPrefix(name, token) || strings.Contains(name, "_"+token) {
+			return true
+		}
+	}
+	return false
+}
+
+func behavioralShiftIssues(index projectIndex, paths []string) []Issue {
+	issues := make([]Issue, 0, 16)
+	for _, relPath := range paths {
+		entry := index.Files[relPath]
+		if len(entry.FunctionProfiles) == 0 {
+			continue
+		}
+		local := make(map[string]functionProfile, len(entry.FunctionProfiles))
+		emitted := 0
+		suppressed := 0
+		for _, fn := range entry.FunctionProfiles {
+			local[fn.Name] = fn
+		}
+		for _, fn := range entry.FunctionProfiles {
+			if !fn.Public {
+				continue
+			}
+			if behavioralCallNameLooksRisky(fn.Name) {
+				continue
+			}
+			chain, risky := resolveRiskyCallChain(local, fn.Name, nil, 0, 5)
+			if !risky {
+				continue
+			}
+			if emitted >= behavioralIssuesPerFileCap {
+				suppressed++
+				continue
+			}
+			msg := fmt.Sprintf("Public function %s reaches a side-effect call chain (%s). Potential behavioral shift should be explicit and guarded.", fn.Name, strings.Join(chain, " -> "))
+			issues = append(issues, issueWithRule(ruleBehavioralShiftChain, relPath, fn.Line, "behavior-shift|"+fn.Name, msg, "Document invariants and expected side effects, and ensure failures are explicitly handled at this boundary."))
+			emitted++
+		}
+		if suppressed > 0 {
+			issues = append(issues, issueWithRule(ruleBehavioralShiftCompact, relPath, 1, "behavior-shift-compact", fmt.Sprintf("%d additional behavioral-shift findings were compacted in this file to keep results actionable.", suppressed), "Address the highest-risk behavioral shift chains first, then re-scan for additional candidates."))
+		}
+	}
+	return issues
+}
+
+func resolveRiskyCallChain(local map[string]functionProfile, name string, seen map[string]bool, depth int, maxDepth int) ([]string, bool) {
+	if depth > maxDepth {
+		return []string{name}, false
+	}
+	if seen == nil {
+		seen = make(map[string]bool)
+	}
+	if seen[name] {
+		return []string{name}, false
+	}
+	seen[name] = true
+	fn, ok := local[name]
+	if !ok {
+		if behavioralCallNameLooksRisky(name) {
+			return []string{name}, true
+		}
+		return []string{name}, false
+	}
+	if fn.DirectRisk {
+		if fn.RiskyCallee != "" {
+			return []string{name, fn.RiskyCallee}, true
+		}
+		return []string{name}, true
+	}
+	for _, callee := range fn.Calls {
+		nextSeen := cloneSeenSet(seen)
+		trail, risky := resolveRiskyCallChain(local, callee, nextSeen, depth+1, maxDepth)
+		if risky {
+			return append([]string{name}, trail...), true
+		}
+	}
+	return []string{name}, false
+}
+
+func cloneSeenSet(in map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func isPublicFunctionSignature(line, name, ext string) bool {
 	trimmed := strings.TrimSpace(line)
 	if strings.HasPrefix(trimmed, "export ") || strings.Contains(trimmed, " export ") {
+		return true
+	}
+	if strings.HasPrefix(strings.ToLower(ext), ".py") {
+		return !strings.HasPrefix(name, "_")
+	}
+	if strings.HasPrefix(strings.ToLower(ext), ".rs") {
+		return strings.Contains(trimmed, "pub ")
+	}
+	if strings.Contains(trimmed, "public ") || strings.HasPrefix(trimmed, "public ") {
 		return true
 	}
 	if name == "main" || name == "init" {
 		return false
 	}
 	return len(name) > 0 && strings.ToUpper(name[:1]) == name[:1]
+}
+
+func leadingIndentWidth(line string) int {
+	width := 0
+	for _, ch := range line {
+		if ch == ' ' {
+			width++
+			continue
+		}
+		if ch == '\t' {
+			width += 4
+			continue
+		}
+		break
+	}
+	return width
+}
+
+func functionSpanByIndent(lines []string, start int, baseIndent int) int {
+	if start < 0 || start >= len(lines) {
+		return 0
+	}
+	for i := start + 1; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == "" || pythonCommentLinePattern.MatchString(trimmed) {
+			continue
+		}
+		indent := leadingIndentWidth(lines[i])
+		if indent <= baseIndent {
+			return i - start
+		}
+	}
+	return len(lines) - start
 }
 
 func functionSpan(lines []string, start int) int {
@@ -1300,31 +1530,114 @@ func functionSpan(lines []string, start int) int {
 	return 0
 }
 
-func principleViolations(rel, content string) []Issue {
-	issues := make([]Issue, 0, 4)
-	if emptyCatchPattern.MatchString(content) {
-		issues = append(issues, Issue{
-			ID:         stableID(rel, 1, "empty-catch"),
-			Severity:   "high",
-			Category:   "cs-principle",
-			Message:    "Empty catch block detected. Swallowing exceptions hides real failures.",
-			File:       rel,
-			Line:       1,
-			Suggestion: "Handle the error or rethrow with context.",
-		})
+func functionDecisionCount(lines []string, start int, span int) int {
+	if span <= 0 {
+		return 0
 	}
-	if goIgnoredErrPattern.MatchString(content) {
-		issues = append(issues, Issue{
-			ID:         stableID(rel, 1, "ignored-error"),
-			Severity:   "medium",
-			Category:   "cs-principle",
-			Message:    "Ignored error assignment found. CS 3500 style requires explicit handling at boundaries.",
-			File:       rel,
-			Line:       1,
-			Suggestion: "Handle returned errors explicitly or document why ignoring is safe.",
-		})
+	end := minInt(len(lines), start+span)
+	count := 0
+	for i := start; i < end; i++ {
+		line := strings.ToLower(lines[i])
+		count += strings.Count(line, "if ")
+		count += strings.Count(line, " if(")
+		count += strings.Count(line, "for ")
+		count += strings.Count(line, "for(")
+		count += strings.Count(line, "switch ")
+		count += strings.Count(line, "case ")
+		count += strings.Count(line, "else if")
+		count += strings.Count(line, "&&")
+		count += strings.Count(line, "||")
+		count += strings.Count(line, "catch")
+	}
+	return count
+}
+
+func shouldFlagLongFunction(rel string, name string, span int, decisionCount int) bool {
+	lowerRel := strings.ToLower(rel)
+	isUIComponent := strings.HasSuffix(lowerRel, ".tsx") || strings.HasSuffix(lowerRel, ".jsx") || strings.HasSuffix(name, "Panel") || strings.HasSuffix(name, "Screen") || strings.HasSuffix(name, "View")
+
+	if span >= 320 {
+		return true
+	}
+
+	if isUIComponent {
+		return span >= 450 && decisionCount >= 40
+	}
+
+	return span >= 200 && decisionCount >= 20
+}
+
+func principleViolations(rel string, lines []string, content string) []Issue {
+	issues := make([]Issue, 0, 4)
+	for i, line := range lines {
+		if emptyCatchPattern.MatchString(line) {
+			issues = append(issues, issueWithRule(ruleEmptyCatch, rel, i+1, "empty-catch", "Empty catch block detected. Swallowing exceptions hides real failures.", "Handle the error or rethrow with context."))
+		}
+	}
+	for i, line := range lines {
+		if goIgnoredErrPattern.MatchString(line) {
+			issues = append(issues, issueWithRule(ruleIgnoredError, rel, i+1, "ignored-error", "Ignored error assignment found. CS 3500 style requires explicit handling at boundaries.", "Handle returned errors explicitly or document why ignoring is safe."))
+		}
+	}
+	for _, line := range riskyDiscardedResultLines(lines) {
+		issues = append(issues, issueWithRule(ruleDiscardedResult, rel, line, "discarded-result", "Discarded function result detected. Hidden failures often come from ignored return values.", "Capture and validate the result, or document why dropping it is safe."))
+	}
+	for i := 0; i < len(lines); i++ {
+		if !pythonExceptLinePattern.MatchString(lines[i]) {
+			continue
+		}
+		for j := i + 1; j < len(lines); j++ {
+			next := strings.TrimSpace(lines[j])
+			if next == "" || pythonCommentLinePattern.MatchString(next) {
+				continue
+			}
+			if next == "pass" {
+				issues = append(issues, issueWithRule(rulePythonEmptyExcept, rel, i+1, "python-empty-except", "Empty exception handler detected (except: pass). Swallowing exceptions hides real failures.", "Handle the exception, log context, or re-raise explicitly."))
+			}
+			break
+		}
 	}
 	return issues
+}
+
+func riskyDiscardedResultLines(lines []string) []int {
+	result := make([]int, 0, 4)
+	for i, line := range lines {
+		match := discardAssignmentPattern.FindStringSubmatch(line)
+		if len(match) != 3 {
+			continue
+		}
+		lhs := strings.ToLower(strings.TrimSpace(match[1]))
+		callee := strings.ToLower(strings.TrimSpace(match[2]))
+		if shouldFlagDiscardedAssignment(lhs, callee) {
+			result = append(result, i+1)
+		}
+	}
+	return result
+}
+
+func shouldFlagDiscardedAssignment(lhs, callee string) bool {
+	if lhs == "" || callee == "" {
+		return false
+	}
+	if lhs != "_" {
+		return strings.HasPrefix(lhs, "unused") || strings.HasPrefix(lhs, "ignored") || strings.HasPrefix(lhs, "_")
+	}
+	return callNameLooksRisky(callee)
+}
+
+func callNameLooksRisky(callee string) bool {
+	parts := strings.Split(callee, ".")
+	name := parts[len(parts)-1]
+	risky := []string{
+		"write", "save", "persist", "create", "delete", "remove", "update", "set", "commit", "rollback", "migrate", "close", "send", "dispatch", "encode", "decode", "upsert", "insert",
+	}
+	for _, token := range risky {
+		if strings.Contains(name, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func deadCodeHeuristics(symbols []symbolDef, identifierCounts map[string]int) []Issue {
@@ -1335,18 +1648,15 @@ func deadCodeHeuristics(symbols []symbolDef, identifierCounts map[string]int) []
 		}
 		count := identifierCounts[sym.Name]
 		if count <= 1 {
-			issues = append(issues, Issue{
-				ID:         stableID(sym.File, sym.Line, "dead-code"),
-				Severity:   "low",
-				Category:   "dead-code",
-				Message:    fmt.Sprintf("Symbol %s appears only once across the indexed project and may be dead code.", sym.Name),
-				File:       sym.File,
-				Line:       sym.Line,
-				Suggestion: "Remove unused symbol or add usage/tests proving it is required.",
-			})
+			issues = append(issues, issueWithRule(ruleDeadCodeSymbol, sym.File, sym.Line, "dead-code", fmt.Sprintf("Symbol %s appears only once across the indexed project and may be dead code.", sym.Name), "Remove unused symbol or add usage/tests proving it is required."))
 		}
 	}
 	return issues
+}
+
+func isTestSourcePath(rel string) bool {
+	lower := strings.ToLower(rel)
+	return strings.Contains(lower, "/test/") || strings.Contains(lower, "_test.") || strings.Contains(lower, ".test.")
 }
 
 func RefreshProjectIndex(projectPath string) error {
@@ -1355,6 +1665,157 @@ func RefreshProjectIndex(projectPath string) error {
 	}
 	_, _, err := buildProjectIndex(projectPath, nil)
 	return err
+}
+
+func issueWithRule(ruleID, file string, line int, idSalt, message, suggestion string) Issue {
+	return issueWithRuleSeverity(ruleID, "", file, line, idSalt, message, suggestion)
+}
+
+func issueWithRuleSeverity(ruleID, severity, file string, line int, idSalt, message, suggestion string) Issue {
+	rule := ruleCatalog[ruleID]
+	if strings.TrimSpace(severity) == "" {
+		severity = rule.DefaultSeverity
+	}
+	return Issue{
+		ID:         stableID(file, line, idSalt),
+		Rule:       ruleID,
+		Severity:   severity,
+		Category:   rule.Category,
+		Message:    message,
+		File:       file,
+		Line:       line,
+		Suggestion: suggestion,
+		DocURL:     rule.DocURL,
+	}
+}
+
+func applyRuleEnginePolicy(projectPath string, issues []Issue) []Issue {
+	overrides := loadRuleSeverityOverrides(projectPath)
+	out := make([]Issue, 0, len(issues))
+	for _, issue := range issues {
+		if def, ok := ruleCatalog[issue.Rule]; ok {
+			if issue.Category == "" {
+				issue.Category = def.Category
+			}
+			if strings.TrimSpace(issue.Severity) == "" {
+				issue.Severity = def.DefaultSeverity
+			}
+			if issue.DocURL == "" {
+				issue.DocURL = def.DocURL
+			}
+		}
+		if !isRulePrincipleAligned(issue.Rule, issue.Category) {
+			continue
+		}
+		if overrideSeverity, ok := overrides[issue.Rule]; ok {
+			normalized := normalizeRuleSeverity(overrideSeverity)
+			if normalized == "off" {
+				if ruleCanBeSilenced(issue.Rule) {
+					continue
+				}
+				normalized = ""
+			}
+			if normalized != "" {
+				issue.Severity = normalized
+			}
+		}
+		out = append(out, issue)
+	}
+	return out
+}
+
+func isRulePrincipleAligned(ruleID, category string) bool {
+	if strings.HasPrefix(ruleID, "cs.") || strings.HasPrefix(ruleID, "behavioral-shift.") {
+		return true
+	}
+	if strings.HasPrefix(ruleID, "duplicate.") || strings.HasPrefix(ruleID, "documentation.") || strings.HasPrefix(ruleID, "dead-code.") || strings.HasPrefix(ruleID, "maintainability.") || strings.HasPrefix(ruleID, "css.") {
+		return true
+	}
+	if category == "cs-principle" || category == "behavioral-shift" || category == "duplicate-content" || category == "documentation-gap" || category == "dead-code" || category == "large-block-without-comment" || category == "css-usage" {
+		return true
+	}
+	return false
+}
+
+func ruleCanBeSilenced(ruleID string) bool {
+	if strings.HasPrefix(ruleID, "cs.error-handling.") {
+		return false
+	}
+	if strings.HasPrefix(ruleID, "behavioral-shift.") {
+		return false
+	}
+	return true
+}
+
+func normalizeRuleSeverity(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "error", "high":
+		return "high"
+	case "warn", "warning", "medium":
+		return "medium"
+	case "info", "low":
+		return "low"
+	case "off", "disabled", "disable", "none":
+		return "off"
+	default:
+		return ""
+	}
+}
+
+func loadRuleSeverityOverrides(projectPath string) map[string]string {
+	candidates := []string{
+		filepath.Join(projectPath, ".engine", "quality-rules.json"),
+		filepath.Join(projectPath, ".quality-rules.json"),
+	}
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if parsed := parseRuleOverrideJSON(data); len(parsed) > 0 {
+			return parsed
+		}
+	}
+	return nil
+}
+
+func parseRuleOverrideJSON(data []byte) map[string]string {
+	var direct map[string]string
+	if err := json.Unmarshal(data, &direct); err == nil && len(direct) > 0 {
+		return direct
+	}
+
+	var wrapped struct {
+		Rules    map[string]string `json:"rules"`
+		Severity map[string]string `json:"severity"`
+	}
+	if err := json.Unmarshal(data, &wrapped); err == nil {
+		if len(wrapped.Rules) > 0 {
+			return wrapped.Rules
+		}
+		if len(wrapped.Severity) > 0 {
+			return wrapped.Severity
+		}
+	}
+
+	var structured struct {
+		Rules map[string]struct {
+			Severity string `json:"severity"`
+		} `json:"rules"`
+	}
+	if err := json.Unmarshal(data, &structured); err == nil && len(structured.Rules) > 0 {
+		out := make(map[string]string, len(structured.Rules))
+		for ruleID, rule := range structured.Rules {
+			if strings.TrimSpace(rule.Severity) != "" {
+				out[ruleID] = rule.Severity
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+
+	return nil
 }
 
 func skipDeadCodeCandidate(name string) bool {
@@ -1391,12 +1852,12 @@ func dedupeIssues(issues []Issue) []Issue {
 
 func compressDocumentationGapIssues(issues []Issue) []Issue {
 	type group struct {
-		Dir            string
-		Severity       string
-		Kind           string
-		TotalCount     int
-		AffectedFiles  map[string]bool
-		Samples        []string
+		Dir           string
+		Severity      string
+		Kind          string
+		TotalCount    int
+		AffectedFiles map[string]bool
+		Samples       []string
 	}
 
 	const (
@@ -1475,15 +1936,14 @@ func compressDocumentationGapIssues(issues []Issue) []Issue {
 			msg = fmt.Sprintf("%d public interfaces across %d files in %s are missing workspace documentation references (files: %s)", g.TotalCount, len(g.AffectedFiles), g.Dir, preview)
 			suggestion = "Add module docs for these interfaces in .md/.mdx/.txt/.dx with responsibilities and usage guidance."
 		}
-		kept = append(kept, Issue{
-			ID:         stableID(g.Dir, 1, "doc-gap-group|"+g.Kind+"|"+g.Severity),
-			Severity:   g.Severity,
-			Category:   "documentation-gap",
-			Message:    msg,
-			File:       g.Dir,
-			Line:       1,
-			Suggestion: suggestion,
-		})
+		ruleID := ruleDocumentationGroupFile
+		switch g.Kind {
+		case "function-comment":
+			ruleID = ruleDocumentationGroupFn
+		case "interface-reference":
+			ruleID = ruleDocumentationGroupIntf
+		}
+		kept = append(kept, issueWithRuleSeverity(ruleID, g.Severity, g.Dir, 1, "doc-gap-group|"+g.Kind+"|"+g.Severity, msg, suggestion))
 	}
 
 	return kept

@@ -20,6 +20,7 @@ import CommandPalette, {
 import {
   PERFORM_CLOSE_FILE_EVENT,
   REQUEST_CLOSE_FILE_EVENT,
+  OPEN_ISSUES_TAB_EVENT,
   SAVE_FILES_EVENT,
   type CloseFileEventDetail,
   type SaveFilesEventDetail,
@@ -1349,6 +1350,15 @@ export default function App() {
     window.addEventListener(REQUEST_CLOSE_FILE_EVENT, onRequestCloseFile as EventListener);
     return () => window.removeEventListener(REQUEST_CLOSE_FILE_EVENT, onRequestCloseFile as EventListener);
   }, [requestFileClose]);
+
+  useEffect(() => {
+    const onOpenIssuesTab = () => {
+      setActivityTab('issues');
+      setShowSidebar(true);
+    };
+    window.addEventListener(OPEN_ISSUES_TAB_EVENT, onOpenIssuesTab);
+    return () => window.removeEventListener(OPEN_ISSUES_TAB_EVENT, onOpenIssuesTab);
+  }, []);
 
   useEffect(() => {
     const onBeforeUnload = (event: BeforeUnloadEvent) => {

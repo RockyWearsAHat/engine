@@ -14,7 +14,9 @@ if [[ -f "${LLAMA_FLEET_ENV:-$ENV_FILE_DEFAULT}" ]]; then
 fi
 
 LLAMA_HOST="${LLAMA_HOST:-127.0.0.1}"
-LLAMA_PORTS="${LLAMA_PORTS:-8081,8082}"
+LLAMA_PORTS="${LLAMA_PORTS:-}"
+LLAMA_BASE_PORT="${LLAMA_BASE_PORT:-8081}"
+LLAMA_BACKENDS="${LLAMA_BACKENDS:-auto}"
 LLAMA_PARALLEL="${LLAMA_PARALLEL:-2}"
 LLAMA_CTX="${LLAMA_CTX:-8192}"
 LLAMA_THREADS="${LLAMA_THREADS:-8}"
@@ -58,8 +60,63 @@ router_pid_file() {
   echo "$PIDS_DIR/router.pid"
 }
 
+detect_cpu_cores() {
+  local cores
+  cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+  if [[ -z "$cores" ]]; then
+    cores="1"
+  fi
+  if [[ "$cores" -lt 1 ]]; then
+    cores="1"
+  fi
+  echo "$cores"
+}
+
+auto_backend_count() {
+  local cores
+  cores="$(detect_cpu_cores)"
+  # Keep one core budgeted for desktop/system responsiveness.
+  if [[ "$cores" -le 2 ]]; then
+    echo "1"
+    return
+  fi
+  local suggested=$(( cores / 3 ))
+  if [[ "$suggested" -lt 1 ]]; then
+    suggested=1
+  fi
+  if [[ "$suggested" -gt 6 ]]; then
+    suggested=6
+  fi
+  echo "$suggested"
+}
+
+generate_port_list() {
+  local backends="$1"
+  local base_port="$2"
+  local i
+  for ((i = 0; i < backends; i++)); do
+    echo $(( base_port + i ))
+  done
+}
+
 port_list() {
-  echo "$LLAMA_PORTS" | tr ',' '\n' | awk 'NF > 0 {gsub(/^[ \t]+|[ \t]+$/, "", $0); print $0}'
+  if [[ -n "${LLAMA_PORTS:-}" ]]; then
+    echo "$LLAMA_PORTS" | tr ',' '\n' | awk 'NF > 0 {gsub(/^[ \t]+|[ \t]+$/, "", $0); print $0}'
+    return
+  fi
+
+  local backend_count
+  backend_count="${LLAMA_BACKENDS:-auto}"
+  if [[ "$backend_count" == "auto" ]]; then
+    backend_count="$(auto_backend_count)"
+  fi
+  if ! [[ "$backend_count" =~ ^[0-9]+$ ]]; then
+    err "LLAMA_BACKENDS must be a positive integer or 'auto'"
+  fi
+  if [[ "$backend_count" -lt 1 ]]; then
+    err "LLAMA_BACKENDS must be at least 1"
+  fi
+  generate_port_list "$backend_count" "$LLAMA_BASE_PORT"
 }
 
 is_pid_alive() {
@@ -99,7 +156,7 @@ build_model_args() {
     return
   fi
 
-  err "set LLAMA_MODEL_PATH or LLAMA_HF_REPO in .engine/llama-fleet.env"
+  err "set LLAMA_MODEL_PATH or LLAMA_HF_REPO (via env or .engine/llama-fleet.env)"
 }
 
 start_backends() {

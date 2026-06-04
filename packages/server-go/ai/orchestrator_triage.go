@@ -92,7 +92,9 @@ func decideOrchestratorRoute(cfg OrchestratorConfig, brief string, cancel <-chan
 // network calls and no model-config coupling.
 func triageReasoning(cfg OrchestratorConfig, brief string, cancel <-chan struct{}) (OrchestratorRoute, bool) {
 	sessionID := fmt.Sprintf("%s-router-%d", chooseSessionPrefix(cfg), time.Now().UnixNano())
-	_ = db.CreateSession(sessionID, cfg.ProjectPath, "")
+	if err := db.CreateSession(sessionID, cfg.ProjectPath, ""); err != nil {
+		cfg.OnError(fmt.Sprintf("create triage session failed: %v", err))
+	}
 
 	var (
 		mu  sync.Mutex
@@ -147,7 +149,9 @@ func triagePrompt(brief string) string {
 // streams tokens straight to the client. It is the RouteConversational handler.
 func runConversationalTurn(cfg OrchestratorConfig, brief string, cancel <-chan struct{}) {
 	sessionID := fmt.Sprintf("%s-chat-%d", chooseSessionPrefix(cfg), time.Now().UnixNano())
-	_ = db.CreateSession(sessionID, cfg.ProjectPath, "")
+	if err := db.CreateSession(sessionID, cfg.ProjectPath, ""); err != nil {
+		cfg.OnError(fmt.Sprintf("create conversational session failed: %v", err))
+	}
 
 	ctx := &ChatContext{
 		ProjectPath:  cfg.ProjectPath,

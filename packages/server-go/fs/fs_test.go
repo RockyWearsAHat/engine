@@ -388,7 +388,9 @@ func TestSearchFiles_ErrorFromSearchMatches(t *testing.T) {
 	// Pass an invalid regex to trigger a rg hard failure.
 	_, err := SearchFiles("(?P", t.TempDir(), "")
 	// rg exits with code 2 on invalid regex, so we expect an error.
-	_ = err
+	if err == nil {
+		t.Fatal("expected error from invalid regex pattern")
+	}
 }
 func TestSearchFiles_Truncation(t *testing.T) {
         // Create a file with 200 very long lines matching a pattern so the

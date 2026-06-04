@@ -16,6 +16,7 @@ import { wsClient } from '../../ws/client.js';
 import type {
   DiscordConfig,
   DiscordValidationResult,
+  LlamaFleetScanResult,
   RepositoryEntry,
 } from '@engine/shared';
 import {
@@ -90,6 +91,9 @@ export default function PreferencesPanel() {
   const [ollamaBaseUrlInput, setOllamaBaseUrlInput] = useState('');
   const [modelInput, setModelInput] = useState('');
   const [clonesDirInput, setClonesDirInput] = useState('');
+  const [fleetScanResult, setFleetScanResult] = useState<LlamaFleetScanResult | null>(null);
+  const [fleetScanError, setFleetScanError] = useState('');
+  const [fleetScanRunning, setFleetScanRunning] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
   const [serviceStatus, setServiceStatus] = useState<BackgroundServiceStatus | null>(null);
   const [serviceMsg, setServiceMsg] = useState('');
@@ -148,7 +152,17 @@ export default function PreferencesPanel() {
 
   useEffect(() => {
     const unsub = wsClient.onMessage((msg: unknown) => {
-      const m = msg as { type?: string; config?: DiscordConfig; active?: boolean; result?: DiscordValidationResult; warning?: string; entries?: RepositoryEntry[]; entry?: RepositoryEntry; name?: string };
+      const m = msg as {
+        type?: string;
+        config?: DiscordConfig;
+        active?: boolean;
+        result?: DiscordValidationResult | LlamaFleetScanResult;
+        warning?: string;
+        entries?: RepositoryEntry[];
+        entry?: RepositoryEntry;
+        name?: string;
+        error?: string;
+      };
       if (!m || typeof m.type !== 'string') return;
       if (m.type === 'discord.config' && m.config) {
         setDiscordForm(m.config);
@@ -174,14 +188,15 @@ export default function PreferencesPanel() {
           wsClient.send({ type: 'discord.validate' });
         }
       } else if (m.type === 'discord.validate.result' && m.result) {
-        setDiscordValidation(m.result);
-        setDiscordInviteUrl(typeof m.result.inviteUrl === 'string' ? m.result.inviteUrl : '');
+        const result = m.result as DiscordValidationResult;
+        setDiscordValidation(result);
+        setDiscordInviteUrl(typeof result.inviteUrl === 'string' ? result.inviteUrl : '');
         // Do NOT set discordActive from validate results — only discord.config and
         // discord.config.saved (which reflect actual service state) should drive that.
         // If we flipped active here, the invite button would disappear before the
         // service is running, locking the user out of the invite/leave controls.
         setDiscordValidating(false);
-        if (m.result.ok && !discordActive) {
+        if (result.ok && !discordActive) {
           setDiscordInviteWatchActive(false);
           // Bot is confirmed in the guild — trigger a real config save so the
           // service starts and discord.config.saved comes back with active:true.
@@ -201,6 +216,14 @@ export default function PreferencesPanel() {
         setRepoEntries((prev) => prev.filter((e) => e.name !== m.name));
         setRepoLoading(false);
         setRepoError('');
+      } else if (m.type === 'llama.fleet.scan.result') {
+        setFleetScanRunning(false);
+        if (typeof m.error === 'string' && m.error.trim()) {
+          setFleetScanError(m.error);
+          return;
+        }
+        setFleetScanError('');
+        setFleetScanResult((m.result as LlamaFleetScanResult) || null);
       } else if (m.type === 'error') {
         const errMsg = (m as { message?: string }).message ?? 'Unknown error';
         const code = (m as { code?: string }).code ?? '';
@@ -295,6 +318,12 @@ export default function PreferencesPanel() {
       markSaved(field);
     }
     /* istanbul ignore stop */
+  };
+
+  const runFleetScan = (writeFile: boolean) => {
+    setFleetScanRunning(true);
+    setFleetScanError('');
+    wsClient.send({ type: 'llama.fleet.scan', writeFile });
   };
 
   const updateEditorPreferences = async (overrides: Partial<typeof editorPreferences>) => {
@@ -988,6 +1017,47 @@ export default function PreferencesPanel() {
               >
                 {saved === 'ollamaUrl' ? <><Check size={12} /> Ollama URL saved</> : 'Save Ollama URL'}
               </button>
+            </div>
+
+            <div className="preferences-message" style={{ borderColor: 'rgba(77, 224, 190, 0.35)' }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Local fleet quick scanner</div>
+              <div className="preferences-muted">
+                Runs a sequential machine scan to recommend efficient llama.cpp fleet sizing without over-allocating CPU or memory.
+              </div>
+              <div className="preferences-inline-actions preferences-action-group" style={{ marginTop: 8 }}>
+                <button
+                  className="btn-secondary"
+                  disabled={fleetScanRunning}
+                  onClick={() => runFleetScan(false)}
+                >
+                  {fleetScanRunning ? 'Scanning…' : 'Scan local fleet settings'}
+                </button>
+                <button
+                  className="btn-secondary"
+                  disabled={fleetScanRunning}
+                  onClick={() => runFleetScan(true)}
+                >
+                  {fleetScanRunning ? 'Writing…' : 'Scan + write .engine/llama-fleet.env'}
+                </button>
+              </div>
+              {fleetScanError && (
+                <div style={{ marginTop: 8, color: '#ff9a9a' }}>{fleetScanError}</div>
+              )}
+              {fleetScanResult && (
+                <div style={{ marginTop: 10 }}>
+                  <div className="preferences-muted">
+                    Machine: {fleetScanResult.machine.cpuCores} CPU cores, {fleetScanResult.machine.memoryGiB} GiB RAM
+                  </div>
+                  <div className="preferences-muted" style={{ marginTop: 4 }}>
+                    Recommended: {fleetScanResult.recommendation.backends} backends @ base port {fleetScanResult.recommendation.basePort}, parallel {fleetScanResult.recommendation.parallel}, threads {fleetScanResult.recommendation.threads}
+                  </div>
+                  {fleetScanResult.wroteEnvFile && fleetScanResult.envFilePath && (
+                    <div className="preferences-muted" style={{ marginTop: 4 }}>
+                      Wrote {fleetScanResult.envFilePath}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </section>

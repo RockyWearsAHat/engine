@@ -248,7 +248,9 @@ func TestCallMeshInference_PeerRequestError(t *testing.T) {
 func TestCallMeshInference_PeerErrorField(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(mesh.InferenceResponse{StatusCode: 200, Error: "upstream failed"})
+		if err := json.NewEncoder(w).Encode(mesh.InferenceResponse{StatusCode: 200, Error: "upstream failed"}); err != nil {
+			t.Fatalf("encode peer error response: %v", err)
+		}
 	}))
 	defer ts.Close()
 
@@ -262,7 +264,9 @@ func TestCallMeshInference_PeerErrorField(t *testing.T) {
 func TestCallMeshInference_PeerStatusError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(mesh.InferenceResponse{StatusCode: 503})
+		if err := json.NewEncoder(w).Encode(mesh.InferenceResponse{StatusCode: 503}); err != nil {
+			t.Fatalf("encode peer status response: %v", err)
+		}
 	}))
 	defer ts.Close()
 
@@ -276,7 +280,9 @@ func TestCallMeshInference_PeerStatusError(t *testing.T) {
 func TestCallMeshInference_Success(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(mesh.InferenceResponse{StatusCode: 200, Body: json.RawMessage(`{"ok":true}`)})
+		if err := json.NewEncoder(w).Encode(mesh.InferenceResponse{StatusCode: 200, Body: json.RawMessage(`{"ok":true}`)}); err != nil {
+			t.Fatalf("encode success response: %v", err)
+		}
 	}))
 	defer ts.Close()
 
@@ -293,7 +299,9 @@ func TestCallMeshInference_Success(t *testing.T) {
 func TestCallMeshInference_SuccessWithDefaultTimeout(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(mesh.InferenceResponse{StatusCode: 200, Body: json.RawMessage(`{"ok":true}`)})
+		if err := json.NewEncoder(w).Encode(mesh.InferenceResponse{StatusCode: 200, Body: json.RawMessage(`{"ok":true}`)}); err != nil {
+			t.Fatalf("encode default-timeout success response: %v", err)
+		}
 	}))
 	defer ts.Close()
 

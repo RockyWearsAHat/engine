@@ -165,7 +165,7 @@ func TestOrchestratorPRDPhase_PersistError(t *testing.T) {
 	}
 	// write design through legacy path to bypass WriteDoc blocker
 	if err := os.WriteFile(filepath.Join(projectPath, ".engine"), []byte("x"), 0o644); err != nil {
-		_ = err
+		t.Logf("expected blocker rewrite failure: %v", err)
 	}
 
 	cfg := OrchestratorConfig{
@@ -461,9 +461,15 @@ func TestRunAutonomousProject_PlanPhaseFailure(t *testing.T) {
 
 func TestRunAutonomousProject_RegeneratesInvalidLoadedPlan(t *testing.T) {
 	dir := setupPhasesDB(t)
-	_ = WriteDoc(dir, DocDesign, "design")
-	_ = WriteDoc(dir, DocVocabulary, "vocab")
-	_ = WriteDoc(dir, DocPRD, "prd")
+	if err := WriteDoc(dir, DocDesign, "design"); err != nil {
+		t.Fatalf("WriteDoc design: %v", err)
+	}
+	if err := WriteDoc(dir, DocVocabulary, "vocab"); err != nil {
+		t.Fatalf("WriteDoc vocabulary: %v", err)
+	}
+	if err := WriteDoc(dir, DocPRD, "prd"); err != nil {
+		t.Fatalf("WriteDoc prd: %v", err)
+	}
 
 	loaded := &OrchestrationState{
 		Owner: "o",
@@ -523,9 +529,15 @@ func TestRunAutonomousProject_RegeneratesInvalidLoadedPlan(t *testing.T) {
 
 func TestRunAutonomousProject_SkipsExhaustedAndEmitsSkip(t *testing.T) {
 	dir := setupPhasesDB(t)
-	_ = WriteDoc(dir, DocDesign, "design")
-	_ = WriteDoc(dir, DocVocabulary, "vocab")
-	_ = WriteDoc(dir, DocPRD, "prd")
+	if err := WriteDoc(dir, DocDesign, "design"); err != nil {
+		t.Fatalf("WriteDoc design: %v", err)
+	}
+	if err := WriteDoc(dir, DocVocabulary, "vocab"); err != nil {
+		t.Fatalf("WriteDoc vocabulary: %v", err)
+	}
+	if err := WriteDoc(dir, DocPRD, "prd"); err != nil {
+		t.Fatalf("WriteDoc prd: %v", err)
+	}
 	state := &OrchestrationState{
 		Owner: "o", Repo: "r", Brief: "brief",
 		Plan: []PlanStep{{Index: 1, Title: "stuck", Attempts: OrchestratorMaxStepAttempts, Done: false, Acceptance: "`echo ok`"}},
@@ -577,9 +589,15 @@ func TestRunAutonomousProject_SkipsExhaustedAndEmitsSkip(t *testing.T) {
 
 func TestRunAutonomousProject_UsesLiveURLWhenPresent(t *testing.T) {
 	dir := setupPhasesDB(t)
-	_ = WriteDoc(dir, DocDesign, "design")
-	_ = WriteDoc(dir, DocVocabulary, "vocab")
-	_ = WriteDoc(dir, DocPRD, "prd")
+	if err := WriteDoc(dir, DocDesign, "design"); err != nil {
+		t.Fatalf("WriteDoc design: %v", err)
+	}
+	if err := WriteDoc(dir, DocVocabulary, "vocab"); err != nil {
+		t.Fatalf("WriteDoc vocabulary: %v", err)
+	}
+	if err := WriteDoc(dir, DocPRD, "prd"); err != nil {
+		t.Fatalf("WriteDoc prd: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, ".engine", "live-url.txt"), []byte("https://example.com"), 0o644); err != nil {
 		t.Fatalf("write live-url: %v", err)
 	}
@@ -622,9 +640,15 @@ func TestRunAutonomousProject_UsesLiveURLWhenPresent(t *testing.T) {
 
 func TestRunAutonomousProject_BuilderErrorBranch(t *testing.T) {
 	dir := setupPhasesDB(t)
-	_ = WriteDoc(dir, DocDesign, "design")
-	_ = WriteDoc(dir, DocVocabulary, "vocab")
-	_ = WriteDoc(dir, DocPRD, "prd")
+	if err := WriteDoc(dir, DocDesign, "design"); err != nil {
+		t.Fatalf("WriteDoc design: %v", err)
+	}
+	if err := WriteDoc(dir, DocVocabulary, "vocab"); err != nil {
+		t.Fatalf("WriteDoc vocabulary: %v", err)
+	}
+	if err := WriteDoc(dir, DocPRD, "prd"); err != nil {
+		t.Fatalf("WriteDoc prd: %v", err)
+	}
 	state := &OrchestrationState{
 		Owner: "o", Repo: "r", Brief: "brief",
 		Plan:      []PlanStep{{Index: 1, Title: "build", Done: false, Acceptance: "`echo ok`"}},
@@ -656,9 +680,15 @@ func TestRunAutonomousProject_BuilderErrorBranch(t *testing.T) {
 
 func TestRunAutonomousProject_ReviewRejectBranch(t *testing.T) {
 	dir := setupPhasesDB(t)
-	_ = WriteDoc(dir, DocDesign, "design")
-	_ = WriteDoc(dir, DocVocabulary, "vocab")
-	_ = WriteDoc(dir, DocPRD, "prd")
+	if err := WriteDoc(dir, DocDesign, "design"); err != nil {
+		t.Fatalf("WriteDoc design: %v", err)
+	}
+	if err := WriteDoc(dir, DocVocabulary, "vocab"); err != nil {
+		t.Fatalf("WriteDoc vocabulary: %v", err)
+	}
+	if err := WriteDoc(dir, DocPRD, "prd"); err != nil {
+		t.Fatalf("WriteDoc prd: %v", err)
+	}
 	state := &OrchestrationState{
 		Owner: "o", Repo: "r", Brief: "brief",
 		Plan:      []PlanStep{{Index: 1, Title: "build", Done: false, Acceptance: "`echo ok`"}},

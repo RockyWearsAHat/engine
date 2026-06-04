@@ -249,6 +249,7 @@ export default function TeamSelector() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {/* Render each team as a selectable button with cost tier and model breakdown */}
       {teams.map(([name, team]) => {
         const isActive = activeTeam === name;
         const isSaving = saving === name;

@@ -78,7 +78,9 @@ func TestGetProjectProfile_EmptyPath_Noop(t *testing.T) {
 func TestGetProjectProfile_ClosedDB_Error(t *testing.T) {
 	initTestDB(t)
 	// Close the DB (but keep the pointer non-nil) to trigger a Scan error.
-	_ = globalDB.Close()
+	if err := globalDB.Close(); err != nil {
+		t.Fatalf("close global db: %v", err)
+	}
 	// Do NOT nil out globalDB — a nil pointer would panic before Scan is reached.
 
 	_, err := GetProjectProfile("/project/x")

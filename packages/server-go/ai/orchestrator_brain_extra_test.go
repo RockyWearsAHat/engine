@@ -141,8 +141,12 @@ func TestOrchestrationBrain_AllTeamsDone_AllDone(t *testing.T) {
 	brain, _ := NewOrchestrationBrain(dir, "o", "r", "brief", "t")
 	_ = brain.AddTeam("t1", "general", []int{0}, nil)
 	_ = brain.AddTeam("t2", "api", []int{1}, nil)
-	_ = brain.UpdateTeamStatus("t1", "done")
-	_ = brain.UpdateTeamStatus("t2", "failed")
+	if err := brain.UpdateTeamStatus("t1", "done"); err != nil {
+		t.Fatalf("update t1 status: %v", err)
+	}
+	if err := brain.UpdateTeamStatus("t2", "failed"); err != nil {
+		t.Fatalf("update t2 status: %v", err)
+	}
 	if !brain.AllTeamsDone() {
 		t.Error("all done/failed teams should be considered done")
 	}
@@ -153,7 +157,9 @@ func TestOrchestrationBrain_AnyTeamFailed_None(t *testing.T) {
 	dir := t.TempDir()
 	brain, _ := NewOrchestrationBrain(dir, "o", "r", "brief", "t")
 	_ = brain.AddTeam("t1", "general", []int{0}, nil)
-	_ = brain.UpdateTeamStatus("t1", "done")
+	if err := brain.UpdateTeamStatus("t1", "done"); err != nil {
+		t.Fatalf("update t1 status: %v", err)
+	}
 	if brain.AnyTeamFailed() {
 		t.Error("no failed teams, AnyTeamFailed should be false")
 	}
@@ -164,7 +170,9 @@ func TestOrchestrationBrain_AnyTeamFailed_HasFailed(t *testing.T) {
 	dir := t.TempDir()
 	brain, _ := NewOrchestrationBrain(dir, "o", "r", "brief", "t")
 	_ = brain.AddTeam("t1", "general", []int{0}, nil)
-	_ = brain.UpdateTeamStatus("t1", "failed")
+	if err := brain.UpdateTeamStatus("t1", "failed"); err != nil {
+		t.Fatalf("update t1 status: %v", err)
+	}
 	if !brain.AnyTeamFailed() {
 		t.Error("failed team, AnyTeamFailed should be true")
 	}

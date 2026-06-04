@@ -99,7 +99,9 @@ fn read_config() -> AppConfig {
 fn write_config(cfg: &AppConfig) -> bool {
     let path = config_path();
     if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
+        if fs::create_dir_all(parent).is_err() {
+            return false;
+        }
     }
     if let Ok(json) = serde_json::to_string_pretty(cfg) {
         fs::write(path, json).is_ok()
@@ -123,8 +125,18 @@ fn server_running(port: u16) -> bool {
         return false;
     };
 
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
+    if stream
+        .set_read_timeout(Some(Duration::from_millis(300)))
+        .is_err()
+    {
+        return false;
+    }
+    if stream
+        .set_write_timeout(Some(Duration::from_millis(300)))
+        .is_err()
+    {
+        return false;
+    }
     let request =
         format!("GET /health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
     if stream.write_all(request.as_bytes()).is_err() {
@@ -145,8 +157,18 @@ fn engine_server_health_ok(port: u16) -> bool {
         return false;
     };
 
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
+    if stream
+        .set_read_timeout(Some(Duration::from_millis(300)))
+        .is_err()
+    {
+        return false;
+    }
+    if stream
+        .set_write_timeout(Some(Duration::from_millis(300)))
+        .is_err()
+    {
+        return false;
+    }
     let request =
         format!("GET /health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
     if stream.write_all(request.as_bytes()).is_err() {
@@ -231,9 +253,13 @@ fn stop_stale_debug_server(port: u16) -> bool {
     };
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    let _ = terminate_pid(pid, "-TERM");
+    if !terminate_pid(pid, "-TERM") {
+        eprintln!("[engine] failed to send TERM to stale server pid {pid}");
+    }
     #[cfg(target_os = "windows")]
-    let _ = terminate_pid(pid, "");
+    if !terminate_pid(pid, "") {
+        eprintln!("[engine] failed to stop stale server pid {pid}");
+    }
 
     for _ in 0..10 {
         if !server_running(port) {
@@ -243,7 +269,9 @@ fn stop_stale_debug_server(port: u16) -> bool {
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    let _ = terminate_pid(pid, "-KILL");
+    if !terminate_pid(pid, "-KILL") {
+        eprintln!("[engine] failed to send KILL to stale server pid {pid}");
+    }
 
     for _ in 0..10 {
         if !server_running(port) {
@@ -394,7 +422,9 @@ fn start_go_server(
     } else if server_running(DEFAULT_PORT) {
         // If an Engine server is already on this port, stop it so this app
         // instance can launch a fresh server with a matching local WS token.
-        let _ = stop_stale_debug_server(DEFAULT_PORT);
+        if !stop_stale_debug_server(DEFAULT_PORT) {
+            eprintln!("[engine] no stale debug server found to stop on port {DEFAULT_PORT}");
+        }
     }
 
     if server_running(DEFAULT_PORT) {
@@ -439,7 +469,9 @@ fn run_background_service() {
         let ServerLaunch { child, .. } =
             start_go_server(&project_path, &cfg, &local_server_token);
         if let Some(mut managed_child) = child {
-            let _ = managed_child.wait();
+            if let Err(error) = managed_child.wait() {
+                eprintln!("[engine] background service wait failed: {error}");
+            }
         }
         // Server exited — wait briefly then restart unless port is already taken
         // (another process may have grabbed it while we slept).
@@ -462,6 +494,23 @@ fn cli_action() -> Option<CliAction> {
     })
 }
 
+fn emit_frontend_menu_event(app: &AppHandle, action: &str) {
+    if let Err(error) = app.emit(FRONTEND_MENU_EVENT, action) {
+        eprintln!(
+            "[engine] failed to emit frontend menu event '{action}': {error}"
+        );
+    }
+}
+
+fn stop_child_process(child: &mut Child, context: &str) {
+    if let Err(error) = child.kill() {
+        eprintln!("[engine] failed to kill child process ({context}): {error}");
+    }
+    if let Err(error) = child.wait() {
+        eprintln!("[engine] failed to wait for child process ({context}): {error}");
+    }
+}
+
 fn generate_local_server_token() -> String {
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
@@ -480,7 +529,9 @@ fn ensure_local_server_token(cfg: &mut AppConfig) -> String {
 
     let token = generate_local_server_token();
     cfg.local_server_token = Some(token.clone());
-    let _ = write_config(cfg);
+    if !write_config(cfg) {
+        eprintln!("[engine] failed to persist local server token to config");
+    }
     token
 }
 
@@ -719,9 +770,12 @@ fn uninstall_startup_service() -> Result<String, String> {
     }
 
     if !startup_test_mode() {
-        let _ = Command::new("launchctl")
+        if let Err(error) = Command::new("launchctl")
             .args(["unload", "-w", plist_path.to_str().unwrap_or("")])
-            .status();
+            .status()
+        {
+            eprintln!("[engine] launchctl unload failed: {error}");
+        }
     }
 
     fs::remove_file(&plist_path).map_err(|e| e.to_string())?;
@@ -816,12 +870,13 @@ fn restart_local_server(
 ) -> bool {
     if let Ok(mut guard) = server_state.child.lock() {
         if let Some(mut child) = guard.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+            stop_child_process(&mut child, "restart_local_server");
         }
     }
 
-    let _ = stop_stale_debug_server(DEFAULT_PORT);
+    if !stop_stale_debug_server(DEFAULT_PORT) {
+        eprintln!("[engine] no stale local server found on port {DEFAULT_PORT}");
+    }
 
     let cfg = read_config();
     let project_path = project_path_for_server(&cfg);
@@ -1040,7 +1095,9 @@ async fn open_folder_dialog(app: AppHandle) -> Option<String> {
     if let Some(path) = folder.as_ref() {
         let mut next_cfg = read_config();
         next_cfg.last_project_path = Some(path.clone());
-        let _ = write_config(&next_cfg);
+        if !write_config(&next_cfg) {
+            eprintln!("[engine] failed to persist selected workspace path to config");
+        }
     }
 
     folder
@@ -1452,37 +1509,37 @@ pub fn run() {
             } else {
                 match event_id {
                     "open-folder" => {
-                        let _ = app.emit(FRONTEND_MENU_EVENT, "open-folder");
+                        emit_frontend_menu_event(app, "open-folder");
                     }
                     "open-file" => {
-                        let _ = app.emit(FRONTEND_MENU_EVENT, "open-file");
+                        emit_frontend_menu_event(app, "open-file");
                     }
                     "build-workspace" => {
-                        let _ = app.emit(FRONTEND_MENU_EVENT, "build-workspace");
+                        emit_frontend_menu_event(app, "build-workspace");
                     }
                     "run-workspace" => {
-                        let _ = app.emit(FRONTEND_MENU_EVENT, "run-workspace");
+                        emit_frontend_menu_event(app, "run-workspace");
                     }
                     "save-file" => {
-                        let _ = app.emit(FRONTEND_MENU_EVENT, "save-file");
+                        emit_frontend_menu_event(app, "save-file");
                     }
                     "save-all-files" => {
-                        let _ = app.emit(FRONTEND_MENU_EVENT, "save-all-files");
+                        emit_frontend_menu_event(app, "save-all-files");
                     }
                     "open-preferences" => {
-                        let _ = app.emit(FRONTEND_MENU_EVENT, "open-preferences");
+                        emit_frontend_menu_event(app, "open-preferences");
                     }
                     "toggle-sidebar" => {
-                        let _ = app.emit(FRONTEND_MENU_EVENT, "toggle-sidebar");
+                        emit_frontend_menu_event(app, "toggle-sidebar");
                     }
                     "toggle-terminal" => {
-                        let _ = app.emit(FRONTEND_MENU_EVENT, "toggle-terminal");
+                        emit_frontend_menu_event(app, "toggle-terminal");
                     }
                     "focus-chat" => {
-                        let _ = app.emit(FRONTEND_MENU_EVENT, "focus-chat");
+                        emit_frontend_menu_event(app, "focus-chat");
                     }
                     "open-project-page" => {
-                        let _ = app.emit(FRONTEND_MENU_EVENT, "open-project-page");
+                        emit_frontend_menu_event(app, "open-project-page");
                     }
                     _ => {
                         eprintln!("[MENU EVENT] unhandled id: {}", event_id);
@@ -1496,7 +1553,11 @@ pub fn run() {
                     if state.managed {
                         if let Ok(mut guard) = state.child.lock() {
                             if let Some(mut child) = guard.take() {
-                                let _ = child.kill();
+                                if let Err(error) = child.kill() {
+                                    eprintln!(
+                                        "[engine] failed to kill managed child on window close: {error}"
+                                    );
+                                }
                             }
                         }
                     }
@@ -1667,6 +1728,7 @@ mod tests {
 
     // ---- project_path_for_server -------------------------------------------
 
+    #[allow(dead_code)]
     #[test]
     fn project_path_uses_config_last_project_path_when_env_absent() {
         if env::var("PROJECT_PATH").is_ok() {
@@ -1678,6 +1740,7 @@ mod tests {
         assert_eq!(result, "/workspace/my-project");
     }
 
+    #[allow(dead_code)]
     #[test]
     fn project_path_falls_back_to_non_empty_path_when_no_config() {
         if env::var("PROJECT_PATH").is_ok() {

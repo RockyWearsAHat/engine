@@ -539,7 +539,7 @@ func TestRefreshProjectIndex_DoesNotExcludeAncestorDirsForNestedGeneratedPaths(t
 	}
 }
 
-func TestScanProject_ReactPitfallSignals(t *testing.T) {
+func TestScanProject_PrincipleScope_DoesNotEmitReactSpecificPitfalls(t *testing.T) {
 	project := t.TempDir()
 	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
 	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "list.tsx"), strings.Join([]string{
@@ -561,24 +561,10 @@ func TestScanProject_ReactPitfallSignals(t *testing.T) {
 		t.Fatalf("scan project: %v", err)
 	}
 
-	foundIndexKey := false
-	foundInlineHandler := false
 	for _, issue := range report.Issues {
-		if issue.Category != "react-pitfall" {
-			continue
+		if issue.Category == "react-pitfall" || strings.HasPrefix(issue.Rule, "react.") {
+			t.Fatalf("expected principle-only findings and no react-specific pitfall flags, got %+v", issue)
 		}
-		if strings.Contains(issue.Message, "index as key") {
-			foundIndexKey = true
-		}
-		if strings.Contains(issue.Message, "Inline JSX event handler") {
-			foundInlineHandler = true
-		}
-	}
-	if !foundIndexKey {
-		t.Fatalf("expected react index-key pitfall issue, got %+v", report.Issues)
-	}
-	if !foundInlineHandler {
-		t.Fatalf("expected react inline-handler pitfall issue, got %+v", report.Issues)
 	}
 }
 
@@ -618,5 +604,438 @@ func TestScanProject_CSSClassFuzzyMatching(t *testing.T) {
 	}
 	if flaggedUsedToken {
 		t.Fatalf("expected fuzzy class matching to keep used selector out of css-usage findings, got %+v", report.Issues)
+	}
+}
+
+func TestScanProject_CSPrinciple_DoesNotFlagLargeLinearFunction(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+
+	lines := []string{"export function LinearWorker() {", "  let total = 0"}
+	for i := 0; i < 180; i++ {
+		lines = append(lines, "  total += 1")
+	}
+	lines = append(lines, "  return total", "}")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "linear.ts"), strings.Join(lines, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Category == "cs-principle" && issue.File == "packages/demo/linear.ts" {
+			t.Fatalf("expected linear function to be ignored by cs-principle long-function heuristic, got %+v", issue)
+		}
+	}
+}
+
+func TestScanProject_CSPrinciple_FlagsLargeDecisionHeavyFunction(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+
+	lines := []string{"export function BranchyWorker(input: number) {", "  let score = 0"}
+	for i := 0; i < 40; i++ {
+		lines = append(lines,
+			"  if (input > 0 && input < 100) {",
+			"    score += 1",
+			"  } else if (input === 0 || input === -1) {",
+			"    score += 2",
+			"  } else {",
+			"    score += 3",
+			"  }",
+		)
+	}
+	lines = append(lines, "  return score", "}")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "branchy.ts"), strings.Join(lines, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Category == "cs-principle" && issue.File == "packages/demo/branchy.ts" {
+			found = true
+			if !strings.Contains(issue.Message, "decision points") {
+				t.Fatalf("expected decision-point context in cs-principle message, got %+v", issue)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected decision-heavy function to be flagged by cs-principle heuristic")
+	}
+}
+
+func TestScanProject_CSPrinciple_IgnoredCallResultDoesNotTriggerIgnoredErrorIssue(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "noise.go"), strings.Join([]string{
+		"package demo",
+		"import \"fmt\"",
+		"func Noisy() {",
+		"  _ = fmt.Sprintf(\"%s\", \"ok\")",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Category == "cs-principle" && strings.Contains(strings.ToLower(issue.Message), "ignored error assignment") {
+			t.Fatalf("expected ignored call-result assignment to be ignored, got %+v", issue)
+		}
+	}
+}
+
+func TestScanProject_CSPrinciple_ExplicitIgnoredErrIsFlagged(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "ignored.go"), strings.Join([]string{
+		"package demo",
+		"func ExplicitIgnore() {",
+		"  err := doThing()",
+		"  _ = err",
+		"}",
+		"func doThing() error { return nil }",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Category == "cs-principle" && strings.Contains(strings.ToLower(issue.Message), "ignored error assignment") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected explicit _ = err pattern to be flagged")
+	}
+}
+
+func TestScanProject_CSPrinciple_ReportsAllExplicitIgnoredErrAssignments(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "ignored_many.go"), strings.Join([]string{
+		"package demo",
+		"func ExplicitIgnoreMany() {",
+		"  err := doThing()",
+		"  _ = err",
+		"  otherErr := doThing()",
+		"  _ = otherErr",
+		"  thirdErr := doThing()",
+		"  _ = thirdErr",
+		"}",
+		"func doThing() error { return nil }",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	count := 0
+	for _, issue := range report.Issues {
+		if issue.Rule == "cs.error-handling.ignored-error-assignment" && issue.File == "packages/demo/ignored_many.go" {
+			count++
+		}
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 ignored error assignment issues, got %d", count)
+	}
+}
+
+func TestScanProject_CSPrinciple_FlagsPythonDecisionHeavyFunction(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+
+	lines := []string{"def branchy_worker(value):", "    score = 0"}
+	for i := 0; i < 40; i++ {
+		lines = append(lines,
+			"    if value > 0 and value < 100:",
+			"        score += 1",
+			"    elif value == 0 or value == -1:",
+			"        score += 2",
+			"    else:",
+			"        score += 3",
+		)
+	}
+	lines = append(lines, "    return score")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "branchy.py"), strings.Join(lines, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Category == "cs-principle" && issue.File == "packages/demo/branchy.py" && strings.Contains(issue.Message, "decision points") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected python decision-heavy function to be flagged")
+	}
+}
+
+func TestScanProject_DocumentationGap_FlagsPublicRustFunctionWithoutDocComment(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "lib.rs"), strings.Join([]string{
+		"pub fn run() -> i32 {",
+		"    1",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Category == "documentation-gap" && strings.Contains(issue.Message, "public functions") && strings.Contains(issue.Message, "lib.rs") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected documentation-gap issue for public rust function")
+	}
+}
+
+func TestScanProject_EmitsRuleMetadata(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "demo.go"), strings.Join([]string{
+		"package demo",
+		"func onlyOnce() int {",
+		"  return 1",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	foundRule := false
+	for _, issue := range report.Issues {
+		if issue.Rule == "" {
+			continue
+		}
+		foundRule = true
+		if issue.DocURL == "" {
+			t.Fatalf("expected doc URL for rule-backed issue, got %+v", issue)
+		}
+		break
+	}
+	if !foundRule {
+		t.Fatalf("expected at least one issue with a rule id")
+	}
+}
+
+func TestScanProject_RuleOverride_CoreSafetyRulesCannotBeSilenced(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, ".engine", "quality-rules.json"), strings.Join([]string{
+		"{",
+		"  \"rules\": {",
+		"    \"cs.error-handling.ignored-error-assignment\": \"off\",",
+		"    \"cs.error-handling.discarded-result\": \"low\"",
+		"  }",
+		"}",
+	}, "\n"))
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "sample.go"), strings.Join([]string{
+		"package demo",
+		"func sample() {",
+		"  err := doThing()",
+		"  _ = err",
+		"  _ = saveThing()",
+		"}",
+		"func doThing() error { return nil }",
+		"func saveThing() error { return nil }",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	foundIgnored := false
+	for _, issue := range report.Issues {
+		if issue.Rule == "cs.error-handling.ignored-error-assignment" {
+			foundIgnored = true
+		}
+	}
+	if !foundIgnored {
+		t.Fatalf("expected ignored-error rule to remain active even when override requests off")
+	}
+
+	foundDiscarded := false
+	for _, issue := range report.Issues {
+		if issue.Rule == "cs.error-handling.discarded-result" {
+			foundDiscarded = true
+			if issue.Severity != "low" {
+				t.Fatalf("expected discarded-result severity override to low, got %+v", issue)
+			}
+		}
+	}
+	if !foundDiscarded {
+		t.Fatalf("expected discarded-result rule to remain after override")
+	}
+}
+
+func TestScanProject_BehavioralShift_FlagsPublicSideEffectCallChain(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "chain.ts"), strings.Join([]string{
+		"function persistUser() {",
+		"  saveUserProfile()",
+		"}",
+		"export function updateUserFlow() {",
+		"  persistUser()",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Rule == "behavioral-shift.side-effect-chain" {
+			found = true
+			if !strings.Contains(issue.Message, "updateUserFlow") {
+				t.Fatalf("expected public entry in behavioral shift message, got %+v", issue)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected behavioral shift issue for public side-effect call chain")
+	}
+}
+
+func TestScanProject_BehavioralShift_CannotBeSilencedByOffOverride(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, ".engine", "quality-rules.json"), strings.Join([]string{
+		"{",
+		"  \"rules\": {",
+		"    \"behavioral-shift.side-effect-chain\": \"off\"",
+		"  }",
+		"}",
+	}, "\n"))
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "chain.ts"), strings.Join([]string{
+		"function persistUser() {",
+		"  saveUserProfile()",
+		"}",
+		"export function updateUserFlow() {",
+		"  persistUser()",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Rule == "behavioral-shift.side-effect-chain" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected behavioral-shift side-effect-chain to remain active when override requests off")
+	}
+}
+
+func TestScanProject_BehavioralShift_CompactsPerFileFindings(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "many.ts"), strings.Join([]string{
+		"function persistOne() { saveOne() }",
+		"function persistTwo() { saveTwo() }",
+		"function persistThree() { saveThree() }",
+		"function persistFour() { saveFour() }",
+		"export function runA() { persistOne() }",
+		"export function runB() { persistTwo() }",
+		"export function runC() { persistThree() }",
+		"export function runD() { persistFour() }",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	chainCount := 0
+	compactCount := 0
+	for _, issue := range report.Issues {
+		if issue.File != "packages/demo/many.ts" {
+			continue
+		}
+		if issue.Rule == "behavioral-shift.side-effect-chain" {
+			chainCount++
+		}
+		if issue.Rule == "behavioral-shift.compaction" {
+			compactCount++
+		}
+	}
+	if chainCount > 3 {
+		t.Fatalf("expected behavioral-shift chain findings to be capped at 3 per file, got %d", chainCount)
+	}
+	if compactCount != 1 {
+		t.Fatalf("expected one behavioral-shift compaction notice, got %d", compactCount)
+	}
+}
+
+func TestScanProject_BehavioralShift_FindsRiskAcrossSiblingBranches(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "graph.ts"), strings.Join([]string{
+		"function shared() {",
+		"  if (Math.random() > 2) return",
+		"}",
+		"function left() {",
+		"  shared()",
+		"}",
+		"function right() {",
+		"  shared()",
+		"  saveSnapshot()",
+		"}",
+		"export function rootFlow() {",
+		"  left()",
+		"  right()",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Rule == "behavioral-shift.side-effect-chain" && strings.Contains(issue.Message, "rootFlow") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected behavioral shift to be found across sibling branch traversal")
 	}
 }

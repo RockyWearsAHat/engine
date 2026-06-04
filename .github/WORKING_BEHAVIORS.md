@@ -108,6 +108,8 @@ Log in to GitHub directly from the Preferences panel using the **Login with GitH
 
 Configure where Engine stores autonomously-cloned repositories using the **Autonomous project save path** field in the GitHub section of Preferences. By default, Engine stores clones in `~/.engine/projects` to avoid nested-repository workspace conflicts. A folder-browse button opens a directory picker for quick selection. The selected path is persisted and synced to the server as the `ENGINE_CLONES_DIR` environment variable.
 
+From Preferences -> Model, users can run a **local fleet quick scanner** that evaluates machine CPU/RAM budgets and recommends efficient llama.cpp fleet settings (backend count, ports, parallelism, threads, batching, context size). The scanner can also write the recommendation directly to `.engine/llama-fleet.env` for easy startup.
+
 ---
 
 ## GitHub Event Detection

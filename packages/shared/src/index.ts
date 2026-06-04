@@ -78,6 +78,28 @@ export interface RuntimeConfig {
   listDirectoryMaxChars?: string | null;
 }
 
+export interface LlamaFleetScanResult {
+  machine: {
+    cpuCores: number;
+    memoryGiB: number;
+  };
+  recommendation: {
+    basePort: number;
+    backends: number;
+    parallel: number;
+    threads: number;
+    threadsBatch: number;
+    threadsHttp: number;
+    ctx: number;
+    batch: number;
+    ubatch: number;
+  };
+  envPreview: string;
+  wroteEnvFile?: boolean;
+  envFilePath?: string;
+  notes: string[];
+}
+
 // Discord control plane types (kept separate from RuntimeConfig because
 // Discord config is persisted to `.engine/discord.json` rather than
 // mirrored into env vars).
@@ -268,6 +290,7 @@ export type ClientMessage =
   | { type: 'editor.tabs.sync'; tabs: TabInfo[] }
   | { type: 'engine.config.get' }
   | { type: 'engine.team.set'; team: string; provider: string; model: string }
+  | { type: 'llama.fleet.scan'; writeFile?: boolean }
   | { type: 'discord.unlink'; leaveGuild?: boolean }
   | { type: 'discord.config.get' }
   | { type: 'discord.config.set'; config: DiscordConfig }
@@ -316,6 +339,7 @@ export type ServerMessage =
   | { type: 'error'; message: string; code?: string }
   | { type: 'engine.config'; yaml: string; error?: string }
   | { type: 'engine.team.updated'; team: string }
+  | { type: 'llama.fleet.scan.result'; result?: LlamaFleetScanResult; error?: string }
   | { type: 'remote.pair.code'; code: string; expiresIn: number }
   | { type: 'test.summary'; sessionId: string; summary: TestSummary }
   | { type: 'discord.config'; config: DiscordConfig; active: boolean }

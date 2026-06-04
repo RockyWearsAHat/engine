@@ -8,45 +8,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileNode } from '@engine/shared';
 import { useStore } from '../store/index.js';
+import { resetStoreForProjectAndAgentTests } from './store-test-helpers.js';
 
-vi.mock('../ws/client.js', () => ({
-  wsClient: {
-    send: vi.fn(),
-    connect: vi.fn(),
-    disconnect: vi.fn(),
-    onMessage: vi.fn(),
-    onOpen: vi.fn(),
-    onClose: vi.fn(),
-  },
-}));
+vi.mock('../ws/client.js', async () => {
+  const { mockWsClientModule } = await import('./ws-client-mock.js');
+  return mockWsClientModule();
+});
 
-function reset() {
-  useStore.setState({
-    connected: false,
-    sessions: [],
-    activeSession: null,
-    chatMessages: [],
-    streamingMessageId: null,
-    fileTree: null,
-    openFiles: [],
-    activeFilePath: null,
-    gitStatus: null,
-    githubToken: null,
-    githubUser: null,
-    githubIssues: [],
-    githubIssuesLoading: false,
-    githubIssuesError: null,
-    searchQuery: '',
-    searchResults: [],
-    searchLoading: false,
-    searchError: null,
-    agentSessions: [],
-    activeAgentSessionId: null,
-    showDotfiles: false,
-  });
-}
-
-beforeEach(reset);
+beforeEach(resetStoreForProjectAndAgentTests);
 
 // ─── File tree ────────────────────────────────────────────────────────────────
 

@@ -40,11 +40,15 @@ func TestHasDoc_TrueOnlyWhenNonEmpty(t *testing.T) {
 	if HasDoc(dir, DocDesign) {
 		t.Error("expected false for missing doc")
 	}
-	_ = WriteDoc(dir, DocDesign, "")
+	if err := WriteDoc(dir, DocDesign, ""); err != nil {
+		t.Fatalf("write empty design doc: %v", err)
+	}
 	if HasDoc(dir, DocDesign) {
 		t.Error("expected false for empty doc")
 	}
-	_ = WriteDoc(dir, DocDesign, "real content")
+	if err := WriteDoc(dir, DocDesign, "real content"); err != nil {
+		t.Fatalf("write real design doc: %v", err)
+	}
 	if !HasDoc(dir, DocDesign) {
 		t.Error("expected true for non-empty doc")
 	}
@@ -52,8 +56,12 @@ func TestHasDoc_TrueOnlyWhenNonEmpty(t *testing.T) {
 
 func TestComposeDocContext_PreservesOrderAndSkipsEmpty(t *testing.T) {
 	dir := t.TempDir()
-	_ = WriteDoc(dir, DocDesign, "DESIGN BODY")
-	_ = WriteDoc(dir, DocVocabulary, "VOCAB BODY")
+	if err := WriteDoc(dir, DocDesign, "DESIGN BODY"); err != nil {
+		t.Fatalf("write design doc: %v", err)
+	}
+	if err := WriteDoc(dir, DocVocabulary, "VOCAB BODY"); err != nil {
+		t.Fatalf("write vocabulary doc: %v", err)
+	}
 	// DocPRD intentionally not written — must be skipped silently.
 
 	composed := ComposeDocContext(dir, DocDesign, DocPRD, DocVocabulary)
@@ -116,7 +124,9 @@ func TestOrchestratorIntakePhase_MigratesLegacyContext(t *testing.T) {
 		t.Fatalf("seed legacy: %v", err)
 	}
 	// Remove the new layered design.md if a write_legacy wrote it as DocContext.
-	_ = os.Remove(DocPath(dir, DocDesign))
+	if err := os.Remove(DocPath(dir, DocDesign)); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("remove layered design doc: %v", err)
+	}
 
 	cfg := OrchestratorConfig{
 		ProjectPath: dir,
@@ -141,9 +151,15 @@ func TestOrchestratorIntakePhase_MigratesLegacyContext(t *testing.T) {
 
 func TestOrchestratorPRDPhase_NoOpWhenBothPresent(t *testing.T) {
 	dir := t.TempDir()
-	_ = WriteDoc(dir, DocDesign, "design")
-	_ = WriteDoc(dir, DocVocabulary, "vocab")
-	_ = WriteDoc(dir, DocPRD, "prd")
+	if err := WriteDoc(dir, DocDesign, "design"); err != nil {
+		t.Fatalf("write design doc: %v", err)
+	}
+	if err := WriteDoc(dir, DocVocabulary, "vocab"); err != nil {
+		t.Fatalf("write vocabulary doc: %v", err)
+	}
+	if err := WriteDoc(dir, DocPRD, "prd"); err != nil {
+		t.Fatalf("write prd doc: %v", err)
+	}
 
 	cfg := OrchestratorConfig{
 		ProjectPath: dir,

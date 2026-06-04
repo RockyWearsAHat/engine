@@ -936,7 +936,9 @@ func TestHandler_Chat_InteractiveRoute_EmptyOnErrorIsIgnored(t *testing.T) {
 	if !errors.Is(err, os.ErrDeadlineExceeded) && !strings.Contains(strings.ToLower(fmt.Sprint(err)), "timeout") {
 		t.Fatalf("expected no extra chat.error after empty OnError, got %v", err)
 	}
-	_ = conn.SetReadDeadline(time.Time{})
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("reset read deadline: %v", err)
+	}
 }
 
 func TestHandler_GithubIssues_ResolvesRepo(t *testing.T) {

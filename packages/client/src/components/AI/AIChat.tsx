@@ -149,6 +149,7 @@ export default function AIChat() {
         onScroll={handleScroll}
         style={{ position: 'relative' }}
       >
+        {/* Empty state when no messages yet */}
         {chatMessages.length === 0 && (
           <div className="empty-state" style={{ paddingTop: 32 }}>
             <div style={{
@@ -166,6 +167,7 @@ export default function AIChat() {
           </div>
         )}
 
+        {/* Render all messages: user bubbles on right, assistant with tools/content on left */}
         {chatMessages.map(msg => (
           <div key={msg.id} className={'chat-msg chat-msg-' + msg.role}>
             {msg.role === 'user' ? (
@@ -239,7 +241,7 @@ export default function AIChat() {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Jump-to-bottom FAB — only visible when scrolled up during streaming */}
+      {/* Jump-to-bottom floating action button — only visible when scrolled up during streaming */}
       {showScrollBtn && (
         <button
           onClick={scrollToBottom}

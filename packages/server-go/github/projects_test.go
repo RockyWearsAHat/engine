@@ -61,7 +61,9 @@ func TestGetProjectV2ID_FallsBackToOrg(t *testing.T) {
 		var req struct {
 			Query string `json:"query"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode graphql request: %v", err)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(req.Query, "user(login") {
 			_, _ = w.Write([]byte(`{"errors":[{"message":"user not found"}]}`))
@@ -129,7 +131,9 @@ func TestAddIssueToEngineProject_Success(t *testing.T) {
 		var req struct {
 			Query string `json:"query"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode add-project request: %v", err)
+		}
 		w.Header().Set("Content-Type", "application/json")
 
 		switch {
@@ -172,7 +176,9 @@ func TestUpdateProjectItemStatus_SuccessAndSkip(t *testing.T) {
 		var req struct {
 			Query string `json:"query"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode update-status request: %v", err)
+		}
 		w.Header().Set("Content-Type", "application/json")
 
 		switch {
@@ -216,7 +222,9 @@ func TestUpdateProjectItemStatus_FieldOrOptionMissingSkips(t *testing.T) {
 		var req struct {
 			Query string `json:"query"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode field/option request: %v", err)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(req.Query, "projectV2(number") {
 			_, _ = w.Write([]byte(`{"data":{"user":{"projectV2":{"id":"P1"}}}}`))
@@ -356,7 +364,9 @@ func TestAddIssueToEngineProject_ErrorBranches(t *testing.T) {
 
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req struct{ Query string `json:"query"` }
-			_ = json.NewDecoder(r.Body).Decode(&req)
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode issue lookup request: %v", err)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			switch {
 			case strings.Contains(req.Query, "projectV2(number"):
@@ -386,7 +396,9 @@ func TestAddIssueToEngineProject_ErrorBranches(t *testing.T) {
 
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req struct{ Query string `json:"query"` }
-			_ = json.NewDecoder(r.Body).Decode(&req)
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode mutation request: %v", err)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			switch {
 			case strings.Contains(req.Query, "projectV2(number"):
@@ -453,7 +465,9 @@ func TestUpdateProjectItemStatus_EarlyAndErrorPaths(t *testing.T) {
 
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req struct{ Query string `json:"query"` }
-			_ = json.NewDecoder(r.Body).Decode(&req)
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode field list error request: %v", err)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			if strings.Contains(req.Query, "projectV2(number") {
 				_, _ = w.Write([]byte(`{"data":{"user":{"projectV2":{"id":"P1"}}}}`))

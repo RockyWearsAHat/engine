@@ -86,10 +86,12 @@ func updateMemoryResidualGraph(projectPath, sessionID string, event *db.MemoryLe
 		ResidualScore:        score,
 		LastEventSequence:    event.Sequence,
 	}
-	_ = db.UpsertMemoryResidualNode(node)
+	if err := db.UpsertMemoryResidualNode(node); err != nil {
+		fmt.Fprintf(os.Stderr, "memory_os: upsert residual node failed (%s): %v\n", node.NodeKey, err)
+	}
 
 	if parent := strings.TrimSpace(fieldString(payload, "parentNode")); parent != "" {
-		_ = db.UpsertMemoryResidualEdge(db.MemoryResidualEdge{
+		if err := db.UpsertMemoryResidualEdge(db.MemoryResidualEdge{
 			ProjectPath:       projectPath,
 			FromNodeKey:       parent,
 			ToNodeKey:         nodeKey,
@@ -97,7 +99,9 @@ func updateMemoryResidualGraph(projectPath, sessionID string, event *db.MemoryLe
 			Weight:            0.8,
 			Unresolved:        verificationStatus != "verified",
 			LastEventSequence: event.Sequence,
-		})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "memory_os: upsert residual edge failed (%s -> %s): %v\n", parent, nodeKey, err)
+		}
 	}
 }
 
@@ -170,8 +174,16 @@ func classifyEventNodeType(eventType string, payload map[string]any) (string, st
 }
 
 func buildDeterministicMemoryContext(projectPath, sessionID, userQuery string, openTabs []TabInfo, budget int) string {
-	nodes, _ := db.ListTopMemoryResidualNodes(projectPath, sessionID, 30)
-	events, _ := db.GetMemoryLedgerEvents(projectPath, 0, 100)
+	nodes, err := db.ListTopMemoryResidualNodes(projectPath, sessionID, 30)
+	if err != nil {
+		fmt.Printf("[memory-os] failed to load residual nodes: %v\n", err)
+		nodes = nil
+	}
+	events, err := db.GetMemoryLedgerEvents(projectPath, 0, 100)
+	if err != nil {
+		fmt.Printf("[memory-os] failed to load memory ledger events: %v\n", err)
+		events = nil
+	}
 
 	pack := MemoryContextPack{}
 	for _, node := range nodes {
@@ -292,23 +304,31 @@ func persistScribeSnapshot(projectPath, sessionID, actorModel, compiledContext s
 		"updatedAt":  time.Now().UTC().Format(time.RFC3339),
 		"eventOffset": eventSequence,
 	}
-	bodyJSON, _ := json.Marshal(snapshotBody)
-	_ = db.SaveMemoryStateSnapshot(db.MemoryStateSnapshot{
+	bodyJSON, err := json.Marshal(snapshotBody)
+	if err != nil {
+		fmt.Printf("[memory-os] failed to marshal scribe snapshot: %v\n", err)
+		return
+	}
+	if err := db.SaveMemoryStateSnapshot(db.MemoryStateSnapshot{
 		ProjectPath:   projectPath,
 		SessionID:     sessionID,
 		SnapshotType:  "scribe-shared",
 		EventSequence: eventSequence,
 		SnapshotJSON:  string(bodyJSON),
-	})
+	}); err != nil {
+		fmt.Printf("[memory-os] failed to persist shared scribe snapshot: %v\n", err)
+	}
 
 	if strings.TrimSpace(actorModel) != "" {
-		_ = db.SaveMemoryStateSnapshot(db.MemoryStateSnapshot{
+		if err := db.SaveMemoryStateSnapshot(db.MemoryStateSnapshot{
 			ProjectPath:   projectPath,
 			SessionID:     sessionID,
 			SnapshotType:  "scribe-model-" + sanitizeSnapshotToken(actorModel),
 			EventSequence: eventSequence,
 			SnapshotJSON:  string(bodyJSON),
-		})
+		}); err != nil {
+			fmt.Printf("[memory-os] failed to persist model scribe snapshot: %v\n", err)
+		}
 	}
 
 	writeScribeMarkdown(projectPath, actorModel, compiledContext)
@@ -317,16 +337,21 @@ func persistScribeSnapshot(projectPath, sessionID, actorModel, compiledContext s
 func writeScribeMarkdown(projectPath, actorModel, compiledContext string) {
 	baseDir := filepath.Join(projectPath, ".engine", "memory", "scribe")
 	if err := os.MkdirAll(filepath.Join(baseDir, "models"), 0o755); err != nil {
+		fmt.Printf("[memory-os] failed to create scribe markdown directory: %v\n", err)
 		return
 	}
 	stamp := time.Now().UTC().Format(time.RFC3339)
 	shared := "# Shared Scribe Memory\n\nUpdated: " + stamp + "\n\n" + compiledContext + "\n"
-	_ = os.WriteFile(filepath.Join(baseDir, "shared.md"), []byte(shared), 0o644)
+	if err := os.WriteFile(filepath.Join(baseDir, "shared.md"), []byte(shared), 0o644); err != nil {
+		fmt.Printf("[memory-os] failed to write shared scribe markdown: %v\n", err)
+	}
 	if strings.TrimSpace(actorModel) == "" {
 		return
 	}
 	modelBody := "# Model Memory\n\nModel: " + actorModel + "\nUpdated: " + stamp + "\n\n" + compiledContext + "\n"
-	_ = os.WriteFile(filepath.Join(baseDir, "models", sanitizeSnapshotToken(actorModel)+".md"), []byte(modelBody), 0o644)
+	if err := os.WriteFile(filepath.Join(baseDir, "models", sanitizeSnapshotToken(actorModel)+".md"), []byte(modelBody), 0o644); err != nil {
+		fmt.Printf("[memory-os] failed to write model scribe markdown: %v\n", err)
+	}
 }
 
 func sanitizeSnapshotToken(value string) string {

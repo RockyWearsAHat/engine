@@ -164,7 +164,9 @@ func (eo *EventOrchestrator) phaseIntake() error {
 
 	design := strings.TrimSpace(cc.GetOutput())
 	if design != "" {
-		_ = WriteDoc(eo.cfg.ProjectPath, DocDesign, design)
+		if err := WriteDoc(eo.cfg.ProjectPath, DocDesign, design); err != nil {
+			eo.cfg.OnError(fmt.Sprintf("persist design doc: %v", err))
+		}
 	}
 
 	eo.bus.Emit(Event{Type: EventDesignReady, Timestamp: time.Now()})

@@ -30,7 +30,9 @@ func TestBuildGrillerPrompt(t *testing.T) {
 // TestOrchestratorIntakePhase_ShortCircuit verifies pre-written DocDesign skips DB.
 func TestOrchestratorIntakePhase_ShortCircuit(t *testing.T) {
 	dir := t.TempDir()
-	_ = WriteDoc(dir, DocDesign, "existing design content")
+	if err := WriteDoc(dir, DocDesign, "existing design content"); err != nil {
+		t.Fatalf("write existing design doc: %v", err)
+	}
 	cfg := OrchestratorConfig{
 		ProjectPath:     dir,
 		OnPhase:         func(string, string) {},
@@ -52,7 +54,9 @@ func TestOrchestratorIntakePhase_ShortCircuit(t *testing.T) {
 // TestOrchestratorIntakePhase_LegacyContext verifies legacy DocContext is used when DocDesign absent.
 func TestOrchestratorIntakePhase_LegacyContext(t *testing.T) {
 	dir := t.TempDir()
-	_ = WriteDoc(dir, DocContext, "legacy design content")
+	if err := WriteDoc(dir, DocContext, "legacy design content"); err != nil {
+		t.Fatalf("write legacy context doc: %v", err)
+	}
 	cfg := OrchestratorConfig{
 		ProjectPath:     dir,
 		OnPhase:         func(string, string) {},
@@ -96,8 +100,12 @@ func TestOrchestratorIntakePhase_WithDB(t *testing.T) {
 // TestOrchestratorPRDPhase_ShortCircuit verifies both docs existing skips full phase.
 func TestOrchestratorPRDPhase_ShortCircuit(t *testing.T) {
 	dir := t.TempDir()
-	_ = WriteDoc(dir, DocVocabulary, "vocab content")
-	_ = WriteDoc(dir, DocPRD, "prd content")
+	if err := WriteDoc(dir, DocVocabulary, "vocab content"); err != nil {
+		t.Fatalf("write vocab doc: %v", err)
+	}
+	if err := WriteDoc(dir, DocPRD, "prd content"); err != nil {
+		t.Fatalf("write prd doc: %v", err)
+	}
 	cfg := OrchestratorConfig{
 		ProjectPath:     dir,
 		OnPhase:         func(string, string) {},
@@ -131,7 +139,9 @@ func TestOrchestratorPRDPhase_MissingDesign(t *testing.T) {
 // TestOrchestratorPRDPhase_WithDB verifies the full path with DB + ChatFn + split output.
 func TestOrchestratorPRDPhase_WithDB(t *testing.T) {
 	dir := setupIntakeDB(t)
-	_ = WriteDoc(dir, DocDesign, "my design concept")
+	if err := WriteDoc(dir, DocDesign, "my design concept"); err != nil {
+		t.Fatalf("write design doc: %v", err)
+	}
 	cfg := OrchestratorConfig{
 		ProjectPath:     dir,
 		OnPhase:         func(string, string) {},

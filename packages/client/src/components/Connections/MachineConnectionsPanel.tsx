@@ -32,6 +32,7 @@ function profileLabel(profile: ConnectionProfile): string {
   return profile.name.trim() || profile.host;
 }
 
+/** Manages remote machine connections including pairing, configuration, and status monitoring. */
 export default function MachineConnectionsPanel({
   compact = false,
 }: {

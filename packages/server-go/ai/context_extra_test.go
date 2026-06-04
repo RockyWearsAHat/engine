@@ -3164,7 +3164,9 @@ func TestRunOpenAICompatibleLoop_ScannerError(t *testing.T) {
 	var text strings.Builder
 	runOpenAICompatibleLoop(ctx, "openai", "gpt-4o", srv.URL+"/v1", "key", true,
 		"system", []anthropicMessage{}, &calls, &text)
-	_ = gotErr
+	if gotErr != "" {
+		t.Fatalf("unexpected error callback: %s", gotErr)
+	}
 }
 
 // ── runOpenAICompatibleLoop: nil tcd in toolCallMap iteration (line 1799) ─────
@@ -3464,8 +3466,12 @@ func TestExecuteToolForTest_ProcessKill_KillSignalDenied(t *testing.T) {
 		"pid": float64(ownPID), "signal": "KILL",
 	}, ctx)
 	// Approval denied → "The user denied the process kill." (not a real kill).
-	_ = result
-	_ = isErr
+	if !isErr {
+		t.Fatalf("expected denial to return an error result, got %q", result)
+	}
+	if !strings.Contains(strings.ToLower(result), "denied") {
+		t.Fatalf("expected denial message, got %q", result)
+	}
 }
 
 // ── github API error paths via GITHUB_API_BASE mock server ───────────────────
@@ -3577,11 +3583,21 @@ func TestExecuteToolForTest_GitPush_SuccessLocalRemote(t *testing.T) {
 		t.Skip("git remote add failed, skipping")
 	}
 	testFile := filepath.Join(ctx.ProjectPath, "push-test.txt")
-	_ = os.WriteFile(testFile, []byte("push test"), 0644)
-	_ = exec.Command("git", "-C", ctx.ProjectPath, "config", "user.email", "test@test.com").Run()
-	_ = exec.Command("git", "-C", ctx.ProjectPath, "config", "user.name", "Test").Run()
-	_ = exec.Command("git", "-C", ctx.ProjectPath, "add", ".").Run()
-	_ = exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "push test commit").Run()
+	if err := os.WriteFile(testFile, []byte("push test"), 0o644); err != nil {
+		t.Fatalf("write push test file: %v", err)
+	}
+	if err := exec.Command("git", "-C", ctx.ProjectPath, "config", "user.email", "test@test.com").Run(); err != nil {
+		t.Fatalf("git config user.email: %v", err)
+	}
+	if err := exec.Command("git", "-C", ctx.ProjectPath, "config", "user.name", "Test").Run(); err != nil {
+		t.Fatalf("git config user.name: %v", err)
+	}
+	if err := exec.Command("git", "-C", ctx.ProjectPath, "add", ".").Run(); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if err := exec.Command("git", "-C", ctx.ProjectPath, "commit", "-m", "push test commit").Run(); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
 
 	ctx.RequestApproval = func(_, _, _, _ string) (bool, error) { return true, nil }
 	result, _ := ExecuteToolForTest("git_push", map[string]any{"remote": "localtest"}, ctx)
@@ -3602,20 +3618,36 @@ func TestExecuteToolForTest_GitPull_SuccessLocalRemote(t *testing.T) {
 	if err := exec.Command("git", "clone", bareDir, srcDir).Run(); err != nil {
 		t.Skip("git clone failed")
 	}
-	_ = exec.Command("git", "-C", srcDir, "config", "user.email", "test@test.com").Run()
-	_ = exec.Command("git", "-C", srcDir, "config", "user.name", "Test").Run()
-	_ = os.WriteFile(filepath.Join(srcDir, "src.txt"), []byte("src"), 0644)
-	_ = exec.Command("git", "-C", srcDir, "add", ".").Run()
-	_ = exec.Command("git", "-C", srcDir, "commit", "-m", "src commit").Run()
-	_ = exec.Command("git", "-C", srcDir, "push", "origin", "HEAD").Run()
+	if err := exec.Command("git", "-C", srcDir, "config", "user.email", "test@test.com").Run(); err != nil {
+		t.Fatalf("source git config user.email: %v", err)
+	}
+	if err := exec.Command("git", "-C", srcDir, "config", "user.name", "Test").Run(); err != nil {
+		t.Fatalf("source git config user.name: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "src.txt"), []byte("src"), 0o644); err != nil {
+		t.Fatalf("write src file: %v", err)
+	}
+	if err := exec.Command("git", "-C", srcDir, "add", ".").Run(); err != nil {
+		t.Fatalf("source git add: %v", err)
+	}
+	if err := exec.Command("git", "-C", srcDir, "commit", "-m", "src commit").Run(); err != nil {
+		t.Fatalf("source git commit: %v", err)
+	}
+	if err := exec.Command("git", "-C", srcDir, "push", "origin", "HEAD").Run(); err != nil {
+		t.Fatalf("source git push: %v", err)
+	}
 
 	// Clone bare into our test project dir so it has a tracking branch.
 	cloneDir := t.TempDir()
 	if err := exec.Command("git", "clone", bareDir, cloneDir).Run(); err != nil {
 		t.Skip("second clone failed")
 	}
-	_ = exec.Command("git", "-C", cloneDir, "config", "user.email", "test@test.com").Run()
-	_ = exec.Command("git", "-C", cloneDir, "config", "user.name", "Test").Run()
+	if err := exec.Command("git", "-C", cloneDir, "config", "user.email", "test@test.com").Run(); err != nil {
+		t.Fatalf("clone git config user.email: %v", err)
+	}
+	if err := exec.Command("git", "-C", cloneDir, "config", "user.name", "Test").Run(); err != nil {
+		t.Fatalf("clone git config user.name: %v", err)
+	}
 
 	ctx := makeChatCtx(t)
 	ctx.ProjectPath = cloneDir
@@ -3691,8 +3723,12 @@ func TestExecuteToolForTest_OpenURL_LinuxViaInject(t *testing.T) {
 	}
 	ctx := makeChatCtx(t)
 	result, isErr := ExecuteToolForTest("open_url", map[string]any{"url": "https://example.com"}, ctx)
-	_ = isErr
-	_ = result
+	if isErr {
+		t.Fatalf("expected success for injected linux open_url, got %q", result)
+	}
+	if strings.TrimSpace(result) == "" {
+		t.Fatal("expected non-empty open_url result")
+	}
 }
 
 func TestExecuteToolForTest_Screenshot_UnsupportedOSViaInject(t *testing.T) {
