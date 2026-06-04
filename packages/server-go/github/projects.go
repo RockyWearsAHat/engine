@@ -23,6 +23,7 @@ import (
 )
 
 // projectOwner returns the configured project board owner (user or org login).
+// Falls back to EngineLogin() when ENGINE_GITHUB_PROJECT_OWNER is unset.
 func projectOwner() string {
 	if v := strings.TrimSpace(os.Getenv("ENGINE_GITHUB_PROJECT_OWNER")); v != "" {
 		return v
@@ -31,6 +32,7 @@ func projectOwner() string {
 }
 
 // projectNumber returns the configured project board number, or 0 when unset.
+// Reads ENGINE_GITHUB_PROJECT_NUMBER environment variable.
 func projectNumber() int {
 	raw := strings.TrimSpace(os.Getenv("ENGINE_GITHUB_PROJECT_NUMBER"))
 	if raw == "" {
@@ -41,6 +43,8 @@ func projectNumber() int {
 }
 
 // graphqlDo executes a GraphQL query/mutation against the GitHub GraphQL API.
+// Automatically sets authentication, content-type, and API version headers.
+// The response is unmarshaled into the out parameter (if non-nil).
 func graphqlDo(token string, query string, variables map[string]any, out any) error {
 	payload := map[string]any{"query": query}
 	if len(variables) > 0 {

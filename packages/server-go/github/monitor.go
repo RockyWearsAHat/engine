@@ -147,7 +147,7 @@ func (m *RepoMonitor) dispatch(ev *MonitoredEvent) {
 	}
 }
 
-// ── ProfilePoller ─────────────────────────────────────────────────────────────
+// ── Profile repository HTTP layer ─────────────────────────────────────────────────
 
 // profileRepoLister abstracts the GitHub API call so tests can stub it.
 type profileRepoLister interface {
@@ -155,7 +155,8 @@ type profileRepoLister interface {
 	GetAuthenticatedLogin() (string, error)
 }
 
-// profileHTTPGet abstracts fetching a raw URL (used for README reads).
+// profileHTTPGet fetches a raw URL (typically a README) with GitHub authentication.
+// Side effect: makes an HTTP request. Returns nil body (no error) for 404 responses.
 var profileHTTPGet = func(url, token string) ([]byte, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -194,8 +195,8 @@ type ProfilePoller struct {
 	lister   profileRepoLister
 	monitor  *RepoMonitor
 
-	mu      sync.Mutex
-	seen    map[string]bool // full_name → README contained @engine last poll
+	mu   sync.Mutex
+	seen map[string]bool // full_name → README contained @engine last poll
 }
 
 // NewProfilePoller creates a ProfilePoller that forwards events to monitor.

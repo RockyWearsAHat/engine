@@ -1,5 +1,8 @@
 package ws
 
+// Tests in this file cover edge cases and boundary conditions for repository overrides
+// and other handler scenarios. Test functions follow Go convention; individual doc comments omitted.
+
 import "testing"
 
 func TestGithubRepoOverride_AllCases(t *testing.T) {

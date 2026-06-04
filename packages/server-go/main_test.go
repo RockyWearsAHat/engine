@@ -30,6 +30,7 @@ type mainRedirectTransport struct {
 	transport http.RoundTripper
 }
 
+// RoundTrip implements http.RoundTripper for mainRedirectTransport.
 func (rt *mainRedirectTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	r2 := r.Clone(r.Context())
 	u, _ := url.Parse(rt.target + r.URL.Path)
@@ -50,26 +51,37 @@ func makeTriggerSSEServer(t *testing.T) *httptest.Server {
 	}))
 }
 
+// fakeDiscordService is a mock implementation of the Discord service for testing.
 type fakeDiscordService struct{}
 
+// Start implements the Discord service Start method.
 func (f *fakeDiscordService) Start() error { return nil }
 
+// Close implements the Discord service Close method.
 func (f *fakeDiscordService) Close() error { return nil }
 
+// CurrentConfig implements the Discord service CurrentConfig method.
 func (f *fakeDiscordService) CurrentConfig() discord.Config { return discord.Config{} }
 
+// Reload implements the Discord service Reload method.
 func (f *fakeDiscordService) Reload(cfg discord.Config) error { return nil }
 
+// SearchHistory implements the Discord service SearchHistory method.
 func (f *fakeDiscordService) SearchHistory(projectPath, query, since string, limit int) ([]db.DiscordSearchHit, error) {
 	return []db.DiscordSearchHit{}, nil
 }
 
+// RecentHistory implements the Discord service RecentHistory method.
 func (f *fakeDiscordService) RecentHistory(projectPath, threadID, since string, limit int) ([]db.DiscordMessage, error) {
 	return []db.DiscordMessage{}, nil
 }
+
+// SendDMToOwner implements the Discord service SendDMToOwner method.
 func (f *fakeDiscordService) SendDMToOwner(_ string) error      { return nil }
+// NotifyProjectProgress implements the Discord service NotifyProjectProgress method.
 func (f *fakeDiscordService) NotifyProjectProgress(_, _ string) {}
 
+// withRunDepsReset resets all global run dependencies to their original values for isolated test execution.
 func withRunDepsReset(t *testing.T) {
 	t.Helper()
 	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
@@ -331,6 +343,7 @@ func TestTriggerIssueSession_UsesActiveOrchestratorRedirect(t *testing.T) {
 	}
 }
 
+// setupTestDB initializes a test database at the given project path.
 func setupTestDB(t *testing.T, projectPath string) {
 	t.Helper()
 	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
@@ -339,6 +352,7 @@ func setupTestDB(t *testing.T, projectPath string) {
 	}
 }
 
+// countSessions returns the number of sessions in the database at projectPath.
 func countSessions(t *testing.T, projectPath string) int {
 	t.Helper()
 	sessions, err := db.ListSessions(projectPath)
@@ -348,6 +362,7 @@ func countSessions(t *testing.T, projectPath string) int {
 	return len(sessions)
 }
 
+// prepareScaffoldTargetRepo sets up a mock scaffold target repository with the given README for testing.
 func prepareScaffoldTargetRepo(t *testing.T, baseProjectPath, owner, repo, readme string) string {
 	t.Helper()
 	if strings.TrimSpace(os.Getenv("ENGINE_CLONES_DIR")) == "" {
@@ -1276,6 +1291,7 @@ func TestRun_DiscordEnabled_Success(t *testing.T) {
 	}
 }
 
+// withAIMockServer configures a mock OpenAI API server for testing AI chat functionality.
 func withAIMockServer(t *testing.T) {
 	t.Helper()
 	srv := makeTriggerSSEServer(t)
@@ -1287,6 +1303,7 @@ func withAIMockServer(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 }
 
+// withPathDepsReset resets all path-related dependencies to their original values for isolated test execution.
 func withPathDepsReset(t *testing.T) {
 	t.Helper()
 	origGetwd := osGetwdFn

@@ -82,16 +82,26 @@ func getMachineCredStore() *remote.KeychainStore {
 	return machineCredStore
 }
 
+// credStoreGetFn retrieves a credential from the machine keychain.
 var credStoreGetFn = func(key string) (string, error) { return getMachineCredStore().Get(key) }
+
+// credStoreSetFn stores a credential in the machine keychain.
 var credStoreSetFn = func(key, value string) error { return getMachineCredStore().Set(key, value) }
+
+// credStoreDelFn deletes a credential from the machine keychain.
 var credStoreDelFn = func(key string) error { return getMachineCredStore().Delete(key) }
 
+// ollamaWarmKeepInterval is the interval between warm-keep pings to Ollama.
 // Must be less than OLLAMA_KEEP_ALIVE (default 30m) so the model never expires.
 // Exported as a var so tests can override it to a short duration.
 var ollamaWarmKeepInterval = 20 * time.Minute
 
-// Shell timeouts are vars so tests can force deterministic timeout coverage.
+// interactiveShellTimeout is the max time for interactive shell operations.
+// Exported as a var so tests can force deterministic timeout coverage.
 var interactiveShellTimeout = 2 * time.Minute
+
+// autonomousShellTimeout is the max time for autonomous shell operations.
+// Exported as a var so tests can force deterministic timeout coverage.
 var autonomousShellTimeout = 5 * time.Minute
 
 // autonomousBuilderMaxTurns bounds headless builder loops so a local model that
@@ -143,6 +153,7 @@ func ollamaPing() {
 
 // parseIntEnv reads an int from env var `key`, falling back to `def` on missing
 // or non-numeric values. Used for runtime tuning knobs like ENGINE_OLLAMA_NUM_CTX.
+// Returns def if the env var is absent, empty, non-numeric, or ≤ 0.
 func parseIntEnv(key string, def int) int {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -155,6 +166,8 @@ func parseIntEnv(key string, def int) int {
 	return n
 }
 
+// runtimeContextMaxTokens returns the max token budget for context from env or default.
+// Validates minimum of 16000 tokens; returns DefaultTokenBudget if lower.
 func runtimeContextMaxTokens() int {
 	b := parseIntEnv("ENGINE_CONTEXT_MAX_TOKENS", DefaultTokenBudget)
 	if b < 16000 {
@@ -163,6 +176,8 @@ func runtimeContextMaxTokens() int {
 	return b
 }
 
+// runtimeContextRecentWindow returns the max number of recent messages to keep.
+// Defaults to 60, clamped to [12, 1000].
 func runtimeContextRecentWindow() int {
 	w := parseIntEnv("ENGINE_CONTEXT_RECENT_WINDOW", 60)
 	if w < 12 {
@@ -174,6 +189,9 @@ func runtimeContextRecentWindow() int {
 	return w
 }
 
+// inferredProviderForModel infers the provider name from a model string.
+// Returns "openai" for gpt-*/o1-/o3-/o4- prefixes, "anthropic" for claude,
+// "ollama" for ollama-style names, and "llamacpp" as fallback.
 func inferredProviderForModel(model string) string {
 	lower := strings.ToLower(strings.TrimSpace(model))
 	if lower == "" {
@@ -192,6 +210,8 @@ func inferredProviderForModel(model string) string {
 	return "llamacpp"
 }
 
+// looksLikeOllamaModel checks if the model name matches Ollama conventions.
+// Returns true if the name contains ':' or starts with a known Ollama prefix.
 func looksLikeOllamaModel(lowerModel string) bool {
 	if strings.Contains(lowerModel, ":") {
 		return true
@@ -204,6 +224,9 @@ func looksLikeOllamaModel(lowerModel string) bool {
 	return false
 }
 
+// resolveProvider returns the normalized provider name, using explicit override or inference.
+// Accepts "anthropic", "openai", "ollama", "llamacpp", "llama.cpp", "llama-cpp",
+// "auto", or "" (empty defaults to inference). Unrecognized values fall back to inference.
 func resolveProvider(explicitProvider string, model string) string {
 	switch strings.ToLower(strings.TrimSpace(explicitProvider)) {
 	case "anthropic", "openai", "ollama", "llamacpp":
@@ -217,6 +240,8 @@ func resolveProvider(explicitProvider string, model string) string {
 	}
 }
 
+// defaultModelForProvider returns the default model name for a given provider.
+// Returns the canonical model string for the provider (e.g. "claude-opus-4-5" for anthropic).
 func defaultModelForProvider(provider string) string {
 	switch provider {
 	case "openai":
@@ -230,6 +255,7 @@ func defaultModelForProvider(provider string) string {
 	}
 }
 
+// ollamaChatCompletionsURL returns the normalized OpenAI-compatible chat completions URL for Ollama.
 func ollamaChatCompletionsURL(baseURL string) string {
 	normalized := ollamaRootURL(baseURL)
 	if strings.HasSuffix(normalized, "/chat/completions") {
@@ -238,6 +264,8 @@ func ollamaChatCompletionsURL(baseURL string) string {
 	return normalized + "/v1/chat/completions"
 }
 
+// ollamaRootURL normalizes an Ollama base URL by removing trailing slashes and path suffixes.
+// Returns the default Ollama URL if baseURL is empty.
 func ollamaRootURL(baseURL string) string {
 	normalized := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if normalized == "" {
@@ -253,6 +281,8 @@ func ollamaRootURL(baseURL string) string {
 	}
 }
 
+// detectOllamaModel queries the Ollama server to find the first loaded model.
+// Returns empty string if no model is loaded or the server is unreachable.
 func detectOllamaModel(baseURL string) string {
 	rootURL := ollamaRootURL(baseURL)
 	if model := firstOllamaModel(rootURL+"/api/ps", "models", "name"); model != "" {
@@ -264,6 +294,9 @@ func detectOllamaModel(baseURL string) string {
 	return ""
 }
 
+// firstOllamaModel extracts the first model name from an Ollama API response.
+// Queries url and extracts a model name from listKey (array) / nameKey (field).
+// Returns empty string on error or if no model is found.
 func firstOllamaModel(url string, listKey string, nameKey string) string {
 	resp, err := http.Get(url)
 	if err != nil {
@@ -292,7 +325,9 @@ func firstOllamaModel(url string, listKey string, nameKey string) string {
 	return ""
 }
 
-// ChatContext carries callbacks for streaming responses to the WebSocket client.
+// ChatContext carries all state and callbacks for a single chat session.
+// It holds project paths, session IDs, streaming callbacks, tool state, and agent metadata.
+// Zero-valued ChatContext.Cancel is treated as non-cancellable.
 type ChatContext struct {
 	ProjectPath      string
 	SessionID        string
@@ -323,10 +358,12 @@ type ChatContext struct {
 	// Role determines the lean system prompt and pre-granted tool set.
 	// Defaults to RoleInteractive when zero-valued.
 	Role AgentRole
-	// ProviderOverride and ModelOverride allow callers to force a specific runtime
-	// model for this role execution (for example reviewer/planner split models).
+	// ProviderOverride overrides the provider for this Chat (e.g., "anthropic", "openai").
+	// Empty string uses auto-detection from model name.
 	ProviderOverride string
-	ModelOverride    string
+	// ModelOverride overrides the model name for this Chat (e.g., "claude-opus-4-5").
+	// Empty string uses the env-configured default.
+	ModelOverride string
 	// MarkVital is set by the agentic loop before iterating. Calling MarkVital(n) marks the
 	// last n messages in the active history as vital checkpoints so they survive context windowing.
 	// Nil outside of an active loop.
@@ -368,14 +405,60 @@ func (ctx *ChatContext) isCancelled() bool {
 	}
 }
 
-// TabInfo represents an open editor tab (pushed by client via editor.tabs.sync).
+// OutputCollector holds a thread-safe string builder for accumulating chat output.
+type OutputCollector struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+// Write appends content to the output buffer in a thread-safe manner.
+func (oc *OutputCollector) Write(content string) {
+	if content == "" {
+		return
+	}
+	oc.mu.Lock()
+	oc.buf.WriteString(content)
+	oc.mu.Unlock()
+}
+
+// String returns the accumulated output.
+func (oc *OutputCollector) String() string {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	return oc.buf.String()
+}
+
+// newChatContextForRole creates a ChatContext with output collection pre-configured.
+// This consolidates the repeated pattern of building a context with sync.Mutex + strings.Builder
+// for collecting streamed output from a role-based chat session.
+func newChatContextForRole(cfg OrchestratorConfig, sessionID string, role AgentRole, cancel <-chan struct{}) (*ChatContext, *OutputCollector) {
+	oc := &OutputCollector{}
+	ctx := &ChatContext{
+		ProjectPath: cfg.ProjectPath,
+		SessionID:   sessionID,
+		Role:        role,
+		Cancel:      cancel,
+		OnChunk: func(content string, _ bool) {
+			oc.Write(content)
+		},
+		OnError:      func(string) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
+	}
+	return ctx, oc
+}
+
+// TabInfo represents an open editor tab pushed by the client.
 type TabInfo struct {
+	// Path is the absolute file path of the tab.
 	Path     string `json:"path"`
+	// IsActive indicates whether this tab is the currently focused tab.
 	IsActive bool   `json:"isActive"`
+	// IsDirty indicates whether the tab has unsaved changes.
 	IsDirty  bool   `json:"isDirty"`
 }
 
-// ToolCall is a single tool invocation recorded in the DB.
+// ToolCall records a single tool invocation, stored in the message history.
 type ToolCall struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
@@ -392,35 +475,54 @@ type anthropicTool struct {
 	InputSchema any    `json:"input_schema"`
 }
 
+// anthropicMessage represents a message in the Anthropic API format.
 type anthropicMessage struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"` // string | []contentBlock
+	// Role is "user" or "assistant".
+	Role string `json:"role"`
+	// Content is the message body: either a string or []contentBlock.
+	Content any `json:"content"`
 	// Vital marks this message as a key checkpoint. Vital messages are always kept during
 	// context windowing; only non-vital messages are pruned when context grows too large.
 	// Never serialised to the API.
 	Vital bool `json:"-"`
 }
 
+// contentBlock represents a single content unit in an Anthropic message.
 type contentBlock struct {
-	Type      string `json:"type"`
-	Text      string `json:"text,omitempty"`
-	ID        string `json:"id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Input     any    `json:"input,omitempty"`
+	// Type is "text", "tool_use", or "tool_result".
+	Type string `json:"type"`
+	// Text is the text content (for type="text").
+	Text string `json:"text,omitempty"`
+	// ID is the content block ID (for type="tool_result").
+	ID string `json:"id,omitempty"`
+	// Name is the tool name (for type="tool_use").
+	Name string `json:"name,omitempty"`
+	// Input is the tool arguments (for type="tool_use").
+	Input any `json:"input,omitempty"`
+	// ToolUseID references the original tool_use block ID (for type="tool_result").
 	ToolUseID string `json:"tool_use_id,omitempty"`
-	Content   string `json:"content,omitempty"`
+	// Content is the tool result text (for type="tool_result").
+	Content string `json:"content,omitempty"`
 }
 
+// anthropicRequest is the HTTP request body for the Anthropic API.
+// anthropicRequest is the HTTP request body for the Anthropic API.
 type anthropicRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"`
-	System    string             `json:"system"`
-	Messages  []anthropicMessage `json:"messages"`
-	Tools     []anthropicTool    `json:"tools"`
-	Stream    bool               `json:"stream"`
+	// Model is the model identifier (e.g., "claude-opus-4-5").
+	Model string `json:"model"`
+	// MaxTokens is the max tokens in the response.
+	MaxTokens int `json:"max_tokens"`
+	// System is the system prompt.
+	System string `json:"system"`
+	// Messages is the conversation history.
+	Messages []anthropicMessage `json:"messages"`
+	// Tools is the tool registry available for this request.
+	Tools []anthropicTool `json:"tools"`
+	// Stream indicates streaming mode.
+	Stream bool `json:"stream"`
 }
 
-// strProp is a helper to build simple {"type":"string","description":"..."} JSON.
+// strProp builds a {"type":"string","description":"..."} schema fragment.
 func strProp(desc string) any {
 	return map[string]any{"type": "string", "description": desc}
 }
@@ -439,6 +541,7 @@ func arrProp(desc string) any {
 	}
 }
 
+// objSchema builds a JSON Schema object with required fields and properties.
 func objSchema(required []string, props map[string]any) any {
 	return map[string]any{
 		"type":       "object",
@@ -2044,6 +2147,66 @@ func historyFromRetryAnchor(history []db.Message, messageID string) []db.Message
 	return out
 }
 
+// persistChatFinalState handles the post-conversation side effects:
+// saving residuals, updating session summary, writing handoff cache, and snapshotting memory.
+// Extracted for clarity and reduced side-effect depth.
+func persistChatFinalState(ctx *ChatContext, assistantMessageID, userMsgID, userMessage string,
+	finalText *strings.Builder, allToolCalls []ToolCall, session *db.Session,
+	windowResult conversationWindowResult, selectiveContext selectiveContextResult,
+	profile *ProjectProfile, openTabs []TabInfo, model string, lastLedgerEvent *db.MemoryLedgerEvent) {
+
+	// Save attention residuals for context recovery on next turn.
+	if err := db.SaveAttentionResiduals(BuildAttentionResidualRecords(
+		ctx.SessionID,
+		userMsgID,
+		userMessage,
+		windowResult,
+		selectiveContext,
+		func() string {
+			if session == nil {
+				return ""
+			}
+			return session.Summary
+		}(),
+	)); err != nil {
+		ctx.OnError(fmt.Sprintf("save attention residuals failed: %v", err))
+	}
+
+	// Update session summary and handoff cache if a new summary was generated.
+	if summary := BuildUpdatedSessionSummary(func() string {
+		if session == nil {
+			return ""
+		}
+		return session.Summary
+	}(), userMessage, finalText.String(), allToolCalls); summary != "" {
+
+		if err := db.UpdateSessionSummary(ctx.SessionID, summary); err != nil {
+			ctx.OnError(fmt.Sprintf("update session summary failed: %v", err))
+		}
+		if ctx.OnSessionUpdated != nil {
+			if updatedSession, err := db.GetSession(ctx.SessionID); err == nil && updatedSession != nil {
+				ctx.OnSessionUpdated(updatedSession)
+			}
+		}
+
+		if err := WriteAutonomyHandoffCache(ctx.ProjectPath, func() *AutonomyHandoff {
+			handoff := BuildAutonomyHandoff(assistantMessageID, ctx.SessionID, ctx.ProjectPath, userMessage, summary, profile)
+			return &handoff
+		}()); err != nil {
+			ctx.OnError(fmt.Sprintf("write autonomy handoff cache failed: %v", err))
+		}
+	}
+
+	// Snapshot deterministic memory context for scribe notes.
+	if compiled := buildDeterministicMemoryContext(ctx.ProjectPath, ctx.SessionID, userMessage, openTabs, 2200); compiled != "" {
+		seq := int64(0)
+		if lastLedgerEvent != nil {
+			seq = lastLedgerEvent.Sequence
+		}
+		persistScribeSnapshot(ctx.ProjectPath, ctx.SessionID, model, compiled, seq)
+	}
+}
+
 // Chat runs the full agentic loop for a user message, streaming results via ctx callbacks.
 func Chat(ctx *ChatContext, userMessage string) {
 	registerChatAgent(ctx)
@@ -2271,50 +2434,8 @@ func Chat(ctx *ChatContext, userMessage string) {
 		"id":   assistantMessageID,
 		"text": finalText.String(),
 	})
-	if err := db.SaveAttentionResiduals(BuildAttentionResidualRecords(
-		ctx.SessionID,
-		userMsgID,
-		userMessage,
-		windowResult,
-		selectiveContext,
-		func() string {
-			if session == nil {
-				return ""
-			}
-			return session.Summary
-		}(),
-	)); err != nil {
-		ctx.OnError(fmt.Sprintf("save attention residuals failed: %v", err))
-	}
-	if summary := BuildUpdatedSessionSummary(func() string {
-		if session == nil {
-			return ""
-		}
-		return session.Summary
-	}(), userMessage, finalText.String(), allToolCalls); summary != "" {
-		if err := db.UpdateSessionSummary(ctx.SessionID, summary); err != nil {
-			ctx.OnError(fmt.Sprintf("update session summary failed: %v", err))
-		}
-		if ctx.OnSessionUpdated != nil {
-			if updatedSession, err := db.GetSession(ctx.SessionID); err == nil && updatedSession != nil {
-				ctx.OnSessionUpdated(updatedSession)
-			}
-		}
-
-		if err := WriteAutonomyHandoffCache(ctx.ProjectPath, func() *AutonomyHandoff {
-			handoff := BuildAutonomyHandoff(assistantMessageID, ctx.SessionID, ctx.ProjectPath, userMessage, summary, profile)
-			return &handoff
-		}()); err != nil {
-			ctx.OnError(fmt.Sprintf("write autonomy handoff cache failed: %v", err))
-		}
-	}
-	if compiled := buildDeterministicMemoryContext(ctx.ProjectPath, ctx.SessionID, userMessage, openTabs, 2200); compiled != "" {
-		seq := int64(0)
-		if lastLedgerEvent != nil {
-			seq = lastLedgerEvent.Sequence
-		}
-		persistScribeSnapshot(ctx.ProjectPath, ctx.SessionID, model, compiled, seq)
-	}
+	persistChatFinalState(ctx, assistantMessageID, userMsgID, userMessage, &finalText, allToolCalls,
+		session, windowResult, selectiveContext, profile, openTabs, model, lastLedgerEvent)
 	ctx.OnChunk("", true)
 }
 

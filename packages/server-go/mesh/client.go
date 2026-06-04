@@ -111,6 +111,7 @@ func (c *Client) signedRequest(ctx context.Context, peer *Peer, method, path str
 	return body, nil
 }
 
+// peerBaseURL normalizes a peer address into an HTTP URL, adding http:// if not present.
 func peerBaseURL(address string) string {
 	addr := strings.TrimSpace(address)
 	if addr == "" {

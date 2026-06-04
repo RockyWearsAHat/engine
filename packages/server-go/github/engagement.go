@@ -16,9 +16,11 @@ import (
 )
 
 // EngageOnIssuePickup is called the moment Engine decides to work on an issue.
-// It self-assigns Engine, adds the issue to the project board, and pins a
-// kickoff comment so the user sees immediate activity on GitHub.
-// projectPath is the local clone root (used for the comment store).
+// Performs multiple side effects in sequence:
+//   1. Self-assigns Engine's bot account
+//   2. Adds the issue to the Engine project board (if configured)
+//   3. Pins a kickoff comment so the user sees immediate activity on GitHub
+// projectPath is the local clone root (used for persisting the comment store).
 func EngageOnIssuePickup(projectPath, owner, repo string, issueNumber int, sessionID string) {
 	// 1. Self-assign.
 	if err := AssignEngine(owner, repo, issueNumber); err != nil {
@@ -48,6 +50,7 @@ func EngageOnIssuePickup(projectPath, owner, repo string, issueNumber int, sessi
 }
 
 // EngageOnIssueProgress updates the pinned status comment with phase/step info.
+// Side effect: edits the issue comment and updates project board item status.
 // stepsDone and stepsTotal may both be 0 when the plan has not been produced yet.
 func EngageOnIssueProgress(projectPath, owner, repo string, issueNumber int, phase, detail string, stepsDone, stepsTotal int) {
 	store := IssueCommentStoreFor(projectPath)
@@ -68,8 +71,8 @@ func EngageOnIssueProgress(projectPath, owner, repo string, issueNumber int, pha
 	}
 }
 
-// EngageOnIssueComplete posts a final comment, unassigns Engine (optional),
-// and marks the project board item as "Done".
+// EngageOnIssueComplete posts a final comment, and marks the project board item as "Done".
+// Side effects: edits or creates a completion comment; updates project status.
 func EngageOnIssueComplete(projectPath, owner, repo string, issueNumber, stepsTotal int, prURL string) {
 	c, err := EngineClient(owner, repo)
 	if err != nil {
@@ -91,6 +94,7 @@ func EngageOnIssueComplete(projectPath, owner, repo string, issueNumber, stepsTo
 }
 
 // EngageOnIssueBlocked posts a "help needed" update to the pinned comment.
+// Side effect: edits or creates a blocked status comment.
 func EngageOnIssueBlocked(projectPath, owner, repo string, issueNumber int, reason string) {
 	store := IssueCommentStoreFor(projectPath)
 	commentID, ok := store.Get(owner, repo, issueNumber)
@@ -108,7 +112,8 @@ func EngageOnIssueBlocked(projectPath, owner, repo string, issueNumber int, reas
 	}
 }
 
-// ── Comment bodies ────────────────────────────────────────────────────────────
+// ── Comment formatting helpers (internal) ────────────────────────────────────
+// These functions construct Markdown templates for status comments posted to issues.
 
 func engineHeader() string {
 	return fmt.Sprintf("<!-- engine-status-comment -->\n**%s is on it** 🤖", EngineDisplayName())

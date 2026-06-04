@@ -6,11 +6,20 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store/index.js';
-import { resetStoreForTests, mockWsClientModule } from './store-test-helpers.js';
+import { resetStoreForTests } from './store-test-helpers.js';
 
 // ─── Mock wsClient ────────────────────────────────────────────────────────────
 // Must be hoisted so the mock is in place before the store module is imported.
-vi.mock('../ws/client.js', () => mockWsClientModule());
+vi.mock('../ws/client.js', () => ({
+  wsClient: {
+    send: vi.fn(),
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    onMessage: vi.fn(),
+    onOpen: vi.fn(),
+    onClose: vi.fn(),
+  },
+}));
 
 // Import AFTER the mock so we get the mocked version.
 import { wsClient } from '../ws/client.js';

@@ -1,5 +1,9 @@
 package ws
 
+// Tests in this file cover WebSocket message handling, routing, and dispatch logic.
+// Test functions follow Go convention of Test* naming; doc comments are omitted
+// as Go does not conventionally require them for test functions.
+
 import (
 	"encoding/json"
 	"errors"
@@ -105,6 +109,7 @@ func openWSTestConnectionWithToken(t *testing.T, projectDir, token string) (*web
 	return conn, cleanup
 }
 
+// TestServeWS_RejectsMissingTokenWhenLocalAuthEnabled verifies websocket rejects connections without valid auth token.
 func TestServeWS_RejectsMissingTokenWhenLocalAuthEnabled(t *testing.T) {
 	projectDir := setupWSProject(t)
 	t.Setenv("ENGINE_LOCAL_WS_TOKEN", "desktop-secret")
@@ -122,6 +127,7 @@ func TestServeWS_RejectsMissingTokenWhenLocalAuthEnabled(t *testing.T) {
 	}
 }
 
+// TestServeWS_AllowsTokenWhenLocalAuthEnabled verifies authenticated connections are allowed with valid token.
 func TestServeWS_AllowsTokenWhenLocalAuthEnabled(t *testing.T) {
 	projectDir := setupWSProject(t)
 	t.Setenv("ENGINE_LOCAL_WS_TOKEN", "desktop-secret")
@@ -143,6 +149,13 @@ func writeWSMessage(t *testing.T, conn *websocket.Conn, payload map[string]any) 
 	if err := conn.WriteJSON(payload); err != nil {
 		t.Fatalf("write websocket json: %v", err)
 	}
+}
+
+// sendAndReceive writes a message and reads the first response of the expected type.
+func sendAndReceive(t *testing.T, conn *websocket.Conn, payload map[string]any, expectedType string) map[string]any {
+	t.Helper()
+	writeWSMessage(t, conn, payload)
+	return readWSMessageOfType(t, conn, expectedType)
 }
 
 func readWSMessageOfType(t *testing.T, conn *websocket.Conn, expectedType string) map[string]any {
@@ -171,6 +184,7 @@ func readWSMessageOfType(t *testing.T, conn *websocket.Conn, expectedType string
 	return nil
 }
 
+// TestHandler_ChatMessage_InvokesAIRunnerWithTabsAndRuntimeConfig verifies chat routing passes open tabs and model config to AI.
 func TestHandler_ChatMessage_InvokesAIRunnerWithTabsAndRuntimeConfig(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
@@ -281,6 +295,7 @@ func TestHandler_ChatMessage_InvokesAIRunnerWithTabsAndRuntimeConfig(t *testing.
 	}
 }
 
+// TestHandler_ChatMessage_WithoutSession_ReturnsChatError verifies chat without session returns error.
 func TestHandler_ChatMessage_WithoutSession_ReturnsChatError(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
@@ -299,6 +314,7 @@ func TestHandler_ChatMessage_WithoutSession_ReturnsChatError(t *testing.T) {
 	}
 }
 
+// TestHandler_ChatMessage_UsesPayloadSessionWhenConnectionStateWasLost verifies chat uses sessionId from payload when session state is lost.
 func TestHandler_ChatMessage_UsesPayloadSessionWhenConnectionStateWasLost(t *testing.T) {
 	projectDir := setupWSProject(t)
 	sessionID := "session-reconnected"
@@ -353,6 +369,7 @@ func TestHandler_ChatMessage_UsesPayloadSessionWhenConnectionStateWasLost(t *tes
 	}
 }
 
+// TestHandler_ChatMessage_CanWriteAndOpenFileThroughAITools verifies AI can write files and trigger editor.open event.
 func TestHandler_ChatMessage_CanWriteAndOpenFileThroughAITools(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
@@ -431,6 +448,7 @@ func TestHandler_ChatMessage_CanWriteAndOpenFileThroughAITools(t *testing.T) {
 	}
 }
 
+// TestHandler_RemotePairCodeGenerate_WhenNotEnabled_ReturnsError verifies pairing fails when not configured.
 func TestHandler_RemotePairCodeGenerate_WhenNotEnabled_ReturnsError(t *testing.T) {
 	SetPairingManager(nil)
 	projectDir := setupWSProject(t)
@@ -444,6 +462,7 @@ func TestHandler_RemotePairCodeGenerate_WhenNotEnabled_ReturnsError(t *testing.T
 	}
 }
 
+// TestHandler_RemotePairCodeGenerate_ReturnsCode verifies pairing code is generated and returned with expiration.
 func TestHandler_RemotePairCodeGenerate_ReturnsCode(t *testing.T) {
 	pm := remote.NewPairingManager()
 	SetPairingManager(pm)

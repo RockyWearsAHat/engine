@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// TestPhaseEmoji_AllPaths verifies emoji mapping for all phase states.
 func TestPhaseEmoji_AllPaths(t *testing.T) {
 	cases := map[string]string{
 		"plan":     "📋",
@@ -23,6 +24,7 @@ func TestPhaseEmoji_AllPaths(t *testing.T) {
 	}
 }
 
+// TestPhaseToProjectStatus_AllPaths verifies project status mapping for all phase states.
 func TestPhaseToProjectStatus_AllPaths(t *testing.T) {
 	cases := map[string]string{
 		"done":    "Done",
@@ -39,6 +41,7 @@ func TestPhaseToProjectStatus_AllPaths(t *testing.T) {
 	}
 }
 
+// TestProgressAndBlockedBodies_TrimmingPaths verifies comment body text trimming and ellipsis formatting.
 func TestProgressAndBlockedBodies_TrimmingPaths(t *testing.T) {
 	detail := strings.Repeat("x", 260)
 	body := progressCommentBody("execute", detail, 0, 0)

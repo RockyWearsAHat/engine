@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// TestEngineToken_PrefersBot verifies ENGINE_GITHUB_BOT_TOKEN takes precedence over GITHUB_TOKEN.
 func TestEngineToken_PrefersBot(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "bot-tok")
 	t.Setenv("GITHUB_TOKEN", "user-tok")
@@ -18,6 +19,7 @@ func TestEngineToken_PrefersBot(t *testing.T) {
 	}
 }
 
+// TestEngineToken_FallsBackToGitHubToken verifies fallback to GITHUB_TOKEN when bot token is unset.
 func TestEngineToken_FallsBackToGitHubToken(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "user-tok")
@@ -26,6 +28,7 @@ func TestEngineToken_FallsBackToGitHubToken(t *testing.T) {
 	}
 }
 
+// TestEngineLogin_FromEnv verifies EngineLogin reads from ENGINE_GITHUB_LOGIN environment variable.
 func TestEngineLogin_FromEnv(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_LOGIN", "my-engine-bot")
 	if got := EngineLogin(); got != "my-engine-bot" {
@@ -33,6 +36,8 @@ func TestEngineLogin_FromEnv(t *testing.T) {
 	}
 }
 
+// TestEngineLogin_ViaAPI verifies EngineLogin queries GitHub API when env var is unset.
+// Tests behavioral side effect (HTTP GET to GitHub user API).
 func TestEngineLogin_ViaAPI(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_LOGIN", "")
 	engineLoginCached = "" // reset cache
@@ -49,6 +54,7 @@ func TestEngineLogin_ViaAPI(t *testing.T) {
 	}
 }
 
+// TestEngineDisplayName_Default verifies EngineDisplayName returns "Engine" when env var is unset.
 func TestEngineDisplayName_Default(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_DISPLAY_NAME", "")
 	if got := EngineDisplayName(); got != "Engine" {
@@ -56,6 +62,7 @@ func TestEngineDisplayName_Default(t *testing.T) {
 	}
 }
 
+// TestEngineDisplayName_Custom verifies EngineDisplayName reads from ENGINE_GITHUB_DISPLAY_NAME env var.
 func TestEngineDisplayName_Custom(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_DISPLAY_NAME", "RockyBot")
 	if got := EngineDisplayName(); got != "RockyBot" {
@@ -63,6 +70,7 @@ func TestEngineDisplayName_Custom(t *testing.T) {
 	}
 }
 
+// TestAssignEngine_NoToken verifies AssignEngine is best-effort when token is missing.
 func TestAssignEngine_NoToken(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
@@ -73,6 +81,8 @@ func TestAssignEngine_NoToken(t *testing.T) {
 	}
 }
 
+// TestAssignEngine_Posts verifies AssignEngine sends POST request with login in assignees field.
+// Tests behavioral side effect (HTTP POST to GitHub API).
 func TestAssignEngine_Posts(t *testing.T) {
 	var captured map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -94,6 +104,7 @@ func TestAssignEngine_Posts(t *testing.T) {
 	}
 }
 
+// TestIssueCommentStore_GetSetRoundtrip verifies comment store persists to disk and reloads correctly.
 func TestIssueCommentStore_GetSetRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(dir, ".engine"), 0700)
@@ -115,6 +126,7 @@ func TestIssueCommentStore_GetSetRoundtrip(t *testing.T) {
 	}
 }
 
+// TestConfigureRepoIdentity_SetsConfig verifies ConfigureRepoIdentity calls git config with correct name and email.
 func TestConfigureRepoIdentity_SetsConfig(t *testing.T) {
 	var calls [][]string
 	old := gitLocalConfigFn
@@ -146,6 +158,7 @@ func TestConfigureRepoIdentity_SetsConfig(t *testing.T) {
 	}
 }
 
+// TestEngineLogin_CacheHit verifies EngineLogin returns cached login without making API call.
 func TestEngineLogin_CacheHit(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_LOGIN", "")
 
@@ -165,6 +178,7 @@ func TestEngineLogin_CacheHit(t *testing.T) {
 	}
 }
 
+// TestUnassignEngine_EngineClientError_IsNil verifies UnassignEngine is best-effort when client creation fails.
 func TestUnassignEngine_EngineClientError_IsNil(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_LOGIN", "engine-bot")
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "")
@@ -175,6 +189,7 @@ func TestUnassignEngine_EngineClientError_IsNil(t *testing.T) {
 	}
 }
 
+// TestConfigureRepoIdentity_NoLogin_Noop verifies ConfigureRepoIdentity skips git config when login is unset.
 func TestConfigureRepoIdentity_NoLogin_Noop(t *testing.T) {
 	old := gitLocalConfigFn
 	defer func() { gitLocalConfigFn = old }()

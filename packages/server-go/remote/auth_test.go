@@ -12,12 +12,19 @@ import (
 	"time"
 )
 
-func TestNewAuthManager_CreatesSecret(t *testing.T) {
+// newAuthManager creates a test AuthManager with a temporary directory.
+func newAuthManager(t *testing.T) *AuthManager {
+	t.Helper()
 	dir := t.TempDir()
 	am, err := NewAuthManager(dir)
 	if err != nil {
 		t.Fatalf("NewAuthManager: %v", err)
 	}
+	return am
+}
+
+func TestNewAuthManager_CreatesSecret(t *testing.T) {
+	am := newAuthManager(t)
 	if am == nil {
 		t.Fatal("expected non-nil AuthManager")
 	}
@@ -40,11 +47,7 @@ func TestNewAuthManager_LoadsExisting(t *testing.T) {
 }
 
 func TestIssueToken_And_ValidateToken(t *testing.T) {
-	dir := t.TempDir()
-	am, err := NewAuthManager(dir)
-	if err != nil {
-		t.Fatalf("NewAuthManager: %v", err)
-	}
+	am := newAuthManager(t)
 
 	token, err := am.IssueToken("device-1", time.Hour)
 	if err != nil {
@@ -64,11 +67,7 @@ func TestIssueToken_And_ValidateToken(t *testing.T) {
 }
 
 func TestValidateToken_Expired(t *testing.T) {
-	dir := t.TempDir()
-	am, err := NewAuthManager(dir)
-	if err != nil {
-		t.Fatalf("NewAuthManager: %v", err)
-	}
+	am := newAuthManager(t)
 
 	token, err := am.IssueToken("device-exp", -time.Minute)
 	if err != nil {
@@ -82,24 +81,16 @@ func TestValidateToken_Expired(t *testing.T) {
 }
 
 func TestValidateToken_BadSignature(t *testing.T) {
-	dir := t.TempDir()
-	am, err := NewAuthManager(dir)
-	if err != nil {
-		t.Fatalf("NewAuthManager: %v", err)
-	}
+	am := newAuthManager(t)
 
-	_, err = am.ValidateToken("tampered.token.signature")
+	_, err := am.ValidateToken("tampered.token.signature")
 	if err == nil {
 		t.Fatal("expected error for bad signature")
 	}
 }
 
 func TestRevokeDevice(t *testing.T) {
-	dir := t.TempDir()
-	am, err := NewAuthManager(dir)
-	if err != nil {
-		t.Fatalf("NewAuthManager: %v", err)
-	}
+	am := newAuthManager(t)
 
 	token, err := am.IssueToken("device-to-revoke", time.Hour)
 	if err != nil {
@@ -115,17 +106,14 @@ func TestRevokeDevice(t *testing.T) {
 }
 
 func TestRotateSecret(t *testing.T) {
-	dir := t.TempDir()
-	am, err := NewAuthManager(dir)
-	if err != nil {
-		t.Fatalf("NewAuthManager: %v", err)
-	}
+	am := newAuthManager(t)
 
 	token, err := am.IssueToken("device-rot", time.Hour)
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
 
+	dir := t.TempDir()
 	if err := am.RotateSecret(dir); err != nil {
 		t.Fatalf("RotateSecret: %v", err)
 	}

@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 )
+
+// TestWebhookReceiver_NoSecret_Dispatches verifies webhooks are dispatched when no secret is configured.
 func TestWebhookReceiver_NoSecret_Dispatches(t *testing.T) {
 	wr := NewWebhookReceiver("")
 	dispatched := false
@@ -34,6 +36,8 @@ func TestWebhookReceiver_NoSecret_Dispatches(t *testing.T) {
 	}
 }
 
+// TestWebhookReceiver_ValidSignature verifies webhooks with valid HMAC signature are dispatched.
+// Tests behavioral side effect (webhook HTTP handler processing).
 func TestWebhookReceiver_ValidSignature(t *testing.T) {
 	secret := "my-secret"
 	wr := NewWebhookReceiver(secret)
@@ -59,6 +63,7 @@ func TestWebhookReceiver_ValidSignature(t *testing.T) {
 	}
 }
 
+// TestWebhookReceiver_InvalidSignature verifies webhooks with invalid HMAC signature are rejected.
 func TestWebhookReceiver_InvalidSignature(t *testing.T) {
 	wr := NewWebhookReceiver("secret")
 	wr.AddHandler(func(_ *WebhookEvent) { t.Error("handler should not be called") })
@@ -74,6 +79,7 @@ func TestWebhookReceiver_InvalidSignature(t *testing.T) {
 	}
 }
 
+// TestWebhookReceiver_MissingSigPrefix verifies signature validation handles malformed headers.
 func TestWebhookReceiver_MissingSigPrefix(t *testing.T) {
 	wr := NewWebhookReceiver("secret")
 	body := []byte(`{}`)
@@ -86,6 +92,7 @@ func TestWebhookReceiver_MissingSigPrefix(t *testing.T) {
 	}
 }
 
+// TestWebhookReceiver_BadHexSig verifies signature validation rejects invalid hex encoding.
 func TestWebhookReceiver_BadHexSig(t *testing.T) {
 	wr := NewWebhookReceiver("secret")
 	body := []byte(`{}`)
@@ -98,6 +105,8 @@ func TestWebhookReceiver_BadHexSig(t *testing.T) {
 	}
 }
 
+// TestWebhookReceiver_SetSecret_ReplacesSignatureKey verifies secret updates take effect immediately.
+// Tests behavioral side effect (webhook HTTP handler signature validation).
 func TestWebhookReceiver_SetSecret_ReplacesSignatureKey(t *testing.T) {
 	wr := NewWebhookReceiver("old-secret")
 	body := []byte(`{"action":"opened"}`)
@@ -138,6 +147,7 @@ func TestWebhookReceiver_SetSecret_ReplacesSignatureKey(t *testing.T) {
 
 // ── ParsePush / TouchesReadme ─────────────────────────────────────────────────
 
+// TestParsePush_TouchesReadme verifies push event parsing detects README modifications.
 func TestParsePush_TouchesReadme(t *testing.T) {
 	payload := `{"ref":"refs/heads/main","commits":[{"id":"abc","message":"docs","added":["README.md"],"modified":[],"removed":[]}]}`
 	ev := &WebhookEvent{Type: "push", Payload: json.RawMessage(payload)}

@@ -108,6 +108,8 @@ html, body, #root {
 .animate-appear { animation: appear 120ms ease both; }
 .animate-spin   { animation: spin 700ms linear infinite; }
 .pulse-dot      { animation: pulse-dot 1.5s ease-in-out infinite; }
+.fade-in        { animation: fadeIn 150ms ease both; }
+.pulse-live     { animation: pulse-dot 1.5s ease-in-out infinite; }
 
 /* Layout primitives */
 .app {
@@ -969,9 +971,6 @@ button,
 input,
 select,
 textarea,
-.card,
-.panel,
-.modal,
 [class*='btn'],
 [class*='button'],
 [class*='chip'],
@@ -1590,10 +1589,6 @@ textarea,
   gap: 12px;
 }
 
-.welcome-logo {
-  display: none;
-}
-
 .welcome-title {
   max-width: 680px;
   font-size: clamp(28px, 3vw, 38px);
@@ -1696,21 +1691,6 @@ textarea,
 }
 .btn-secondary:hover { background: rgba(83, 203, 168, 0.16); color: var(--tx); border-color: rgba(141, 232, 201, 0.44); }
 
-.welcome-pill-row {
-  display: none;
-}
-
-.welcome-pill {
-  padding: 7px 10px;
-  border-radius: 3px;
-  background: rgba(83, 203, 168, 0.12);
-  border: 1px solid rgba(83, 203, 168, 0.35);
-  color: var(--tx-2);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
 .welcome-recent-title {
   font-size: 11px;
   font-weight: 600;
@@ -1737,16 +1717,6 @@ textarea,
 }
 .welcome-recent-name { font-weight: 500; font-size: 13px; flex: 1; }
 .welcome-recent-path { font-size: 11px; color: var(--tx-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
-
-.welcome-empty-state {
-  padding: 12px 0 0;
-  border-radius: 0;
-  background: transparent;
-  border: none;
-  color: var(--tx-3);
-  font-size: 12px;
-  line-height: 1.6;
-}
 
 .welcome-aside {
   display: flex;
@@ -2010,6 +1980,40 @@ textarea,
   color: var(--tx-2);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.connections-generate {
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.connections-generate-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tx);
+}
+
+.connections-code-display {
+  padding: 10px 12px;
+  background: rgba(9, 16, 16, 0.82);
+  border: 1px solid rgba(83, 203, 168, 0.28);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent);
+  overflow-x: auto;
+  word-break: break-all;
+}
+
+.connections-code-value {
+  font-weight: 600;
+  color: var(--accent-2);
 }
 
 /* Right panel (AI + Agent) */
@@ -2365,8 +2369,6 @@ textarea,
 
 /* Misc utilities */
 .icon-file-color { flex-shrink: 0; }
-.mono { font-family: var(--font-mono); }
-.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .empty-state {
   display: flex; flex-direction: column; align-items: center; justify-content: center;

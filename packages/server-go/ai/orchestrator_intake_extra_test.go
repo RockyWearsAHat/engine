@@ -7,7 +7,8 @@ import (
 	"github.com/engine/server/db"
 )
 
-// setupIntakeDB initialises the DB so db.CreateSession succeeds.
+// setupIntakeDB creates a temporary project directory and initializes the DB for intake tests.
+// Returns the project root path; uses t.TempDir() for cleanup.
 func setupIntakeDB(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

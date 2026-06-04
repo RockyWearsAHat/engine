@@ -14,6 +14,7 @@ import (
 
 const defaultAPIBase = "https://api.github.com"
 
+// apiBase returns the GitHub API base URL, allowing GITHUB_API_BASE env var override.
 func apiBase() string {
 	if v := os.Getenv("GITHUB_API_BASE"); v != "" {
 		return v
@@ -338,8 +339,11 @@ func (c *Client) ListUserRepos(perPage int) ([]UserRepo, error) {
 	return all, nil
 }
 
-// --- HTTP helpers ---
+// ── HTTP helpers (internal) ────────────────────────────────────────────────────
+// These methods handle common HTTP request patterns: GET, POST, PATCH, and the
+// underlying doRequest that sets authentication headers and validates responses.
 
+// doGet performs a GET request and returns the response body.
 func (c *Client) doGet(url string) ([]byte, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -348,6 +352,7 @@ func (c *Client) doGet(url string) ([]byte, error) {
 	return c.doRequest(req)
 }
 
+// doPost performs a POST request with a JSON payload and returns the response body.
 func (c *Client) doPost(url string, payload any) ([]byte, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -360,6 +365,7 @@ func (c *Client) doPost(url string, payload any) ([]byte, error) {
 	return c.doRequest(req)
 }
 
+// doPatch performs a PATCH request with a JSON payload and returns the response body.
 func (c *Client) doPatch(url string, payload any) ([]byte, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -372,6 +378,8 @@ func (c *Client) doPatch(url string, payload any) ([]byte, error) {
 	return c.doRequest(req)
 }
 
+// doRequest executes an HTTP request with authentication headers and parses the response.
+// Sets Authorization, Accept, API version, and Content-Type (for non-GET) headers.
 func (c *Client) doRequest(req *http.Request) ([]byte, error) {
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/vnd.github+json")

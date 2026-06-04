@@ -28,6 +28,7 @@ func TestEnsureStorageDir(t *testing.T) {
 	}
 }
 
+// newTestServer creates a test Server with a temporary storage directory and mock WebSocket handler.
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	dir := t.TempDir()
@@ -46,6 +47,14 @@ func newTestServer(t *testing.T) *Server {
 	return s
 }
 
+// testRequest executes an HTTP request against the server and returns the response recorder.
+func testRequest(t *testing.T, s *Server, req *http.Request) *httptest.ResponseRecorder {
+	t.Helper()
+	rr := httptest.NewRecorder()
+	s.mux.ServeHTTP(rr, req)
+	return rr
+}
+
 func TestNewServer_CreatesServer(t *testing.T) {
 	s := newTestServer(t)
 	if s == nil {
@@ -62,8 +71,7 @@ func TestNewServer_CreatesServer(t *testing.T) {
 func TestRemoteStatus_Handler(t *testing.T) {
 	s := newTestServer(t)
 	req := httptest.NewRequest("GET", "/remote/status", nil)
-	rr := httptest.NewRecorder()
-	s.mux.ServeHTTP(rr, req)
+	rr := testRequest(t, s, req)
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rr.Code)
@@ -80,8 +88,7 @@ func TestRemoteStatus_Handler(t *testing.T) {
 func TestHealth_Handler(t *testing.T) {
 	s := newTestServer(t)
 	req := httptest.NewRequest("GET", "/health", nil)
-	rr := httptest.NewRecorder()
-	s.mux.ServeHTTP(rr, req)
+	rr := testRequest(t, s, req)
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rr.Code)
@@ -98,8 +105,7 @@ func TestHealth_Handler(t *testing.T) {
 func TestHandlePair_WrongMethod(t *testing.T) {
 	s := newTestServer(t)
 	req := httptest.NewRequest("GET", "/remote/pair", nil)
-	rr := httptest.NewRecorder()
-	s.mux.ServeHTTP(rr, req)
+	rr := testRequest(t, s, req)
 
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 405", rr.Code)
@@ -111,8 +117,7 @@ func TestHandlePair_InvalidCode(t *testing.T) {
 	body := bytes.NewBufferString(`{"code": "000000"}`)
 	req := httptest.NewRequest("POST", "/remote/pair", body)
 	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-	s.mux.ServeHTTP(rr, req)
+	rr := testRequest(t, s, req)
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rr.Code)
@@ -136,8 +141,7 @@ func TestHandlePair_ValidCode(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"code": code})
 	req := httptest.NewRequest("POST", "/remote/pair", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-	s.mux.ServeHTTP(rr, req)
+	rr := testRequest(t, s, req)
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rr.Code)
@@ -158,8 +162,7 @@ func TestHandlePair_BadJSON(t *testing.T) {
 	s := newTestServer(t)
 	req := httptest.NewRequest("POST", "/remote/pair", bytes.NewBufferString("{invalid"))
 	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-	s.mux.ServeHTTP(rr, req)
+	rr := testRequest(t, s, req)
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rr.Code)
@@ -175,8 +178,7 @@ func TestHandleRefresh_ValidToken(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/remote/refresh", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	rr := httptest.NewRecorder()
-	s.mux.ServeHTTP(rr, req)
+	rr := testRequest(t, s, req)
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rr.Code)
@@ -193,8 +195,7 @@ func TestHandleRefresh_ValidToken(t *testing.T) {
 func TestHandleRefresh_InvalidToken(t *testing.T) {
 	s := newTestServer(t)
 	req := httptest.NewRequest("POST", "/remote/refresh", nil)
-	rr := httptest.NewRecorder()
-	s.mux.ServeHTTP(rr, req)
+	rr := testRequest(t, s, req)
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rr.Code)
@@ -204,8 +205,7 @@ func TestHandleRefresh_InvalidToken(t *testing.T) {
 func TestWS_RequiresAuth(t *testing.T) {
 	s := newTestServer(t)
 	req := httptest.NewRequest("GET", "/ws", nil)
-	rr := httptest.NewRecorder()
-	s.mux.ServeHTTP(rr, req)
+	rr := testRequest(t, s, req)
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rr.Code)

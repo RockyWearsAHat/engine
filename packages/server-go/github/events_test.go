@@ -15,16 +15,17 @@ import (
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+// makeWatcher creates a test EventsWatcher with injectable functions for testing.
 func makeWatcher(monitor *RepoMonitor) *EventsWatcher {
 	return &EventsWatcher{
-		token:   "test",
-		monitor: monitor,
-		startedAt: time.Now().UTC(),
-		seen:    map[string]bool{},
-		processed: map[string]bool{},
+		token:                  "test",
+		monitor:                monitor,
+		startedAt:              time.Now().UTC(),
+		seen:                   map[string]bool{},
+		processed:              map[string]bool{},
 		processedIssueComments: map[int64]bool{},
-		tickFn:  func(_ time.Duration) <-chan time.Time { ch := make(chan time.Time, 1); ch <- time.Now(); return ch },
-		loginFn: func(_ string) (string, error) { return "testuser", nil },
+		tickFn:                 func(_ time.Duration) <-chan time.Time { ch := make(chan time.Time, 1); ch <- time.Now(); return ch },
+		loginFn:                func(_ string) (string, error) { return "testuser", nil },
 		listReposFn: func(_ string, _ int) ([]UserRepo, error) {
 			return nil, nil // empty initial scan by default
 		},
@@ -39,6 +40,7 @@ func makeWatcher(monitor *RepoMonitor) *EventsWatcher {
 
 // ── NewEventsWatcherFromEnv ───────────────────────────────────────────────────
 
+// TestNewEventsWatcherFromEnv_NoToken_ReturnsNil verifies watcher is not created without token source.
 func TestNewEventsWatcherFromEnv_NoToken_ReturnsNil(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	orig := ghCLITokenFn
@@ -49,6 +51,7 @@ func TestNewEventsWatcherFromEnv_NoToken_ReturnsNil(t *testing.T) {
 	}
 }
 
+// TestNewEventsWatcherFromEnv_WithToken_ReturnsWatcher verifies watcher creation with GITHUB_TOKEN set.
 func TestNewEventsWatcherFromEnv_WithToken_ReturnsWatcher(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "ghp_test")
 	w := NewEventsWatcherFromEnv(NewRepoMonitor())
@@ -57,6 +60,7 @@ func TestNewEventsWatcherFromEnv_WithToken_ReturnsWatcher(t *testing.T) {
 	}
 }
 
+// TestNewEventsWatcherFromEnv_CLIFallback_ReturnsWatcher verifies watcher creation when gh CLI supplies token.
 func TestNewEventsWatcherFromEnv_CLIFallback_ReturnsWatcher(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	orig := ghCLITokenFn
@@ -68,6 +72,7 @@ func TestNewEventsWatcherFromEnv_CLIFallback_ReturnsWatcher(t *testing.T) {
 	}
 }
 
+// TestNewEventsWatcherFromEnv_EnvTakesPrecedenceOverCLI verifies GITHUB_TOKEN overrides gh CLI token.
 func TestNewEventsWatcherFromEnv_EnvTakesPrecedenceOverCLI(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "ghp_env_token")
 	orig := ghCLITokenFn
@@ -84,6 +89,7 @@ func TestNewEventsWatcherFromEnv_EnvTakesPrecedenceOverCLI(t *testing.T) {
 
 // ── initial scan ─────────────────────────────────────────────────────────────
 
+// TestEventsWatcher_InitialScan_FiresOnEngineTag verifies README @engine tag triggers callback.
 func TestEventsWatcher_InitialScan_FiresOnEngineTag(t *testing.T) {
 	monitor := NewRepoMonitor()
 	var fired []json.RawMessage
@@ -104,6 +110,7 @@ func TestEventsWatcher_InitialScan_FiresOnEngineTag(t *testing.T) {
 	}
 }
 
+// TestEventsWatcher_InitialScan_NoFireWithoutTag verifies callback is not fired without @engine tag.
 func TestEventsWatcher_InitialScan_NoFireWithoutTag(t *testing.T) {
 	monitor := NewRepoMonitor()
 	var count int
@@ -121,6 +128,7 @@ func TestEventsWatcher_InitialScan_NoFireWithoutTag(t *testing.T) {
 	}
 }
 
+// TestEventsWatcher_InitialScan_ListError_NoFire verifies callback is not fired on list error.
 func TestEventsWatcher_InitialScan_ListError_NoFire(t *testing.T) {
 	monitor := NewRepoMonitor()
 	var count int
@@ -140,6 +148,8 @@ func TestEventsWatcher_InitialScan_ListError_NoFire(t *testing.T) {
 
 // ── processEvents ─────────────────────────────────────────────────────────────
 
+// TestEventsWatcher_PushEvent_TouchesReadme_Fires verifies push event with README change triggers callback.
+// Tests behavioral side effects (monitoring repository push events).
 func TestEventsWatcher_PushEvent_TouchesReadme_Fires(t *testing.T) {
 	monitor := NewRepoMonitor()
 	var fired int
@@ -157,7 +167,9 @@ func TestEventsWatcher_PushEvent_TouchesReadme_Fires(t *testing.T) {
 		},
 	})
 	w.processEvents([]eventEntry{
-		{Type: "PushEvent", Repo: struct{ Name string `json:"name"` }{Name: "alice/myrepo"}, Payload: payload},
+		{Type: "PushEvent", Repo: struct {
+			Name string `json:"name"`
+		}{Name: "alice/myrepo"}, Payload: payload},
 	})
 
 	if fired != 1 {
@@ -182,7 +194,9 @@ func TestEventsWatcher_PushEvent_NoReadmeTouched_NoFire(t *testing.T) {
 		},
 	})
 	w.processEvents([]eventEntry{
-		{Type: "PushEvent", Repo: struct{ Name string `json:"name"` }{Name: "alice/go"}, Payload: payload},
+		{Type: "PushEvent", Repo: struct {
+			Name string `json:"name"`
+		}{Name: "alice/go"}, Payload: payload},
 	})
 
 	if fired != 0 {
@@ -202,7 +216,9 @@ func TestEventsWatcher_CreateEvent_Repository_Fires(t *testing.T) {
 
 	payload, _ := json.Marshal(map[string]string{"ref_type": "repository"})
 	w.processEvents([]eventEntry{
-		{Type: "CreateEvent", Repo: struct{ Name string `json:"name"` }{Name: "alice/newrepo"}, Payload: payload},
+		{Type: "CreateEvent", Repo: struct {
+			Name string `json:"name"`
+		}{Name: "alice/newrepo"}, Payload: payload},
 	})
 
 	if fired != 1 {
@@ -219,7 +235,9 @@ func TestEventsWatcher_CreateEvent_Branch_NoFire(t *testing.T) {
 
 	payload, _ := json.Marshal(map[string]string{"ref_type": "branch"})
 	w.processEvents([]eventEntry{
-		{Type: "CreateEvent", Repo: struct{ Name string `json:"name"` }{Name: "alice/existing"}, Payload: payload},
+		{Type: "CreateEvent", Repo: struct {
+			Name string `json:"name"`
+		}{Name: "alice/existing"}, Payload: payload},
 	})
 
 	if fired != 0 {
@@ -245,8 +263,12 @@ func TestEventsWatcher_DeduplicatesWithinBatch(t *testing.T) {
 	})
 	// Two push events for the same repo in one batch.
 	w.processEvents([]eventEntry{
-		{Type: "PushEvent", Repo: struct{ Name string `json:"name"` }{Name: "alice/dup"}, Payload: pushPayload},
-		{Type: "PushEvent", Repo: struct{ Name string `json:"name"` }{Name: "alice/dup"}, Payload: pushPayload},
+		{Type: "PushEvent", Repo: struct {
+			Name string `json:"name"`
+		}{Name: "alice/dup"}, Payload: pushPayload},
+		{Type: "PushEvent", Repo: struct {
+			Name string `json:"name"`
+		}{Name: "alice/dup"}, Payload: pushPayload},
 	})
 
 	if count != 1 {
@@ -269,7 +291,9 @@ func TestEventsWatcher_DoesNotRefireIfTagAlreadySeen(t *testing.T) {
 		"commits": []map[string]any{{"added": []string{"README.md"}, "modified": []string{}}},
 	})
 	ev := []eventEntry{
-		{Type: "PushEvent", Repo: struct{ Name string `json:"name"` }{Name: "alice/stable"}, Payload: pushPayload},
+		{Type: "PushEvent", Repo: struct {
+			Name string `json:"name"`
+		}{Name: "alice/stable"}, Payload: pushPayload},
 	}
 
 	w.processEvents(ev) // fires
@@ -298,7 +322,9 @@ func TestEventsWatcher_RefiresWhenTagReappears(t *testing.T) {
 		"ref":     "refs/heads/main",
 		"commits": []map[string]any{{"added": []string{"README.md"}, "modified": []string{}}},
 	})
-	ev := []eventEntry{{Type: "PushEvent", Repo: struct{ Name string `json:"name"` }{Name: "alice/cycling"}, Payload: payload}}
+	ev := []eventEntry{{Type: "PushEvent", Repo: struct {
+		Name string `json:"name"`
+	}{Name: "alice/cycling"}, Payload: payload}}
 
 	w.processEvents(ev) // fires — tag present
 	hasTag = false
@@ -674,7 +700,9 @@ func TestProcessEvents_PushEvent_BadJSON(t *testing.T) {
 
 	w := makeWatcher(monitor)
 	w.processEvents([]eventEntry{
-		{Type: "PushEvent", Repo: struct{ Name string `json:"name"` }{Name: "alice/repo"}, Payload: json.RawMessage(`not json`)},
+		{Type: "PushEvent", Repo: struct {
+			Name string `json:"name"`
+		}{Name: "alice/repo"}, Payload: json.RawMessage(`not json`)},
 	})
 	if fired != 0 {
 		t.Fatalf("bad JSON PushEvent should not fire OnReadmeChange, got %d", fired)
@@ -688,7 +716,9 @@ func TestProcessEvents_CreateEvent_BadJSON(t *testing.T) {
 
 	w := makeWatcher(monitor)
 	w.processEvents([]eventEntry{
-		{Type: "CreateEvent", Repo: struct{ Name string `json:"name"` }{Name: "alice/repo"}, Payload: json.RawMessage(`not json`)},
+		{Type: "CreateEvent", Repo: struct {
+			Name string `json:"name"`
+		}{Name: "alice/repo"}, Payload: json.RawMessage(`not json`)},
 	})
 	if fired != 0 {
 		t.Fatalf("bad JSON CreateEvent should not fire OnReadmeChange, got %d", fired)

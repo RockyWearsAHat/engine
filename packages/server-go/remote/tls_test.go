@@ -7,12 +7,19 @@ import (
 	"testing"
 )
 
-func TestLoadOrCreateTLSConfig_CreatesNew(t *testing.T) {
+// newTLSConfig creates a test TLS config with a temporary directory.
+func newTLSConfig(t *testing.T) (*tls.Config, string) {
+	t.Helper()
 	dir := t.TempDir()
 	cfg, err := LoadOrCreateTLSConfig(dir)
 	if err != nil {
 		t.Fatalf("LoadOrCreateTLSConfig: %v", err)
 	}
+	return cfg, dir
+}
+
+func TestLoadOrCreateTLSConfig_CreatesNew(t *testing.T) {
+	cfg, _ := newTLSConfig(t)
 	if cfg == nil {
 		t.Fatal("expected non-nil TLS config")
 	}
@@ -41,13 +48,9 @@ func TestLoadOrCreateTLSConfig_LoadsExisting(t *testing.T) {
 }
 
 func TestLoadOrCreateTLSConfig_ValidCert(t *testing.T) {
-	dir := t.TempDir()
-	cfg, err := LoadOrCreateTLSConfig(dir)
-	if err != nil {
-		t.Fatalf("LoadOrCreateTLSConfig: %v", err)
-	}
+	cfg, _ := newTLSConfig(t)
 
-	cert, err := tls.X509KeyPair(
+	cert, _ := tls.X509KeyPair(
 		cfg.Certificates[0].Certificate[0],
 		nil, // We just test the cert was created
 	)

@@ -92,7 +92,7 @@ func (wr *WebhookReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // validSignature returns true if sig matches the HMAC-SHA256 of body under wr.secret.
-// sig must be in the format "sha256=<hex>".
+// sig must be in the format "sha256=<hex>". Returns true (no validation) when secret is empty.
 func (wr *WebhookReceiver) validSignature(body []byte, sig string) bool {
 	wr.mu.RLock()
 	secret := append([]byte(nil), wr.secret...)
@@ -121,7 +121,7 @@ func (wr *WebhookReceiver) validSignature(body []byte, sig string) bool {
 
 // PushPayload is the payload for "push" events.
 type PushPayload struct {
-	Ref        string `json:"ref"`        // e.g. "refs/heads/main"
+	Ref        string `json:"ref"` // e.g. "refs/heads/main"
 	Repository struct {
 		FullName      string `json:"full_name"`
 		DefaultBranch string `json:"default_branch"`
@@ -142,7 +142,7 @@ type IssueCommentPayload struct {
 		ID        int64  `json:"id"`
 		Body      string `json:"body"`
 		CreatedAt string `json:"created_at"`
-		User struct {
+		User      struct {
 			Login string `json:"login"`
 		} `json:"user"`
 	} `json:"comment"`
@@ -173,8 +173,8 @@ type IssuePayload struct {
 
 // WorkflowRunPayload is the payload for "workflow_run" events.
 type WorkflowRunPayload struct {
-	Action      string `json:"action"`       // "requested", "completed", etc.
-	Conclusion  string `json:"conclusion"`   // "success", "failure", "skipped", etc.
+	Action      string `json:"action"`     // "requested", "completed", etc.
+	Conclusion  string `json:"conclusion"` // "success", "failure", "skipped", etc.
 	WorkflowRun struct {
 		Name    string `json:"name"`
 		Status  string `json:"status"`

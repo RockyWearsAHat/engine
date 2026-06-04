@@ -12,6 +12,7 @@ import (
 	"time"
 )
 
+// TestClientHealth_SuccessAndParseError tests that Health succeeds on valid responses and reports parse errors.
 func TestClientHealth_SuccessAndParseError(t *testing.T) {
 	cfg := &Config{SelfName: "host", Peers: []Peer{{Name: "mac", Secret: "k"}}}
 	srv := NewServer(cfg)
@@ -43,6 +44,7 @@ func TestClientHealth_SuccessAndParseError(t *testing.T) {
 	}
 }
 
+// TestClientInferenceAndExec_ParseErrors tests that Inference and Exec report JSON parsing errors.
 func TestClientInferenceAndExec_ParseErrors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -61,6 +63,7 @@ func TestClientInferenceAndExec_ParseErrors(t *testing.T) {
 	}
 }
 
+// TestClientSignedRequest_ValidationErrors tests that signedRequest validates peer and secret parameters.
 func TestClientSignedRequest_ValidationErrors(t *testing.T) {
 	c := NewClient("mac")	
 	if _, err := c.signedRequest(context.Background(), nil, http.MethodPost, "/mesh/health", nil); err == nil {
@@ -74,6 +77,7 @@ func TestClientSignedRequest_ValidationErrors(t *testing.T) {
 	}
 }
 
+// TestPeerBaseURL_Paths tests that peerBaseURL correctly formats peer addresses.
 func TestPeerBaseURL_Paths(t *testing.T) {
 	if got := peerBaseURL(""); got != "" {
 		t.Fatalf("peerBaseURL empty = %q, want empty", got)
@@ -86,6 +90,7 @@ func TestPeerBaseURL_Paths(t *testing.T) {
 	}
 }
 
+// TestNewServer_NilConfigCreatesDefault tests that NewServer creates a default config when nil is passed.
 func TestNewServer_NilConfigCreatesDefault(t *testing.T) {
 	s := NewServer(nil)
 	if s.cfg == nil {
@@ -93,6 +98,7 @@ func TestNewServer_NilConfigCreatesDefault(t *testing.T) {
 	}
 }
 
+// TestListenAndServe_ContextCancel tests that ListenAndServe respects context cancellation.
 func TestListenAndServe_ContextCancel(t *testing.T) {
 	s := NewServer(&Config{ListenAddr: "127.0.0.1:0"})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -104,6 +110,7 @@ func TestListenAndServe_ContextCancel(t *testing.T) {
 	}
 }
 
+// TestListenAndServe_ServerErrorPath tests that ListenAndServe reports errors from the listener.
 func TestListenAndServe_ServerErrorPath(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

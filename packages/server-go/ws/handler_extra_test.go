@@ -1,5 +1,8 @@
 package ws
 
+// Tests in this file provide additional coverage for handler scenarios and special cases.
+// Test functions follow Go convention; individual doc comments omitted.
+
 import (
 	"encoding/json"
 	"fmt"
@@ -24,6 +27,7 @@ import (
 
 // ─── stub Discord bridge ──────────────────────────────────────────────────────
 
+// stubDiscordBridge implements DiscordBridge for testing.
 type stubDiscordBridge struct {
 	cfg        discord.Config
 	reloadErr  error
@@ -46,6 +50,7 @@ func (s *stubDiscordBridge) NotifyProjectProgress(_, _ string) {}
 
 // ─── stub HTTP transport ──────────────────────────────────────────────────────
 
+// fixedResponseTransport returns a fixed HTTP response for testing.
 type fixedResponseTransport struct {
 	statusCode int
 	body       string
@@ -67,6 +72,8 @@ func deregisterAIOrchestratorHandle(projectPath string)
 
 // ─── Discord config get ───────────────────────────────────────────────────────
 
+// TestHandler_DiscordConfigGet_NilBridge verifies discord.config.get returns default config when no bridge is set.
+// TestHandler_DiscordConfigGet_NilBridge verifies discord.config.get returns default config when no bridge is set.
 func TestHandler_DiscordConfigGet_NilBridge(t *testing.T) {
 	SetDiscordBridge(nil)
 	projectDir := setupWSProject(t)
@@ -80,6 +87,7 @@ func TestHandler_DiscordConfigGet_NilBridge(t *testing.T) {
 	}
 }
 
+// TestHandler_DiscordConfigGet_WithBridge verifies discord.config.get returns active config when bridge is set.
 func TestHandler_DiscordConfigGet_WithBridge(t *testing.T) {
 	stub := &stubDiscordBridge{cfg: discord.Config{Enabled: true, BotToken: "tok"}}
 	SetDiscordBridge(stub)
@@ -98,6 +106,8 @@ func TestHandler_DiscordConfigGet_WithBridge(t *testing.T) {
 
 // ─── Discord history search ───────────────────────────────────────────────────
 
+// TestHandler_DiscordHistorySearch_NilBridge verifies search returns error when Discord is unavailable.
+// TestHandler_DiscordHistorySearch_NilBridge verifies search returns error when Discord is unavailable.
 func TestHandler_DiscordHistorySearch_NilBridge(t *testing.T) {
 	SetDiscordBridge(nil)
 	projectDir := setupWSProject(t)
@@ -116,6 +126,7 @@ func TestHandler_DiscordHistorySearch_NilBridge(t *testing.T) {
 	}
 }
 
+// TestHandler_DiscordHistorySearch_WithBridge_Success verifies search returns hits when bridge is available.
 func TestHandler_DiscordHistorySearch_WithBridge_Success(t *testing.T) {
 	stub := &stubDiscordBridge{
 		searchHits: []db.DiscordSearchHit{{DiscordMessage: db.DiscordMessage{ID: "m1", Content: "cave AI"}}},
@@ -140,6 +151,7 @@ func TestHandler_DiscordHistorySearch_WithBridge_Success(t *testing.T) {
 	}
 }
 
+// TestHandler_DiscordHistorySearch_WithBridge_Error verifies search error is forwarded to client.
 func TestHandler_DiscordHistorySearch_WithBridge_Error(t *testing.T) {
 	stub := &stubDiscordBridge{searchErr: fmt.Errorf("db failure")}
 	SetDiscordBridge(stub)
@@ -161,6 +173,8 @@ func TestHandler_DiscordHistorySearch_WithBridge_Error(t *testing.T) {
 
 // ─── Discord history recent ───────────────────────────────────────────────────
 
+// TestHandler_DiscordHistoryRecent_NilBridge verifies recent returns error when Discord is unavailable.
+// TestHandler_DiscordHistoryRecent_NilBridge verifies recent returns error when Discord is unavailable.
 func TestHandler_DiscordHistoryRecent_NilBridge(t *testing.T) {
 	SetDiscordBridge(nil)
 	projectDir := setupWSProject(t)
@@ -179,6 +193,7 @@ func TestHandler_DiscordHistoryRecent_NilBridge(t *testing.T) {
 	}
 }
 
+// TestHandler_DiscordHistoryRecent_WithBridge_Success verifies recent returns message rows when bridge is available.
 func TestHandler_DiscordHistoryRecent_WithBridge_Success(t *testing.T) {
 	stub := &stubDiscordBridge{
 		recentRows: []db.DiscordMessage{{ID: "r1", Content: "hello"}},
@@ -203,6 +218,7 @@ func TestHandler_DiscordHistoryRecent_WithBridge_Success(t *testing.T) {
 	}
 }
 
+// TestHandler_DiscordHistoryRecent_WithBridge_Error verifies recent error is forwarded to client.
 func TestHandler_DiscordHistoryRecent_WithBridge_Error(t *testing.T) {
 	stub := &stubDiscordBridge{recentErr: fmt.Errorf("db err")}
 	SetDiscordBridge(stub)
@@ -224,6 +240,8 @@ func TestHandler_DiscordHistoryRecent_WithBridge_Error(t *testing.T) {
 
 // ─── Discord config set ───────────────────────────────────────────────────────
 
+// TestHandler_DiscordConfigSet_NilBridgeDisabledConfig verifies disabled config is always saved without bridge.
+// TestHandler_DiscordConfigSet_NilBridgeDisabledConfig verifies disabled config is always saved without bridge.
 func TestHandler_DiscordConfigSet_NilBridgeDisabledConfig(t *testing.T) {
 	SetDiscordBridge(nil)
 	projectDir := setupWSProject(t)
@@ -243,6 +261,7 @@ func TestHandler_DiscordConfigSet_NilBridgeDisabledConfig(t *testing.T) {
 	}
 }
 
+// TestHandler_DiscordConfigSet_WithBridge_ReloadError verifies reload errors are reported as warnings.
 func TestHandler_DiscordConfigSet_WithBridge_ReloadError(t *testing.T) {
 	stub := &stubDiscordBridge{reloadErr: fmt.Errorf("reload fail")}
 	SetDiscordBridge(stub)
@@ -265,6 +284,7 @@ func TestHandler_DiscordConfigSet_WithBridge_ReloadError(t *testing.T) {
 	}
 }
 
+// TestHandler_DiscordConfigSet_WithBridge_ReloadOK verifies successful config reload returns no warning.
 func TestHandler_DiscordConfigSet_WithBridge_ReloadOK(t *testing.T) {
 	stub := &stubDiscordBridge{cfg: discord.Config{Enabled: true}}
 	SetDiscordBridge(stub)
@@ -289,6 +309,7 @@ func TestHandler_DiscordConfigSet_WithBridge_ReloadOK(t *testing.T) {
 
 // ─── GitHub user ──────────────────────────────────────────────────────────────
 
+// TestHandler_GitHubUser_NoToken verifies error is returned when GitHub token is not configured.
 func TestHandler_GitHubUser_NoToken(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("ENGINE_GITHUB_TOKEN", "")
@@ -303,6 +324,7 @@ func TestHandler_GitHubUser_NoToken(t *testing.T) {
 	}
 }
 
+// TestHandler_GitHubUser_MockHTTP_Success verifies user info is extracted from GitHub API response.
 func TestHandler_GitHubUser_MockHTTP_Success(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-token")
 
@@ -327,6 +349,8 @@ func TestHandler_GitHubUser_MockHTTP_Success(t *testing.T) {
 	}
 }
 
+// TestHandler_QualityReportGet_Success verifies quality report is returned with correct structure.
+// TestHandler_QualityReportGet_Success verifies quality report is returned with correct structure.
 func TestHandler_QualityReportGet_Success(t *testing.T) {
 	original := qualityScanWithProgressFn
 	qualityScanWithProgressFn = func(projectPath string, maxIssues int, _ quality.ProgressCallback) (quality.Report, error) {
@@ -356,6 +380,8 @@ func TestHandler_QualityReportGet_Success(t *testing.T) {
 	}
 }
 
+// TestHandler_QualityReportGet_Error verifies quality scan errors are reported in response.
+// TestHandler_QualityReportGet_Error verifies quality scan errors are reported in response.
 func TestHandler_QualityReportGet_Error(t *testing.T) {
 	original := qualityScanWithProgressFn
 	qualityScanWithProgressFn = func(_ string, _ int, _ quality.ProgressCallback) (quality.Report, error) {
@@ -374,6 +400,7 @@ func TestHandler_QualityReportGet_Error(t *testing.T) {
 	}
 }
 
+// TestHandler_QualityReportGet_ProgressEvent verifies progress events are streamed to client during scan.
 func TestHandler_QualityReportGet_ProgressEvent(t *testing.T) {
 	original := qualityScanWithProgressFn
 	qualityScanWithProgressFn = func(projectPath string, _ int, onProgress quality.ProgressCallback) (quality.Report, error) {
@@ -406,6 +433,7 @@ func TestHandler_QualityReportGet_ProgressEvent(t *testing.T) {
 	}
 }
 
+// TestHandler_QualityReportGet_BadPayload verifies bad payload for maxIssues returns error.
 func TestHandler_QualityReportGet_BadPayload(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
@@ -418,6 +446,7 @@ func TestHandler_QualityReportGet_BadPayload(t *testing.T) {
 	}
 }
 
+// TestHandler_GitHubUser_MockHTTP_APIError verifies API errors from GitHub are reported to client.
 func TestHandler_GitHubUser_MockHTTP_APIError(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "test-token")
 
@@ -569,6 +598,7 @@ func TestHandler_ApprovalRespond_UnknownID_NoOp(t *testing.T) {
 
 // ─── requestApproval: timeout path ────────────────────────────────────────────
 
+// TestHandler_RequestApproval_Timeout verifies approval timeout returns error when no response within timeout.
 func TestHandler_RequestApproval_Timeout(t *testing.T) {
 	// Set a very short approval timeout so we don't wait 5 minutes.
 	origTimeout := approvalTimeout
@@ -1164,7 +1194,8 @@ func TestHandler_ResolveAllApprovals_OnConnectionClose(t *testing.T) {
 	}
 }
 
-// readAnyWSMessage reads the next raw message without filtering by type.
+// readAnyWSMessage reads the next raw message without filtering by type, for tests that
+// need to examine message order or detect unexpected message types.
 func readAnyWSMessage(t *testing.T, conn *websocket.Conn) map[string]any {
 	t.Helper()
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck

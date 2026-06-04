@@ -1,5 +1,9 @@
 package ws
 
+// Tests in this file cover Discord bridge functionality and message handling.
+// Test functions follow Go convention of Test* naming; doc comments are omitted
+// as Go does not conventionally require them for test functions.
+
 import (
 	"fmt"
 	"os"
@@ -224,18 +228,15 @@ func TestHandleDiscordConfigGet_NilBridge_ReturnsOnDiskConfig(t *testing.T) {
 	defer cleanup()
 
 	// Open the project so the connection has a projectPath.
-	writeWSMessage(t, conn, map[string]any{
+	sendAndReceive(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
-	})
-	readWSMessageOfType(t, conn, "session.created")
+	}, "session.created")
 
 	// Request discord config with no bridge registered.
-	writeWSMessage(t, conn, map[string]any{
+	response := sendAndReceive(t, conn, map[string]any{
 		"type": "discord.config.get",
-	})
-
-	response := readWSMessageOfType(t, conn, "discord.config")
+	}, "discord.config")
 	if response["type"] != "discord.config" {
 		t.Fatalf("expected discord.config response, got %+v", response)
 	}
@@ -298,22 +299,19 @@ func TestHandleDiscordValidate_WithOverride(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]any{
+	sendAndReceive(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
-	})
-	readWSMessageOfType(t, conn, "session.created")
+	}, "session.created")
 
-	writeWSMessage(t, conn, map[string]any{
+	response := sendAndReceive(t, conn, map[string]any{
 		"type": "discord.validate",
 		"config": map[string]any{
 			"token":   "tkn",
 			"guildId": "gid",
 			"enabled": false,
 		},
-	})
-
-	response := readWSMessageOfType(t, conn, "discord.validate.result")
+	}, "discord.validate.result")
 	if _, ok := response["result"]; !ok {
 		t.Errorf("expected result field, got %+v", response)
 	}
@@ -330,18 +328,15 @@ func TestHandleDiscordUnlink_NilBridge_ClearsConfigOnDisk(t *testing.T) {
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
 
-	writeWSMessage(t, conn, map[string]any{
+	sendAndReceive(t, conn, map[string]any{
 		"type": "project.open",
 		"path": projectDir,
-	})
-	readWSMessageOfType(t, conn, "session.created")
-
-	writeWSMessage(t, conn, map[string]any{
-		"type": "discord.unlink",
-	})
+	}, "session.created")
 
 	// Expect discord.config.saved with active=false.
-	response := readWSMessageOfType(t, conn, "discord.config.saved")
+	response := sendAndReceive(t, conn, map[string]any{
+		"type": "discord.unlink",
+	}, "discord.config.saved")
 	if active, _ := response["active"].(bool); active {
 		t.Error("expected active=false after unlink")
 	}
