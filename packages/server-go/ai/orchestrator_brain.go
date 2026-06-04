@@ -63,9 +63,24 @@ type OrchestrationBrain struct {
 	SessionIDPrefix string `json:"session_id_prefix"`
 }
 
-// NewOrchestrationBrain initializes the brain from persisted state or fresh.
-func NewOrchestrationBrain(projectPath, owner, repo, brief, sessionIDPrefix string) (*OrchestrationBrain, error) {
-	brain := &OrchestrationBrain{
+// stageLoadBrainFromDisk attempts to load persisted brain state from disk.
+func stageLoadBrainFromDisk(projectPath string) (*OrchestrationBrain, error) {
+	engineDir := filepath.Join(projectPath, ".engine")
+	statePath := filepath.Join(engineDir, "brain.json")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		return nil, err
+	}
+	brain := &OrchestrationBrain{}
+	if err := json.Unmarshal(data, brain); err != nil {
+		return nil, err
+	}
+	return brain, nil
+}
+
+// stageInitFreshBrain creates a new OrchestrationBrain with default initialization.
+func stageInitFreshBrain(projectPath, owner, repo, brief, sessionIDPrefix string) *OrchestrationBrain {
+	return &OrchestrationBrain{
 		ProjectPath:     projectPath,
 		Owner:           owner,
 		Repo:            repo,
@@ -75,18 +90,31 @@ func NewOrchestrationBrain(projectPath, owner, repo, brief, sessionIDPrefix stri
 		StartedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 	}
+}
 
+// NewOrchestrationBrain initializes the brain from persisted state or fresh.
+func NewOrchestrationBrain(projectPath, owner, repo, brief, sessionIDPrefix string) (*OrchestrationBrain, error) {
 	// Try loading from disk
-	engineDir := filepath.Join(projectPath, ".engine")
-	statePath := filepath.Join(engineDir, "brain.json")
-	if data, err := os.ReadFile(statePath); err == nil {
-		if err := json.Unmarshal(data, brain); err == nil {
-			brain.UpdatedAt = time.Now()
-			return brain, nil
-		}
+	if brain, err := stageLoadBrainFromDisk(projectPath); err == nil {
+		brain.UpdatedAt = time.Now()
+		return brain, nil
 	}
 
-	return brain, nil
+	// Fall back to fresh initialization
+	return stageInitFreshBrain(projectPath, owner, repo, brief, sessionIDPrefix), nil
+}
+
+// stageParseVocab transforms a vocabulary string into a map of key-value pairs.
+func stageParseVocab(vocabulary string) map[string]string {
+	return parseVocabularyMap(vocabulary)
+}
+
+// stageUpdateRequirementsState mutates the brain's requirements with doc layers and parsed vocabulary.
+func stageUpdateRequirementsState(b *OrchestrationBrain, design, vocabulary, prd, moduleIndex string) {
+	b.Requirements.Design = design
+	b.Requirements.PRD = prd
+	b.Requirements.ModuleIndex = moduleIndex
+	b.Requirements.Vocabulary = stageParseVocab(vocabulary)
 }
 
 // UpdateRequirements loads the three doc layers into brain.
@@ -94,15 +122,7 @@ func (b *OrchestrationBrain) UpdateRequirements(design, vocabulary, prd, moduleI
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	b.Requirements.Design = design
-	b.Requirements.PRD = prd
-	b.Requirements.ModuleIndex = moduleIndex
-
-	b.Requirements.Vocabulary = make(map[string]string)
-	for k, v := range parseVocabularyMap(vocabulary) {
-		b.Requirements.Vocabulary[k] = v
-	}
-
+	stageUpdateRequirementsState(b, design, vocabulary, prd, moduleIndex)
 	b.UpdatedAt = time.Now()
 	return b.persist()
 }
@@ -144,12 +164,9 @@ func (b *OrchestrationBrain) UpdatePlan(steps []PlanStep) error {
 	return b.persist()
 }
 
-// AddTeam registers a new team.
-func (b *OrchestrationBrain) AddTeam(teamID string, role string, steps []int, dependsOn []string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.Teams[teamID] = TeamState{
+// stageInitTeamState creates a new TeamState with given parameters.
+func stageInitTeamState(teamID, role string, steps, dependsOn []string) TeamState {
+	return TeamState{
 		ID:            teamID,
 		Role:          role,
 		AssignedSteps: steps,
@@ -158,9 +175,27 @@ func (b *OrchestrationBrain) AddTeam(teamID string, role string, steps []int, de
 		Progress:      make(map[string]interface{}),
 		Metadata:      make(map[string]interface{}),
 	}
+}
 
+// AddTeam registers a new team.
+func (b *OrchestrationBrain) AddTeam(teamID string, role string, steps []int, dependsOn []string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.Teams[teamID] = stageInitTeamState(teamID, role, steps, dependsOn)
 	b.UpdatedAt = time.Now()
 	return b.persist()
+}
+
+// stageUpdateTeamTimestamps mutates team status and sets started/completed times as appropriate.
+func stageUpdateTeamTimestamps(t *TeamState, newStatus string) {
+	t.Status = newStatus
+	if newStatus == "running" && t.StartedAt.IsZero() {
+		t.StartedAt = time.Now()
+	}
+	if newStatus == "done" || newStatus == "failed" {
+		t.CompletedAt = time.Now()
+	}
 }
 
 // UpdateTeamStatus changes a team's status.
@@ -173,16 +208,15 @@ func (b *OrchestrationBrain) UpdateTeamStatus(teamID, newStatus string) error {
 		return fmt.Errorf("team %s not found", teamID)
 	}
 
-	t.Status = newStatus
-	if newStatus == "running" && t.StartedAt.IsZero() {
-		t.StartedAt = time.Now()
-	}
-	if newStatus == "done" || newStatus == "failed" {
-		t.CompletedAt = time.Now()
-	}
+	stageUpdateTeamTimestamps(&t, newStatus)
 	b.Teams[teamID] = t
 	b.UpdatedAt = time.Now()
 	return b.persist()
+}
+
+// stageUpdateTeamFeedback mutates the team with new feedback.
+func stageUpdateTeamFeedback(t *TeamState, feedback string) {
+	t.Feedback = feedback
 }
 
 // UpdateTeamFeedback records feedback for a team (e.g., validation failure).
@@ -195,7 +229,7 @@ func (b *OrchestrationBrain) UpdateTeamFeedback(teamID, feedback string) error {
 		return fmt.Errorf("team %s not found", teamID)
 	}
 
-	t.Feedback = feedback
+	stageUpdateTeamFeedback(&t, feedback)
 	b.Teams[teamID] = t
 	b.UpdatedAt = time.Now()
 	return b.persist()
@@ -310,12 +344,18 @@ func (b *OrchestrationBrain) MarkCompleted() error {
 	return b.persist()
 }
 
-func (b *OrchestrationBrain) persist() error {
-	engineDir := filepath.Join(b.ProjectPath, ".engine")
+// stagePersistBrain persists the brain to disk by creating the .engine directory,
+// marshaling to JSON, and writing the file.
+func stagePersistBrain(projectPath string, brain *OrchestrationBrain) error {
+	engineDir := filepath.Join(projectPath, ".engine")
 	_ = os.MkdirAll(engineDir, 0755)
 
 	statePath := filepath.Join(engineDir, "brain.json")
-	data, _ := json.MarshalIndent(b, "", "  ")
+	data, _ := json.MarshalIndent(brain, "", "  ")
 
 	return os.WriteFile(statePath, data, 0644)
+}
+
+func (b *OrchestrationBrain) persist() error {
+	return stagePersistBrain(b.ProjectPath, b)
 }

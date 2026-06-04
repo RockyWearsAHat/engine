@@ -26,6 +26,26 @@ func newEmptyChatContext(projectDir string) *ChatContext {
 	}
 }
 
+// setupProjectAndSessionForTest stages: setupHistoryTestProject + db.CreateSession.
+// Returns projectDir. Use when tool_call tests need a seeded project with an active session.
+func setupProjectAndSessionForTest(t *testing.T, sessionID string) string {
+	projectDir := setupHistoryTestProject(t)
+	if err := db.CreateSession(sessionID, projectDir, "main"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	return projectDir
+}
+
+// setupOllamaServerWithEnv creates a test Ollama server and sets required environment variables.
+// Returns the server; caller must defer server.Close(). Eliminates repeated t.Setenv patterns.
+func setupOllamaServerWithEnv(t *testing.T, provider, model string) *httptest.Server {
+	server := newOllamaTestServer(model)
+	t.Setenv("ENGINE_MODEL_PROVIDER", provider)
+	t.Setenv("ENGINE_MODEL", model)
+	t.Setenv("OLLAMA_BASE_URL", server.URL)
+	return server
+}
+
 func TestParseToolCallsFromText_HermesXML(t *testing.T) {
 	raw := "I will read main.go.\n<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"main.go\"}}\n</tool_call>"
 	calls := parseToolCallsFromText(raw)
@@ -192,10 +212,7 @@ func TestStripToolCallMarkup_RemovesXMLAndKeepsProse(t *testing.T) {
 // (no native `tool_calls`). The loop should still execute the tool, send the result
 // back, and converge — exactly the broken qwen3.x behaviour we are repairing.
 func TestOpenAILoop_FallsBackToXMLToolCalls(t *testing.T) {
-	projectDir := setupHistoryTestProject(t)
-	if err := db.CreateSession("session-xml-fallback", projectDir, "main"); err != nil {
-		t.Fatalf("create session: %v", err)
-	}
+	projectDir := setupProjectAndSessionForTest(t, "session-xml-fallback")
 
 	// Write a known file so read_file has something to return.
 	if err := writeFileForTest(projectDir, "main.go", "package main\n"); err != nil {
@@ -282,10 +299,7 @@ func TestOpenAILoop_FallsBackToXMLToolCalls(t *testing.T) {
 // to LLAMACPP_BASE_URL/v1/chat/completions and that the loop converges on a normal text
 // response (the same shape the OpenAI-compat path produces).
 func TestChat_LlamacppProvider_UsesEndpoint(t *testing.T) {
-	projectDir := setupHistoryTestProject(t)
-	if err := db.CreateSession("session-llamacpp", projectDir, "main"); err != nil {
-		t.Fatalf("create session: %v", err)
-	}
+	projectDir := setupProjectAndSessionForTest(t, "session-llamacpp")
 
 	var hitPaths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -335,10 +349,7 @@ func TestChat_LlamacppProvider_UsesEndpoint(t *testing.T) {
 // tool definitions. Without this, tool calling fails silently — the root cause
 // behind the qwen3.x XML-fallback path we added in tool_call_parser.go.
 func TestOllamaLoop_SendsNumCtxOption(t *testing.T) {
-	projectDir := setupHistoryTestProject(t)
-	if err := db.CreateSession("session-numctx", projectDir, "main"); err != nil {
-		t.Fatalf("create session: %v", err)
-	}
+	projectDir := setupProjectAndSessionForTest(t, "session-numctx")
 
 	type capturedReq struct {
 		Options map[string]any `json:"options"`

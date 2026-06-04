@@ -574,6 +574,245 @@ func setupGitHubAPI(t *testing.T, srv *httptest.Server, token string) {
 	t.Setenv("GITHUB_TOKEN", token)
 }
 
+// ────────────────────────────────────────────────────────────────────────────────
+// Centralized Assertion & Setup Helpers — Reduce Duplication Across Test Files
+// ────────────────────────────────────────────────────────────────────────────────
+
+// assertHTTPError asserts err is non-nil with optional context message.
+// Centralizes "if err == nil { t.Error(...) }" pattern.
+func assertHTTPError(t *testing.T, err error, context string) {
+	t.Helper()
+	if err == nil {
+		if context != "" {
+			t.Errorf("expected error: %s", context)
+		} else {
+			t.Error("expected error")
+		}
+	}
+}
+
+// assertHTTPSuccess asserts err is nil with optional context message.
+// Centralizes "if err != nil { t.Fatalf(...) }" pattern.
+func assertHTTPSuccess(t *testing.T, err error, context string) {
+	t.Helper()
+	if err != nil {
+		if context != "" {
+			t.Fatalf("%s: %v", context, err)
+		} else {
+			t.Fatalf("%v", err)
+		}
+	}
+}
+
+// assertHTTPErrorWithStatus verifies error is non-nil after HTTP call expecting non-2xx response.
+// Combines error assertion with HTTP status context.
+func assertHTTPErrorWithStatus(t *testing.T, err error, statusCode int, operation string) {
+	t.Helper()
+	if err == nil {
+		t.Errorf("expected error from %s on status %d", operation, statusCode)
+	}
+}
+
+// assertHTTPMethod asserts captured HTTP request method matches expected.
+// Centralizes "if method != expected { t.Fatalf(...) }" pattern.
+func assertHTTPMethod(t *testing.T, got, want string) {
+	t.Helper()
+	if got != want {
+		t.Errorf("method = %q, want %q", got, want)
+	}
+}
+
+// assertHTTPPayload asserts a string field in decoded JSON payload equals expected value.
+// Centralizes payload field assertion pattern.
+func assertHTTPPayload(t *testing.T, payload map[string]any, field, expectedValue string) {
+	t.Helper()
+	got, ok := payload[field].(string)
+	if !ok || got != expectedValue {
+		t.Errorf("payload[%q] = %q, want %q", field, got, expectedValue)
+	}
+}
+
+// assertHTTPPayloadSlice asserts a []any field in decoded JSON payload has expected length and values.
+// Centralizes list/array payload field assertions.
+func assertHTTPPayloadSlice(t *testing.T, payload map[string]any, field string, expectedValues []string) {
+	t.Helper()
+	list, ok := payload[field].([]any)
+	if !ok {
+		t.Errorf("payload[%q] is not []any", field)
+		return
+	}
+	if len(list) != len(expectedValues) {
+		t.Errorf("payload[%q] length = %d, want %d", field, len(list), len(expectedValues))
+		return
+	}
+	for i, expected := range expectedValues {
+		if got, ok := list[i].(string); !ok || got != expected {
+			t.Errorf("payload[%q][%d] = %q, want %q", field, i, got, expected)
+		}
+	}
+}
+
+// captureHTTPRequestHandler returns an http.HandlerFunc that captures HTTP method and JSON body.
+// Useful for verifying API call payloads and HTTP method selection.
+// captureMethod and capturePayload are pointers to be filled by handler; handler responds with 200 OK + empty JSON.
+func captureHTTPRequestHandler(t *testing.T, captureMethod *string, capturePayload *map[string]any) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		*captureMethod = r.Method
+		if err := json.NewDecoder(r.Body).Decode(capturePayload); err != nil {
+			t.Logf("warning: decode request body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}
+}
+
+// setupGitHubAPIWithErrorServer creates error server and configures GitHub API environment.
+// Combines newErrorResponseServer + setupGitHubAPI pattern.
+func setupGitHubAPIWithErrorServer(t *testing.T, statusCode int, token string) *httptest.Server {
+	t.Helper()
+	srv := newErrorResponseServer(t, statusCode, "")
+	setupGitHubAPI(t, srv, token)
+	return srv
+}
+
+// ────────────────────────────────────────────────────────────────────────────────
+// Additional HTTP Test Helpers — Reduce Duplication Across Test Files
+// ────────────────────────────────────────────────────────────────────────────────
+
+// newResponseServer creates a server that responds with the given status and body (as raw bytes).
+// Generalizes simple status+body response pattern for error and API testing.
+func newResponseServer(t *testing.T, status int, body string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+		if body != "" {
+			_, _ = w.Write([]byte(body))
+		}
+	}))
+}
+
+// conditionalHandlerFunc is a callback that returns HTTP status and body based on request method.
+// Used by newMethodConditionalHandler to route POST vs GET/other requests.
+type conditionalHandlerFunc func(w http.ResponseWriter, r *http.Request) (int, string)
+
+// newMethodConditionalHandler creates a handler that dispatches POST and non-POST requests differently.
+// onPost and onOther receive w and r; handler manages status/body writing via returned (status, body).
+// Centralizes POST/GET conditional pattern used in github_gaps_test.go engagement tests.
+func newMethodConditionalHandler(t *testing.T, onPost, onOther conditionalHandlerFunc) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		var handler conditionalHandlerFunc
+		if r.Method == http.MethodPost {
+			handler = onPost
+		} else {
+			handler = onOther
+		}
+		status, body := handler(w, r)
+		w.WriteHeader(status)
+		if body != "" {
+			_, _ = w.Write([]byte(body))
+		}
+	}
+}
+
+// pathSuffixMatcher is a function type that matches request path suffix and returns (matches bool, handler).
+// Used by newPathSuffixHandler to route requests based on URL path suffix patterns.
+type pathSuffixMatcher struct {
+	suffix  string
+	handler conditionalHandlerFunc
+}
+
+// newPathSuffixHandler creates a handler that routes requests based on URL path suffixes.
+// Each matcher is tried in order; first path suffix match uses that handler.
+// handler receives (w, r) and returns (status, body) for response.
+// Centralizes path suffix routing pattern used in github_gaps_test.go engagement tests.
+func newPathSuffixHandler(t *testing.T, defaultStatus int, defaultBody string, matchers ...pathSuffixMatcher) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		for _, m := range matchers {
+			if strings.HasSuffix(r.URL.Path, m.suffix) {
+				status, body := m.handler(w, r)
+				w.WriteHeader(status)
+				if body != "" {
+					_, _ = w.Write([]byte(body))
+				}
+				return
+			}
+		}
+		// No match: use default
+		w.WriteHeader(defaultStatus)
+		if defaultBody != "" {
+			_, _ = w.Write([]byte(defaultBody))
+		}
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────────
+// GraphQL Test Helpers — Reduce Duplication in projects_test.go
+// ────────────────────────────────────────────────────────────────────────────────
+
+// graphQLQueryMatcher is a function type that matches GraphQL queries and returns (handled bool, response JSON).
+// Used by newGraphQLHandlerWithQueries to route GraphQL requests to appropriate response generators.
+type graphQLQueryMatcher func(query string) (bool, string)
+
+// newGraphQLHandlerWithQueries creates an http.HandlerFunc that routes GraphQL queries based on matchers.
+// Each matcher is tried in order; first match responds with its JSON. Falls back to 400 error.
+// Centralizes the repeated pattern of query inspection + conditional JSON response in projects_test.go.
+func newGraphQLHandlerWithQueries(t *testing.T, matchers ...graphQLQueryMatcher) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		if err := decodeGraphQLRequest(r, &req); err != nil {
+			t.Fatalf("decode graphql request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		for _, m := range matchers {
+			if handled, response := m(req.Query); handled {
+				io.WriteString(w, response) //nolint:errcheck
+				return
+			}
+		}
+		// No matcher accepted query
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"errors":[{"message":"unexpected query"}]}`) //nolint:errcheck
+	}
+}
+
+// graphQLMatch creates a matcher that responds to queries containing the given substring.
+// Used with newGraphQLHandlerWithQueries to route queries like "projectV2(number" or "addProjectV2ItemById".
+func graphQLMatch(substring, jsonResponse string) graphQLQueryMatcher {
+	return func(query string) (bool, string) {
+		if strings.Contains(query, substring) {
+			return true, jsonResponse
+		}
+		return false, ""
+	}
+}
+
+// graphQLMatchFallthrough creates a matcher that always matches (must be last in matchers list).
+// Used to provide default/fallback response for unmatched queries.
+func graphQLMatchFallthrough(jsonResponse string) graphQLQueryMatcher {
+	return func(query string) (bool, string) {
+		return true, jsonResponse
+	}
+}
+
+// assertGraphQLStatus verifies GraphQL response status and Content-Type; used in conditional servers.
+// Centralizes response header assertions repeated in projects_test.go tests.
+func assertGraphQLStatus(t *testing.T, handler http.HandlerFunc, wantStatus int) {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/graphql", strings.NewReader(`{"query":"test"}`))
+	r.Header.Set("Content-Type", "application/json")
+	handler(w, r)
+	if w.Code != wantStatus {
+		t.Errorf("status = %d, want %d", w.Code, wantStatus)
+	}
+}
+
 // ── RepoMonitor ───────────────────────────────────────────────────────────────
 
 func TestNewRepoMonitor(t *testing.T) {
@@ -721,9 +960,7 @@ func TestListIssues_ParseError(t *testing.T) {
 
 	c := newClientWithBase(srv.URL)
 	_, err := c.ListIssues("open", nil)
-	if err == nil {
-		t.Fatal("expected parse error")
-	}
+	assertHTTPError(t, err, "ListIssues parse error")
 }
 
 func TestGetIssue_ParseError(t *testing.T) {
@@ -734,20 +971,16 @@ func TestGetIssue_ParseError(t *testing.T) {
 
 	c := newClientWithBase(srv.URL)
 	_, err := c.GetIssue(1)
-	if err == nil {
-		t.Fatal("expected parse error")
-	}
+	assertHTTPError(t, err, "GetIssue parse error")
 }
 
 func TestCreateIssue_DoPostError(t *testing.T) {
-	srv := newErrorResponseServer(t, http.StatusInternalServerError, "boom")
+	srv := setupGitHubAPIWithErrorServer(t, http.StatusInternalServerError, "")
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
 	_, err := c.CreateIssue("title", "body", nil)
-	if err == nil {
-		t.Fatal("expected create issue error")
-	}
+	assertHTTPError(t, err, "CreateIssue POST error")
 }
 
 func TestCreateIssue_ParseError(t *testing.T) {
@@ -759,20 +992,16 @@ func TestCreateIssue_ParseError(t *testing.T) {
 
 	c := newClientWithBase(srv.URL)
 	_, err := c.CreateIssue("title", "body", nil)
-	if err == nil {
-		t.Fatal("expected parse error")
-	}
+	assertHTTPError(t, err, "CreateIssue parse error")
 }
 
 func TestAddComment_DoPostError(t *testing.T) {
-	srv := newErrorResponseServer(t, http.StatusInternalServerError, "boom")
+	srv := setupGitHubAPIWithErrorServer(t, http.StatusInternalServerError, "")
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
 	_, err := c.AddComment(1, "hello")
-	if err == nil {
-		t.Fatal("expected add comment error")
-	}
+	assertHTTPError(t, err, "AddComment POST error")
 }
 
 func TestAddComment_ParseError(t *testing.T) {
@@ -784,9 +1013,7 @@ func TestAddComment_ParseError(t *testing.T) {
 
 	c := newClientWithBase(srv.URL)
 	_, err := c.AddComment(1, "hello")
-	if err == nil {
-		t.Fatal("expected parse error")
-	}
+	assertHTTPError(t, err, "AddComment parse error")
 }
 
 func TestCloseIssue_AddCommentError(t *testing.T) {
@@ -800,31 +1027,25 @@ func TestCloseIssue_AddCommentError(t *testing.T) {
 
 	c := newClientWithBase(srv.URL)
 	err := c.CloseIssue(1, "closing")
-	if err == nil {
-		t.Fatal("expected close issue add-comment error")
-	}
+	assertHTTPError(t, err, "CloseIssue add-comment error")
 }
 
 func TestCloseIssue_DoPatchError(t *testing.T) {
-	srv := newErrorResponseServer(t, http.StatusInternalServerError, "boom")
+	srv := setupGitHubAPIWithErrorServer(t, http.StatusInternalServerError, "")
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
 	err := c.CloseIssue(1, "")
-	if err == nil {
-		t.Fatal("expected close issue patch error")
-	}
+	assertHTTPError(t, err, "CloseIssue PATCH error")
 }
 
 func TestUpdateIssue_DoPatchError(t *testing.T) {
-	srv := newErrorResponseServer(t, http.StatusInternalServerError, "boom")
+	srv := setupGitHubAPIWithErrorServer(t, http.StatusInternalServerError, "")
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
 	_, err := c.UpdateIssue(1, map[string]any{"title": "x"})
-	if err == nil {
-		t.Fatal("expected update issue error")
-	}
+	assertHTTPError(t, err, "UpdateIssue PATCH error")
 }
 
 func TestUpdateIssue_ParseError(t *testing.T) {
@@ -835,9 +1056,7 @@ func TestUpdateIssue_ParseError(t *testing.T) {
 
 	c := newClientWithBase(srv.URL)
 	_, err := c.UpdateIssue(1, map[string]any{"title": "x"})
-	if err == nil {
-		t.Fatal("expected parse error")
-	}
+	assertHTTPError(t, err, "UpdateIssue parse error")
 }
 
 func TestDoGet_BadURL(t *testing.T) {

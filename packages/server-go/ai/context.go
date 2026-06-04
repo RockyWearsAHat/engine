@@ -100,6 +100,51 @@ var ollamaWarmKeepInterval = 20 * time.Minute
 // Exported as a var so tests can force deterministic timeout coverage.
 var interactiveShellTimeout = 2 * time.Minute
 
+// TestHelpers: functions below are exported helpers for test suites to reduce duplication.
+// They stage side-effect chains (env setup, server creation, callbacks) in named functions.
+
+// stageTestCallbacks creates standard no-op callbacks for test ChatContexts.
+func stageTestCallbacks() (func(_ *db.Session), func(string, bool), func(string, any), func(string, any, bool), func(string)) {
+	return func(_ *db.Session) {}, func(string, bool) {}, func(string, any) {}, func(string, any, bool) {}, func(string) {}
+}
+
+// newChatContextForOllamaTest creates a ChatContext pre-configured for Ollama integration tests
+// with standard no-op callbacks. Caller provides SessionID, ProjectPath, and Role.
+// Use this to avoid repeating the callback setup 5+ times per test file.
+func newChatContextForOllamaTest(sessionID, projectDir string, role AgentRole) *ChatContext {
+	onSessionUpdated, onChunk, onToolCall, onToolResult, onError := stageTestCallbacks()
+	return &ChatContext{
+		ProjectPath:      projectDir,
+		SessionID:        sessionID,
+		Role:             role,
+		OnSessionUpdated: onSessionUpdated,
+		OnChunk:          onChunk,
+		OnToolCall:       onToolCall,
+		OnToolResult:     onToolResult,
+		OnError:          onError,
+	}
+}
+
+// stageTestOrchestratorCallbacks creates standard no-op callbacks for test OrchestratorConfigs.
+func stageTestOrchestratorCallbacks() (func(string, string), func(string), func(string)) {
+	return func(string, string) {}, func(string) {}, func(string) {}
+}
+
+// newOrchestratorConfigForTest creates a standard OrchestratorConfig for orchestrator tests.
+// All callbacks are set to no-ops. Caller provides ProjectPath and optional Owner/Repo for GitHub context.
+func newOrchestratorConfigForTest(projectPath, owner, repo, sessionIDPrefix string) OrchestratorConfig {
+	onPhase, onProgress, onError := stageTestOrchestratorCallbacks()
+	return OrchestratorConfig{
+		ProjectPath:     projectPath,
+		Owner:           owner,
+		Repo:            repo,
+		OnPhase:         onPhase,
+		OnProgress:      onProgress,
+		OnError:         onError,
+		SessionIDPrefix: sessionIDPrefix,
+	}
+}
+
 // autonomousShellTimeout is the max time for autonomous shell operations.
 // Exported as a var so tests can force deterministic timeout coverage.
 var autonomousShellTimeout = 5 * time.Minute
@@ -434,7 +479,13 @@ func (oc *OutputCollector) String() string {
 	return oc.buf.String()
 }
 
-func initChatContextCallbacks(oc *OutputCollector) (func(string, bool), func(string), func(string, any), func(string, any, bool)) {
+// stageCollectorCreation creates a new OutputCollector for accumulating output.
+func stageCollectorCreation() *OutputCollector {
+	return &OutputCollector{}
+}
+
+// stageCallbacksInit prepares output-collecting callbacks from an OutputCollector.
+func stageCallbacksInit(oc *OutputCollector) (func(string, bool), func(string), func(string, any), func(string, any, bool)) {
 	onChunk := func(content string, _ bool) {
 		oc.Write(content)
 	}
@@ -444,13 +495,9 @@ func initChatContextCallbacks(oc *OutputCollector) (func(string, bool), func(str
 	return onChunk, onError, onToolCall, onToolResult
 }
 
-// newChatContextForRole creates a ChatContext with output collection pre-configured.
-// This consolidates the repeated pattern of building a context with sync.Mutex + strings.Builder
-// for collecting streamed output from a role-based chat session.
-func newChatContextForRole(cfg OrchestratorConfig, sessionID string, role AgentRole, cancel <-chan struct{}) (*ChatContext, *OutputCollector) {
-	oc := &OutputCollector{}
-	onChunk, onError, onToolCall, onToolResult := initChatContextCallbacks(oc)
-	ctx := &ChatContext{
+// stageChatContextCreation constructs a ChatContext from config, sessionID, role, cancel, and callbacks.
+func stageChatContextCreation(cfg OrchestratorConfig, sessionID string, role AgentRole, cancel <-chan struct{}, onChunk func(string, bool), onError func(string), onToolCall func(string, any), onToolResult func(string, any, bool)) *ChatContext {
+	return &ChatContext{
 		ProjectPath:  cfg.ProjectPath,
 		SessionID:    sessionID,
 		Role:         role,
@@ -460,6 +507,15 @@ func newChatContextForRole(cfg OrchestratorConfig, sessionID string, role AgentR
 		OnToolCall:   onToolCall,
 		OnToolResult: onToolResult,
 	}
+}
+
+// newChatContextForRole creates a ChatContext with output collection pre-configured.
+// This consolidates the repeated pattern of building a context with sync.Mutex + strings.Builder
+// for collecting streamed output from a role-based chat session.
+func newChatContextForRole(cfg OrchestratorConfig, sessionID string, role AgentRole, cancel <-chan struct{}) (*ChatContext, *OutputCollector) {
+	oc := stageCollectorCreation()
+	onChunk, onError, onToolCall, onToolResult := stageCallbacksInit(oc)
+	ctx := stageChatContextCreation(cfg, sessionID, role, cancel, onChunk, onError, onToolCall, onToolResult)
 	return ctx, oc
 }
 

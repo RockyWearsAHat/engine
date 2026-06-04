@@ -124,17 +124,37 @@ func LoadConfig(projectPath string) (Config, error) {
 	if !cfg.Enabled {
 		return cfg, nil
 	}
+
+	if err := validateConfig(&cfg); err != nil {
+		return cfg, err
+	}
+
+	if err := ensureStoragePath(cfg.StoragePath); err != nil {
+		return cfg, err
+	}
+
+	return cfg, nil
+}
+
+// validateConfig checks that all required Discord config fields are present.
+// Returns error with clear message naming the config source if any field is missing.
+func validateConfig(cfg *Config) error {
 	if cfg.BotToken == "" {
-		return cfg, fmt.Errorf("discord bot token is required in %s or ENGINE_DISCORD_BOT_TOKEN", cfg.ConfigFilePath)
+		return fmt.Errorf("discord bot token is required in %s or ENGINE_DISCORD_BOT_TOKEN", cfg.ConfigFilePath)
 	}
 	if cfg.GuildID == "" {
-		return cfg, fmt.Errorf("discord guild id is required in %s or ENGINE_DISCORD_GUILD_ID", cfg.ConfigFilePath)
+		return fmt.Errorf("discord guild id is required in %s or ENGINE_DISCORD_GUILD_ID", cfg.ConfigFilePath)
 	}
 	if len(cfg.AllowedUsers) == 0 {
-		return cfg, fmt.Errorf("at least one allowed Discord user id is required in %s or ENGINE_DISCORD_ALLOWED_USER_IDS", cfg.ConfigFilePath)
+		return fmt.Errorf("at least one allowed Discord user id is required in %s or ENGINE_DISCORD_ALLOWED_USER_IDS", cfg.ConfigFilePath)
 	}
-	_ = os.MkdirAll(cfg.StoragePath, 0700)
-	return cfg, nil
+	return nil
+}
+
+// ensureStoragePath creates the storage directory if it does not exist.
+// Side effect: mkdir. Returns error if creation fails.
+func ensureStoragePath(storagePath string) error {
+	return os.MkdirAll(storagePath, 0700)
 }
 
 func loadProjectConfig(projectPath string) (fileConfig, bool, error) {
@@ -425,60 +445,88 @@ func (s *Service) addProject(replyChannelID string, inputPath string) error {
 		return fmt.Errorf("path is required")
 	}
 
-	// Support GitHub/git URLs: clone them to a local directory first.
 	isURL := strings.HasPrefix(clean, "https://") || strings.HasPrefix(clean, "http://") || strings.HasPrefix(clean, "git@")
 	if isURL {
-		clonesDir := resolveClonesDir(s.project)
-		if err := os.MkdirAll(clonesDir, 0o755); err != nil {
-			return fmt.Errorf("create clones directory: %w", err)
+		var err error
+		clean, err = s.handleGitURLProject(clean)
+		if err != nil {
+			return err
 		}
+	}
 
-		candidates, primary := cloneDirNameCandidates(clean)
-		if existingPath, ok := findExistingClonePath(clonesDir, candidates); ok {
-			clean = existingPath
-		} else {
-			dest := filepath.Join(clonesDir, primary)
-			if destInfo, err := os.Stat(dest); err == nil && destInfo.IsDir() {
-				if _, gitErr := os.Stat(filepath.Join(dest, ".git")); gitErr != nil {
-					return fmt.Errorf("clone destination exists but is not a git repository: %s", dest)
-				}
-			} else {
-				if err := s.cloneProjectFn(clean, dest); err != nil {
-					return fmt.Errorf("clone %s: %w", clean, err)
-				}
-			}
-			clean = dest
-		}
+	if err := validateProjectPath(clean); err != nil {
+		return err
 	}
 
 	abs, _ := filepath.Abs(clean)
-	if st, err := os.Stat(abs); err != nil || !st.IsDir() {
-		return fmt.Errorf("path must be an existing directory")
-	}
 
-	repo := filepath.Base(abs)
+repo := filepath.Base(abs)
 	channelName := "proj-" + slug(repo)
 	ch, err := s.ensureProjectChannel(channelName)
 	if err != nil {
 		return err
 	}
 
+	s.updateProjectStateAfterAdd(abs, repo, ch.ID)
+
+	branch, _ := gogit.GetCurrentBranch(abs)
+	s.send(replyChannelID, fmt.Sprintf("Project enrolled: %s\\nChannel: <#%s>\\nBranch: %s", abs, ch.ID, branch))
+	s.send(ch.ID, "Engine linked to this project channel. Just chat normally to run the agent. Commands still available: !status !sessions !lastcommit !pause !resume !search !history")
+	return nil
+}
+
+// handleGitURLProject clones a git URL to the local clones directory and
+// returns the local path. Side effects: mkdir for clones dir, git clone call,
+// directory stat checks. Returns error on any step.
+func (s *Service) handleGitURLProject(urlString string) (string, error) {
+	clonesDir := resolveClonesDir(s.project)
+	if err := os.MkdirAll(clonesDir, 0o755); err != nil {
+		return "", fmt.Errorf("create clones directory: %w", err)
+	}
+
+	candidates, primary := cloneDirNameCandidates(urlString)
+	if existingPath, ok := findExistingClonePath(clonesDir, candidates); ok {
+		return existingPath, nil
+	}
+
+	dest := filepath.Join(clonesDir, primary)
+	if destInfo, err := os.Stat(dest); err == nil && destInfo.IsDir() {
+		if _, gitErr := os.Stat(filepath.Join(dest, ".git")); gitErr != nil {
+			return "", fmt.Errorf("clone destination exists but is not a git repository: %s", dest)
+		}
+	} else {
+		if err := s.cloneProjectFn(urlString, dest); err != nil {
+			return "", fmt.Errorf("clone %s: %w", urlString, err)
+		}
+	}
+
+	return dest, nil
+}
+
+// validateProjectPath checks that the path is an existing directory.
+func validateProjectPath(pathStr string) error {
+	abs, _ := filepath.Abs(pathStr)
+	if st, err := os.Stat(abs); err != nil || !st.IsDir() {
+		return fmt.Errorf("path must be an existing directory")
+	}
+	return nil
+}
+
+// updateProjectStateAfterAdd mutates the service state to add the project,
+// persists state to disk, and returns without sending notifications.
+// Side effects: stateMu lock, state.Projects write, saveState().
+func (s *Service) updateProjectStateAfterAdd(projectPath, repoName, channelID string) {
 	s.stateMu.Lock()
-	s.state.Projects[abs] = ProjectBinding{
-		ProjectPath: abs,
-		RepoName:    repo,
-		ChannelID:   ch.ID,
+	s.state.Projects[projectPath] = ProjectBinding{
+		ProjectPath: projectPath,
+		RepoName:    repoName,
+		ChannelID:   channelID,
 		Paused:      false,
 	}
 	s.stateMu.Unlock()
 	if err := s.saveState(); err != nil {
 		log.Printf("discord: save state after addProject failed: %v", err)
 	}
-
-	branch, _ := gogit.GetCurrentBranch(abs)
-	s.send(replyChannelID, fmt.Sprintf("Project enrolled: %s\\nChannel: <#%s>\\nBranch: %s", abs, ch.ID, branch))
-	s.send(ch.ID, "Engine linked to this project channel. Just chat normally to run the agent. Commands still available: !status !sessions !lastcommit !pause !resume !search !history")
-	return nil
 }
 
 func resolveClonesDir(projectPath string) string {
@@ -868,13 +916,25 @@ func (s *Service) runAgentChat(m *discordgo.MessageCreate, binding ProjectBindin
 		return
 	}
 
-	// Channel routing: keep each project's communication in the project channel.
 	replyChannelID, sessionID, err := s.acquireProjectChatSession(m, binding, prompt)
 	if err != nil {
 		s.send(m.ChannelID, "Could not start project chat: "+err.Error())
 		return
 	}
 
+	if !s.markTaskActive(sessionID, binding.ChannelID, replyChannelID) {
+		return
+	}
+
+	s.send(replyChannelID, "Running agent request...")
+	channelID := binding.ChannelID
+	go s.runAgentChatAsync(binding, replyChannelID, sessionID, channelID, prompt)
+}
+
+// markTaskActive atomically checks and marks a session/channel as active.
+// Side effects: activeMu lock, active/activeByChannel map write.
+// Returns false and sends error message if task already running.
+func (s *Service) markTaskActive(sessionID, channelID, replyChannelID string) bool {
 	s.activeMu.Lock()
 	if s.active == nil {
 		s.active = make(map[string]bool)
@@ -882,123 +942,125 @@ func (s *Service) runAgentChat(m *discordgo.MessageCreate, binding ProjectBindin
 	if s.activeByChannel == nil {
 		s.activeByChannel = make(map[string]bool)
 	}
-	if s.activeByChannel[binding.ChannelID] {
+	if s.activeByChannel[channelID] {
 		s.activeMu.Unlock()
 		s.send(replyChannelID, "A task is already running for this project channel. Wait for it to finish.")
-		return
+		return false
 	}
 	if s.active[sessionID] {
 		s.activeMu.Unlock()
 		s.send(replyChannelID, "A task is already running for this session. Wait for it to finish.")
-		return
+		return false
 	}
 	s.active[sessionID] = true
-	s.activeByChannel[binding.ChannelID] = true
+	s.activeByChannel[channelID] = true
 	s.activeMu.Unlock()
+	return true
+}
 
-	s.send(replyChannelID, "Running agent request...")
-	channelID := binding.ChannelID
-	go func() {
-		defer func() {
-			s.activeMu.Lock()
-			delete(s.active, sessionID)
-			delete(s.activeByChannel, channelID)
-			s.activeMu.Unlock()
-		}()
+// markTaskInactive clears the active flags for a session/channel.
+// Side effects: activeMu lock, active/activeByChannel map delete.
+func (s *Service) markTaskInactive(sessionID, channelID string) {
+	s.activeMu.Lock()
+	delete(s.active, sessionID)
+	delete(s.activeByChannel, channelID)
+	s.activeMu.Unlock()
+}
 
-		var outMu sync.Mutex
-		var output strings.Builder
-		var lastErr string
+// runAgentChatAsync runs the autonomous project orchestrator and handles results.
+// Runs in a goroutine. Side effects: ai.RunAutonomousProject (external), db writes,
+// send() calls, markTaskInactive cleanup. Handles errors by sending to replyChannelID.
+func (s *Service) runAgentChatAsync(binding ProjectBinding, replyChannelID, sessionID, channelID, prompt string) {
+	defer s.markTaskInactive(sessionID, channelID)
 
-		cancel := make(chan struct{})
-		defer close(cancel)
+	var outMu sync.Mutex
+	var output strings.Builder
+	var lastErr string
 
-		chatPrompt := promptWithProjectStatusContext(binding, prompt)
+	cancel := make(chan struct{})
+	defer close(cancel)
 
-		// One door: Discord is just an external chat window. The orchestrator
-		// triages this brief and picks the autonomy level itself — answer in
-		// chat, or drive the full plan → execute → review → validate build
-		// pipeline — exactly like the editor chat window. No keyword gate here;
-		// routing is the orchestrator's job.
-		state, runErr := runAutonomousProject(ai.OrchestratorConfig{
-			ProjectPath:     binding.ProjectPath,
-			Brief:           chatPrompt,
-			SessionIDPrefix: fmt.Sprintf("discord-%s", sessionID),
-			Cancel:          cancel,
-			ChatFn:          chatFunc,
-			// InteractiveChat is the conversational executor. When the
-			// orchestrator triages this brief as chat (not a build), it streams
-			// the reply here; we accumulate it and relay to the channel.
-			InteractiveChat: func(brief string, cxl <-chan struct{}) {
-				chatFunc(&ai.ChatContext{
-					ProjectPath: binding.ProjectPath,
-					SessionID:   sessionID,
-					Cancel:      cxl,
-					Role:        ai.RoleInteractive,
-					OnChunk: func(content string, done bool) {
-						if done || strings.TrimSpace(content) == "" {
-							return
-						}
-						outMu.Lock()
-						output.WriteString(content)
-						outMu.Unlock()
-					},
-					OnToolCall:       func(_ string, _ any) {},
-					OnToolResult:     func(_ string, _ any, _ bool) {},
-					OnError:          func(err string) { lastErr = strings.TrimSpace(err) },
-					OnSessionUpdated: func(_ *db.Session) {},
-					RequestApproval: func(kind, title, message, command string) (bool, error) {
-						_ = kind
-						_ = title
-						_ = message
-						_ = command
-						return false, fmt.Errorf("approval required but unavailable in discord command mode")
-					},
-				}, brief)
-			},
-			OnPhase: func(phase, detail string) {
-				s.send(replyChannelID, fmt.Sprintf("Orchestrator %s: %s", phase, detail))
-			},
-			OnProgress: func(message string) {
-				if strings.TrimSpace(message) != "" {
-					s.send(replyChannelID, message)
-				}
-			},
-			OnError: func(err string) {
-				if strings.TrimSpace(err) != "" {
-					lastErr = strings.TrimSpace(err)
-				}
-			},
-		})
+	chatPrompt := promptWithProjectStatusContext(binding, prompt)
 
-		if strings.TrimSpace(lastErr) != "" {
-			s.send(replyChannelID, "Agent error: "+lastErr)
-			return
-		}
-		if runErr != nil {
-			s.send(replyChannelID, "Agent error: "+runErr.Error())
-			return
-		}
+	state, runErr := runAutonomousProject(s.buildChatContext(binding, sessionID, replyChannelID, &output, &outMu, &lastErr, cancel, chatPrompt))
 
-		// A build route already streamed progress through OnPhase/OnProgress;
-		// post a completion summary instead of relaying chat text. Only a
-		// conversational route has a text answer to send back.
-		if state != nil && !state.Conversational {
-			s.send(replyChannelID, fmt.Sprintf("Orchestrator completed (%d steps, %d iterations).", len(state.Plan), state.OuterIterations))
-			return
-		}
+	if strings.TrimSpace(lastErr) != "" {
+		s.send(replyChannelID, "Agent error: "+lastErr)
+		return
+	}
+	if runErr != nil {
+		s.send(replyChannelID, "Agent error: "+runErr.Error())
+		return
+	}
 
-		outMu.Lock()
-		answer := strings.TrimSpace(output.String())
-		outMu.Unlock()
-		if answer == "" {
-			answer = "(No response text returned.)"
-		}
+	if state != nil && !state.Conversational {
+		s.send(replyChannelID, fmt.Sprintf("Orchestrator completed (%d steps, %d iterations).", len(state.Plan), state.OuterIterations))
+		return
+	}
 
-		for _, part := range splitForDiscord(answer, maxDiscordMessageChars) {
-			s.sendTagged(replyChannelID, part, "agent", sessionID)
-		}
-	}()
+	outMu.Lock()
+	answer := strings.TrimSpace(output.String())
+	outMu.Unlock()
+	if answer == "" {
+		answer = "(No response text returned.)"
+	}
+
+	for _, part := range splitForDiscord(answer, maxDiscordMessageChars) {
+		s.sendTagged(replyChannelID, part, "agent", sessionID)
+	}
+}
+
+// buildChatContext constructs the orchestrator config with callbacks for a chat session.
+// Side effects: none (pure construction). The returned config will have side effects
+// when executed by the orchestrator.
+func (s *Service) buildChatContext(binding ProjectBinding, sessionID, replyChannelID string, output *strings.Builder, outMu *sync.Mutex, lastErr *string, cancel <-chan struct{}, chatPrompt string) ai.OrchestratorConfig {
+	return ai.OrchestratorConfig{
+		ProjectPath:     binding.ProjectPath,
+		Brief:           chatPrompt,
+		SessionIDPrefix: fmt.Sprintf("discord-%s", sessionID),
+		Cancel:          cancel,
+		ChatFn:          chatFunc,
+		InteractiveChat: func(brief string, cxl <-chan struct{}) {
+			chatFunc(&ai.ChatContext{
+				ProjectPath: binding.ProjectPath,
+				SessionID:   sessionID,
+				Cancel:      cxl,
+				Role:        ai.RoleInteractive,
+				OnChunk: func(content string, done bool) {
+					if done || strings.TrimSpace(content) == "" {
+						return
+					}
+					outMu.Lock()
+					output.WriteString(content)
+					outMu.Unlock()
+				},
+				OnToolCall:       func(_ string, _ any) {},
+				OnToolResult:     func(_ string, _ any, _ bool) {},
+				OnError:          func(err string) { *lastErr = strings.TrimSpace(err) },
+				OnSessionUpdated: func(_ *db.Session) {},
+				RequestApproval: func(kind, title, message, command string) (bool, error) {
+					_ = kind
+					_ = title
+					_ = message
+					_ = command
+					return false, fmt.Errorf("approval required but unavailable in discord command mode")
+				},
+			}, brief)
+		},
+		OnPhase: func(phase, detail string) {
+			s.send(replyChannelID, fmt.Sprintf("Orchestrator %s: %s", phase, detail))
+		},
+		OnProgress: func(message string) {
+			if strings.TrimSpace(message) != "" {
+				s.send(replyChannelID, message)
+			}
+		},
+		OnError: func(err string) {
+			if strings.TrimSpace(err) != "" {
+				*lastErr = strings.TrimSpace(err)
+			}
+		},
+	}
 }
 
 func promptWithProjectStatusContext(binding ProjectBinding, prompt string) string {

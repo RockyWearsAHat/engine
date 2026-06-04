@@ -43,11 +43,18 @@ func newOllamaTestServer(modelName string) *httptest.Server {
 	}))
 }
 
-func TestChat_OllamaProvider_UsesRunningModelAndPersistsMessages(t *testing.T) {
+// setupProjectAndSession stages the side-effect chain: project setup + DB initialization + session creation.
+// Returns projectDir and sessionID. Caller sets t.Setenv("OLLAMA_BASE_URL", ...) and other env vars as needed.
+func setupProjectAndSession(t *testing.T, sessionID string) string {
 	projectDir := setupHistoryTestProject(t)
-	if err := db.CreateSession("session-ollama", projectDir, "main"); err != nil {
+	if err := db.CreateSession(sessionID, projectDir, "main"); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
+	return projectDir
+}
+
+func TestChat_OllamaProvider_UsesRunningModelAndPersistsMessages(t *testing.T) {
+	projectDir := setupProjectAndSession(t, "session-ollama")
 
 	requestedModels := make([]string, 0, 1)
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -128,10 +135,7 @@ func TestChat_OllamaProvider_UsesRunningModelAndPersistsMessages(t *testing.T) {
 }
 
 func TestChat_RolePlanner_SeedsPreGrantedTools(t *testing.T) {
-	projectDir := setupHistoryTestProject(t)
-	if err := db.CreateSession("session-planner", projectDir, "main"); err != nil {
-		t.Fatalf("create session: %v", err)
-	}
+	projectDir := setupProjectAndSession(t, "session-planner")
 
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -300,10 +304,7 @@ func TestRunPlannerPrePass_UsesPlannerModelOverride(t *testing.T) {
 }
 
 func TestChat_ReviewerRole_UsesReviewerModelOverride(t *testing.T) {
-	projectDir := setupHistoryTestProject(t)
-	if err := db.CreateSession("session-reviewer-override", projectDir, "main"); err != nil {
-		t.Fatalf("create session: %v", err)
-	}
+	projectDir := setupProjectAndSession(t, "session-reviewer-override")
 
 	requestedModels := make([]string, 0, 1)
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -355,10 +356,7 @@ func TestChat_ReviewerRole_UsesReviewerModelOverride(t *testing.T) {
 }
 
 func TestChat_WorkflowRequest_TriggersPlannerPrePass(t *testing.T) {
-	projectDir := setupHistoryTestProject(t)
-	if err := db.CreateSession("session-workflow-plan", projectDir, "main"); err != nil {
-		t.Fatalf("create session: %v", err)
-	}
+	projectDir := setupProjectAndSession(t, "session-workflow-plan")
 
 	callCount := 0
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -423,10 +421,7 @@ func TestChat_WorkflowRequest_TriggersPlannerPrePass(t *testing.T) {
 }
 
 func TestChat_NonWorkflowRequest_SkipsPlannerPrePass(t *testing.T) {
-	projectDir := setupHistoryTestProject(t)
-	if err := db.CreateSession("session-qa-noplan", projectDir, "main"); err != nil {
-		t.Fatalf("create session: %v", err)
-	}
+	projectDir := setupProjectAndSession(t, "session-qa-noplan")
 
 	callCount := 0
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

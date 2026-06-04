@@ -13,6 +13,75 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
+// ── HTTP mock helpers ───────────────────────────────────────────────────────
+
+type discordEndpoints struct {
+	oldAPI              string
+	oldUsers            string
+	oldUserChannels     func(string) string
+	oldChannels         string
+	oldChannelMessages  func(string) string
+	oldGuilds           string
+}
+
+func saveDiscordEndpoints() discordEndpoints {
+	return discordEndpoints{
+		oldAPI:             discordgo.EndpointAPI,
+		oldUsers:           discordgo.EndpointUsers,
+		oldUserChannels:    discordgo.EndpointUserChannels,
+		oldChannels:        discordgo.EndpointChannels,
+		oldChannelMessages: discordgo.EndpointChannelMessages,
+		oldGuilds:          discordgo.EndpointGuilds,
+	}
+}
+
+func restoreDiscordEndpoints(ep discordEndpoints) {
+	discordgo.EndpointAPI = ep.oldAPI
+	discordgo.EndpointUsers = ep.oldUsers
+	discordgo.EndpointUserChannels = ep.oldUserChannels
+	discordgo.EndpointChannels = ep.oldChannels
+	discordgo.EndpointChannelMessages = ep.oldChannelMessages
+	discordgo.EndpointGuilds = ep.oldGuilds
+}
+
+func setupDiscordMockEndpoints(t *testing.T, server *httptest.Server) {
+	ep := saveDiscordEndpoints()
+	t.Cleanup(func() { restoreDiscordEndpoints(ep) })
+	
+	discordgo.EndpointAPI = server.URL + "/"
+	discordgo.EndpointUsers = discordgo.EndpointAPI + "users/"
+	discordgo.EndpointUserChannels = func(uID string) string { return discordgo.EndpointUsers + uID + "/channels" }
+	discordgo.EndpointChannels = discordgo.EndpointAPI + "channels/"
+	discordgo.EndpointChannelMessages = func(cID string) string { return discordgo.EndpointChannels + cID + "/messages" }
+	discordgo.EndpointGuilds = discordgo.EndpointAPI + "guilds/"
+}
+
+// setupHTTPMockServer creates an HTTP test server and configures Discord endpoints.
+// Returns the server and a *discordgo.Session configured to use it.
+func setupHTTPMockServer(t *testing.T, handler http.Handler) (*httptest.Server, *discordgo.Session) {
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	setupDiscordMockEndpoints(t, server)
+	dg, _ := discordgo.New("Bot fake-token")
+	return server, dg
+}
+
+// setupServiceWithMocks creates a Service with HTTP mocking, projects map, and optional config.
+// Common pattern for DM/AutoEnroll tests.
+func setupServiceWithMocks(t *testing.T, handler http.Handler, projects map[string]ProjectBinding) (*httptest.Server, *Service) {
+	server, dg := setupHTTPMockServer(t, handler)
+	if projects == nil {
+		projects = make(map[string]ProjectBinding)
+	}
+	svc := &Service{
+		cfg:            Config{GuildID: "g1", ControlChannelName: "engine-control"},
+		state:          persistedState{Projects: projects},
+		dg:             dg,
+		cloneProjectFn: func(_, _ string) error { return nil },
+	}
+	return server, svc
+}
+
 // ── parseOptionalBool ────────────────────────────────────────────────────────
 
 func TestParseOptionalBool_True(t *testing.T) {
@@ -309,9 +378,7 @@ func TestIsAllowedUser_NotAllowed(t *testing.T) {
 // ── resolveProjectByRef / resolveProjectForMessage ────────────────────────────
 
 func TestResolveProjectByRef_NotFound(t *testing.T) {
-	svc := &Service{
-		state: persistedState{Projects: make(map[string]ProjectBinding)},
-	}
+	svc := newServiceWithEmptyProjects("")
 	_, _, ok := svc.resolveProjectByRef("nonexistent")
 	if ok {
 		t.Error("expected false for empty projects")
@@ -319,9 +386,7 @@ func TestResolveProjectByRef_NotFound(t *testing.T) {
 }
 
 func TestResolveProjectForMessage_NoMatch(t *testing.T) {
-	svc := &Service{
-		state: persistedState{Projects: make(map[string]ProjectBinding)},
-	}
+	svc := newServiceWithEmptyProjects("")
 	_, ok := svc.resolveProjectForMessage("chan-abc", nil)
 	if ok {
 		t.Error("expected false with no projects")
@@ -329,9 +394,7 @@ func TestResolveProjectForMessage_NoMatch(t *testing.T) {
 }
 
 func TestResolveAskTarget_TooFewArgs(t *testing.T) {
-	svc := &Service{
-		state: persistedState{Projects: make(map[string]ProjectBinding)},
-	}
+	svc := newServiceWithEmptyProjects("")
 	_, _, ok := svc.resolveAskTarget("chan-abc", []string{"onearg"})
 	if ok {
 		t.Error("expected false with one arg and no matching channel")
@@ -508,10 +571,7 @@ func TestApplyEnvOverrides_SetsFromEnv(t *testing.T) {
 // ── resolveContext (no dg, no projects) ─────────────────────────────────────
 
 func TestResolveContext_NoProjects(t *testing.T) {
-	svc := &Service{
-		dg:    nil,
-		state: persistedState{Projects: make(map[string]ProjectBinding)},
-	}
+	svc := newServiceWithEmptyProjects("")
 	projectPath, sessionID := svc.resolveContext("chan-1", "")
 	if projectPath != "" || sessionID != "" {
 		t.Errorf("expected empty results, got (%q, %q)", projectPath, sessionID)
@@ -616,29 +676,23 @@ func TestStateDir_WithEnvOverride(t *testing.T) {
 func TestSendDM_NilSession_ReturnsError(t *testing.T) {
 	svc := &Service{}
 	err := svc.SendDM("user123", "hello")
-	if err == nil || err.Error() != "discord bot not connected" {
-		t.Fatalf("expected 'discord bot not connected', got %v", err)
-	}
+	assertErrorMessage(t, err, "discord bot not connected", "TestSendDM_NilSession_ReturnsError")
 }
 
 func TestSendDMToOwner_NoUsersConfigured_ReturnsError(t *testing.T) {
 	svc := &Service{cfg: Config{AllowedUsers: map[string]bool{}}}
 	err := svc.SendDMToOwner("hello")
-	if err == nil || err.Error() != "no allowed Discord users configured" {
-		t.Fatalf("expected 'no allowed Discord users configured', got %v", err)
-	}
+	assertErrorMessage(t, err, "no allowed Discord users configured", "TestSendDMToOwner_NoUsersConfigured_ReturnsError")
 }
 
 func TestSendDMToOwner_NilSession_ReturnsError(t *testing.T) {
 	svc := &Service{cfg: Config{AllowedUsers: map[string]bool{"u1": true}}}
 	err := svc.SendDMToOwner("hello")
-	if err == nil || err.Error() != "discord bot not connected" {
-		t.Fatalf("expected 'discord bot not connected', got %v", err)
-	}
+	assertErrorMessage(t, err, "discord bot not connected", "TestSendDMToOwner_NilSession_ReturnsError")
 }
 
 func TestSendDM_WithSession_HappyPath(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/channels"):
 			if err := json.NewEncoder(w).Encode(map[string]string{"id": "dm-ch-1"}); err != nil {
@@ -651,28 +705,9 @@ func TestSendDM_WithSession_HappyPath(t *testing.T) {
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
-	}))
-	t.Cleanup(server.Close)
-
-	oldAPI := discordgo.EndpointAPI
-	oldUsers := discordgo.EndpointUsers
-	oldUserChannels := discordgo.EndpointUserChannels
-	oldChannels := discordgo.EndpointChannels
-	oldChannelMessages := discordgo.EndpointChannelMessages
-	t.Cleanup(func() {
-		discordgo.EndpointAPI = oldAPI
-		discordgo.EndpointUsers = oldUsers
-		discordgo.EndpointUserChannels = oldUserChannels
-		discordgo.EndpointChannels = oldChannels
-		discordgo.EndpointChannelMessages = oldChannelMessages
 	})
-	discordgo.EndpointAPI = server.URL + "/"
-	discordgo.EndpointUsers = discordgo.EndpointAPI + "users/"
-	discordgo.EndpointUserChannels = func(uID string) string { return discordgo.EndpointUsers + uID + "/channels" }
-	discordgo.EndpointChannels = discordgo.EndpointAPI + "channels/"
-	discordgo.EndpointChannelMessages = func(cID string) string { return discordgo.EndpointChannels + cID + "/messages" }
 
-	dg, _ := discordgo.New("Bot fake-token")
+	_, dg := setupHTTPMockServer(t, handler)
 	svc := &Service{dg: dg}
 	if err := svc.SendDM("user123", "hello"); err != nil {
 		t.Fatalf("SendDM unexpected error: %v", err)
@@ -680,24 +715,13 @@ func TestSendDM_WithSession_HappyPath(t *testing.T) {
 }
 
 func TestSendDM_UserChannelCreateError_ReturnsError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
-	}))
-	t.Cleanup(server.Close)
-
-	oldAPI := discordgo.EndpointAPI
-	oldUsers := discordgo.EndpointUsers
-	oldUserChannels := discordgo.EndpointUserChannels
-	t.Cleanup(func() {
-		discordgo.EndpointAPI = oldAPI
-		discordgo.EndpointUsers = oldUsers
-		discordgo.EndpointUserChannels = oldUserChannels
 	})
-	discordgo.EndpointAPI = server.URL + "/"
-	discordgo.EndpointUsers = discordgo.EndpointAPI + "users/"
-	discordgo.EndpointUserChannels = func(uID string) string { return discordgo.EndpointUsers + uID + "/channels" }
 
-	dg, _ := discordgo.New("Bot fake-token")
+	server, dg := setupHTTPMockServer(t, handler)
+	discordgo.EndpointUserChannels = func(uID string) string { return server.URL + "/users/" + uID + "/channels" }
+
 	svc := &Service{dg: dg}
 	err := svc.SendDM("user123", "hello")
 	if err == nil {
@@ -721,7 +745,7 @@ func TestAutoEnrollProject_ValidPath_EnrollsAndAnnounces(t *testing.T) {
 	projectDir := t.TempDir()
 
 	var sentMessages []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/guilds/"):
 			// channels list
@@ -751,33 +775,9 @@ func TestAutoEnrollProject_ValidPath_EnrollsAndAnnounces(t *testing.T) {
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
-	}))
-	t.Cleanup(server.Close)
-
-	oldAPI := discordgo.EndpointAPI
-	oldGuilds := discordgo.EndpointGuilds
-	oldChannels := discordgo.EndpointChannels
-	oldChannelMessages := discordgo.EndpointChannelMessages
-	t.Cleanup(func() {
-		discordgo.EndpointAPI = oldAPI
-		discordgo.EndpointGuilds = oldGuilds
-		discordgo.EndpointChannels = oldChannels
-		discordgo.EndpointChannelMessages = oldChannelMessages
 	})
-	discordgo.EndpointAPI = server.URL + "/"
-	discordgo.EndpointGuilds = discordgo.EndpointAPI + "guilds/"
-	discordgo.EndpointChannels = discordgo.EndpointAPI + "channels/"
-	discordgo.EndpointChannelMessages = func(cID string) string {
-		return discordgo.EndpointChannels + cID + "/messages"
-	}
 
-	dg, _ := discordgo.New("Bot fake-token")
-	svc := &Service{
-		cfg:            Config{GuildID: "g1", ControlChannelName: "engine-control"},
-		state:          persistedState{Projects: make(map[string]ProjectBinding)},
-		dg:             dg,
-		cloneProjectFn: func(_, _ string) error { return nil },
-	}
+	_, svc := setupServiceWithMocks(t, handler, nil)
 
 	if err := svc.AutoEnrollProject(projectDir, "myowner", "myrepo"); err != nil {
 		t.Fatalf("AutoEnrollProject unexpected error: %v", err)
@@ -809,7 +809,7 @@ func TestAutoEnrollProject_ControlChannelFails_ReturnsError(t *testing.T) {
 
 	// Request counter: first GET (ensureProjectChannel) succeeds, second GET (ensureControlChannel) fails.
 	var getCount int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/guilds/") && strings.HasSuffix(r.URL.Path, "/channels"):
 			getCount++
@@ -833,33 +833,9 @@ func TestAutoEnrollProject_ControlChannelFails_ReturnsError(t *testing.T) {
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
-	}))
-	t.Cleanup(server.Close)
-
-	oldAPI := discordgo.EndpointAPI
-	oldGuilds := discordgo.EndpointGuilds
-	oldChannels := discordgo.EndpointChannels
-	oldChannelMessages := discordgo.EndpointChannelMessages
-	t.Cleanup(func() {
-		discordgo.EndpointAPI = oldAPI
-		discordgo.EndpointGuilds = oldGuilds
-		discordgo.EndpointChannels = oldChannels
-		discordgo.EndpointChannelMessages = oldChannelMessages
 	})
-	discordgo.EndpointAPI = server.URL + "/"
-	discordgo.EndpointGuilds = discordgo.EndpointAPI + "guilds/"
-	discordgo.EndpointChannels = discordgo.EndpointAPI + "channels/"
-	discordgo.EndpointChannelMessages = func(cID string) string {
-		return discordgo.EndpointChannels + cID + "/messages"
-	}
 
-	dg, _ := discordgo.New("Bot fake-token")
-	svc := &Service{
-		cfg:            Config{GuildID: "g1", ControlChannelName: "engine-control"},
-		state:          persistedState{Projects: make(map[string]ProjectBinding)},
-		dg:             dg,
-		cloneProjectFn: func(_, _ string) error { return nil },
-	}
+	_, svc := setupServiceWithMocks(t, handler, nil)
 	err := svc.AutoEnrollProject(projectDir, "myowner", "myrepo")
 	if err == nil {
 		t.Fatal("expected error when ensureControlChannel fails, got nil")
@@ -870,7 +846,7 @@ func TestAutoEnrollProject_AlreadyEnrolled_IsIdempotent(t *testing.T) {
 	projectDir := t.TempDir()
 
 	var sentMessages []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/channels/") && strings.HasSuffix(r.URL.Path, "/messages"):
 			var body map[string]any
@@ -888,38 +864,16 @@ func TestAutoEnrollProject_AlreadyEnrolled_IsIdempotent(t *testing.T) {
 				t.Fatalf("encode default guild list response: %v", err)
 			}
 		}
-	}))
-	t.Cleanup(server.Close)
-
-	oldAPI := discordgo.EndpointAPI
-	oldGuilds := discordgo.EndpointGuilds
-	oldChannels := discordgo.EndpointChannels
-	oldChannelMessages := discordgo.EndpointChannelMessages
-	t.Cleanup(func() {
-		discordgo.EndpointAPI = oldAPI
-		discordgo.EndpointGuilds = oldGuilds
-		discordgo.EndpointChannels = oldChannels
-		discordgo.EndpointChannelMessages = oldChannelMessages
 	})
-	discordgo.EndpointAPI = server.URL + "/"
-	discordgo.EndpointGuilds = discordgo.EndpointAPI + "guilds/"
-	discordgo.EndpointChannels = discordgo.EndpointAPI + "channels/"
-	discordgo.EndpointChannelMessages = func(cID string) string {
-		return discordgo.EndpointChannels + cID + "/messages"
-	}
 
-	dg, _ := discordgo.New("Bot fake-token")
-	svc := &Service{
-		cfg:            Config{GuildID: "g1", ControlChannelName: "engine-control"},
-		state:          persistedState{Projects: make(map[string]ProjectBinding)},
-		dg:             dg,
-		cloneProjectFn: func(_, _ string) error { return nil },
-	}
+	_, svc := setupServiceWithMocks(t, handler, nil)
 
 	absProject, _ := filepath.Abs(projectDir)
 	svc.stateMu.Lock()
 	svc.state.Projects[absProject] = ProjectBinding{ProjectPath: absProject, RepoName: "myrepo", ChannelID: "ch-proj", Paused: false}
 	svc.stateMu.Unlock()
+
+	_ = sentMessages // captured messages from handler
 
 	if err := svc.AutoEnrollProject(projectDir, "myowner", "myrepo"); err != nil {
 		t.Fatalf("AutoEnrollProject unexpected error: %v", err)

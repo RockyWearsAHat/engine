@@ -47,15 +47,15 @@ func TestHandler_DiscordConfigGet_NilBridge(t *testing.T) {
 	defer cleanup()
 
 	msg := sendAndReceive(t, conn, map[string]any{"type": "discord.config.get"}, "discord.config")
-	assertMessageType(t, msg, "discord.config")
+	if msg["type"] != "discord.config" {
+		t.Fatalf("expected discord.config type, got %+v", msg)
+	}
 }
 
 // TestHandler_DiscordConfigGet_WithBridge verifies discord.config.get returns active config when bridge is set.
 func TestHandler_DiscordConfigGet_WithBridge(t *testing.T) {
 	stub := &testDiscordBridge{cfg: discord.Config{Enabled: true, BotToken: "tok"}}
-	defer setupDiscordBridgeScopedTest(t, stub)()
-
-	_, conn, cleanup := setupWSProjectAndConnection(t)
+	_, conn, cleanup := setupDiscordBridgeAndProjectForTest(t, stub)
 	defer cleanup()
 
 	msg := sendAndReceive(t, conn, map[string]any{"type": "discord.config.get"}, "discord.config")
@@ -71,13 +71,12 @@ func TestHandler_DiscordHistorySearch_NilBridge(t *testing.T) {
 	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
-	msg := sendAndReceive(t, conn, map[string]any{
+	testSendAndAssertErrorCode(t, conn, map[string]any{
 		"type":        "discord.history.search",
 		"projectPath": "",
 		"query":       "hello",
 		"limit":       10,
-	}, "error")
-	assertErrorCode(t, msg, "DISCORD_UNAVAILABLE")
+	}, "DISCORD_UNAVAILABLE")
 }
 
 // TestHandler_DiscordHistorySearch_WithBridge_Success verifies search returns hits when bridge is available.
@@ -85,9 +84,7 @@ func TestHandler_DiscordHistorySearch_WithBridge_Success(t *testing.T) {
 	stub := &testDiscordBridge{
 		searchHits: []db.DiscordSearchHit{{DiscordMessage: db.DiscordMessage{ID: "m1", Content: "cave AI"}}},
 	}
-	defer setupDiscordBridgeScopedTest(t, stub)()
-
-	_, conn, cleanup := setupWSProjectAndConnection(t)
+	_, conn, cleanup := setupDiscordBridgeAndProjectForTest(t, stub)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -106,9 +103,7 @@ func TestHandler_DiscordHistorySearch_WithBridge_Success(t *testing.T) {
 // TestHandler_DiscordHistorySearch_WithBridge_Error verifies search error is forwarded to client.
 func TestHandler_DiscordHistorySearch_WithBridge_Error(t *testing.T) {
 	stub := &testDiscordBridge{searchErr: fmt.Errorf("db failure")}
-	defer setupDiscordBridgeScopedTest(t, stub)()
-
-	_, conn, cleanup := setupWSProjectAndConnection(t)
+	_, conn, cleanup := setupDiscordBridgeAndProjectForTest(t, stub)
 	defer cleanup()
 
 	testSendAndAssertErrorCode(t, conn, map[string]any{
@@ -121,7 +116,7 @@ func TestHandler_DiscordHistorySearch_WithBridge_Error(t *testing.T) {
 
 // TestHandler_DiscordHistoryRecent_NilBridge verifies recent returns error when Discord is unavailable.
 func TestHandler_DiscordHistoryRecent_NilBridge(t *testing.T) {
-	_, conn, cleanup := setupWSProjectWithNullBridgeAndConnection(t)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	testSendAndAssertErrorCode(t, conn, map[string]any{
@@ -137,9 +132,7 @@ func TestHandler_DiscordHistoryRecent_WithBridge_Success(t *testing.T) {
 	stub := &testDiscordBridge{
 		recentRows: []db.DiscordMessage{{ID: "r1", Content: "hello"}},
 	}
-	defer setupDiscordBridgeScopedTest(t, stub)()
-
-	_, conn, cleanup := setupWSProjectAndConnection(t)
+	_, conn, cleanup := setupDiscordBridgeAndProjectForTest(t, stub)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -158,9 +151,7 @@ func TestHandler_DiscordHistoryRecent_WithBridge_Success(t *testing.T) {
 // TestHandler_DiscordHistoryRecent_WithBridge_Error verifies recent error is forwarded to client.
 func TestHandler_DiscordHistoryRecent_WithBridge_Error(t *testing.T) {
 	stub := &testDiscordBridge{recentErr: fmt.Errorf("db err")}
-	defer setupDiscordBridgeScopedTest(t, stub)()
-
-	_, conn, cleanup := setupWSProjectAndConnection(t)
+	_, conn, cleanup := setupDiscordBridgeAndProjectForTest(t, stub)
 	defer cleanup()
 
 	testSendAndAssertErrorCode(t, conn, map[string]any{
@@ -192,9 +183,7 @@ func TestHandler_DiscordConfigSet_NilBridgeDisabledConfig(t *testing.T) {
 // TestHandler_DiscordConfigSet_WithBridge_ReloadError verifies reload errors are reported as warnings.
 func TestHandler_DiscordConfigSet_WithBridge_ReloadError(t *testing.T) {
 	stub := &testDiscordBridge{reloadErr: fmt.Errorf("reload fail")}
-	defer setupDiscordBridgeScopedTest(t, stub)()
-
-	_, conn, cleanup := setupWSProjectAndConnection(t)
+	_, conn, cleanup := setupDiscordBridgeAndProjectForTest(t, stub)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -213,9 +202,7 @@ func TestHandler_DiscordConfigSet_WithBridge_ReloadError(t *testing.T) {
 // TestHandler_DiscordConfigSet_WithBridge_ReloadOK verifies successful config reload returns no warning.
 func TestHandler_DiscordConfigSet_WithBridge_ReloadOK(t *testing.T) {
 	stub := &testDiscordBridge{cfg: discord.Config{Enabled: true}}
-	defer setupDiscordBridgeScopedTest(t, stub)()
-
-	_, conn, cleanup := setupWSProjectAndConnection(t)
+	_, conn, cleanup := setupDiscordBridgeAndProjectForTest(t, stub)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{

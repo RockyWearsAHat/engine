@@ -105,7 +105,6 @@ html, body, #root {
   to   { opacity: 1; }
 }
 
-.animate-fade   { animation: fadeIn 150ms ease both; }
 .animate-slide  { animation: fadeSlide 150ms ease both; }
 .animate-appear { animation: appear 120ms ease both; }
 .animate-spin   { animation: spin 700ms linear infinite; }
@@ -490,9 +489,6 @@ html, body, #root {
 }
 
 /* ==================== LAYOUT: Activity Bar & Sidebar ==================== */
-
-/* Activity bar */
-/* ==================== LAYOUT: Sidebar & Activity Bar ==================== */
 
 .activity-bar {
   width: 42px;
@@ -2023,9 +2019,6 @@ textarea,
 
 /* ==================== LAYOUT: Right Panel (Chat & Agent) ==================== */
 
-/* Right panel (AI + Agent) */
-/* ==================== LAYOUT: Right Chat Panel ==================== */
-
 .right-panel {
   width: 300px;
   min-width: 260px;
@@ -2086,13 +2079,6 @@ textarea,
   padding: 2px 12px;
   animation: fadeIn 120ms ease both;
 }
-
-.chat-msg-user .chat-bubble {
-  background: var(--accent-dim);
-  border: 1px solid rgba(83, 203, 168, 0.32);
-  border-radius: 3px;
-  padding: 8px 11px;
-  color: var(--tx);
   font-size: 13px;
   line-height: 1.55;
   display: inline-block;
@@ -2177,9 +2163,6 @@ textarea,
 .tool-badge-name { font-weight: 600; font-family: var(--font-mono); }
 
 /* ==================== LAYOUT: Terminal Panel ==================== */
-
-/* Bottom terminal */
-/* ==================== LAYOUT: Terminal & Output ==================== */
 
 .bottom-panel {
   border-top: 1px solid var(--border);
@@ -3467,14 +3450,17 @@ textarea,
   font-weight: 500;
 }
 
-.preferences-nav-btn:hover {
+.preferences-nav-btn:hover,
+.preferences-nav-btn.active {
   color: var(--tx);
+}
+
+.preferences-nav-btn:hover {
   border-color: rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.02);
 }
 
 .preferences-nav-btn.active {
-  color: var(--tx);
   border-color: rgba(124, 140, 255, 0.45);
   background: rgba(124, 140, 255, 0.08);
 }
@@ -3516,20 +3502,22 @@ textarea,
 
 /* Consolidate flex layout patterns for preferences sections */
 .preferences-card-header,
-.preferences-row,
-.preferences-toggle-row,
-.preferences-inline-actions,
 .preferences-service-status {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.preferences-row {
   display: flex;
   gap: 12px;
 }
 
-/* Sections that align items in row with space-between */
-.preferences-card-header,
-.preferences-toggle-row,
-.preferences-service-status {
-  align-items: center;
-  justify-content: space-between;
+.preferences-inline-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .preferences-card-title {
@@ -3621,15 +3609,18 @@ textarea,
   transition: all 120ms ease;
 }
 
+.preferences-chip:hover,
+.preferences-chip.active {
+  color: var(--tx);
+}
+
 .preferences-chip:hover {
   border-color: rgba(124, 140, 255, 0.25);
-  color: var(--tx);
 }
 
 .preferences-chip.active {
   background: rgba(124, 140, 255, 0.12);
   border-color: var(--accent);
-  color: var(--tx);
 }
 
 .preferences-toggle-row {
@@ -3693,10 +3684,6 @@ textarea,
   white-space: pre-wrap;
   font-size: 11px;
   line-height: 1.5;
-}
-
-.preferences-inline-actions {
-  flex-wrap: wrap;
 }
 
 .preferences-action-group {
