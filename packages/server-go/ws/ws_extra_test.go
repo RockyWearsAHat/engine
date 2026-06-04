@@ -30,15 +30,14 @@ func TestSendErr_ViaUnknownMessageType(t *testing.T) {
 		"type": "totally.unknown.type.xyz",
 	})
 	msg := drainWSUntilType(t, conn, "error")
-	if msg["code"] != "UNKNOWN_TYPE" {
-		t.Errorf("expected UNKNOWN_TYPE, got %v", msg["code"])
+	if code, _ := msg["code"].(string); code != "UNKNOWN_TYPE" {
+		t.Errorf("expected UNKNOWN_TYPE, got %v", code)
 	}
 }
 
 // TestResolveApproval_NonExistentID verifies resolveApproval is a no-op for unknown IDs.
 func TestResolveApproval_NonExistentID(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	// approval.respond with unknown id — should silently succeed (no panic, no error)
@@ -59,8 +58,7 @@ func TestResolveApproval_NonExistentID(t *testing.T) {
 
 // TestResolveApproval_MissingID exercises the sendErr for empty approval id.
 func TestResolveApproval_MissingID(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -76,9 +74,7 @@ func TestResolveApproval_MissingID(t *testing.T) {
 
 // TestHandleDiscordHistorySearch_NoBridge exercises the error path when bridge is nil.
 func TestHandleDiscordHistorySearch_NoBridge(t *testing.T) {
-	projectDir := setupWSProject(t)
-	SetDiscordBridge(nil)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectWithNullBridgeAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -93,9 +89,7 @@ func TestHandleDiscordHistorySearch_NoBridge(t *testing.T) {
 
 // TestHandleDiscordHistoryRecent_NoBridge exercises the error path when bridge is nil.
 func TestHandleDiscordHistoryRecent_NoBridge(t *testing.T) {
-	projectDir := setupWSProject(t)
-	SetDiscordBridge(nil)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectWithNullBridgeAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -109,9 +103,7 @@ func TestHandleDiscordHistoryRecent_NoBridge(t *testing.T) {
 
 // TestHandleDiscordValidate_NoBridge exercises validateHandler with no config on disk.
 func TestHandleDiscordValidate_NoBridge(t *testing.T) {
-	projectDir := setupWSProject(t)
-	SetDiscordBridge(nil)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectWithNullBridgeAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -125,9 +117,7 @@ func TestHandleDiscordValidate_NoBridge(t *testing.T) {
 
 // TestHandleDiscordValidate_WithConfig exercises validate with an override config.
 func TestHandleDiscordValidate_WithConfig(t *testing.T) {
-	projectDir := setupWSProject(t)
-	SetDiscordBridge(nil)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectWithNullBridgeAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -147,9 +137,7 @@ func TestHandleDiscordValidate_WithConfig(t *testing.T) {
 
 // TestHandleDiscordConfigSet exercises saving a discord config.
 func TestHandleDiscordConfigSet_SavesConfig(t *testing.T) {
-	projectDir := setupWSProject(t)
-	SetDiscordBridge(nil)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectWithNullBridgeAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -169,10 +157,7 @@ func TestHandleDiscordConfigSet_SavesConfig(t *testing.T) {
 
 // TestHandleGitHubIssues_NoRemoteConfigured exercises the path where no remote is found.
 func TestHandleGitHubIssues_NoRemoteConfigured(t *testing.T) {
-	projectDir := setupWSProject(t)
-	t.Setenv("ENGINE_GITHUB_OWNER", "")
-	t.Setenv("ENGINE_GITHUB_REPO", "")
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -187,10 +172,7 @@ func TestHandleGitHubIssues_NoRemoteConfigured(t *testing.T) {
 
 // TestHandleGitHubIssues_IncompleteOverride exercises path when override owner missing.
 func TestHandleGitHubIssues_IncompleteOverride(t *testing.T) {
-	projectDir := setupWSProject(t)
-	t.Setenv("ENGINE_GITHUB_OWNER", "")
-	t.Setenv("ENGINE_GITHUB_REPO", "some-repo")
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{

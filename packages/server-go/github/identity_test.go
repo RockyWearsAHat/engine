@@ -1,7 +1,6 @@
 package github
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,8 +8,13 @@ import (
 	"time"
 )
 
-// Test gaps for identity.go: EngineClient, NewProfileClient.
-// Shared helpers: setupGitHubAPI, newEngineDir, resetEngineLoginCache, newServerWithStatus (see github_test.go).
+// ── Test Coverage: identity.go (EngineClient, NewProfileClient, EngineToken, EngineLogin) ────
+//
+// Shared public test utilities (defined in github_test.go):
+//   • setupGitHubAPI(t, srv, token) - Configures GITHUB_API_BASE and GITHUB_TOKEN for mock server
+//   • newEngineDir(t) - Creates temp directory with .engine subdirectory
+//   • resetEngineLoginCache(t) - Clears cached engine login state for fresh API calls
+//   • newServerWithStatus(t, status) - Returns httptest.Server with fixed status code
 
 // TestEngineToken_PrefersBot verifies ENGINE_GITHUB_BOT_TOKEN takes precedence over GITHUB_TOKEN.
 func TestEngineToken_PrefersBot(t *testing.T) {
@@ -88,11 +92,7 @@ func TestAssignEngine_NoToken(t *testing.T) {
 // Tests behavioral side effect (HTTP POST to GitHub API).
 func TestAssignEngine_Posts(t *testing.T) {
 	var captured map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewDecoder(r.Body).Decode(&captured)
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte("{}"))
-	}))
+	srv := newTestServer(t, captureHTTPPayload(&captured))
 	defer srv.Close()
 	t.Setenv("GITHUB_API_BASE", srv.URL)
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")

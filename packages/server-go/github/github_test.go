@@ -281,29 +281,27 @@ func TestNewClientWithToken(t *testing.T) {
 }
 
 func TestListIssues(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		issues := []Issue{{Number: 1, Title: "Bug", State: "open"}}
-		json.NewEncoder(w).Encode(issues) //nolint:errcheck
-	}))
+	issues := []Issue{{Number: 1, Title: "Bug", State: "open"}}
+	srv := newJSONResponseServer(t, issues)
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
-	issues, err := c.ListIssues("open", nil)
+	got, err := c.ListIssues("open", nil)
 	if err != nil {
 		t.Fatalf("ListIssues: %v", err)
 	}
-	if len(issues) != 1 || issues[0].Number != 1 {
-		t.Errorf("unexpected issues: %v", issues)
+	if len(got) != 1 || got[0].Number != 1 {
+		t.Errorf("unexpected issues: %v", got)
 	}
 }
 
 func TestListIssues_WithLabels(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("labels") == "" {
 			t.Error("expected labels param")
 		}
 		json.NewEncoder(w).Encode([]Issue{}) //nolint:errcheck
-	}))
+	})
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -314,9 +312,7 @@ func TestListIssues_WithLabels(t *testing.T) {
 }
 
 func TestGetIssue(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(Issue{Number: 42, Title: "Feature"}) //nolint:errcheck
-	}))
+	srv := newJSONResponseServer(t, Issue{Number: 42, Title: "Feature"})
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -330,10 +326,7 @@ func TestGetIssue(t *testing.T) {
 }
 
 func TestCreateIssue(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(Issue{Number: 7, Title: "New Bug"}) //nolint:errcheck
-	}))
+	srv := newJSONResponseServer(t, Issue{Number: 7, Title: "New Bug"}, http.StatusCreated)
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -347,10 +340,7 @@ func TestCreateIssue(t *testing.T) {
 }
 
 func TestCreateIssue_WithLabels(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(Issue{Number: 8}) //nolint:errcheck
-	}))
+	srv := newJSONResponseServer(t, Issue{Number: 8}, http.StatusCreated)
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -361,10 +351,7 @@ func TestCreateIssue_WithLabels(t *testing.T) {
 }
 
 func TestAddComment(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(Comment{ID: 5, Body: "LGTM"}) //nolint:errcheck
-	}))
+	srv := newJSONResponseServer(t, Comment{ID: 5, Body: "LGTM"}, http.StatusCreated)
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -378,14 +365,12 @@ func TestAddComment(t *testing.T) {
 }
 
 func TestCloseIssue_WithComment(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "POST" {
-			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(Comment{ID: 1}) //nolint:errcheck
-			return
+	srv := newConditionalServer(t, func(method, path string) (int, string) {
+		if method == http.MethodPost {
+			return http.StatusCreated, mustMarshalJSON(Comment{ID: 1})
 		}
-		json.NewEncoder(w).Encode(Issue{Number: 1, State: "closed"}) //nolint:errcheck
-	}))
+		return http.StatusOK, mustMarshalJSON(Issue{Number: 1, State: "closed"})
+	})
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -395,9 +380,7 @@ func TestCloseIssue_WithComment(t *testing.T) {
 }
 
 func TestCloseIssue_NoComment(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(Issue{Number: 1, State: "closed"}) //nolint:errcheck
-	}))
+	srv := newJSONResponseServer(t, Issue{Number: 1, State: "closed"})
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -407,9 +390,7 @@ func TestCloseIssue_NoComment(t *testing.T) {
 }
 
 func TestUpdateIssue(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(Issue{Number: 3, Title: "Updated"}) //nolint:errcheck
-	}))
+	srv := newJSONResponseServer(t, Issue{Number: 3, Title: "Updated"})
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -423,9 +404,7 @@ func TestUpdateIssue(t *testing.T) {
 }
 
 func TestGitHubClient_HTTPError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "not found", http.StatusNotFound)
-	}))
+	srv := newErrorResponseServer(t, http.StatusNotFound, "not found")
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -435,9 +414,14 @@ func TestGitHubClient_HTTPError(t *testing.T) {
 	}
 }
 
-// newClientWithBase creates a client pointing at a test server.
-// Replaces the hardcoded apiBase by injecting a custom http.Client transport
-// that rewrites github.com to srv.URL.
+// ────────────────────────────────────────────────────────────────────────────────
+// Public Test Utilities — GitHub Client and API Testing
+// ────────────────────────────────────────────────────────────────────────────────
+// These helpers enable testing against mock HTTP servers without hitting api.github.com.
+// Used across github_gaps_test.go, identity_test.go, and client_extra_test.go.
+
+// newClientWithBase creates a *Client pointing at a test server via rebaseTransport.
+// Rewrites all requests from api.github.com to the provided base URL.
 func newClientWithBase(base string) *Client {
 	transport := &rebaseTransport{base: base}
 	return &Client{
@@ -468,8 +452,8 @@ func (t *rebaseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(newReq)
 }
 
-// newEngineDir creates a temporary directory with .engine subdirectory.
-// Returned string is the temp directory path.
+// newEngineDir creates a temporary directory with .engine subdirectory for test isolation.
+// Used to test comment store persistence and config file handling.
 func newEngineDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -477,8 +461,8 @@ func newEngineDir(t *testing.T) string {
 	return dir
 }
 
-// setupEngineEnv sets standard ENGINE_GITHUB environment variables for testing.
-// Sets TOKEN="tok", LOGIN="engine-bot", PROJECT_NUMBER="".
+// setupEngineEnv sets ENGINE_GITHUB_{BOT_TOKEN=tok,LOGIN=engine-bot,PROJECT_NUMBER=""}.
+// Provides a consistent baseline environment for engine identity tests.
 func setupEngineEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("ENGINE_GITHUB_BOT_TOKEN", "tok")
@@ -486,7 +470,8 @@ func setupEngineEnv(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_PROJECT_NUMBER", "")
 }
 
-// resetEngineLoginCache clears the cached engine login state (for identity_test.go).
+// resetEngineLoginCache clears engineLoginCached and engineLoginAt to force fresh API lookups.
+// Used before EngineLogin tests to ensure no stale cache state persists.
 func resetEngineLoginCache(t *testing.T) {
 	t.Helper()
 	engineLoginMu.Lock()
@@ -495,7 +480,8 @@ func resetEngineLoginCache(t *testing.T) {
 	engineLoginAt = time.Time{}
 }
 
-// withEventsHTTPClient temporarily replaces eventsHTTPClient for testing (for projects_test.go).
+// withEventsHTTPClient temporarily replaces eventsHTTPClient with srv.Client().
+// Restores original via t.Cleanup; use setupGraphQLServer instead (projects_test.go).
 func withEventsHTTPClient(t *testing.T, srv *httptest.Server) {
 	t.Helper()
 	oldHTTP := eventsHTTPClient
@@ -505,8 +491,8 @@ func withEventsHTTPClient(t *testing.T, srv *httptest.Server) {
 	})
 }
 
-// captureHTTPPayload creates an HTTP handler that captures JSON request body into dst.
-// Responds with 201 Created and empty JSON object on success.
+// captureHTTPPayload returns an http.HandlerFunc that unmarshals JSON body into dst.
+// Responds with 201 Created and empty JSON object. Useful for verifying API call payloads.
 func captureHTTPPayload(dst *map[string]any) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -516,8 +502,17 @@ func captureHTTPPayload(dst *map[string]any) http.HandlerFunc {
 	}
 }
 
-// newServerWithStatus creates a test server that responds with the given status code.
-// Useful for testing HTTP error conditions.
+// mustMarshalJSON marshals v to JSON string, fatal on error (for test helpers).
+func mustMarshalJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic("mustMarshalJSON: " + err.Error())
+	}
+	return string(b)
+}
+
+// newServerWithStatus creates a minimal httptest.Server that responds with the given HTTP status.
+// Used to test error handling in client methods (non-2xx responses).
 func newServerWithStatus(t *testing.T, status int) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -525,7 +520,54 @@ func newServerWithStatus(t *testing.T, status int) *httptest.Server {
 	}))
 }
 
-// setupGitHubAPI configures GITHUB_API_BASE and GITHUB_TOKEN for testing against a mock server.
+// newTestServer creates an httptest.Server with a custom HandlerFunc.
+// Centralizes server creation pattern for JSON/error response testing.
+func newTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(handler)
+}
+
+// newJSONResponseServer creates a server that encodes v as JSON with optional status code.
+// Defaults to http.StatusOK; pass 201 for Created, etc. Used in success path tests.
+func newJSONResponseServer(t *testing.T, v any, status ...int) *httptest.Server {
+	t.Helper()
+	code := http.StatusOK
+	if len(status) > 0 {
+		code = status[0]
+	}
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(code)
+		json.NewEncoder(w).Encode(v) //nolint:errcheck
+	}))
+}
+
+// newErrorResponseServer creates a server that responds with the given status and error body.
+// Centralizes error response pattern for all client method error path tests.
+func newErrorResponseServer(t *testing.T, status int, body string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+		if body != "" {
+			_, _ = w.Write([]byte(body))
+		}
+	}))
+}
+
+// newConditionalServer creates a server that handles different HTTP methods/paths differently.
+// Callback receives method and path; returns status and body (empty body skips write).
+func newConditionalServer(t *testing.T, callback func(method, path string) (int, string)) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		status, body := callback(r.Method, r.URL.Path)
+		w.WriteHeader(status)
+		if body != "" {
+			_, _ = w.Write([]byte(body))
+		}
+	}))
+}
+
+// setupGitHubAPI configures GITHUB_API_BASE to srv.URL and GITHUB_TOKEN for API testing.
+// Enables package-level functions (PostCommitStatus, PostIssueComment, etc.) to hit mock server.
 func setupGitHubAPI(t *testing.T, srv *httptest.Server, token string) {
 	t.Helper()
 	t.Setenv("GITHUB_API_BASE", srv.URL)
@@ -672,9 +714,9 @@ func TestRepoMonitor_Enqueue_FullNotifyChannel(t *testing.T) {
 }
 
 func TestListIssues_ParseError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("not-json"))
-	}))
+	})
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -685,9 +727,9 @@ func TestListIssues_ParseError(t *testing.T) {
 }
 
 func TestGetIssue_ParseError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("not-json"))
-	}))
+	})
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -698,9 +740,7 @@ func TestGetIssue_ParseError(t *testing.T) {
 }
 
 func TestCreateIssue_DoPostError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "boom", http.StatusInternalServerError)
-	}))
+	srv := newErrorResponseServer(t, http.StatusInternalServerError, "boom")
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -711,10 +751,10 @@ func TestCreateIssue_DoPostError(t *testing.T) {
 }
 
 func TestCreateIssue_ParseError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte("not-json"))
-	}))
+	})
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -725,9 +765,7 @@ func TestCreateIssue_ParseError(t *testing.T) {
 }
 
 func TestAddComment_DoPostError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "boom", http.StatusInternalServerError)
-	}))
+	srv := newErrorResponseServer(t, http.StatusInternalServerError, "boom")
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -738,10 +776,10 @@ func TestAddComment_DoPostError(t *testing.T) {
 }
 
 func TestAddComment_ParseError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte("not-json"))
-	}))
+	})
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -752,13 +790,12 @@ func TestAddComment_ParseError(t *testing.T) {
 }
 
 func TestCloseIssue_AddCommentError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			http.Error(w, "boom", http.StatusInternalServerError)
-			return
+	srv := newConditionalServer(t, func(method, path string) (int, string) {
+		if method == http.MethodPost {
+			return http.StatusInternalServerError, "boom"
 		}
-		_, _ = w.Write([]byte(`{"number":1,"state":"closed"}`))
-	}))
+		return http.StatusOK, mustMarshalJSON(Issue{Number: 1, State: "closed"})
+	})
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -769,9 +806,7 @@ func TestCloseIssue_AddCommentError(t *testing.T) {
 }
 
 func TestCloseIssue_DoPatchError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "boom", http.StatusInternalServerError)
-	}))
+	srv := newErrorResponseServer(t, http.StatusInternalServerError, "boom")
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -782,9 +817,7 @@ func TestCloseIssue_DoPatchError(t *testing.T) {
 }
 
 func TestUpdateIssue_DoPatchError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "boom", http.StatusInternalServerError)
-	}))
+	srv := newErrorResponseServer(t, http.StatusInternalServerError, "boom")
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)
@@ -795,9 +828,9 @@ func TestUpdateIssue_DoPatchError(t *testing.T) {
 }
 
 func TestUpdateIssue_ParseError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("not-json"))
-	}))
+	})
 	defer srv.Close()
 
 	c := newClientWithBase(srv.URL)

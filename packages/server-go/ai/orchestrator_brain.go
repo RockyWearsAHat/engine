@@ -201,6 +201,19 @@ func (b *OrchestrationBrain) UpdateTeamFeedback(teamID, feedback string) error {
 	return b.persist()
 }
 
+func (b *OrchestrationBrain) evaluateTeamDependencies(depIDs []string) ([]string, bool) {
+	var blocked []string
+	isBlocked := false
+	for _, depID := range depIDs {
+		depTeam, ok := b.Teams[depID]
+		if !ok || depTeam.Status != "done" {
+			blocked = append(blocked, depID)
+			isBlocked = true
+		}
+	}
+	return blocked, isBlocked
+}
+
 // TeamBlockedOn returns true if teamID is blocked by any uncompleted dependencies.
 func (b *OrchestrationBrain) TeamBlockedOn(teamID string) []string {
 	b.mu.RLock()
@@ -211,13 +224,7 @@ func (b *OrchestrationBrain) TeamBlockedOn(teamID string) []string {
 		return nil
 	}
 
-	var blocked []string
-	for _, depID := range t.DependsOn {
-		depTeam, ok := b.Teams[depID]
-		if !ok || depTeam.Status != "done" {
-			blocked = append(blocked, depID)
-		}
-	}
+	blocked, _ := b.evaluateTeamDependencies(t.DependsOn)
 	return blocked
 }
 
@@ -232,16 +239,8 @@ func (b *OrchestrationBrain) ReadyTeams() []TeamState {
 			continue
 		}
 
-		blocked := false
-		for _, depID := range t.DependsOn {
-			depTeam, ok := b.Teams[depID]
-			if !ok || depTeam.Status != "done" {
-				blocked = true
-				break
-			}
-		}
-
-		if !blocked {
+		_, isBlocked := b.evaluateTeamDependencies(t.DependsOn)
+		if !isBlocked {
 			ready = append(ready, t)
 		}
 	}

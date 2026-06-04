@@ -9,24 +9,32 @@ import (
 	"testing"
 )
 
-// errReadCloser is a mock io.ReadCloser that always fails on Read.
+// ────────────────────────────────────────────────────────────────────────────────
+// Public Test Utilities — GraphQL and Project Board Testing
+// ────────────────────────────────────────────────────────────────────────────────
+
+// errReadCloser is a mock io.ReadCloser that fails on Read with io.ErrUnexpectedEOF.
+// Used to test error paths in response body parsing.
 type errReadCloser struct{}
 
 func (errReadCloser) Read(p []byte) (int, error) { return 0, io.ErrUnexpectedEOF }
 func (errReadCloser) Close() error               { return nil }
 
 // roundTripperFunc is a functional adapter for http.RoundTripper.
+// Allows inline http.Transport mock for testing custom response scenarios.
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// decodeGraphQLRequest unmarshals a GraphQL query from the request body.
+// decodeGraphQLRequest unmarshals a GraphQL query JSON from the request body.
+// Extracts the 'query' field from GitHub GraphQL API request payloads.
 func decodeGraphQLRequest(r *http.Request, dst any) error {
 	return json.NewDecoder(r.Body).Decode(dst)
 }
 
-// setupProjectEnv sets up environment variables for project board testing.
-// Centralizes repeated env setup pattern across tests.
+// setupProjectEnv sets ENGINE_GITHUB_{PROJECT_NUMBER,PROJECT_OWNER,BOT_TOKEN,LOGIN} variables.
+// Centralizes environment setup pattern for project board integration tests.
+// Non-positive projectNumber and empty strings are skipped (no-op).
 func setupProjectEnv(t *testing.T, projectNumber int, projectOwner, token, login string) {
 	t.Helper()
 	if projectNumber > 0 {
@@ -43,8 +51,9 @@ func setupProjectEnv(t *testing.T, projectNumber int, projectOwner, token, login
 	}
 }
 
-// setupGraphQLServer creates a test HTTP server and configures the eventsHTTPClient to use it.
-// Server URL is set as GITHUB_API_BASE. Automatically cleaned up via t.Cleanup.
+// setupGraphQLServer creates a test HTTP server with custom handler and wires eventsHTTPClient.
+// Sets GITHUB_API_BASE to the server URL and restores original eventsHTTPClient via t.Cleanup.
+// Use with setupProjectEnv for full GraphQL mutation/query testing.
 func setupGraphQLServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(handler)

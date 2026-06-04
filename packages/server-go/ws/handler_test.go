@@ -71,9 +71,7 @@ func TestServeWS_AllowsTokenWhenLocalAuthEnabled(t *testing.T) {
 		"path": projectDir,
 	})
 	message := readWSMessageOfType(t, conn, "session.created")
-	if message["type"] != "session.created" {
-		t.Fatalf("expected authenticated websocket to load session, got %+v", message)
-	}
+	assertMessageType(t, message, "session.created")
 }
 
 
@@ -169,19 +167,9 @@ func TestHandler_ChatMessage_InvokesAIRunnerWithTabsAndRuntimeConfig(t *testing.
 		t.Fatalf("expected chat.started for session %q, got %+v", sessionID, started)
 	}
 
-	if got := readWSMessageOfType(t, conn, "chat.tool_call"); got["name"] != "list_open_tabs" {
-		t.Fatalf("expected tool call to flow back to websocket, got %+v", got)
-	}
-	if got := readWSMessageOfType(t, conn, "chat.tool_result"); got["name"] != "list_open_tabs" {
-		t.Fatalf("expected tool result to flow back to websocket, got %+v", got)
-	}
-	finalChunk := readWSMessageOfType(t, conn, "chat.chunk")
-	if done, _ := finalChunk["done"].(bool); !done {
-		nextChunk := readWSMessageOfType(t, conn, "chat.chunk")
-		if done, _ = nextChunk["done"].(bool); !done {
-			t.Fatalf("expected final chat chunk with done=true, got %+v then %+v", finalChunk, nextChunk)
-		}
-	}
+	readChatToolCall(t, conn, "list_open_tabs")
+	readChatToolResult(t, conn, "list_open_tabs")
+	readChatChunksFinal(t, conn)
 }
 
 // TestHandler_ChatMessage_WithoutSession_ReturnsChatError verifies chat without session returns error.
@@ -334,9 +322,7 @@ func TestHandler_RemotePairCodeGenerate_WhenNotEnabled_ReturnsError(t *testing.T
 
 	writeWSMessage(t, conn, map[string]any{"type": "remote.pair.code.generate"})
 	msg := readWSMessageOfType(t, conn, "error")
-	if msg["code"] != "PAIRING_DISABLED" {
-		t.Fatalf("expected PAIRING_DISABLED error, got %+v", msg)
-	}
+	assertErrorCode(t, msg, "PAIRING_DISABLED")
 }
 
 // TestHandler_RemotePairCodeGenerate_ReturnsCode verifies pairing code is generated and returned with expiration.
@@ -486,9 +472,7 @@ func TestHandler_ProjectOpen_NoPath(t *testing.T) {
 
 	writeWSMessage(t, conn, map[string]any{"type": "project.open"})
 	msg := readWSMessageOfType(t, conn, "error")
-	if msg["code"] != "BAD_PAYLOAD" {
-		t.Fatalf("expected BAD_PAYLOAD, got %+v", msg)
-	}
+	assertErrorCode(t, msg, "BAD_PAYLOAD")
 }
 
 func TestHandler_FileRead_Error(t *testing.T) {
@@ -498,9 +482,7 @@ func TestHandler_FileRead_Error(t *testing.T) {
 
 	writeWSMessage(t, conn, map[string]any{"type": "file.read", "path": "/nonexistent/xyz/file.txt"})
 	msg := readWSMessageOfType(t, conn, "error")
-	if msg["code"] != "FILE_ERROR" {
-		t.Fatalf("expected FILE_ERROR, got %+v", msg)
-	}
+	assertErrorCode(t, msg, "FILE_ERROR")
 }
 
 // Note: TestHandler_FileSave_Error, TestHandler_FileCreate_Error, TestHandler_FolderCreate_Error
@@ -533,9 +515,7 @@ func TestHandler_FileTree_Error(t *testing.T) {
 
 	writeWSMessage(t, conn, map[string]any{"type": "file.tree", "path": "/nonexistent/xyz/dir"})
 	msg := readWSMessageOfType(t, conn, "error")
-	if msg["code"] != "FILE_ERROR" {
-		t.Fatalf("expected FILE_ERROR, got %+v", msg)
-	}
+	assertErrorCode(t, msg, "FILE_ERROR")
 }
 
 func TestHandler_GitStatus_NonGitDir(t *testing.T) {
