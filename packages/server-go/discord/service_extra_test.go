@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,9 @@ type discordEndpoints struct {
 	oldGuilds           string
 }
 
+var discordEndpointOverrideMu sync.Mutex
+
+// saveDiscordEndpoints saves the current Discord API endpoint configuration.
 func saveDiscordEndpoints() discordEndpoints {
 	return discordEndpoints{
 		oldAPI:             discordgo.EndpointAPI,
@@ -35,6 +39,7 @@ func saveDiscordEndpoints() discordEndpoints {
 	}
 }
 
+// restoreDiscordEndpoints restores previously saved Discord API endpoints.
 func restoreDiscordEndpoints(ep discordEndpoints) {
 	discordgo.EndpointAPI = ep.oldAPI
 	discordgo.EndpointUsers = ep.oldUsers
@@ -44,9 +49,14 @@ func restoreDiscordEndpoints(ep discordEndpoints) {
 	discordgo.EndpointGuilds = ep.oldGuilds
 }
 
+// setupDiscordMockEndpoints configures Discord endpoints to use a test server and registers cleanup.
 func setupDiscordMockEndpoints(t *testing.T, server *httptest.Server) {
+	discordEndpointOverrideMu.Lock()
 	ep := saveDiscordEndpoints()
-	t.Cleanup(func() { restoreDiscordEndpoints(ep) })
+	t.Cleanup(func() {
+		restoreDiscordEndpoints(ep)
+		discordEndpointOverrideMu.Unlock()
+	})
 	
 	discordgo.EndpointAPI = server.URL + "/"
 	discordgo.EndpointUsers = discordgo.EndpointAPI + "users/"

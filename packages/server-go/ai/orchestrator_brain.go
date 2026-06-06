@@ -117,14 +117,26 @@ func stageUpdateRequirementsState(b *OrchestrationBrain, design, vocabulary, prd
 	b.Requirements.Vocabulary = stageParseVocab(vocabulary)
 }
 
-// UpdateRequirements loads the three doc layers into brain.
-func (b *OrchestrationBrain) UpdateRequirements(design, vocabulary, prd, moduleIndex string) error {
+// stageLockAndPersist executes the lock-mutate-timestamp-persist side-effect chain for global state.
+// mutator is called with the unlocked brain and is responsible for all state changes.
+func (b *OrchestrationBrain) stageLockAndPersist(mutator func(*OrchestrationBrain) error) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	stageUpdateRequirementsState(b, design, vocabulary, prd, moduleIndex)
+	if err := mutator(b); err != nil {
+		return err
+	}
+
 	b.UpdatedAt = time.Now()
 	return b.persist()
+}
+
+// UpdateRequirements loads the three doc layers into brain.
+func (b *OrchestrationBrain) UpdateRequirements(design, vocabulary, prd, moduleIndex string) error {
+	return b.stageLockAndPersist(func(brain *OrchestrationBrain) error {
+		stageUpdateRequirementsState(brain, design, vocabulary, prd, moduleIndex)
+		return nil
+	})
 }
 
 func parseVocabularyMap(vocabulary string) map[string]string {
@@ -156,16 +168,14 @@ func parseVocabularyMap(vocabulary string) map[string]string {
 
 // UpdatePlan replaces the plan with a new one.
 func (b *OrchestrationBrain) UpdatePlan(steps []PlanStep) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.Plan = steps
-	b.UpdatedAt = time.Now()
-	return b.persist()
+	return b.stageLockAndPersist(func(brain *OrchestrationBrain) error {
+		brain.Plan = steps
+		return nil
+	})
 }
 
 // stageInitTeamState creates a new TeamState with given parameters.
-func stageInitTeamState(teamID, role string, steps, dependsOn []string) TeamState {
+func stageInitTeamState(teamID, role string, steps []int, dependsOn []string) TeamState {
 	return TeamState{
 		ID:            teamID,
 		Role:          role,
@@ -179,12 +189,10 @@ func stageInitTeamState(teamID, role string, steps, dependsOn []string) TeamStat
 
 // AddTeam registers a new team.
 func (b *OrchestrationBrain) AddTeam(teamID string, role string, steps []int, dependsOn []string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.Teams[teamID] = stageInitTeamState(teamID, role, steps, dependsOn)
-	b.UpdatedAt = time.Now()
-	return b.persist()
+	return b.stageLockAndPersist(func(brain *OrchestrationBrain) error {
+		brain.Teams[teamID] = stageInitTeamState(teamID, role, steps, dependsOn)
+		return nil
+	})
 }
 
 // stageUpdateTeamTimestamps mutates team status and sets started/completed times as appropriate.
@@ -198,8 +206,9 @@ func stageUpdateTeamTimestamps(t *TeamState, newStatus string) {
 	}
 }
 
-// UpdateTeamStatus changes a team's status.
-func (b *OrchestrationBrain) UpdateTeamStatus(teamID, newStatus string) error {
+// stageApplyTeamMutation executes the lock-fetch-mutate-timestamp-persist side-effect chain.
+// mutator is called with the fetched TeamState and returns any error during mutation.
+func (b *OrchestrationBrain) stageApplyTeamMutation(teamID string, mutator func(*TeamState) error) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -208,10 +217,21 @@ func (b *OrchestrationBrain) UpdateTeamStatus(teamID, newStatus string) error {
 		return fmt.Errorf("team %s not found", teamID)
 	}
 
-	stageUpdateTeamTimestamps(&t, newStatus)
+	if err := mutator(&t); err != nil {
+		return err
+	}
+
 	b.Teams[teamID] = t
 	b.UpdatedAt = time.Now()
 	return b.persist()
+}
+
+// UpdateTeamStatus changes a team's status.
+func (b *OrchestrationBrain) UpdateTeamStatus(teamID, newStatus string) error {
+	return b.stageApplyTeamMutation(teamID, func(t *TeamState) error {
+		stageUpdateTeamTimestamps(t, newStatus)
+		return nil
+	})
 }
 
 // stageUpdateTeamFeedback mutates the team with new feedback.
@@ -221,18 +241,10 @@ func stageUpdateTeamFeedback(t *TeamState, feedback string) {
 
 // UpdateTeamFeedback records feedback for a team (e.g., validation failure).
 func (b *OrchestrationBrain) UpdateTeamFeedback(teamID, feedback string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	t, ok := b.Teams[teamID]
-	if !ok {
-		return fmt.Errorf("team %s not found", teamID)
-	}
-
-	stageUpdateTeamFeedback(&t, feedback)
-	b.Teams[teamID] = t
-	b.UpdatedAt = time.Now()
-	return b.persist()
+	return b.stageApplyTeamMutation(teamID, func(t *TeamState) error {
+		stageUpdateTeamFeedback(t, feedback)
+		return nil
+	})
 }
 
 func (b *OrchestrationBrain) evaluateTeamDependencies(depIDs []string) ([]string, bool) {

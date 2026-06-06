@@ -495,6 +495,15 @@ func stageCallbacksInit(oc *OutputCollector) (func(string, bool), func(string), 
 	return onChunk, onError, onToolCall, onToolResult
 }
 
+// stageOutputCollectorWithCallbacks encapsulates the side-effect chain of creating
+// an OutputCollector and initializing output-collecting callbacks. Both stages are
+// explicitly combined to clarify they are a dependent pair.
+func stageOutputCollectorWithCallbacks() (*OutputCollector, func(string, bool), func(string), func(string, any), func(string, any, bool)) {
+	oc := stageCollectorCreation()
+	onChunk, onError, onToolCall, onToolResult := stageCallbacksInit(oc)
+	return oc, onChunk, onError, onToolCall, onToolResult
+}
+
 // stageChatContextCreation constructs a ChatContext from config, sessionID, role, cancel, and callbacks.
 func stageChatContextCreation(cfg OrchestratorConfig, sessionID string, role AgentRole, cancel <-chan struct{}, onChunk func(string, bool), onError func(string), onToolCall func(string, any), onToolResult func(string, any, bool)) *ChatContext {
 	return &ChatContext{
@@ -513,8 +522,7 @@ func stageChatContextCreation(cfg OrchestratorConfig, sessionID string, role Age
 // This consolidates the repeated pattern of building a context with sync.Mutex + strings.Builder
 // for collecting streamed output from a role-based chat session.
 func newChatContextForRole(cfg OrchestratorConfig, sessionID string, role AgentRole, cancel <-chan struct{}) (*ChatContext, *OutputCollector) {
-	oc := stageCollectorCreation()
-	onChunk, onError, onToolCall, onToolResult := stageCallbacksInit(oc)
+	oc, onChunk, onError, onToolCall, onToolResult := stageOutputCollectorWithCallbacks()
 	ctx := stageChatContextCreation(cfg, sessionID, role, cancel, onChunk, onError, onToolCall, onToolResult)
 	return ctx, oc
 }

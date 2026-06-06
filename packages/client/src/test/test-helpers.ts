@@ -7,18 +7,21 @@
  * - Store setup utilities
  * - Common cleanup patterns
  */
-import { act, render, RenderOptions, RenderResult } from '@testing-library/react';
-import { ReactElement } from 'react';
+import { act } from '@testing-library/react';
 import { vi } from 'vitest';
 import type { ServerMessage } from '@engine/shared';
 
 // ─── WS Client Mocking ────────────────────────────────────────────────────────
 
 /**
- * Create a WS client mock with callback capture for onMessage and onOpen.
- * Returns both the mock definition (for vi.mock) and a namespace with captured callbacks.
+ * Create a WS client mock's internal structure for use in vi.hoisted().
+ * Call this from within vi.hoisted to capture onMessage and onOpen callbacks.
+ *
+ * Usage in test files:
+ * const { wsCallbacks, mockDef } = vi.hoisted(() => createWsClientMockFactory());
+ * vi.mock('../ws/client.js', () => mockDef);
  */
-export function createWsClientMock() {
+export function createWsClientMockFactory() {
   let capturedWsCallback: ((data: unknown) => void) | null = null;
   let capturedOnOpenCallback: (() => void) | null = null;
 
@@ -71,13 +74,6 @@ export function sendWsMessage(
   act(() => {
     capturedCallback?.(msg);
   });
-}
-
-/**
- * Emit a message to all registered WS handlers (for multi-handler setups).
- */
-export function emitWsMessage(handlers: Set<(msg: ServerMessage) => void>, msg: ServerMessage) {
-  handlers.forEach((handler) => handler(msg));
 }
 
 // ─── Bridge Mocking ───────────────────────────────────────────────────────────
@@ -154,61 +150,45 @@ export function createBridgeMock(
   };
 }
 
-// ─── Component Rendering with Setup ───────────────────────────────────────────
-
-/**
- * Render a component with store/WS setup.
- * Handles common patterns: clear mocks, render, return mocks for assertions.
- */
-export async function renderWithWsSetup<T extends ReactElement>(
-  component: T,
-  options?: { beforeRender?: () => void; clearMocks?: string[] } & RenderOptions
-): Promise<{ result: RenderResult; wsCallback: ((data: unknown) => void) | null }> {
-  if (options?.beforeRender) {
-    options.beforeRender();
-  }
-
-  // This is a placeholder — in practice the test will have already set up vi.mock
-  // and imported wsClient. We just render the component.
-  const result = render(component, options);
-  return { result, wsCallback: null };
-}
-
 // ─── Mock Clearing ────────────────────────────────────────────────────────────
 
 /**
- * Clear all mocks from a set of mock objects (e.g., bridge methods).
+ * Clear all vi.fn() mocks recursively from an object or array of targets.
+ * Clears both mockClear() and mockReset() on all vitest mocks found.
  */
-export function clearMocks(...targets: any[]) {
+export function clearAllMocks(...targets: any[]) {
   targets.forEach((target) => {
-    if (target?.mockClear) target.mockClear();
-    else if (typeof target === 'object') {
+    if (!target) return;
+    if (target?.mockClear) {
+      target.mockClear();
+      if (target?.mockReset) target.mockReset();
+      return;
+    }
+    if (typeof target === 'object') {
       Object.values(target).forEach((fn: any) => {
-        if (fn?.mockClear) fn.mockClear();
+        if (fn?.mockClear) {
+          fn.mockClear();
+          if (fn?.mockReset) fn.mockReset();
+        }
       });
     }
   });
 }
 
 /**
- * Reset/clear all mocks from a bridge mock.
+ * @deprecated Use clearAllMocks() instead. Provided for backward compatibility.
  */
-export function clearBridgeMocks(bridge: any) {
-  Object.values(bridge).forEach((fn: any) => {
-    if (fn?.mockClear) fn.mockClear();
-    if (fn?.mockReset) fn.mockReset();
-  });
-}
+export const clearBridgeMocks = clearAllMocks;
 
 /**
- * Reset/clear all mocks from a ws mock.
+ * @deprecated Use clearAllMocks() instead. Provided for backward compatibility.
  */
-export function clearWsMocks(wsClient: any) {
-  ['send', 'connect', 'disconnect', 'onMessage', 'onOpen', 'onClose'].forEach((key) => {
-    if (wsClient[key]?.mockClear) wsClient[key].mockClear();
-    if (wsClient[key]?.mockReset) wsClient[key].mockReset();
-  });
-}
+export const clearWsMocks = clearAllMocks;
+
+/**
+ * @deprecated Use clearAllMocks() instead. Provided for backward compatibility.
+ */
+export const clearMocks = clearAllMocks;
 
 // ─── Common Test Setup Patterns ────────────────────────────────────────────────
 
@@ -230,3 +210,66 @@ export function createWsHandlerSet() {
     },
   };
 }
+
+// ─── Store Setup for UI Component Tests ────────────────────────────────────────
+
+import { useStore } from '../store/index.js';
+import type { EditorPreferences, Session } from '@engine/shared';
+
+/**
+ * Setup store with defaults for UI component tests.
+ * Returns a reset function for use in afterEach if needed.
+ */
+export function setupStoreForUITests(overrides?: {
+  connected?: boolean;
+  activeSession?: Session | null;
+  editorPreferences?: EditorPreferences;
+  gitStatus?: any;
+  githubUser?: any;
+  openFiles?: any[];
+  activeFilePath?: string | null;
+}): () => void {
+  const defaults = {
+    connected: false,
+    activeSession: {
+      id: 'sess-1',
+      projectPath: '/project/root',
+      branchName: 'main',
+      createdAt: '',
+      updatedAt: '',
+      summary: '',
+      messageCount: 0,
+    },
+    editorPreferences: {
+      fontFamily: 'monospace',
+      fontSize: 13,
+      lineHeight: 1.5,
+      tabSize: 2,
+      markdownViewMode: 'text' as const,
+      wordWrap: false,
+    },
+    gitStatus: {
+      branch: 'main',
+      staged: [],
+      unstaged: [],
+      untracked: [],
+      ignored: [],
+      ahead: 0,
+      behind: 0,
+    },
+    githubUser: null,
+    openFiles: [],
+    activeFilePath: null,
+  };
+
+  useStore.setState({
+    ...defaults,
+    ...overrides,
+  });
+
+  // Return a reset function for optional use in afterEach
+  return () => {
+    useStore.setState(defaults);
+  };
+}
+

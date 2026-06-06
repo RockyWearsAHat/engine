@@ -1,19 +1,23 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createWsHandlerSet } from './test-helpers.js';
 
 const wsClientMocks = vi.hoisted(() => {
-  const listeners: Array<(msg: Record<string, unknown>) => void> = [];
+  const { handlers, mockDefinition, emitToAllHandlers } = createWsHandlerSet();
   return {
     send: vi.fn(),
-    onMessage: vi.fn((cb: (msg: Record<string, unknown>) => void) => {
-      listeners.push(cb);
-      return () => { listeners.splice(listeners.indexOf(cb), 1); };
-    }),
-    _emit: (msg: Record<string, unknown>) => listeners.forEach(l => l(msg)),
+    onMessage: mockDefinition.onMessage,
+    _emit: emitToAllHandlers,
+    handlers,
   };
 });
 
-vi.mock('../ws/client.js', () => ({ wsClient: wsClientMocks }));
+vi.mock('../ws/client.js', () => ({
+  wsClient: {
+    send: wsClientMocks.send,
+    onMessage: wsClientMocks.onMessage,
+  },
+}));
 
 const connectionMocks = vi.hoisted(() => ({
   clearConnectionProfiles: vi.fn(),

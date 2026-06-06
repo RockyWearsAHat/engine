@@ -286,3 +286,39 @@ func newServerAndClientPair(t *testing.T) (*httptest.Server, *Peer, *Client) {
 	return ts, peer, c
 }
 
+// newDefaultMeshServerWithTestConfig creates a standard mesh server for testing.
+func newDefaultMeshServerWithTestConfig(t *testing.T) *httptest.Server {
+	t.Helper()
+	return newMeshServer(t, defaultMeshTestConfig())
+}
+
+// doExecRequestAndAssertStatus executes an exec request with standard parameters and asserts the status code.
+func doExecRequestAndAssertStatus(t *testing.T, ts *httptest.Server, cmd string, expectedStatus int, args ...string) *ExecResponse {
+	t.Helper()
+	body := marshalExecRequest(cmd, args...)
+	resp := doSignedRequestAndExpectStatus(t, ts, "/mesh/exec", http.MethodPost, testSecret, testClientName, body, expectedStatus)
+	defer resp.Body.Close()
+	if expectedStatus != http.StatusOK {
+		return nil
+	}
+	return decodeExecResponse(t, resp.Body)
+}
+
+// doInferenceRequestAndAssertStatus executes an inference request with standard parameters and asserts the status code.
+func doInferenceRequestAndAssertStatus(t *testing.T, ts *httptest.Server, path, method string, expectedStatus int, body []byte) *InferenceResponse {
+	t.Helper()
+	resp := doSignedRequestAndExpectStatus(t, ts, "/mesh/inference", http.MethodPost, testSecret, testClientName, body, expectedStatus)
+	defer resp.Body.Close()
+	return decodeInferenceResponse(t, resp.Body)
+}
+
+// execRequestWithStatusCheck is a consolidated helper for tests that create a server, exec, and verify status.
+func execRequestWithStatusCheck(t *testing.T, cfg *Config, cmd string, expectedStatus int, args ...string) *ExecResponse {
+	t.Helper()
+	ts := newMeshServer(t, cfg)
+	body := marshalExecRequest(cmd, args...)
+	resp := doSignedRequestAndExpectStatus(t, ts, "/mesh/exec", http.MethodPost, testSecret, testClientName, body, expectedStatus)
+	defer resp.Body.Close()
+	return decodeExecResponse(t, resp.Body)
+}
+

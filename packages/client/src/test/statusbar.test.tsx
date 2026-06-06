@@ -1,7 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import StatusBar from '../components/StatusBar/StatusBar.js';
-import { useStore } from '../store/index.js';
+import { setupStoreForUITests } from './test-helpers.js';
 import { EDITOR_STATUS_EVENT } from '../editorEvents.js';
 
 const { setEditorPreferencesMock } = vi.hoisted(() => ({
@@ -14,38 +13,39 @@ vi.mock('../bridge.js', () => ({
   },
 }));
 
-function seedStore() {
-  useStore.setState({
-    connected: true,
-    gitStatus: {
-      branch: 'main',
-      staged: ['a.ts'],
-      unstaged: ['b.ts'],
-      untracked: ['c.ts'],
-      ignored: [],
-      ahead: 2,
-      behind: 1,
-    },
-    activeFilePath: '/project/README.md',
-    openFiles: [
-      { path: '/project/README.md', content: '# hi', language: 'markdown', size: 10, largeFile: false, dirty: true },
-    ],
-    githubUser: { login: 'octocat' },
-    editorPreferences: {
-      fontFamily: 'mono',
-      fontSize: 13,
-      lineHeight: 1.6,
-      tabSize: 2,
-      markdownViewMode: 'text',
-      wordWrap: false,
-    },
-  });
-}
+// ── Lazy import after mocks ───────────────────────────────────────────────────
+
+const { default: StatusBar } = await import('../components/StatusBar/StatusBar.js');
+const { useStore } = await import('../store/index.js');
 
 describe('StatusBar interactions', () => {
   beforeEach(() => {
     setEditorPreferencesMock.mockClear();
-    seedStore();
+    setupStoreForUITests({
+      connected: true,
+      gitStatus: {
+        branch: 'main',
+        staged: ['a.ts'],
+        unstaged: ['b.ts'],
+        untracked: ['c.ts'],
+        ignored: [],
+        ahead: 2,
+        behind: 1,
+      },
+      activeFilePath: '/project/README.md',
+      openFiles: [
+        { path: '/project/README.md', content: '# hi', language: 'markdown', size: 10, largeFile: false, dirty: true },
+      ],
+      githubUser: { login: 'octocat' },
+      editorPreferences: {
+        fontFamily: 'mono',
+        fontSize: 13,
+        lineHeight: 1.6,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+    });
   });
 
   it('Connection_Git_Github_EditorStatus_Rendered', () => {

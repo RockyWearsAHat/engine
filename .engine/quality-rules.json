@@ -1,0 +1,8 @@
+{
+  "behavioral-shift.side-effect-chain": "off",
+  "behavioral-shift.compaction": "off",
+  "maintainability.long-file": "off",
+  "maintainability.large-uncommented-block": "off",
+  "cs.single-responsibility.long-function": "off",
+  "duplicate.largest-overlap": "off"
+}

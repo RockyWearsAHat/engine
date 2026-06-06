@@ -109,230 +109,246 @@ func CurrentProject() string {
 	return globalDBProject
 }
 
+var coreSchemaStatements = []string{
+	`CREATE TABLE IF NOT EXISTS sessions (
+		id          TEXT PRIMARY KEY,
+		project_path TEXT NOT NULL,
+		branch_name  TEXT NOT NULL DEFAULT '',
+		summary      TEXT NOT NULL DEFAULT '',
+		created_at   TEXT NOT NULL,
+		updated_at   TEXT NOT NULL
+	);`,
+	`CREATE TABLE IF NOT EXISTS project_directions (
+		project_path TEXT PRIMARY KEY,
+		summary      TEXT NOT NULL DEFAULT '',
+		created_at   TEXT NOT NULL,
+		updated_at   TEXT NOT NULL
+	);`,
+	`CREATE TABLE IF NOT EXISTS messages (
+		id         TEXT PRIMARY KEY,
+		session_id TEXT NOT NULL,
+		role       TEXT NOT NULL,
+		content    TEXT NOT NULL,
+		tool_calls TEXT,
+		created_at TEXT NOT NULL,
+		FOREIGN KEY(session_id) REFERENCES sessions(id)
+	);`,
+	`CREATE TABLE IF NOT EXISTS tool_log (
+		id          TEXT PRIMARY KEY,
+		session_id  TEXT NOT NULL,
+		name        TEXT NOT NULL,
+		input       TEXT,
+		result      TEXT,
+		is_error    INTEGER NOT NULL DEFAULT 0,
+		duration_ms INTEGER NOT NULL DEFAULT 0,
+		created_at  TEXT NOT NULL
+	);`,
+	`CREATE TABLE IF NOT EXISTS usage_events (
+		id              TEXT PRIMARY KEY,
+		session_id      TEXT NOT NULL,
+		project_path    TEXT NOT NULL,
+		provider        TEXT NOT NULL,
+		model           TEXT NOT NULL,
+		input_tokens    INTEGER NOT NULL DEFAULT 0,
+		output_tokens   INTEGER NOT NULL DEFAULT 0,
+		total_tokens    INTEGER NOT NULL DEFAULT 0,
+		cost_usd        REAL NOT NULL DEFAULT 0,
+		api_duration_ms INTEGER NOT NULL DEFAULT 0,
+		created_at      TEXT NOT NULL,
+		FOREIGN KEY(session_id) REFERENCES sessions(id)
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_usage_events_session_created
+		ON usage_events(session_id, created_at DESC);`,
+	`CREATE INDEX IF NOT EXISTS idx_usage_events_project_created
+		ON usage_events(project_path, created_at DESC);`,
+	`CREATE INDEX IF NOT EXISTS idx_usage_events_model_created
+		ON usage_events(model, created_at DESC);`,
+	`CREATE TABLE IF NOT EXISTS validation_results (
+		id             TEXT PRIMARY KEY,
+		session_id     TEXT NOT NULL,
+		issue          TEXT NOT NULL DEFAULT '',
+		issue_resolved INTEGER NOT NULL DEFAULT 0,
+		test_passed    INTEGER NOT NULL DEFAULT 0,
+		error_count    INTEGER NOT NULL DEFAULT 0,
+		warning_count  INTEGER NOT NULL DEFAULT 0,
+		duration_ms    INTEGER NOT NULL DEFAULT 0,
+		evidence       TEXT NOT NULL DEFAULT '',
+		command        TEXT NOT NULL DEFAULT '',
+		created_at     TEXT NOT NULL,
+		FOREIGN KEY(session_id) REFERENCES sessions(id)
+	);`,
+	`CREATE TABLE IF NOT EXISTS learning_events (
+		id          TEXT PRIMARY KEY,
+		session_id  TEXT NOT NULL,
+		pattern     TEXT NOT NULL,
+		outcome     TEXT NOT NULL,
+		confidence  REAL NOT NULL DEFAULT 0.5,
+		category    TEXT NOT NULL DEFAULT '',
+		context     TEXT NOT NULL DEFAULT '',
+		created_at  TEXT NOT NULL,
+		FOREIGN KEY(session_id) REFERENCES sessions(id)
+	);`,
+	`CREATE TABLE IF NOT EXISTS attention_residuals (
+		id           TEXT PRIMARY KEY,
+		session_id   TEXT NOT NULL,
+		message_id   TEXT NOT NULL,
+		source_key   TEXT NOT NULL,
+		source_type  TEXT NOT NULL,
+		source_label TEXT NOT NULL DEFAULT '',
+		query_text   TEXT NOT NULL DEFAULT '',
+		weight       REAL NOT NULL DEFAULT 0,
+		score        REAL NOT NULL DEFAULT 0,
+		context      TEXT NOT NULL DEFAULT '',
+		created_at   TEXT NOT NULL,
+		FOREIGN KEY(session_id) REFERENCES sessions(id),
+		FOREIGN KEY(message_id) REFERENCES messages(id)
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_attention_residuals_session_created
+		ON attention_residuals(session_id, created_at DESC);`,
+	`CREATE INDEX IF NOT EXISTS idx_attention_residuals_source_key_created
+		ON attention_residuals(source_key, created_at DESC);`,
+	`CREATE TABLE IF NOT EXISTS discord_messages (
+		id            TEXT PRIMARY KEY,
+		project_path  TEXT NOT NULL,
+		channel_id    TEXT NOT NULL DEFAULT '',
+		thread_id     TEXT NOT NULL DEFAULT '',
+		session_id    TEXT NOT NULL DEFAULT '',
+		author_id     TEXT NOT NULL DEFAULT '',
+		author_name   TEXT NOT NULL DEFAULT '',
+		direction     TEXT NOT NULL DEFAULT 'in',
+		kind          TEXT NOT NULL DEFAULT 'message',
+		content       TEXT NOT NULL DEFAULT '',
+		created_at    TEXT NOT NULL
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_discord_messages_project_created
+		ON discord_messages(project_path, created_at DESC);`,
+	`CREATE INDEX IF NOT EXISTS idx_discord_messages_thread_created
+		ON discord_messages(thread_id, created_at DESC);`,
+	`CREATE INDEX IF NOT EXISTS idx_discord_messages_session_created
+		ON discord_messages(session_id, created_at DESC);`,
+	`CREATE VIRTUAL TABLE IF NOT EXISTS discord_messages_fts USING fts5(
+		content,
+		author_name,
+		content='discord_messages',
+		content_rowid='rowid',
+		tokenize='porter unicode61'
+	);`,
+	`CREATE TRIGGER IF NOT EXISTS discord_messages_ai AFTER INSERT ON discord_messages BEGIN
+		INSERT INTO discord_messages_fts(rowid, content, author_name)
+		VALUES (new.rowid, new.content, new.author_name);
+	END;`,
+	`CREATE TRIGGER IF NOT EXISTS discord_messages_ad AFTER DELETE ON discord_messages BEGIN
+		INSERT INTO discord_messages_fts(discord_messages_fts, rowid, content, author_name)
+		VALUES ('delete', old.rowid, old.content, old.author_name);
+	END;`,
+	`CREATE TABLE IF NOT EXISTS discord_session_threads (
+		session_id   TEXT PRIMARY KEY,
+		project_path TEXT NOT NULL,
+		thread_id    TEXT NOT NULL,
+		channel_id   TEXT NOT NULL DEFAULT '',
+		created_at   TEXT NOT NULL
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_discord_session_threads_thread
+		ON discord_session_threads(thread_id);`,
+	`CREATE INDEX IF NOT EXISTS idx_discord_session_threads_project
+		ON discord_session_threads(project_path, created_at DESC);`,
+	`CREATE TABLE IF NOT EXISTS working_state (
+		session_id TEXT PRIMARY KEY,
+		state      TEXT NOT NULL DEFAULT '{}',
+		updated_at TEXT NOT NULL
+	);`,
+	`CREATE TABLE IF NOT EXISTS project_profiles (
+		project_path TEXT PRIMARY KEY,
+		profile_json TEXT NOT NULL DEFAULT '{}',
+		created_at   TEXT NOT NULL,
+		updated_at   TEXT NOT NULL
+	);`,
+}
+
+var memorySchemaStatements = []string{
+	`CREATE TABLE IF NOT EXISTS memory_ledger_events (
+		id            TEXT PRIMARY KEY,
+		project_path  TEXT NOT NULL,
+		session_id    TEXT NOT NULL DEFAULT '',
+		sequence      INTEGER NOT NULL,
+		event_type    TEXT NOT NULL,
+		actor_model   TEXT NOT NULL DEFAULT '',
+		payload_json  TEXT NOT NULL DEFAULT '{}',
+		prev_hash     TEXT NOT NULL DEFAULT '',
+		event_hash    TEXT NOT NULL,
+		created_at    TEXT NOT NULL
+	);`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_ledger_project_sequence
+		ON memory_ledger_events(project_path, sequence);`,
+	`CREATE INDEX IF NOT EXISTS idx_memory_ledger_project_created
+		ON memory_ledger_events(project_path, created_at DESC);`,
+	`CREATE INDEX IF NOT EXISTS idx_memory_ledger_project_session_created
+		ON memory_ledger_events(project_path, session_id, created_at DESC);`,
+	`CREATE TABLE IF NOT EXISTS memory_residual_nodes (
+		project_path           TEXT NOT NULL,
+		node_key               TEXT NOT NULL,
+		session_id             TEXT NOT NULL DEFAULT '',
+		node_type              TEXT NOT NULL,
+		label                  TEXT NOT NULL DEFAULT '',
+		verification_status    TEXT NOT NULL DEFAULT 'unverified',
+		confidence             REAL NOT NULL DEFAULT 0,
+		novelty                REAL NOT NULL DEFAULT 0,
+		surprise               REAL NOT NULL DEFAULT 0,
+		verification_strength  REAL NOT NULL DEFAULT 0,
+		dependency_centrality  REAL NOT NULL DEFAULT 0,
+		residual_score         REAL NOT NULL DEFAULT 0,
+		superseded             INTEGER NOT NULL DEFAULT 0,
+		contradicted           INTEGER NOT NULL DEFAULT 0,
+		last_event_sequence    INTEGER NOT NULL DEFAULT 0,
+		updated_at             TEXT NOT NULL,
+		PRIMARY KEY(project_path, node_key)
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_memory_nodes_project_score
+		ON memory_residual_nodes(project_path, residual_score DESC, updated_at DESC);`,
+	`CREATE INDEX IF NOT EXISTS idx_memory_nodes_project_session_score
+		ON memory_residual_nodes(project_path, session_id, residual_score DESC, updated_at DESC);`,
+	`CREATE TABLE IF NOT EXISTS memory_residual_edges (
+		id                    TEXT PRIMARY KEY,
+		project_path          TEXT NOT NULL,
+		from_node_key         TEXT NOT NULL,
+		to_node_key           TEXT NOT NULL,
+		edge_type             TEXT NOT NULL,
+		weight                REAL NOT NULL DEFAULT 0,
+		unresolved            INTEGER NOT NULL DEFAULT 0,
+		last_event_sequence   INTEGER NOT NULL DEFAULT 0,
+		updated_at            TEXT NOT NULL
+	);`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_edges_unique
+		ON memory_residual_edges(project_path, from_node_key, to_node_key, edge_type);`,
+	`CREATE INDEX IF NOT EXISTS idx_memory_edges_project_from
+		ON memory_residual_edges(project_path, from_node_key, updated_at DESC);`,
+	`CREATE TABLE IF NOT EXISTS memory_state_snapshots (
+		id               TEXT PRIMARY KEY,
+		project_path     TEXT NOT NULL,
+		session_id       TEXT NOT NULL DEFAULT '',
+		snapshot_type    TEXT NOT NULL,
+		event_sequence   INTEGER NOT NULL DEFAULT 0,
+		snapshot_json    TEXT NOT NULL DEFAULT '{}',
+		created_at       TEXT NOT NULL
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_memory_snapshots_lookup
+		ON memory_state_snapshots(project_path, session_id, snapshot_type, event_sequence DESC, created_at DESC);`,
+}
+
+func execStatements(statements []string) error {
+	for _, statement := range statements {
+		if _, err := globalDB.Exec(statement); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func migrate() error {
-	_, err := globalDB.Exec(`
-		CREATE TABLE IF NOT EXISTS sessions (
-			id          TEXT PRIMARY KEY,
-			project_path TEXT NOT NULL,
-			branch_name  TEXT NOT NULL DEFAULT '',
-			summary      TEXT NOT NULL DEFAULT '',
-			created_at   TEXT NOT NULL,
-			updated_at   TEXT NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS project_directions (
-			project_path TEXT PRIMARY KEY,
-			summary      TEXT NOT NULL DEFAULT '',
-			created_at   TEXT NOT NULL,
-			updated_at   TEXT NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS messages (
-			id         TEXT PRIMARY KEY,
-			session_id TEXT NOT NULL,
-			role       TEXT NOT NULL,
-			content    TEXT NOT NULL,
-			tool_calls TEXT,
-			created_at TEXT NOT NULL,
-			FOREIGN KEY(session_id) REFERENCES sessions(id)
-		);
-		CREATE TABLE IF NOT EXISTS tool_log (
-			id          TEXT PRIMARY KEY,
-			session_id  TEXT NOT NULL,
-			name        TEXT NOT NULL,
-			input       TEXT,
-			result      TEXT,
-			is_error    INTEGER NOT NULL DEFAULT 0,
-			duration_ms INTEGER NOT NULL DEFAULT 0,
-			created_at  TEXT NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS usage_events (
-			id              TEXT PRIMARY KEY,
-			session_id      TEXT NOT NULL,
-			project_path    TEXT NOT NULL,
-			provider        TEXT NOT NULL,
-			model           TEXT NOT NULL,
-			input_tokens    INTEGER NOT NULL DEFAULT 0,
-			output_tokens   INTEGER NOT NULL DEFAULT 0,
-			total_tokens    INTEGER NOT NULL DEFAULT 0,
-			cost_usd        REAL NOT NULL DEFAULT 0,
-			api_duration_ms INTEGER NOT NULL DEFAULT 0,
-			created_at      TEXT NOT NULL,
-			FOREIGN KEY(session_id) REFERENCES sessions(id)
-		);
-		CREATE INDEX IF NOT EXISTS idx_usage_events_session_created
-			ON usage_events(session_id, created_at DESC);
-		CREATE INDEX IF NOT EXISTS idx_usage_events_project_created
-			ON usage_events(project_path, created_at DESC);
-		CREATE INDEX IF NOT EXISTS idx_usage_events_model_created
-			ON usage_events(model, created_at DESC);
-		CREATE TABLE IF NOT EXISTS validation_results (
-			id             TEXT PRIMARY KEY,
-			session_id     TEXT NOT NULL,
-			issue          TEXT NOT NULL DEFAULT '',
-			issue_resolved INTEGER NOT NULL DEFAULT 0,
-			test_passed    INTEGER NOT NULL DEFAULT 0,
-			error_count    INTEGER NOT NULL DEFAULT 0,
-			warning_count  INTEGER NOT NULL DEFAULT 0,
-			duration_ms    INTEGER NOT NULL DEFAULT 0,
-			evidence       TEXT NOT NULL DEFAULT '',
-			command        TEXT NOT NULL DEFAULT '',
-			created_at     TEXT NOT NULL,
-			FOREIGN KEY(session_id) REFERENCES sessions(id)
-		);
-		CREATE TABLE IF NOT EXISTS learning_events (
-			id          TEXT PRIMARY KEY,
-			session_id  TEXT NOT NULL,
-			pattern     TEXT NOT NULL,
-			outcome     TEXT NOT NULL,
-			confidence  REAL NOT NULL DEFAULT 0.5,
-			category    TEXT NOT NULL DEFAULT '',
-			context     TEXT NOT NULL DEFAULT '',
-			created_at  TEXT NOT NULL,
-			FOREIGN KEY(session_id) REFERENCES sessions(id)
-		);
-		CREATE TABLE IF NOT EXISTS attention_residuals (
-			id           TEXT PRIMARY KEY,
-			session_id   TEXT NOT NULL,
-			message_id   TEXT NOT NULL,
-			source_key   TEXT NOT NULL,
-			source_type  TEXT NOT NULL,
-			source_label TEXT NOT NULL DEFAULT '',
-			query_text   TEXT NOT NULL DEFAULT '',
-			weight       REAL NOT NULL DEFAULT 0,
-			score        REAL NOT NULL DEFAULT 0,
-			context      TEXT NOT NULL DEFAULT '',
-			created_at   TEXT NOT NULL,
-			FOREIGN KEY(session_id) REFERENCES sessions(id),
-			FOREIGN KEY(message_id) REFERENCES messages(id)
-		);
-		CREATE INDEX IF NOT EXISTS idx_attention_residuals_session_created
-			ON attention_residuals(session_id, created_at DESC);
-		CREATE INDEX IF NOT EXISTS idx_attention_residuals_source_key_created
-			ON attention_residuals(source_key, created_at DESC);
-		CREATE TABLE IF NOT EXISTS discord_messages (
-			id            TEXT PRIMARY KEY,
-			project_path  TEXT NOT NULL,
-			channel_id    TEXT NOT NULL DEFAULT '',
-			thread_id     TEXT NOT NULL DEFAULT '',
-			session_id    TEXT NOT NULL DEFAULT '',
-			author_id     TEXT NOT NULL DEFAULT '',
-			author_name   TEXT NOT NULL DEFAULT '',
-			direction     TEXT NOT NULL DEFAULT 'in',
-			kind          TEXT NOT NULL DEFAULT 'message',
-			content       TEXT NOT NULL DEFAULT '',
-			created_at    TEXT NOT NULL
-		);
-		CREATE INDEX IF NOT EXISTS idx_discord_messages_project_created
-			ON discord_messages(project_path, created_at DESC);
-		CREATE INDEX IF NOT EXISTS idx_discord_messages_thread_created
-			ON discord_messages(thread_id, created_at DESC);
-		CREATE INDEX IF NOT EXISTS idx_discord_messages_session_created
-			ON discord_messages(session_id, created_at DESC);
-		CREATE VIRTUAL TABLE IF NOT EXISTS discord_messages_fts USING fts5(
-			content,
-			author_name,
-			content='discord_messages',
-			content_rowid='rowid',
-			tokenize='porter unicode61'
-		);
-		CREATE TRIGGER IF NOT EXISTS discord_messages_ai AFTER INSERT ON discord_messages BEGIN
-			INSERT INTO discord_messages_fts(rowid, content, author_name)
-			VALUES (new.rowid, new.content, new.author_name);
-		END;
-		CREATE TRIGGER IF NOT EXISTS discord_messages_ad AFTER DELETE ON discord_messages BEGIN
-			INSERT INTO discord_messages_fts(discord_messages_fts, rowid, content, author_name)
-			VALUES ('delete', old.rowid, old.content, old.author_name);
-		END;
-		CREATE TABLE IF NOT EXISTS discord_session_threads (
-			session_id   TEXT PRIMARY KEY,
-			project_path TEXT NOT NULL,
-			thread_id    TEXT NOT NULL,
-			channel_id   TEXT NOT NULL DEFAULT '',
-			created_at   TEXT NOT NULL
-		);
-		CREATE INDEX IF NOT EXISTS idx_discord_session_threads_thread
-			ON discord_session_threads(thread_id);
-		CREATE INDEX IF NOT EXISTS idx_discord_session_threads_project
-			ON discord_session_threads(project_path, created_at DESC);
-		CREATE TABLE IF NOT EXISTS working_state (
-			session_id TEXT PRIMARY KEY,
-			state      TEXT NOT NULL DEFAULT '{}',
-			updated_at TEXT NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS project_profiles (
-			project_path TEXT PRIMARY KEY,
-			profile_json TEXT NOT NULL DEFAULT '{}',
-			created_at   TEXT NOT NULL,
-			updated_at   TEXT NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS memory_ledger_events (
-			id            TEXT PRIMARY KEY,
-			project_path  TEXT NOT NULL,
-			session_id    TEXT NOT NULL DEFAULT '',
-			sequence      INTEGER NOT NULL,
-			event_type    TEXT NOT NULL,
-			actor_model   TEXT NOT NULL DEFAULT '',
-			payload_json  TEXT NOT NULL DEFAULT '{}',
-			prev_hash     TEXT NOT NULL DEFAULT '',
-			event_hash    TEXT NOT NULL,
-			created_at    TEXT NOT NULL
-		);
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_ledger_project_sequence
-			ON memory_ledger_events(project_path, sequence);
-		CREATE INDEX IF NOT EXISTS idx_memory_ledger_project_created
-			ON memory_ledger_events(project_path, created_at DESC);
-		CREATE INDEX IF NOT EXISTS idx_memory_ledger_project_session_created
-			ON memory_ledger_events(project_path, session_id, created_at DESC);
-		CREATE TABLE IF NOT EXISTS memory_residual_nodes (
-			project_path           TEXT NOT NULL,
-			node_key               TEXT NOT NULL,
-			session_id             TEXT NOT NULL DEFAULT '',
-			node_type              TEXT NOT NULL,
-			label                  TEXT NOT NULL DEFAULT '',
-			verification_status    TEXT NOT NULL DEFAULT 'unverified',
-			confidence             REAL NOT NULL DEFAULT 0,
-			novelty                REAL NOT NULL DEFAULT 0,
-			surprise               REAL NOT NULL DEFAULT 0,
-			verification_strength  REAL NOT NULL DEFAULT 0,
-			dependency_centrality  REAL NOT NULL DEFAULT 0,
-			residual_score         REAL NOT NULL DEFAULT 0,
-			superseded             INTEGER NOT NULL DEFAULT 0,
-			contradicted           INTEGER NOT NULL DEFAULT 0,
-			last_event_sequence    INTEGER NOT NULL DEFAULT 0,
-			updated_at             TEXT NOT NULL,
-			PRIMARY KEY(project_path, node_key)
-		);
-		CREATE INDEX IF NOT EXISTS idx_memory_nodes_project_score
-			ON memory_residual_nodes(project_path, residual_score DESC, updated_at DESC);
-		CREATE INDEX IF NOT EXISTS idx_memory_nodes_project_session_score
-			ON memory_residual_nodes(project_path, session_id, residual_score DESC, updated_at DESC);
-		CREATE TABLE IF NOT EXISTS memory_residual_edges (
-			id                    TEXT PRIMARY KEY,
-			project_path          TEXT NOT NULL,
-			from_node_key         TEXT NOT NULL,
-			to_node_key           TEXT NOT NULL,
-			edge_type             TEXT NOT NULL,
-			weight                REAL NOT NULL DEFAULT 0,
-			unresolved            INTEGER NOT NULL DEFAULT 0,
-			last_event_sequence   INTEGER NOT NULL DEFAULT 0,
-			updated_at            TEXT NOT NULL
-		);
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_edges_unique
-			ON memory_residual_edges(project_path, from_node_key, to_node_key, edge_type);
-		CREATE INDEX IF NOT EXISTS idx_memory_edges_project_from
-			ON memory_residual_edges(project_path, from_node_key, updated_at DESC);
-		CREATE TABLE IF NOT EXISTS memory_state_snapshots (
-			id               TEXT PRIMARY KEY,
-			project_path     TEXT NOT NULL,
-			session_id       TEXT NOT NULL DEFAULT '',
-			snapshot_type    TEXT NOT NULL,
-			event_sequence   INTEGER NOT NULL DEFAULT 0,
-			snapshot_json    TEXT NOT NULL DEFAULT '{}',
-			created_at       TEXT NOT NULL
-		);
-		CREATE INDEX IF NOT EXISTS idx_memory_snapshots_lookup
-			ON memory_state_snapshots(project_path, session_id, snapshot_type, event_sequence DESC, created_at DESC);
-	`)
-	return err
+	if err := execStatements(coreSchemaStatements); err != nil {
+		return err
+	}
+	return execStatements(memorySchemaStatements)
 }
 
 // Session mirrors the TypeScript Session type.

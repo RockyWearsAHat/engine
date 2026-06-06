@@ -8,26 +8,16 @@
  */
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { useStore } from '../store/index.js';
+import { sendWsMessage, createBridgeMock, setupStoreForUITests, createWsClientMockFactory } from './test-helpers.js';
 
-// ── WS mock with callback capture ─────────────────────────────────────────────
+// ── WS mock with callback capture using vi.hoisted ──────────────────────────────
 
-let capturedWsCallback: ((data: unknown) => void) | null = null;
+const { mockDef: wsMockDef, wsCallbacks } = vi.hoisted(() => createWsClientMockFactory());
 
-vi.mock('../ws/client.js', () => ({
-  wsClient: {
-    send: vi.fn(),
-    onMessage: vi.fn((cb: (data: unknown) => void) => {
-      capturedWsCallback = cb;
-      return () => { capturedWsCallback = null; };
-    }),
-    onOpen: vi.fn(() => () => {}),
-    onClose: vi.fn(() => () => {}),
-  },
-}));
+vi.mock('../ws/client.js', () => wsMockDef);
 
-vi.mock('../bridge.js', () => ({
-  bridge: {
+vi.mock('../bridge.js', () =>
+  createBridgeMock({
     openExternal: vi.fn(),
     getLocalServerToken: vi.fn().mockResolvedValue('tok-123'),
     getGithubToken: vi.fn().mockResolvedValue(null),
@@ -38,11 +28,6 @@ vi.mock('../bridge.js', () => ({
     getModelProvider: vi.fn().mockResolvedValue(null),
     getOllamaBaseUrl: vi.fn().mockResolvedValue(null),
     getModel: vi.fn().mockResolvedValue(null),
-    getEditorPreferences: vi.fn().mockResolvedValue({ fontFamily: 'monospace', fontSize: 13, lineHeight: 1.5, tabSize: 2, markdownViewMode: 'text', wordWrap: false }),
-    agentServiceStatus: vi.fn().mockResolvedValue({ installed: false, running: false }),
-    setEditorPreferences: vi.fn().mockResolvedValue(true),
-    installAgentService: vi.fn().mockResolvedValue(''),
-    uninstallAgentService: vi.fn().mockResolvedValue(''),
     setGithubToken: vi.fn().mockResolvedValue(true),
     setGithubRepoOwner: vi.fn().mockResolvedValue(true),
     setGithubRepoName: vi.fn().mockResolvedValue(true),
@@ -51,14 +36,8 @@ vi.mock('../bridge.js', () => ({
     setAnthropicKey: vi.fn().mockResolvedValue(true),
     setOpenAiKey: vi.fn().mockResolvedValue(true),
     setOllamaBaseUrl: vi.fn().mockResolvedValue(true),
-    setActiveTeam: vi.fn().mockResolvedValue(undefined),
-    getActiveTeam: vi.fn().mockResolvedValue(null),
-    setLastProjectPath: vi.fn().mockResolvedValue(undefined),
-    getClonesDir: vi.fn().mockResolvedValue(null),
-    setClonesDir: vi.fn().mockResolvedValue(true),
-    openFolderDialog: vi.fn().mockResolvedValue(null),
-  },
-}));
+  })
+);
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
@@ -69,41 +48,29 @@ vi.mock('@tauri-apps/api/core', () => ({
 const { default: PreferencesPanel } = await import('../components/Preferences/PreferencesPanel.js');
 const { wsClient } = await import('../ws/client.js');
 const { bridge } = await import('../bridge.js');
+const { useStore } = await import('../store/index.js');
 
 function getTab(label: RegExp) {
   const matches = screen.getAllByRole('tab', { name: label });
   return matches[0];
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function sendWsMessage(msg: unknown) {
-  act(() => {
-    capturedWsCallback?.(msg);
-  });
-}
-
-function setupStore() {
-  useStore.setState({
-    githubToken: null,
-    githubUser: null,
-    githubAuthFlow: null,
-    editorPreferences: {
-      fontFamily: 'default',
-      fontSize: 13,
-      lineHeight: 1.5,
-      tabSize: 2,
-      markdownViewMode: 'text',
-      wordWrap: false,
-    },
-    activeSession: null,
-  });
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('PreferencesPanel — mount', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('Mount_NoError', () => {
     const { container } = render(<PreferencesPanel />);
@@ -122,7 +89,19 @@ describe('PreferencesPanel — mount', () => {
 });
 
 describe('PreferencesPanel — section navigation', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('MachineConnectionsClicked_SectionShown', () => {
     render(<PreferencesPanel />);
@@ -169,7 +148,19 @@ describe('PreferencesPanel — section navigation', () => {
 });
 
 describe('PreferencesPanel — llama fleet quick scanner', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('ScannerButtonClicked_SendsScanMessage', () => {
     render(<PreferencesPanel />);
@@ -187,7 +178,7 @@ describe('PreferencesPanel — llama fleet quick scanner', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/model/i));
 
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'llama.fleet.scan.result',
       result: {
         machine: { cpuCores: 8, memoryGiB: 16 },
@@ -213,7 +204,19 @@ describe('PreferencesPanel — llama fleet quick scanner', () => {
 });
 
 describe('PreferencesPanel — Editor Appearance section (PreviewCode)', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('EditorAppearanceOpen_CodePreviewRendered', () => {
     render(<PreferencesPanel />);
@@ -249,13 +252,25 @@ describe('PreferencesPanel — Editor Appearance section (PreviewCode)', () => {
 });
 
 describe('PreferencesPanel — discord WS messages (discord.config)', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('DiscordConfigWsMessage_FormPopulated', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/^discord/i));
 
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'discord.config',
       config: {
         enabled: true,
@@ -277,7 +292,7 @@ describe('PreferencesPanel — discord WS messages (discord.config)', () => {
   it('DiscordConfigSavedWsMessage_SaveBadgeTriggered', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/^discord/i));
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'discord.config.saved',
       config: {
         enabled: true,
@@ -298,7 +313,7 @@ describe('PreferencesPanel — discord WS messages (discord.config)', () => {
   it('DiscordValidateResultSuccess_SuccessStateShown', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/^discord/i));
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'discord.validate.result',
       result: { ok: true, guildName: 'Guild Name', botTag: 'bot#1234', errors: [], warnings: [] },
     });
@@ -308,7 +323,7 @@ describe('PreferencesPanel — discord WS messages (discord.config)', () => {
   it('DiscordValidateResultFailure_ErrorShown', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/^discord/i));
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'discord.validate.result',
       result: { ok: false, guildName: '', botTag: '', errors: ['invalid token'], warnings: [] },
     });
@@ -319,7 +334,7 @@ describe('PreferencesPanel — discord WS messages (discord.config)', () => {
   it('DiscordValidateResultWithWarnings_WarningsListRendered', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/^discord/i));
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'discord.validate.result',
       result: { ok: true, guildName: 'MyGuild', botTag: 'bot#0001', errors: [], warnings: ['missing channel'] },
     });
@@ -331,7 +346,7 @@ describe('PreferencesPanel — discord WS messages (discord.config)', () => {
     fireEvent.click(getTab(/^discord/i));
     vi.mocked(bridge.openExternal).mockClear();
     vi.mocked(wsClient.send).mockClear();
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'discord.validate.result',
       result: {
         ok: false,
@@ -356,7 +371,263 @@ describe('PreferencesPanel — discord WS messages (discord.config)', () => {
     fireEvent.click(getTab(/^discord/i));
     vi.mocked(wsClient.send).mockClear();
     // Bot joins guild — validate returns ok with guildName.
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
+      type: 'discord.validate.result',
+      result: {
+        ok: true,
+        guildName: 'My Server',
+        botTag: 'engine-bot#0000',
+        inviteUrl: '',
+        errors: [],
+        warnings: [],
+      },
+    });
+    // A discord.config.set should have been triggered to actually start the service.
+    const navItem = getTab(/teams/i);
+    fireEvent.click(navItem);
+    expect(navItem.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('DiscordControlClicked_DiscordSectionShown', () => {
+    render(<PreferencesPanel />);
+    const navItem = getTab(/^discord/i);
+    fireEvent.click(navItem);
+    expect(navItem.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('GitHubWiringClicked_GithubSectionShown', () => {
+    render(<PreferencesPanel />);
+    const navItem = getTab(/^github/i);
+    fireEvent.click(navItem);
+    expect(navItem.getAttribute('aria-selected')).toBe('true');
+  });
+});
+
+describe('PreferencesPanel — llama fleet quick scanner', () => {
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
+
+  it('ScannerButtonClicked_SendsScanMessage', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/model/i));
+    vi.mocked(wsClient.send).mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /scan local fleet settings/i }));
+
+    expect(vi.mocked(wsClient.send)).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'llama.fleet.scan', writeFile: false }),
+    );
+  });
+
+  it('ScanResultMessage_RendersRecommendationSummary', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/model/i));
+
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
+      type: 'llama.fleet.scan.result',
+      result: {
+        machine: { cpuCores: 8, memoryGiB: 16 },
+        recommendation: {
+          basePort: 8081,
+          backends: 2,
+          parallel: 2,
+          threads: 4,
+          threadsBatch: 4,
+          threadsHttp: 4,
+          ctx: 8192,
+          batch: 512,
+          ubatch: 128,
+        },
+        envPreview: 'LLAMA_BASE_PORT=8081',
+        notes: [],
+      },
+    });
+
+    expect(screen.getByText(/8 CPU cores, 16 GiB RAM/i)).toBeTruthy();
+    expect(screen.getByText(/Recommended: 2 backends/i)).toBeTruthy();
+  });
+});
+
+describe('PreferencesPanel — Editor Appearance section (PreviewCode)', () => {
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
+
+  it('EditorAppearanceOpen_CodePreviewRendered', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/editor/i));
+    expect(screen.getByText(/font family/i)).toBeTruthy();
+  });
+
+  it('FontSizeInteraction_UpdatedPreferencesPersisted', async () => {
+    vi.mocked(bridge.setEditorPreferences).mockClear();
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/editor/i));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /16px/i }));
+    });
+    expect(vi.mocked(bridge.setEditorPreferences)).toHaveBeenCalledWith(
+      expect.objectContaining({ fontSize: 16 }),
+    );
+  });
+
+  it('WordWrapToggled_StoreUpdated', async () => {
+    vi.mocked(bridge.setEditorPreferences).mockClear();
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/editor/i));
+    const toggle = document.querySelector('.preferences-switch') as HTMLButtonElement | null;
+    expect(toggle).not.toBeNull();
+    await act(async () => {
+      toggle?.click();
+    });
+    expect(vi.mocked(bridge.setEditorPreferences)).toHaveBeenCalledWith(
+      expect.objectContaining({ wordWrap: true }),
+    );
+  });
+});
+
+describe('PreferencesPanel — discord WS messages (discord.config)', () => {
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
+
+  it('DiscordConfigWsMessage_FormPopulated', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^discord/i));
+
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
+      type: 'discord.config',
+      config: {
+        enabled: true,
+        botToken: '',
+        botTokenMasked: '',
+        guildId: 'guild-abc',
+        allowedUserIds: ['user-1', 'user-2'],
+        commandPrefix: '!',
+        controlChannelName: 'engine-control',
+        hasToken: false,
+      },
+      active: true,
+    });
+
+    expect(screen.getByDisplayValue('guild-abc')).toBeTruthy();
+    expect(screen.getByDisplayValue('user-1, user-2')).toBeTruthy();
+  });
+
+  it('DiscordConfigSavedWsMessage_SaveBadgeTriggered', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^discord/i));
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
+      type: 'discord.config.saved',
+      config: {
+        enabled: true,
+        botToken: '',
+        botTokenMasked: '***',
+        guildId: 'guild-abc',
+        allowedUserIds: [],
+        commandPrefix: '!',
+        controlChannelName: 'engine-control',
+        hasToken: true,
+      },
+      active: true,
+      warning: 'saved with warning',
+    });
+    expect(screen.getByText(/saved with warning/i)).toBeTruthy();
+  });
+
+  it('DiscordValidateResultSuccess_SuccessStateShown', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^discord/i));
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
+      type: 'discord.validate.result',
+      result: { ok: true, guildName: 'Guild Name', botTag: 'bot#1234', errors: [], warnings: [] },
+    });
+    expect(screen.getByText(/connection ok/i)).toBeTruthy();
+  });
+
+  it('DiscordValidateResultFailure_ErrorShown', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^discord/i));
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
+      type: 'discord.validate.result',
+      result: { ok: false, guildName: '', botTag: '', errors: ['invalid token'], warnings: [] },
+    });
+    expect(screen.getByText(/issues detected/i)).toBeTruthy();
+    expect(screen.getByText(/invalid token/i)).toBeTruthy();
+  });
+
+  it('DiscordValidateResultWithWarnings_WarningsListRendered', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^discord/i));
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
+      type: 'discord.validate.result',
+      result: { ok: true, guildName: 'MyGuild', botTag: 'bot#0001', errors: [], warnings: ['missing channel'] },
+    });
+    expect(screen.getByText(/missing channel/i)).toBeTruthy();
+  });
+
+  it('DiscordValidateResultWithInvite_InviteLinkRendered', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^discord/i));
+    vi.mocked(bridge.openExternal).mockClear();
+    vi.mocked(wsClient.send).mockClear();
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
+      type: 'discord.validate.result',
+      result: {
+        ok: false,
+        guildName: '',
+        botTag: 'engine-bot',
+        inviteUrl: 'https://discord.com/api/oauth2/authorize?client_id=123&permissions=8&scope=bot%20applications.commands',
+        errors: ['guild not found'],
+        warnings: [],
+      },
+    });
+    const inviteBtn = screen.getByRole('button', { name: /invite bot to server/i });
+    expect(inviteBtn).toBeTruthy();
+    expect(screen.getByRole('button', { name: /test connection/i })).toBeTruthy();
+    fireEvent.click(inviteBtn);
+    expect(vi.mocked(bridge.openExternal)).toHaveBeenCalledWith(expect.stringContaining('discord.com/api/oauth2/authorize'));
+    // No immediate validate is sent on invite click — polling watch handles that.
+    expect(vi.mocked(wsClient.send)).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'discord.validate' }));
+  });
+
+  it('DiscordValidateResultOk_TriggersAutoSaveNotDirectActiveSet', () => {
+    render(<PreferencesPanel />);
+    fireEvent.click(getTab(/^discord/i));
+    vi.mocked(wsClient.send).mockClear();
+    // Bot joins guild — validate returns ok with guildName.
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'discord.validate.result',
       result: {
         ok: true,
@@ -379,7 +650,7 @@ describe('PreferencesPanel — discord WS messages (discord.config)', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/^discord/i));
     vi.mocked(wsClient.send).mockClear();
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'discord.validate.result',
       result: {
         ok: false,
@@ -407,7 +678,7 @@ describe('PreferencesPanel — discord WS messages (discord.config)', () => {
     fireEvent.click(getTab(/^discord/i));
     vi.mocked(wsClient.send).mockClear();
 
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'discord.validate.result',
       result: {
         ok: false,
@@ -441,7 +712,7 @@ describe('PreferencesPanel — discord WS messages (discord.config)', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/^discord/i));
 
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'discord.validate.result',
       result: {
         ok: false,
@@ -459,7 +730,7 @@ describe('PreferencesPanel — discord WS messages (discord.config)', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/^discord/i));
 
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'discord.config',
       config: {
         enabled: true,
@@ -498,7 +769,7 @@ describe('PreferencesPanel — discord WS messages (discord.config)', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/^discord/i));
 
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'discord.config',
       config: {
         enabled: false,
@@ -524,7 +795,7 @@ describe('PreferencesPanel — discord WS messages (discord.config)', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/^discord/i));
 
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'discord.config.saved',
       config: {
         enabled: true,
@@ -547,7 +818,7 @@ describe('PreferencesPanel — discord WS messages (discord.config)', () => {
     fireEvent.click(getTab(/^discord/i));
     vi.mocked(wsClient.send).mockClear();
 
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'discord.config.saved',
       config: {
         enabled: false,
@@ -583,13 +854,25 @@ describe('PreferencesPanel — discord WS messages (discord.config)', () => {
 
   it('PreferencesPanel_onMessageGuard_nullMessageIsIgnored', () => {
     render(<PreferencesPanel />);
-    sendWsMessage(null);
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, null);
     expect(screen.getAllByText(/desktop services/i).length).toBeGreaterThan(0);
   });
 });
 
 describe('PreferencesPanel — Desktop Services section', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('LocalServerTokenAvailable_Shown', async () => {
     render(<PreferencesPanel />);
@@ -611,7 +894,19 @@ describe('PreferencesPanel — Desktop Services section', () => {
 });
 
 describe('PreferencesPanel — Machine Connections section', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('ConnectionsSection_MachineConnectionsPanelRendered', () => {
     render(<PreferencesPanel />);
@@ -621,7 +916,19 @@ describe('PreferencesPanel — Machine Connections section', () => {
 });
 
 describe('PreferencesPanel — SaveBadge rendering', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('SaveBadge appears in editor appearance when preferences saved', async () => {
     vi.mocked(bridge.setEditorPreferences).mockClear();
@@ -639,9 +946,22 @@ describe('PreferencesPanel — SaveBadge rendering', () => {
 });
 
 describe('PreferencesPanel — WS message ignored for other types', () => {
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
   it('UnrelatedWsMessages_Ignored', () => {
     render(<PreferencesPanel />);
-    sendWsMessage({ type: 'file.save', path: '/a.ts' });
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'file.save', path: '/a.ts' });
     expect(getTab(/desktop/i).getAttribute('aria-selected')).toBe('true');
   });
 });
@@ -660,7 +980,19 @@ describe('PreferencesPanel — jumpToSection via ref', () => {
 });
 
 describe('PreferencesPanel — bridge.get* with values', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('Mount_BridgeValuesPopulateInputs', async () => {
     vi.mocked(bridge.getGithubToken).mockResolvedValueOnce('ghp_test_token');
@@ -696,7 +1028,25 @@ describe('PreferencesPanel — bridge.get* with values', () => {
 });
 
 describe('PreferencesPanel — GitHub form saves', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+      githubUser: null,
+    });
+    // Reset github token and auth flow from store
+    useStore.setState({ 
+      githubToken: null,
+      githubAuthFlow: null,
+    });
+  });
 
   it('GithubTokenButtonClicked_TokenSaved', async () => {
     vi.mocked(bridge.setGithubToken).mockResolvedValue(true);
@@ -745,7 +1095,19 @@ describe('PreferencesPanel — GitHub form saves', () => {
 });
 
 describe('PreferencesPanel — Model Provider form saves', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('ProviderButtonClicked_ProviderSaved', async () => {
     vi.mocked(bridge.setModelProvider).mockResolvedValue(true);
@@ -824,7 +1186,19 @@ describe('PreferencesPanel — Model Provider form saves', () => {
 });
 
 describe('PreferencesPanel — Desktop service install/uninstall', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('InstallButtonClicked_ServiceInstalled', async () => {
     vi.mocked(bridge.installAgentService).mockResolvedValue('Service installed successfully');
@@ -854,7 +1228,19 @@ describe('PreferencesPanel — Desktop service install/uninstall', () => {
 });
 
 describe('PreferencesPanel — Discord form interactions', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('DiscordEnabledCheckbox_Changed', () => {
     render(<PreferencesPanel />);
@@ -929,7 +1315,7 @@ describe('PreferencesPanel — Discord form interactions', () => {
 
   it('DiscordConfigSavedWithWarning_WarningShown', () => {
     render(<PreferencesPanel />);
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'discord.config.saved',
       config: {
         enabled: true,
@@ -949,13 +1335,25 @@ describe('PreferencesPanel — Discord form interactions', () => {
 
   it('DiscordValidateResultNoResultField_Ignored', () => {
     render(<PreferencesPanel />);
-    sendWsMessage({ type: 'discord.validate.result' });
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'discord.validate.result' });
     expect(screen.queryByText(/success/i)).toBeNull();
   });
 });
 
 describe('PreferencesPanel — Editor form interactions', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('MarkdownViewModeChangedToPreview', async () => {
     render(<PreferencesPanel />);
@@ -972,7 +1370,19 @@ describe('PreferencesPanel — Editor form interactions', () => {
 });
 
 describe('PreferencesPanel — SaveBadge active state', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('SaveBadge shows Saved text when active=true', async () => {
     vi.mocked(bridge.setGithubToken).mockResolvedValue(true);
@@ -992,7 +1402,19 @@ describe('PreferencesPanel — SaveBadge active state', () => {
 });
 
 describe('PreferencesPanel — Editor Appearance additional controls', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('ResetDefaultsButton_EditorPreferencesReset', async () => {
     vi.mocked(bridge.setEditorPreferences).mockClear();
@@ -1043,7 +1465,19 @@ describe('PreferencesPanel — Editor Appearance additional controls', () => {
 // ── Repository Registry ───────────────────────────────────────────────────────
 
 describe('PreferencesPanel — repo registry navigation', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('ReposTab_Renders', () => {
     render(<PreferencesPanel />);
@@ -1066,12 +1500,24 @@ describe('PreferencesPanel — repo registry navigation', () => {
 });
 
 describe('PreferencesPanel — repo registry WS messages', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('RepoList_Message_PopulatesEntries', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/repos/i));
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'repo.list',
       entries: [
         { name: 'myrepo', localPath: '/home/user/myrepo', url: '' },
@@ -1084,8 +1530,8 @@ describe('PreferencesPanel — repo registry WS messages', () => {
   it('RepoAdded_Message_AppendsEntry', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/repos/i));
-    sendWsMessage({ type: 'repo.list', entries: [] });
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'repo.list', entries: [] });
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'repo.added',
       entry: { name: 'newrepo', localPath: '/tmp/newrepo', url: '' },
     });
@@ -1095,11 +1541,11 @@ describe('PreferencesPanel — repo registry WS messages', () => {
   it('RepoAdded_Duplicate_DoesNotDuplicate', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/repos/i));
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'repo.list',
       entries: [{ name: 'dup', localPath: '/tmp/dup', url: '' }],
     });
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'repo.added',
       entry: { name: 'dup', localPath: '/tmp/dup', url: '' },
     });
@@ -1109,12 +1555,12 @@ describe('PreferencesPanel — repo registry WS messages', () => {
   it('RepoRemoved_Message_RemovesEntry', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/repos/i));
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'repo.list',
       entries: [{ name: 'todelete', localPath: '/tmp/todelete', url: '' }],
     });
     expect(screen.getByText('todelete')).toBeTruthy();
-    sendWsMessage({ type: 'repo.removed', name: 'todelete' });
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'repo.removed', name: 'todelete' });
     expect(screen.queryByText('todelete')).toBeNull();
   });
 
@@ -1126,44 +1572,56 @@ describe('PreferencesPanel — repo registry WS messages', () => {
     fireEvent.change(input, { target: { value: '/tmp/new' } });
     fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
 
-    sendWsMessage({ type: 'error', code: 'REPO_ADD_ERROR', message: 'temporary failure' });
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'error', code: 'REPO_ADD_ERROR', message: 'temporary failure' });
     expect(screen.getByText('temporary failure')).toBeTruthy();
 
-    sendWsMessage({ type: 'repo.removed', name: 'missing' });
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'repo.removed', name: 'missing' });
     expect(screen.queryByText('temporary failure')).toBeNull();
   });
 
   it('RepoError_REPO_ADD_ERROR_ShowsMessage', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/repos/i));
-    sendWsMessage({ type: 'error', code: 'REPO_ADD_ERROR', message: 'clone failed' });
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'error', code: 'REPO_ADD_ERROR', message: 'clone failed' });
     expect(screen.getByText('clone failed')).toBeTruthy();
   });
 
   it('RepoError_REPO_REMOVE_ERROR_ShowsMessage', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/repos/i));
-    sendWsMessage({ type: 'error', code: 'REPO_REMOVE_ERROR', message: 'not found' });
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'error', code: 'REPO_REMOVE_ERROR', message: 'not found' });
     expect(screen.getByText('not found')).toBeTruthy();
   });
 
   it('RepoError_REPO_LIST_ERROR_ShowsMessage', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/repos/i));
-    sendWsMessage({ type: 'error', code: 'REPO_LIST_ERROR', message: 'disk error' });
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'error', code: 'REPO_LIST_ERROR', message: 'disk error' });
     expect(screen.getByText('disk error')).toBeTruthy();
   });
 
   it('RepoError_WithoutRepoErrorCode_DoesNotShowError', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/repos/i));
-    sendWsMessage({ type: 'error' });
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'error' });
     expect(screen.queryByText('Unknown error')).toBeNull();
   });
 });
 
 describe('PreferencesPanel — repo registry interactions', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('AddButton_Disabled_WhenInputEmpty', () => {
     render(<PreferencesPanel />);
@@ -1187,7 +1645,7 @@ describe('PreferencesPanel — repo registry interactions', () => {
     vi.mocked(wsClient.send).mockClear();
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/repos/i));
-    sendWsMessage({
+    sendWsMessage(wsCallbacks.getCapturedWsCallback, {
       type: 'repo.list',
       entries: [{ name: 'alpha', localPath: '/tmp/alpha', url: '' }],
     });
@@ -1204,6 +1662,13 @@ describe('PreferencesPanel — repo registry interactions', () => {
 });
 
 describe('PreferencesPanel — GitHub auth flow UI', () => {
+  let useStore: typeof import('../store/index.js').useStore;
+
+  beforeEach(async () => {
+    const storeModule = await import('../store/index.js');
+    useStore = storeModule.useStore;
+  });
+
   it('NoToken_NoFlow_LoginButtonShown', () => {
     useStore.setState({ githubToken: null, githubAuthFlow: null });
     render(<PreferencesPanel />);
@@ -1250,7 +1715,19 @@ describe('PreferencesPanel — GitHub auth flow UI', () => {
 });
 
 describe('PreferencesPanel — clones dir field', () => {
-  beforeEach(setupStore);
+  beforeEach(() => {
+    setupStoreForUITests({
+      editorPreferences: {
+        fontFamily: 'default',
+        fontSize: 13,
+        lineHeight: 1.5,
+        tabSize: 2,
+        markdownViewMode: 'text',
+        wordWrap: false,
+      },
+      activeSession: null,
+    });
+  });
 
   it('LoadsClonesDir_PopulatesInput', async () => {
     vi.mocked(bridge.getClonesDir).mockResolvedValueOnce('/saved/clones');

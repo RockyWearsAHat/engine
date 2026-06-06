@@ -224,46 +224,6 @@ type CapturedAIInvocation struct {
 	OllamaURL   string
 }
 
-// setupAIChatCapture sets up runAIChat to capture invocations into the provided channel.
-// Returns the original runAIChat function to restore in cleanup.
-func setupAIChatCapture(invocations chan<- CapturedAIInvocation) func(*ai.ChatContext, string) {
-	original := runAIChat
-	runAIChat = func(ctx *ai.ChatContext, userMessage string) {
-		tabs := ctx.GetOpenTabs()
-		tabCopy := append([]ai.TabInfo(nil), tabs...)
-		invocations <- CapturedAIInvocation{
-			ProjectPath: ctx.ProjectPath,
-			SessionID:   ctx.SessionID,
-			Message:     userMessage,
-			OpenTabs:    tabCopy,
-			Provider:    os.Getenv("ENGINE_MODEL_PROVIDER"),
-			Model:       os.Getenv("ENGINE_MODEL"),
-			OllamaURL:   os.Getenv("OLLAMA_BASE_URL"),
-		}
-	}
-	return original
-}
-
-// setupAIOrchestratorRunDefault sets up runAutonomousProject with interactive mode.
-// Returns the original runAutonomousProject function to restore in cleanup.
-func setupAIOrchestratorRunDefault() func(ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
-	original := runAutonomousProject
-	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
-		if cfg.InteractiveChat != nil {
-			cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
-		}
-		return &ai.OrchestrationState{Conversational: true}, nil
-	}
-	return original
-}
-
-// setupAIChatFunc sets up runAIChat with a custom handler and returns the original.
-func setupAIChatFunc(handler func(*ai.ChatContext, string)) func(*ai.ChatContext, string) {
-	original := runAIChat
-	runAIChat = handler
-	return original
-}
-
 // setupAIChatAndOrchestratorScoped sets up both runAIChat and runAutonomousProject with provided handlers.
 // Returns a cleanup function that restores the original functions when called.
 // Designed for use with defer or t.Cleanup().
@@ -314,63 +274,6 @@ func testFileOperationError(t *testing.T, conn *websocket.Conn, opType string) {
 	}
 }
 
-// setupMockHTTPClient replaces wsHTTPClient with a fixed transport and returns cleanup function.
-// Useful for mocking GitHub API responses.
-func setupMockHTTPClient(t *testing.T, statusCode int, body string) func() {
-	t.Helper()
-	original := wsHTTPClient
-	wsHTTPClient = &http.Client{
-		Transport: &fixedHTTPTransport{statusCode: statusCode, body: body},
-	}
-	return func() { wsHTTPClient = original }
-}
-
-// setupChatFlowWithApproval sets up a chat flow that requests approval.
-// Returns projectDir, connection, cleanup, and channels for result/error reporting.
-// The approval request message will be read automatically.
-func setupChatFlowWithApproval(t *testing.T, chatHandler func(*ai.ChatContext, string)) (string, *websocket.Conn, func(), <-chan bool, <-chan error) {
-	t.Helper()
-
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
-
-	allowedResult := make(chan bool, 1)
-	errResult := make(chan error, 1)
-
-	defer setupAIChatAndOrchestratorScoped(
-		chatHandler,
-		func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
-			if cfg.InteractiveChat != nil {
-				cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
-			}
-			return &ai.OrchestrationState{Conversational: true}, nil
-		},
-	)()
-
-	// Project setup
-	writeWSMessage(t, conn, map[string]any{
-		"type": "project.open",
-		"path": projectDir,
-	})
-	sessionMsg := readWSMessageOfType(t, conn, "session.created")
-	sessionID := sessionMsg["session"].(map[string]any)["id"].(string)
-
-	// Trigger chat with approval request
-	writeWSMessage(t, conn, map[string]any{
-		"type":      "chat",
-		"sessionId": sessionID,
-		"content":   "request approval",
-	})
-	readWSMessageOfType(t, conn, "chat.started")
-
-	// Read the approval request
-	approvalMsg := readWSMessageOfType(t, conn, "approval.request")
-	req, _ := approvalMsg["request"].(map[string]any)
-	_, _ = req["id"].(string) // approval ID exists but caller reads from msg directly
-
-	return projectDir, conn, cleanup, allowedResult, errResult
-}
-
 // ─── Consolidated test flow helpers (DRY) ────────────────────────────────────
 
 // setupWSProjectAndConnection consolidates the common pattern of creating a test project and opening a websocket connection.
@@ -378,17 +281,6 @@ func setupChatFlowWithApproval(t *testing.T, chatHandler func(*ai.ChatContext, s
 func setupWSProjectAndConnection(t *testing.T) (string, *websocket.Conn, func()) {
 	t.Helper()
 	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
-	return projectDir, conn, cleanup
-}
-
-// setupWSProjectWithNullBridgeAndConnection sets up a test project, clears Discord bridge, and opens connection.
-// Consolidates: setupWSProject + SetDiscordBridge(nil) + openWSTestConnection pattern.
-// Returns projectDir, connection, and cleanup function.
-func setupWSProjectWithNullBridgeAndConnection(t *testing.T) (string, *websocket.Conn, func()) {
-	t.Helper()
-	projectDir := setupWSProject(t)
-	SetDiscordBridge(nil)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	return projectDir, conn, cleanup
 }
@@ -423,39 +315,22 @@ func testSendAndReadMessage(t *testing.T, conn *websocket.Conn, payload map[stri
 	return readWSMessageOfType(t, conn, expectedResponseType)
 }
 
-// testDiscordFeatureWithSetup consolidates the pattern: setup bridge, project, connection, send message, receive response.
-// Caller provides the message payload and expected response type.
-// Returns projectDir, connection, cleanup, and the response message.
-func testDiscordFeatureWithSetup(t *testing.T, bridge DiscordBridge, payload map[string]any, expectedResponseType string) (string, *websocket.Conn, func(), map[string]any) {
-	t.Helper()
-	SetDiscordBridge(bridge)
-	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
-	response := sendAndReceive(t, conn, payload, expectedResponseType)
-	return projectDir, conn, cleanup, response
-}
-
 // testGitHubAPIWithMockHTTP consolidates the pattern: setup mock HTTP client, project, connection, send message, receive response.
 // Caller provides HTTP status code, response body, message payload, and expected response type.
 // Returns projectDir, connection, cleanup, and the response message.
 func testGitHubAPIWithMockHTTP(t *testing.T, statusCode int, responseBody string, payload map[string]any, expectedResponseType string) (string, *websocket.Conn, func(), map[string]any) {
 	t.Helper()
-	httpCleanup := setupMockHTTPClient(t, statusCode, responseBody)
+	original := wsHTTPClient
+	wsHTTPClient = &http.Client{
+		Transport: &fixedHTTPTransport{statusCode: statusCode, body: responseBody},
+	}
 	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
 	response := sendAndReceive(t, conn, payload, expectedResponseType)
 	fullCleanup := func() {
 		cleanup()
-		httpCleanup()
+		wsHTTPClient = original
 	}
 	return projectDir, conn, fullCleanup, response
-}
-
-// testSimpleWSMessageFlow sends a message and reads a response of the expected type.
-// Useful for tests that just need to exercise a simple request-response pattern.
-func testSimpleWSMessageFlow(t *testing.T, payload map[string]any, expectedResponseType string) map[string]any {
-	t.Helper()
-	_, conn, cleanup := setupWSProjectAndConnection(t)
-	defer cleanup()
-	return sendAndReceive(t, conn, payload, expectedResponseType)
 }
 
 // setupQualityScanFunc sets up qualityScanWithProgressFn with a custom handler and returns cleanup.
@@ -593,19 +468,6 @@ func readChatChunksFinal(t *testing.T, conn *websocket.Conn) []map[string]any {
 	return chunks
 }
 
-// testDiscordFeatureFlow consolidates: setup bridge → project → connection → send message → receive response.
-// Optionally verify response code if expectedErrorCode is non-empty.
-func testDiscordFeatureFlow(t *testing.T, bridge DiscordBridge, payload map[string]any, expectedResponseType, expectedErrorCode string) (string, *websocket.Conn, func(), map[string]any) {
-	t.Helper()
-	defer setupDiscordBridgeScopedTest(t, bridge)()
-	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
-	response := sendAndReceive(t, conn, payload, expectedResponseType)
-	if expectedErrorCode != "" {
-		assertErrorCode(t, response, expectedErrorCode)
-	}
-	return projectDir, conn, cleanup, response
-}
-
 // ─── Authentication and connection helpers ──────────────────────────────────
 
 // testAuthConnectionRejectsWithoutToken verifies websocket rejects connections without valid auth token.
@@ -614,53 +476,19 @@ func testAuthConnectionRejectsWithoutToken(t *testing.T, tokenValue string) {
 	t.Helper()
 	projectDir := setupWSProject(t)
 	t.Setenv("ENGINE_LOCAL_WS_TOKEN", tokenValue)
-	_, err := openWSTestConnectionWithToken(t, projectDir, "")
-	if err == nil {
-		t.Fatal("expected connection rejection without token")
-	}
-}
-
-// openWSAuthenticatedConnection sets up a websocket connection with auth token and validates response.
-// Fails test if connection succeeds when it shouldn't or fails when it should succeed.
-// Returns connection and cleanup function (or nil connection if expectedStatusCode is not 200).
-func openWSAuthenticatedConnection(t *testing.T, projectDir, token string, expectedStatusCode int) (*websocket.Conn, func()) {
-	t.Helper()
 
 	hub := NewHub(projectDir)
 	server := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
+	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	if token != "" {
-		wsURL += "?token=" + url.QueryEscape(token)
-	}
-
-	conn, response, err := websocket.DefaultDialer.Dial(wsURL, nil)
-
-	cleanup := func() {
-		if conn != nil {
-			conn.Close() //nolint:errcheck
-		}
-		server.Close()
-	}
-
-	if expectedStatusCode == http.StatusOK {
-		if err != nil {
-			cleanup()
-			t.Fatalf("expected successful websocket connection with token %q, got error: %v", token, err)
-		}
-		return conn, cleanup
-	}
-
-	// Non-200 expected: connection should fail with specific status
+	_, response, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err == nil {
-		cleanup()
-		t.Fatalf("expected connection to fail with status %d, but connection succeeded", expectedStatusCode)
+		t.Fatal("expected websocket dial to fail without auth token")
 	}
-	if response == nil || response.StatusCode != expectedStatusCode {
-		cleanup()
-		t.Fatalf("expected status code %d, got %#v", expectedStatusCode, response)
+	if response == nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 unauthorized response, got %#v", response)
 	}
-	return nil, cleanup
 }
 
 // ─── HTTP redirect transport for GitHub API mocking ─────────────────────────
@@ -680,20 +508,6 @@ func (t *wsRedirectTransport) RoundTrip(r *http.Request) (*http.Response, error)
 	return t.real.RoundTrip(r2)
 }
 
-// setupHTTPServerAndClient configures wsHTTPClient to redirect to the given server.
-// Returns a cleanup function that restores the original client.
-// Consolidates: create server + redirect transport + restore pattern.
-func setupHTTPServerAndClient(t *testing.T, server *httptest.Server) func() {
-	t.Helper()
-	original := wsHTTPClient
-	wsHTTPClient = &http.Client{
-		Transport: &wsRedirectTransport{target: server.URL, real: http.DefaultTransport},
-	}
-	return func() {
-		wsHTTPClient = original
-	}
-}
-
 // setupDiscordBridgeAndProjectForTest consolidates: setupDiscordBridgeScopedTest + setupWSProjectAndConnection.
 // Caller provides bridge, and returns projectDir, connection, and cleanup function.
 func setupDiscordBridgeAndProjectForTest(t *testing.T, bridge DiscordBridge) (string, *websocket.Conn, func()) {
@@ -706,18 +520,32 @@ func setupDiscordBridgeAndProjectForTest(t *testing.T, bridge DiscordBridge) (st
 	}
 }
 
+// setupWSProjectWithNullBridgeAndConnection opens a ws test connection with a nil discord bridge.
+// This preserves legacy test call sites that verify DISCORD_UNAVAILABLE paths.
+func setupWSProjectWithNullBridgeAndConnection(t *testing.T) (string, *websocket.Conn, func()) {
+	t.Helper()
+	SetDiscordBridge(nil)
+	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
+	return projectDir, conn, func() {
+		cleanup()
+		SetDiscordBridge(nil)
+	}
+}
+
 // setupGitHubHTTPMock creates a test HTTP server with the given response and redirects wsHTTPClient to it.
 // Returns the server and cleanup function (which closes server and restores original client).
-// Consolidates: httptest.NewServer + setupHTTPServerAndClient pattern.
 func setupGitHubHTTPMock(t *testing.T, statusCode int, body string) (*httptest.Server, func()) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(statusCode)
 		w.Write([]byte(body)) //nolint:errcheck
 	}))
-	clientCleanup := setupHTTPServerAndClient(t, server)
+	original := wsHTTPClient
+	wsHTTPClient = &http.Client{
+		Transport: &wsRedirectTransport{target: server.URL, real: http.DefaultTransport},
+	}
 	return server, func() {
-		clientCleanup()
+		wsHTTPClient = original
 		server.Close()
 	}
 }

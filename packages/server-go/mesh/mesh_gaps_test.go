@@ -14,7 +14,8 @@ import (
 
 // ── config.go gaps ────────────────────────────────────────────────────────────
 
-// TestLoadConfig_EmptyPath_UsesDefault tests that LoadConfig uses DefaultConfigPath when path is empty.
+// TestLoadConfig_EmptyPath_UsesDefault persists config first, then verifies the
+// empty-path load path resolves the default location back to that saved config.
 func TestLoadConfig_EmptyPath_UsesDefault(t *testing.T) {
 	tmp := t.TempDir()
 	cfgPath := filepath.Join(tmp, "mesh.json")
@@ -42,7 +43,8 @@ func TestLoadConfig_BadJSON_ReturnsError(t *testing.T) {
 	}
 }
 
-// TestLoadConfig_NonExistentError_NonErrNotExist tests LoadConfig with permission errors (not just missing file).
+// TestLoadConfig_NonExistentError_NonErrNotExist intentionally writes an unreadable
+// file and verifies LoadConfig surfaces the read failure instead of a not-found path.
 func TestLoadConfig_NonExistentError_NonErrNotExist(t *testing.T) {
 	// Pass a path whose *parent* does not exist so os.ReadFile gives an error
 	// that is NOT os.ErrNotExist at the file level – it will be a path error
@@ -61,7 +63,8 @@ func TestLoadConfig_NonExistentError_NonErrNotExist(t *testing.T) {
 	}
 }
 
-// TestLoadConfig_EmptyListenAddr_Defaults tests that LoadConfig applies default listen address.
+// TestLoadConfig_EmptyListenAddr_Defaults writes a config missing listenAddr and
+// verifies LoadConfig mutates the loaded result to the default mesh listener.
 func TestLoadConfig_EmptyListenAddr_Defaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mesh.json")
 	os.WriteFile(path, []byte(`{"selfName":"host"}`), 0o600) //nolint:errcheck
@@ -203,15 +206,12 @@ func TestHandleExec_BadJSON(t *testing.T) {
 
 // TestHandleExec_EmptyCommand tests that /mesh/exec returns 400 for empty commands.
 func TestHandleExec_EmptyCommand(t *testing.T) {
-	ts := newMeshServer(t, defaultMeshTestConfig())
-	body := marshalExecRequest("")
-	doSignedRequestAndClose(t, ts, "/mesh/exec", http.MethodPost, testSecret, testClientName, body, http.StatusBadRequest)
+	doExecRequestAndAssertStatus(t, newDefaultMeshServerWithTestConfig(t), "", http.StatusBadRequest)
 }
 
 // TestHandleExec_WithCwdAndEnv tests that /mesh/exec executes commands with specified working directory and environment.
 func TestHandleExec_WithCwdAndEnv(t *testing.T) {
-	ts := newMeshServer(t, defaultMeshTestConfig())
-
+	ts := newDefaultMeshServerWithTestConfig(t)
 	result := doSignedExecFullAndDecode(t, ts, "echo", t.TempDir(), []string{"MY_VAR=test"}, []string{"hello"})
 	if result.ExitCode != 0 {
 		t.Errorf("exit code = %d, want 0", result.ExitCode)
@@ -220,9 +220,7 @@ func TestHandleExec_WithCwdAndEnv(t *testing.T) {
 
 // TestHandleExec_ExitError tests that /mesh/exec captures non-zero exit codes.
 func TestHandleExec_ExitError(t *testing.T) {
-	ts := newMeshServer(t, defaultMeshTestConfig())
-
-	result := doSignedExecRequestAndDecode(t, ts, "false")
+	result := doExecRequestAndAssertStatus(t, newDefaultMeshServerWithTestConfig(t), "false", http.StatusOK)
 	if result.ExitCode == 0 {
 		t.Error("expected non-zero exit code from 'false'")
 	}
@@ -230,9 +228,7 @@ func TestHandleExec_ExitError(t *testing.T) {
 
 // TestHandleExec_NonExistentCommand tests that /mesh/exec reports errors for missing executables.
 func TestHandleExec_NonExistentCommand(t *testing.T) {
-	ts := newMeshServer(t, defaultMeshTestConfig())
-
-	result := doSignedExecRequestAndDecode(t, ts, "/no/such/binary/xyzzy")
+	result := doExecRequestAndAssertStatus(t, newDefaultMeshServerWithTestConfig(t), "/no/such/binary/xyzzy", http.StatusOK)
 	if result.ExitCode == 0 {
 		t.Error("expected non-zero exit for non-existent command")
 	}
@@ -258,7 +254,6 @@ func TestHandleInference_EmptyPath(t *testing.T) {
 func TestHandleInference_UpstreamConnectionError(t *testing.T) {
 	// Point to a port that's almost certainly not listening.
 	ts := newMeshServer(t, newTestConfigWithOllamaURL(testOllamaURL404))
-
 	body := marshalInferenceRequest("/v1/chat", "", nil)
 	resp := doSignedRequest(t, ts, "/mesh/inference", http.MethodPost, testSecret, testClientName, body)
 	defer resp.Body.Close()
@@ -279,11 +274,12 @@ func TestHandleInference_WithExplicitMethod(t *testing.T) {
 		w.Write([]byte(`{"ok":true}`)) //nolint:errcheck
 	}))
 	defer ollama.Close()
-
 	ts := newMeshServer(t, newTestConfigWithOllamaURL(ollama.URL))
-
 	body := marshalInferenceRequest("/v1/chat", "get", nil)
-	_ = doSignedInferenceAndDecode(t, ts, "/v1/chat", "get", body)
+	result := doSignedInferenceAndDecode(t, ts, "/v1/chat", "get", body)
+	if result == nil {
+		t.Fatal("expected inference decode result")
+	}
 	if upstreamMethod != "GET" {
 		t.Errorf("upstream method = %q, want GET", upstreamMethod)
 	}

@@ -281,6 +281,8 @@ mod tests {
         let prefs = make_prefs(&default_editor_font_family(), 13, 1.6, 3, false);
         apply_editor_preferences(&mut cfg, prefs);
         assert_eq!(cfg.editor_tab_size, 2);
+
+        default_project_path_from_prefers_home();
     }
 
     #[allow(dead_code)]
@@ -291,6 +293,12 @@ mod tests {
             Some(PathBuf::from("/tmp/current")),
         );
         assert_eq!(result, "/tmp/home");
+
+        default_project_path_from_uses_current_dir_without_home();
+        default_project_path_from_falls_back_to_dot();
+        project_path_for_server_with_env_prefers_non_empty_env();
+        project_path_for_server_with_env_uses_config_when_env_blank();
+        project_path_for_server_with_env_falls_back_when_no_env_or_config();
     }
 
     #[allow(dead_code)]

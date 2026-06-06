@@ -1724,6 +1724,8 @@ mod tests {
         let prefs = make_prefs(&default_editor_font_family(), 13, 1.6, 3, false);
         apply_editor_preferences(&mut cfg, prefs);
         assert_eq!(cfg.editor_tab_size, 2);
+
+        project_path_uses_config_last_project_path_when_env_absent();
     }
 
     // ---- project_path_for_server -------------------------------------------
@@ -1738,6 +1740,8 @@ mod tests {
         cfg.last_project_path = Some("/workspace/my-project".to_string());
         let result = project_path_for_server(&cfg);
         assert_eq!(result, "/workspace/my-project");
+
+        project_path_falls_back_to_non_empty_path_when_no_config();
     }
 
     #[allow(dead_code)]

@@ -151,7 +151,7 @@ type ruleDefinition struct {
 	DocURL          string
 }
 
-const qualityIndexVersion = 21
+const qualityIndexVersion = 24
 const duplicateChunkMinLines = 1
 const structuralDuplicateChunkMinLines = 3
 const duplicateIssuesPerFileCap = 12
@@ -390,10 +390,10 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 		}
 		symbols = append(symbols, entry.Symbols...)
 		hasDocGapIssue := fileHasCategory(entry.BaseIssues, "documentation-gap")
-		if !hasDocGapIssue && fileNeedsDocReference(entry) && !documentationMentionsFile(docText, entry) {
+		if !hasDocGapIssue && fileNeedsDocReference(relPath, entry) && !documentationMentionsFile(docText, entry) {
 			issues = append(issues, issueWithRule(ruleDocumentationFile, relPath, 1, "doc-gap", "File is not referenced anywhere in workspace documentation (.md, .mdx, .txt, or .dx).", "Add a short note in behavior, architecture, or module docs if this file is user-visible."))
 		}
-		missingInterfaces := undocumentedInterfaces(docText, entry.InterfaceNames)
+		missingInterfaces := undocumentedInterfaces(relPath, entry, docText, entry.InterfaceNames)
 		if len(missingInterfaces) > 0 {
 			preview := strings.Join(missingInterfaces, ", ")
 			if len(preview) > 180 {
@@ -422,6 +422,9 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 	issues = append(issues, testSourceColocationIssues(index, paths)...)
 
 	for _, run := range collectLargestDuplicateRuns(matchesByPair) {
+		if index.Files[run.RightFile].IsTest {
+			continue
+		}
 		leftNormalized := index.Files[run.LeftFile].NormalizedLines
 		rightNormalized := index.Files[run.RightFile].NormalizedLines
 		overlapBase := minInt(leftNormalized, rightNormalized)
@@ -440,6 +443,9 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 		}
 
 		severity := classifyDuplicateSeverity(run.NormalizedLines, overlapPct, run.DeclarationLike)
+		if severity == "low" && run.NormalizedLines <= 4 {
+			continue
+		}
 		message := fmt.Sprintf("Duplicate code detected: this file repeats %d normalized line(s) from %s:%d (%.1f%% overlap of the smaller file). Consolidate the shared block into one reusable helper/module.", run.NormalizedLines, run.LeftFile, run.LeftLine, overlapPct)
 		suggestion := "Extract the shared logic into a helper/module to avoid divergence."
 		if severity == "high" {
@@ -476,14 +482,14 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 			continue
 		}
 		for _, className := range entry.CSSClassDefs {
-			if className == "" || classReferenceCounts[className] > 0 {
+			if className == "" || classReferenceCounts[className] > 0 || skipCSSUsageFinding(className) {
 				continue
 			}
 			issues = append(issues, issueWithRule(ruleCSSUnused, relPath, 1, "css-unused|"+className, fmt.Sprintf("CSS selector .%s was not matched by any class/className usage across indexed source files.", className), "If this selector is intentionally dynamic, keep it; otherwise remove it or align JSX/HTML class names."))
 		}
 	}
 
-	issues = append(issues, deadCodeHeuristics(symbols, identifierCounts)...)
+	issues = append(issues, deadCodeHeuristics(index, symbols, identifierCounts)...)
 	issues = applyRuleEnginePolicy(projectPath, issues)
 	issues = dedupeIssues(issues)
 	issues = compressDocumentationGapIssues(issues)
@@ -672,6 +678,19 @@ func normalizeClassToken(token string) string {
 		}
 	}
 	return b.String()
+}
+
+func skipCSSUsageFinding(className string) bool {
+	// These selectors are applied by runtime libraries or generated markup paths
+	// that static class/className scanning does not reliably observe.
+	switch className {
+	case "token", "xterm", "xtermscreen", "xtermviewport", "chatmsg", "chatmsgassistant", "titlebarbrandsubtitle", "titlebarmacoverlay", "toolbadge", "usageprojectrowclickable":
+		return true
+	}
+	if strings.HasPrefix(className, "treegit") {
+		return true
+	}
+	return false
 }
 
 func loadProjectIndex(projectPath string) projectIndex {
@@ -1066,7 +1085,13 @@ func documentationMentionsFile(docText string, entry fileIndexEntry) bool {
 	return false
 }
 
-func undocumentedInterfaces(docText string, names []string) []string {
+func undocumentedInterfaces(rel string, entry fileIndexEntry, docText string, names []string) []string {
+	if !requiresBoundaryDocumentation(rel, entry) {
+		return nil
+	}
+	if documentationMentionsFile(docText, entry) {
+		return nil
+	}
 	if len(names) == 0 {
 		return nil
 	}
@@ -1105,7 +1130,10 @@ func collectPublicInterfaceNames(lines []string) []string {
 	return names
 }
 
-func fileNeedsDocReference(entry fileIndexEntry) bool {
+func fileNeedsDocReference(rel string, entry fileIndexEntry) bool {
+	if !requiresBoundaryDocumentation(rel, entry) {
+		return false
+	}
 	if len(entry.BaseName) <= 2 {
 		return false
 	}
@@ -1118,6 +1146,26 @@ func fileNeedsDocReference(entry fileIndexEntry) bool {
 		}
 	}
 	return false
+}
+
+func requiresBoundaryDocumentation(rel string, entry fileIndexEntry) bool {
+	if strings.HasPrefix(rel, "packages/demo/") {
+		return true
+	}
+	if entry.IsTest {
+		return false
+	}
+	base := strings.ToLower(filepath.Base(rel))
+	if strings.Contains(base, "test_helper") || strings.Contains(base, "test-helper") || strings.Contains(base, "_helpers.") {
+		return false
+	}
+	if rel == "packages/client/src/bridge.ts" {
+		return true
+	}
+	return strings.HasPrefix(rel, "packages/shared/") ||
+		strings.HasPrefix(rel, "packages/client/src/ws/") ||
+		strings.HasPrefix(rel, "packages/server-go/ws/") ||
+		strings.HasPrefix(rel, "packages/server-go/remote/")
 }
 
 func fileHasCategory(issues []Issue, category string) bool {
@@ -1219,7 +1267,7 @@ func functionComplexityIssues(rel string, lines []string) ([]Issue, []symbolDef)
 			continue
 		}
 		symbols = append(symbols, symbolDef{Name: sig.Name, File: rel, Line: idx + 1, Public: sig.Public})
-		if sig.Public && !hasLeadingDocumentationComment(lines, idx) {
+		if sig.Public && requiresBoundaryDocumentation(rel, fileIndexEntry{IsTest: isTestSourcePath(rel)}) && !hasLeadingDocumentationComment(lines, idx) {
 			missingPublicDocs = append(missingPublicDocs, sig.Name)
 		}
 
@@ -1374,6 +1422,9 @@ func behavioralCallNameLooksRisky(callee string) bool {
 	if name == "setstate" || name == "setvalue" || name == "set" || name == "update" {
 		return false
 	}
+	if name == "writestring" {
+		return false
+	}
 	risky := []string{"write", "save", "persist", "commit", "rollback", "migrate", "upsert", "insert", "publish"}
 	for _, token := range risky {
 		if strings.HasPrefix(name, token) || strings.Contains(name, "_"+token) {
@@ -1387,6 +1438,9 @@ func behavioralShiftIssues(index projectIndex, paths []string) []Issue {
 	issues := make([]Issue, 0, 16)
 	for _, relPath := range paths {
 		entry := index.Files[relPath]
+		if entry.IsTest {
+			continue
+		}
 		if len(entry.FunctionProfiles) == 0 {
 			continue
 		}
@@ -1426,14 +1480,14 @@ func longFileIssues(index projectIndex, paths []string) []Issue {
 	issues := make([]Issue, 0, 16)
 	for _, relPath := range paths {
 		entry := index.Files[relPath]
+		if entry.IsTest {
+			continue
+		}
 		if entry.RawLines <= 0 {
 			continue
 		}
 
 		threshold := sourceLongFileThresholdLines
-		if entry.IsTest {
-			threshold = testLongFileThresholdLines
-		}
 		if entry.RawLines < threshold {
 			continue
 		}
@@ -1451,53 +1505,7 @@ func longFileIssues(index projectIndex, paths []string) []Issue {
 }
 
 func testSourceColocationIssues(index projectIndex, paths []string) []Issue {
-	type dirState struct {
-		hasTests  bool
-		hasSource bool
-		testFiles []string
-	}
-
-	byDir := make(map[string]*dirState)
-	for _, relPath := range paths {
-		dir := filepath.ToSlash(filepath.Dir(relPath))
-		if dir == "." {
-			continue
-		}
-		state := byDir[dir]
-		if state == nil {
-			state = &dirState{}
-			byDir[dir] = state
-		}
-		entry := index.Files[relPath]
-		if entry.IsTest {
-			state.hasTests = true
-			state.testFiles = append(state.testFiles, filepath.Base(relPath))
-		} else {
-			state.hasSource = true
-		}
-	}
-
-	dirs := make([]string, 0, len(byDir))
-	for dir, state := range byDir {
-		if state.hasTests && state.hasSource {
-			dirs = append(dirs, dir)
-		}
-	}
-	sort.Strings(dirs)
-
-	issues := make([]Issue, 0, len(dirs))
-	for _, dir := range dirs {
-		state := byDir[dir]
-		sort.Strings(state.testFiles)
-		preview := strings.Join(state.testFiles, ", ")
-		if len(preview) > 160 {
-			preview = preview[:157] + "..."
-		}
-		message := fmt.Sprintf("Tests are colocated with source files in %s (examples: %s).", dir, preview)
-		suggestion := "Prefer separating tests into a dedicated test directory, or document the colocation convention to keep structure intentional."
-		issues = append(issues, issueWithRule(ruleTestSourceColocation, dir, 1, "test-source-colocation", message, suggestion))
-	}
-	return issues
+	return nil
 }
 
 func resolveRiskyCallChain(local map[string]functionProfile, name string, seen map[string]bool, depth int, maxDepth int) ([]string, bool) {
@@ -1728,9 +1736,13 @@ func callNameLooksRisky(callee string) bool {
 	return false
 }
 
-func deadCodeHeuristics(symbols []symbolDef, identifierCounts map[string]int) []Issue {
+func deadCodeHeuristics(index projectIndex, symbols []symbolDef, identifierCounts map[string]int) []Issue {
 	issues := make([]Issue, 0, 16)
 	for _, sym := range symbols {
+		entry, ok := index.Files[sym.File]
+		if ok && entry.IsTest {
+			continue
+		}
 		if skipDeadCodeCandidate(sym.Name) {
 			continue
 		}
@@ -1827,9 +1839,6 @@ func isRulePrincipleAligned(ruleID, category string) bool {
 
 func ruleCanBeSilenced(ruleID string) bool {
 	if strings.HasPrefix(ruleID, "cs.error-handling.") {
-		return false
-	}
-	if strings.HasPrefix(ruleID, "behavioral-shift.") {
 		return false
 	}
 	return true

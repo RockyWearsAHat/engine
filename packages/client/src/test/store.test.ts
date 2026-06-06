@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useStore } from '../store/index.js';
 import { resetStoreForTests } from './store-test-helpers.js';
+import { clearWsMocks } from './test-helpers.js';
 
 // ─── Mock wsClient ────────────────────────────────────────────────────────────
 // Must be hoisted so the mock is in place before the store module is imported.
@@ -28,7 +29,7 @@ import { wsClient } from '../ws/client.js';
 
 beforeEach(() => {
   resetStoreForTests();
-  vi.mocked(wsClient.send).mockClear();
+  clearWsMocks(wsClient);
 });
 
 afterEach(() => {
