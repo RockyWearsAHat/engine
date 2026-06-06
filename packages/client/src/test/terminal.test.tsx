@@ -1,30 +1,36 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { useStore } from '../store/index.js';
+import { sendWsMessage, setupStoreForUITests, createWsClientMockFactory } from './test-helpers.js';
 
-let capturedWsHandler: ((msg: unknown) => void) | null = null;
-const { sendMock, writeMock, openMock, disposeMock, onDataMock } = vi.hoisted(() => ({
-  sendMock: vi.fn(),
-  writeMock: vi.fn(),
-  openMock: vi.fn(),
-  disposeMock: vi.fn(),
-  onDataMock: vi.fn((cb: (data: string) => void) => {
+// ── Terminal & xterm mocks with all handlers ─────────────────────────────────
+
+const { sendMock, writeMock, openMock, disposeMock, onDataMock, fitMock, proposeDimensionsMock, wsCallbacks, mockDef: wsMockDef } = vi.hoisted(() => {
+  const { wsCallbacks: wsCallbacksBase, mockDef: baseWsMock } = createWsClientMockFactory();
+
+  const sendMock = vi.fn();
+  const writeMock = vi.fn();
+  const openMock = vi.fn();
+  const disposeMock = vi.fn();
+  const onDataMock = vi.fn((cb: (data: string) => void) => {
     void cb;
     return { dispose: vi.fn() };
-  }),
-}));
+  });
+  const fitMock = vi.fn();
+  const proposeDimensionsMock = vi.fn(() => ({ cols: 80, rows: 24 }));
 
-vi.mock('../ws/client.js', () => ({
-  wsClient: {
-    send: sendMock,
-    onMessage: vi.fn((cb: (msg: unknown) => void) => {
-      capturedWsHandler = cb;
-      return () => {
-        capturedWsHandler = null;
-      };
-    }),
-  },
-}));
+  const mockDef = {
+    wsClient: {
+      ...baseWsMock.wsClient,
+      send: sendMock,
+    },
+  };
+
+  return { sendMock, writeMock, openMock, disposeMock, onDataMock, fitMock, proposeDimensionsMock, wsCallbacks: wsCallbacksBase, mockDef: mockDef };
+});
+
+// ── Module mocks ──────────────────────────────────────────────────────────────
+
+vi.mock('../ws/client.js', () => wsMockDef);
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class MockTerminal {
@@ -36,8 +42,6 @@ vi.mock('@xterm/xterm', () => ({
   },
 }));
 
-const fitMock = vi.fn();
-const proposeDimensionsMock = vi.fn(() => ({ cols: 80, rows: 24 }));
 vi.mock('@xterm/addon-fit', () => ({
   FitAddon: class MockFitAddon {
     fit = fitMock;
@@ -51,7 +55,11 @@ vi.mock('@xterm/addon-web-links', () => ({
 
 vi.mock('@xterm/xterm/css/xterm.css', () => ({}));
 
+// ── Lazy imports after mocks ───────────────────────────────────────────────────
+
 const { default: Terminal } = await import('../components/Terminal/Terminal.js');
+const { useStore } = await import('../store/index.js');
+const { wsClient } = await import('../ws/client.js');
 
 class MockResizeObserver {
   observe = vi.fn();
@@ -69,7 +77,7 @@ describe('Terminal interactions', () => {
     disposeMock.mockClear();
     fitMock.mockClear();
     proposeDimensionsMock.mockClear();
-    useStore.setState({
+    setupStoreForUITests({
       activeSession: {
         id: 'sess-1',
         projectPath: '/project/root',
@@ -101,7 +109,7 @@ describe('Terminal interactions', () => {
     expect(sendMock).toHaveBeenCalledWith({ type: 'terminal.create', cwd: '/project/root' });
 
     act(() => {
-      capturedWsHandler?.({ type: 'terminal.created', terminalId: 't-1', cwd: '/project/root' });
+      sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'terminal.created', terminalId: 't-1', cwd: '/project/root' });
     });
 
     await act(async () => {
@@ -119,10 +127,10 @@ describe('Terminal interactions', () => {
   it('TerminalOutput_WrittenToActiveXtermInstance', () => {
     render(<Terminal />);
     act(() => {
-      capturedWsHandler?.({ type: 'terminal.created', terminalId: 't-1', cwd: '/project/root' });
+      sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'terminal.created', terminalId: 't-1', cwd: '/project/root' });
     });
     act(() => {
-      capturedWsHandler?.({ type: 'terminal.output', terminalId: 't-1', data: 'hello\n' });
+      sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'terminal.output', terminalId: 't-1', data: 'hello\n' });
     });
     expect(writeMock).toHaveBeenCalledWith('hello\n');
   });
@@ -130,7 +138,7 @@ describe('Terminal interactions', () => {
   it('WebsocketCommand_TerminalTabClosed', () => {
     render(<Terminal />);
     act(() => {
-      capturedWsHandler?.({ type: 'terminal.created', terminalId: 't-1', cwd: '/project/root' });
+      sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'terminal.created', terminalId: 't-1', cwd: '/project/root' });
     });
 
     fireEvent.click(screen.getByText('shell').closest('div')?.querySelector('button') as HTMLButtonElement);
@@ -140,12 +148,12 @@ describe('Terminal interactions', () => {
   it('TerminalClosedMessage_TabRemoved', () => {
     render(<Terminal />);
     act(() => {
-      capturedWsHandler?.({ type: 'terminal.created', terminalId: 't-close', cwd: '/project/root' });
+      sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'terminal.created', terminalId: 't-close', cwd: '/project/root' });
     });
     expect(screen.getByText('shell')).toBeTruthy();
 
     act(() => {
-      capturedWsHandler?.({ type: 'terminal.closed', terminalId: 't-close' });
+      sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'terminal.closed', terminalId: 't-close' });
     });
 
     expect(screen.queryByText('shell')).toBeNull();
@@ -160,7 +168,7 @@ describe('Terminal interactions', () => {
 
     render(<Terminal />);
     act(() => {
-      capturedWsHandler?.({ type: 'terminal.created', terminalId: 't-ondata', cwd: '/project/root' });
+      wsCallbacks.getCapturedWsCallback?.({ type: 'terminal.created', terminalId: 't-ondata', cwd: '/project/root' });
     });
 
     act(() => {
@@ -180,7 +188,7 @@ describe('Terminal interactions', () => {
 
     render(<Terminal />);
     act(() => {
-      capturedWsHandler?.({ type: 'terminal.created', terminalId: 't-resize', cwd: '/project/root' });
+      wsCallbacks.getCapturedWsCallback?.({ type: 'terminal.created', terminalId: 't-resize', cwd: '/project/root' });
     });
 
     act(() => { capturedROCb?.(); });
@@ -191,10 +199,10 @@ describe('Terminal interactions', () => {
   it('SecondTerminalTabClicked_ActiveTabSwitched', () => {
     render(<Terminal />);
     act(() => {
-      capturedWsHandler?.({ type: 'terminal.created', terminalId: 't-a', cwd: '/project/root' });
+      wsCallbacks.getCapturedWsCallback?.({ type: 'terminal.created', terminalId: 't-a', cwd: '/project/root' });
     });
     act(() => {
-      capturedWsHandler?.({ type: 'terminal.created', terminalId: 't-b', cwd: '/project/root' });
+      wsCallbacks.getCapturedWsCallback?.({ type: 'terminal.created', terminalId: 't-b', cwd: '/project/root' });
     });
 
     const shellTabs = screen.getAllByText('shell');
@@ -222,11 +230,11 @@ describe('Terminal interactions', () => {
   it('TerminalOutput_UnknownTerminalId_WriteSkipped', () => {
     render(<Terminal />);
     act(() => {
-      capturedWsHandler?.({ type: 'terminal.created', terminalId: 't-known', cwd: '/project/root' });
+      wsCallbacks.getCapturedWsCallback?.({ type: 'terminal.created', terminalId: 't-known', cwd: '/project/root' });
     });
     // Send output for a different (unknown) terminal ID — covers the `tab?.` FALSE branch
     act(() => {
-      capturedWsHandler?.({ type: 'terminal.output', terminalId: 'unknown-id', data: 'hello' });
+      wsCallbacks.getCapturedWsCallback?.({ type: 'terminal.output', terminalId: 'unknown-id', data: 'hello' });
     });
     // writeMock should NOT have been called (tab was undefined)
     expect(writeMock).not.toHaveBeenCalled();

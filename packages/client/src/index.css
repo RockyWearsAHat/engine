@@ -1461,6 +1461,7 @@ textarea,
   line-height: 1.6;
   display: -webkit-box;
   -webkit-box-orient: vertical;
+  line-clamp: 4;
   -webkit-line-clamp: 4;
   overflow: hidden;
 }
@@ -2078,7 +2079,6 @@ textarea,
 .chat-msg {
   padding: 2px 12px;
   animation: fadeIn 120ms ease both;
-}
   font-size: 13px;
   line-height: 1.55;
   display: inline-block;
@@ -3450,17 +3450,14 @@ textarea,
   font-weight: 500;
 }
 
-.preferences-nav-btn:hover,
-.preferences-nav-btn.active {
-  color: var(--tx);
-}
-
 .preferences-nav-btn:hover {
+  color: var(--tx);
   border-color: rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.02);
 }
 
 .preferences-nav-btn.active {
+  color: var(--tx);
   border-color: rgba(124, 140, 255, 0.45);
   background: rgba(124, 140, 255, 0.08);
 }
@@ -3500,7 +3497,6 @@ textarea,
   max-width: 62ch;
 }
 
-/* Consolidate flex layout patterns for preferences sections */
 .preferences-card-header,
 .preferences-service-status {
   display: flex;
@@ -3509,14 +3505,13 @@ textarea,
   justify-content: space-between;
 }
 
-.preferences-row {
+.preferences-row,
+.preferences-inline-actions {
   display: flex;
   gap: 12px;
 }
 
 .preferences-inline-actions {
-  display: flex;
-  gap: 12px;
   flex-wrap: wrap;
 }
 
@@ -3574,11 +3569,7 @@ textarea,
   letter-spacing: 0.04em;
 }
 
-.preferences-label + input,
-.preferences-label + select,
-.preferences-label + textarea {
-  margin-top: 8px;
-}
+
 
 .preferences-muted {
   color: var(--tx-3);
@@ -3609,16 +3600,13 @@ textarea,
   transition: all 120ms ease;
 }
 
-.preferences-chip:hover,
-.preferences-chip.active {
-  color: var(--tx);
-}
-
 .preferences-chip:hover {
+  color: var(--tx);
   border-color: rgba(124, 140, 255, 0.25);
 }
 
 .preferences-chip.active {
+  color: var(--tx);
   background: rgba(124, 140, 255, 0.12);
   border-color: var(--accent);
 }

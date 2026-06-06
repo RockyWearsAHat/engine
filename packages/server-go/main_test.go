@@ -211,19 +211,14 @@ func withIssueCommentStateMutex(t *testing.T) {
 func setupScaffoldTest(t *testing.T, owner, repo, readme string) string {
 	t.Helper()
 	projectPath := t.TempDir()
-	setupTestDB(t, projectPath)
-	withAIMockServer(t)
-	withIssueCommentStateMutex(t)
-	prepareScaffoldTargetRepo(t, projectPath, owner, repo, readme)
-	return projectPath
+	return setupScaffoldTestWithPath(t, projectPath, owner, repo, readme)
 }
 
 // setupTriggerTestWithDB initializes database, AI mock server, and scaffold repo for trigger tests.
 func setupTriggerTestWithDB(t *testing.T, owner, repo, readme string) (projectPath, targetPath string) {
 	t.Helper()
 	projectPath = t.TempDir()
-	setupTestDB(t, projectPath)
-	withAIMockServer(t)
+	setupBaseTestEnvironment(t, projectPath)
 	targetPath = prepareScaffoldTargetRepo(t, projectPath, owner, repo, readme)
 	return
 }
@@ -283,6 +278,8 @@ func TestReserveIssueCommentDispatch_CleansUpExpiredEntries(t *testing.T) {
 	}
 }
 
+// TestTriggerIssueSession_DuplicateSuppressed seeds a scaffold repo once and verifies
+// duplicate comment dispatches stay in the same prepared write-backed project state.
 func TestTriggerIssueSession_DuplicateSuppressed(t *testing.T) {
 	projectPath := setupScaffoldTest(t, "owner", "repo", "# Demo\n@engine")
 
@@ -291,6 +288,8 @@ func TestTriggerIssueSession_DuplicateSuppressed(t *testing.T) {
 	triggerIssueSession(projectPath, payload)
 }
 
+// TestTriggerIssueSession_UsesActiveOrchestratorRedirect seeds repo files for the trigger,
+// then verifies issue comments are redirected into the already running orchestrator.
 func TestTriggerIssueSession_UsesActiveOrchestratorRedirect(t *testing.T) {
 	projectPath, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
 	release := make(chan struct{})
@@ -496,6 +495,22 @@ func setupRunModeBaseDeps(t *testing.T) {
 	newDiscordServiceFn = func(cfg discord.Config, path string) (discordRuntime, error) {
 		return &fakeDiscordService{}, nil
 	}
+}
+
+// setupBaseTestEnvironment initializes database, AI mock, and issue comment state for all trigger/scaffold tests.
+func setupBaseTestEnvironment(t *testing.T, projectPath string) {
+	t.Helper()
+	setupTestDB(t, projectPath)
+	withAIMockServer(t)
+	withIssueCommentStateMutex(t)
+}
+
+// setupScaffoldTestWithPath initializes database, AI mock, issue comment state, and scaffold repo at the given project path.
+func setupScaffoldTestWithPath(t *testing.T, projectPath, owner, repo, readme string) string {
+	t.Helper()
+	setupBaseTestEnvironment(t, projectPath)
+	prepareScaffoldTargetRepo(t, projectPath, owner, repo, readme)
+	return projectPath
 }
 
 // setupRunModeLocalWithCommonMocks initializes a run() test for local mode (no VPN/remote)
@@ -761,6 +776,8 @@ func TestScaffoldTrigger_DedupeAndCooldown(t *testing.T) {
 	}
 }
 
+// TestHasRecentScaffoldSession writes scaffold session state into the prepared repo
+// and verifies only recent matching scaffold sessions are reported.
 func TestHasRecentScaffoldSession(t *testing.T) {
 	_, target := setupTestDBAndScaffoldRepo(t, "owner", "repo", "# Demo\n@engine")
 	if err := db.WithProject(target, func() error {
@@ -1325,23 +1342,52 @@ func (f *fakeDiscordServiceStartErr) RecentHistory(pp, tid, since string, limit 
 func (f *fakeDiscordServiceStartErr) SendDMToOwner(_ string) error      { return nil }
 func (f *fakeDiscordServiceStartErr) NotifyProjectProgress(_, _ string) {}
 
-func TestRun_DiscordEnabled_StartError_NonFatal(t *testing.T) {
+// setupDiscordEnabledTestWithService initializes a Discord-enabled test with database, hub, and custom service factory.
+func setupDiscordEnabledTestWithService(t *testing.T, newServiceFn func(discord.Config, string) (discordRuntime, error)) string {
+	t.Helper()
 	withRunDepsReset(t)
 	projectPath := t.TempDir()
 	t.Setenv("PROJECT_PATH", projectPath)
 	t.Setenv("ENGINE_VPN", "")
 	t.Setenv("ENGINE_REMOTE", "")
-
-	bridgeSet := false
-	listenErr := errors.New("test stop")
 	dbInitFn = func(path string) error { return db.Init(path) }
 	newHubFn = func(path string) *ws.Hub { return ws.NewHub(path) }
 	loadDiscordConfigFn = func(path string) (discord.Config, error) {
 		return discord.Config{Enabled: true, BotToken: "tok", GuildID: "g1"}, nil
 	}
-	newDiscordServiceFn = func(cfg discord.Config, path string) (discordRuntime, error) {
-		return &fakeDiscordServiceStartErr{err: errors.New("discord open: fake gateway error")}, nil
+	newDiscordServiceFn = newServiceFn
+	return projectPath
+}
+
+// assertDiscordBridgeState verifies that the discord bridge was set/not set as expected.
+func assertDiscordBridgeState(t *testing.T, bridgeSet bool, expectedSet bool, scenario string) {
+	t.Helper()
+	if bridgeSet != expectedSet {
+		if expectedSet {
+			t.Fatalf("%s: expected discord bridge to be set, but it was not", scenario)
+		} else {
+			t.Fatalf("%s: expected discord bridge to remain unset, but it was set", scenario)
+		}
 	}
+}
+
+// triggerAndAssertSessionsCreated triggers a session function and verifies sessions were created.
+func triggerAndAssertSessionsCreatedHelper(t *testing.T, projectPath string, triggerFn func(string, json.RawMessage), payload json.RawMessage) {
+	t.Helper()
+	triggerFn(projectPath, payload)
+	assertSessionsCreated(t, projectPath)
+}
+
+func TestRun_DiscordEnabled_StartError_NonFatal(t *testing.T) {
+	projectPath := setupDiscordEnabledTestWithService(t, func(cfg discord.Config, path string) (discordRuntime, error) {
+		return &fakeDiscordServiceStartErr{err: errors.New("discord open: fake gateway error")}, nil
+	})
+	if projectPath == "" {
+		t.Fatal("expected discord-enabled test setup to return a project path")
+	}
+
+	bridgeSet := false
+	listenErr := errors.New("test stop")
 	setDiscordBridgeFn = func(s ws.DiscordBridge) { bridgeSet = true }
 	setupRunModeWithHTTPMocks(t,
 		func(pattern string, handler func(http.ResponseWriter, *http.Request)) bool { return false },
@@ -1352,28 +1398,19 @@ func TestRun_DiscordEnabled_StartError_NonFatal(t *testing.T) {
 	if !errors.Is(err, listenErr) {
 		t.Fatalf("expected listen error after non-fatal discord start failure, got %v", err)
 	}
-	if bridgeSet {
-		t.Fatal("expected discord bridge to remain unset when Start fails")
-	}
+	assertDiscordBridgeState(t, bridgeSet, false, "discord start error")
 }
 
 func TestRun_DiscordEnabled_ServiceInitError_NonFatal(t *testing.T) {
-	withRunDepsReset(t)
-	projectPath := t.TempDir()
-	t.Setenv("PROJECT_PATH", projectPath)
-	t.Setenv("ENGINE_VPN", "")
-	t.Setenv("ENGINE_REMOTE", "")
+	projectPath := setupDiscordEnabledTestWithService(t, func(cfg discord.Config, path string) (discordRuntime, error) {
+		return nil, errors.New("init failed")
+	})
+	if projectPath == "" {
+		t.Fatal("expected discord-enabled test setup to return a project path")
+	}
 
 	bridgeSet := false
 	listenErr := errors.New("test stop")
-	dbInitFn = func(path string) error { return db.Init(path) }
-	newHubFn = func(path string) *ws.Hub { return ws.NewHub(path) }
-	loadDiscordConfigFn = func(path string) (discord.Config, error) {
-		return discord.Config{Enabled: true, BotToken: "tok", GuildID: "g1"}, nil
-	}
-	newDiscordServiceFn = func(cfg discord.Config, path string) (discordRuntime, error) {
-		return nil, errors.New("init failed")
-	}
 	setDiscordBridgeFn = func(s ws.DiscordBridge) { bridgeSet = true }
 	setupRunModeWithHTTPMocks(t,
 		func(pattern string, handler func(http.ResponseWriter, *http.Request)) bool { return false },
@@ -1384,9 +1421,7 @@ func TestRun_DiscordEnabled_ServiceInitError_NonFatal(t *testing.T) {
 	if !errors.Is(err, listenErr) {
 		t.Fatalf("expected listen error after non-fatal discord init failure, got %v", err)
 	}
-	if bridgeSet {
-		t.Fatal("expected discord bridge to remain unset when init fails")
-	}
+	assertDiscordBridgeState(t, bridgeSet, false, "discord init error")
 }
 
 func TestRun_VPNMode_RespectsVPNPortOverride(t *testing.T) {
@@ -1428,21 +1463,14 @@ func TestRun_RemoteMode_RespectsRemotePortOverride(t *testing.T) {
 }
 
 func TestRun_DiscordEnabled_Success(t *testing.T) {
-	withRunDepsReset(t)
-	projectPath := t.TempDir()
-	t.Setenv("PROJECT_PATH", projectPath)
-	t.Setenv("ENGINE_VPN", "")
-	t.Setenv("ENGINE_REMOTE", "")
+	projectPath := setupDiscordEnabledTestWithService(t, func(cfg discord.Config, path string) (discordRuntime, error) {
+		return &fakeDiscordService{}, nil
+	})
+	if projectPath == "" {
+		t.Fatal("expected discord-enabled test setup to return a project path")
+	}
 
 	bridgeSet := false
-	dbInitFn = func(path string) error { return db.Init(path) }
-	newHubFn = func(path string) *ws.Hub { return ws.NewHub(path) }
-	loadDiscordConfigFn = func(path string) (discord.Config, error) {
-		return discord.Config{Enabled: true, BotToken: "tok", GuildID: "g1"}, nil
-	}
-	newDiscordServiceFn = func(cfg discord.Config, path string) (discordRuntime, error) {
-		return &fakeDiscordService{}, nil
-	}
 	setDiscordBridgeFn = func(s ws.DiscordBridge) { bridgeSet = true }
 	setupRunModeWithHTTPMocks(t,
 		func(pattern string, handler func(http.ResponseWriter, *http.Request)) bool { return false },
@@ -1451,9 +1479,7 @@ func TestRun_DiscordEnabled_Success(t *testing.T) {
 
 	_ = run()
 
-	if !bridgeSet {
-		t.Error("expected discord bridge to be set after successful Start")
-	}
+	assertDiscordBridgeState(t, bridgeSet, true, "discord enabled success")
 }
 
 // withAIMockServer configures a mock OpenAI API server for testing AI chat functionality.
@@ -1509,32 +1535,23 @@ func TestDefaultNewDiscordServiceFn_Call(t *testing.T) {
 }
 
 func TestTriggerScaffoldSession_OnChunkCalled(t *testing.T) {
-	projectPath, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
-
-	triggerScaffoldSession(projectPath, makeScaffoldPayload())
-	// If OnChunk was not called, the session message count would still be from ai.Chat.
-	// Just verify no panic and session was created.
-	assertSessionsCreated(t, targetPath)
+	_, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
+	triggerAndAssertSessionsCreatedHelper(t, targetPath, triggerScaffoldSession, makeScaffoldPayload())
 }
 
 func TestTriggerCIAnalysisSession_OnChunkCalled(t *testing.T) {
 	projectPath := setupTriggerWithAIMock(t)
-	triggerCIAnalysisSession(projectPath, makeCIPayload())
-	assertSessionsCreated(t, projectPath)
+	triggerAndAssertSessionsCreatedHelper(t, projectPath, triggerCIAnalysisSession, makeCIPayload())
 }
 
 func TestTriggerIssueSession_OnChunkCalled(t *testing.T) {
-	projectPath, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
-
-	triggerIssueSession(projectPath, makeIssueCommentPayload())
-	assertSessionsCreated(t, targetPath)
+	_, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
+	triggerAndAssertSessionsCreatedHelper(t, targetPath, triggerIssueSession, makeIssueCommentPayload())
 }
 
 func TestTriggerIssueOpenedSession_OnChunkCalled(t *testing.T) {
-	projectPath, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
-
-	triggerIssueOpenedSession(projectPath, makeIssueOpenedPayload())
-	assertSessionsCreated(t, targetPath)
+	_, targetPath := setupTriggerTestWithDB(t, "owner", "repo", "# Demo\n@engine")
+	triggerAndAssertSessionsCreatedHelper(t, targetPath, triggerIssueOpenedSession, makeIssueOpenedPayload())
 }
 
 func TestTriggerSessions_DBCreateAndSaveErrorsCovered(t *testing.T) {

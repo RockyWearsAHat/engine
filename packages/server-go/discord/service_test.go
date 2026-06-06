@@ -11,10 +11,12 @@ import (
 	"testing"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/engine/server/db"
 )
 
 // Helper functions to reduce test duplication
 
+// newServiceWithEmptyProjects creates a Service with no projects.
 func newServiceWithEmptyProjects(storagePath string) *Service {
 	return &Service{
 		cfg: Config{StoragePath: storagePath},
@@ -24,6 +26,7 @@ func newServiceWithEmptyProjects(storagePath string) *Service {
 	}
 }
 
+// newServiceWithProjects creates a Service with the given projects map.
 func newServiceWithProjects(storagePath string, projects map[string]ProjectBinding) *Service {
 	return &Service{
 		cfg: Config{StoragePath: storagePath},
@@ -33,6 +36,7 @@ func newServiceWithProjects(storagePath string, projects map[string]ProjectBindi
 	}
 }
 
+// newTestMessageCreate constructs a MessageCreate event for testing.
 func newTestMessageCreate(channelID, guildID, content string, authorID string, isBot bool) *discordgo.MessageCreate {
 	return &discordgo.MessageCreate{
 		Message: &discordgo.Message{
@@ -44,6 +48,7 @@ func newTestMessageCreate(channelID, guildID, content string, authorID string, i
 	}
 }
 
+// assertErrorMessage verifies an error message matches the expected value.
 func assertErrorMessage(t *testing.T, err error, wantMsg string, testName string) {
 	if err == nil {
 		t.Fatalf("%s: expected error %q, got nil", testName, wantMsg)
@@ -55,7 +60,7 @@ func assertErrorMessage(t *testing.T, err error, wantMsg string, testName string
 
 // ── Staged setup helpers for config and state ────────────────────────────────
 
-// clearDiscordEnv clears all Discord-related environment variables in one step
+// clearDiscordEnv clears all Discord-related environment variables in one step.
 func clearDiscordEnv(t *testing.T) {
 	t.Setenv("ENGINE_DISCORD", "")
 	t.Setenv("ENGINE_DISCORD_BOT_TOKEN", "")
@@ -66,14 +71,14 @@ func clearDiscordEnv(t *testing.T) {
 	t.Setenv("ENGINE_STATE_DIR", "")
 }
 
-// setDiscordEnv sets Discord environment variables from a config-like map
+// setDiscordEnv sets Discord environment variables from a config-like map.
 func setDiscordEnv(t *testing.T, env map[string]string) {
 	for k, v := range env {
 		t.Setenv(k, v)
 	}
 }
 
-// createConfigFile writes a discord config file to projectDir/.engine/discord.json
+// createConfigFile writes a discord config file to projectDir/.engine/discord.json and returns its path.
 func createConfigFile(t *testing.T, projectDir string, configJSON string) string {
 	configDir := filepath.Join(projectDir, ".engine")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
@@ -86,7 +91,7 @@ func createConfigFile(t *testing.T, projectDir string, configJSON string) string
 	return configPath
 }
 
-// writePersistentState writes a service state file to storage directory
+// writePersistentState writes a service state file to the storage directory.
 func writePersistentState(t *testing.T, storageDir string, state persistedState) {
 	data, _ := json.Marshal(state)
 	statePath := filepath.Join(storageDir, defaultStateFileName)
@@ -324,7 +329,10 @@ func TestLoadConfigEnvOverridesProjectFile(t *testing.T) {
 		"guildId": "file-guild",
 		"allowedUserIds": ["file-user"]
 	}`
-	_ = createConfigFile(t, projectDir, configJSON)
+	configPath := createConfigFile(t, projectDir, configJSON)
+	if strings.TrimSpace(configPath) == "" {
+		t.Fatal("expected config file path")
+	}
 
 	setDiscordConfigForTests(t, map[string]string{
 		"ENGINE_DISCORD":                  "true",
@@ -1062,8 +1070,12 @@ func TestHandleProjectCommand_NoArgs(t *testing.T) {
 }
 
 func TestHandleAskCommand_Branches(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := db.Init(projectDir); err != nil {
+		t.Fatalf("db init: %v", err)
+	}
 	svc := &Service{
-		cfg: Config{CommandPrefix: "!"},
+		cfg: Config{CommandPrefix: "!", StoragePath: projectDir},
 		state: persistedState{
 			Projects: make(map[string]ProjectBinding),
 		},
@@ -1083,8 +1095,8 @@ func TestHandleAskCommand_Branches(t *testing.T) {
 	svc.handleAskCommand(m, []string{"some", "prompt"})
 
 	// project found but paused
-	svc.state.Projects["/proj"] = ProjectBinding{
-		ProjectPath: "/proj",
+	svc.state.Projects[projectDir] = ProjectBinding{
+		ProjectPath: projectDir,
 		ChannelID:   "ch-1",
 		Paused:      true,
 	}
@@ -1092,8 +1104,8 @@ func TestHandleAskCommand_Branches(t *testing.T) {
 	svc.handleAskCommand(m, []string{"a", "prompt"})
 
 	// project found, not paused, but dg==nil → acquireChatThread fails
-	svc.state.Projects["/proj"] = ProjectBinding{
-		ProjectPath: "/proj",
+	svc.state.Projects[projectDir] = ProjectBinding{
+		ProjectPath: projectDir,
 		ChannelID:   "ch-1",
 		Paused:      false,
 	}

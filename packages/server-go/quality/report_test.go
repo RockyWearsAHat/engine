@@ -221,6 +221,58 @@ func TestScanProject_FlagsPublicInterfacesMissingWorkspaceDocs(t *testing.T) {
 	}
 }
 
+func TestScanProject_Documentation_SkipsInternalImplementationFiles(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "client", "src", "components", "InternalWidget.tsx"), strings.Join([]string{
+		"export interface InternalWidgetState {",
+		"  open: boolean",
+		"}",
+		"",
+		"export function InternalWidget() {",
+		"  return null",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Category == "documentation-gap" && (strings.Contains(issue.File, "InternalWidget.tsx") || strings.Contains(issue.Message, "InternalWidget")) {
+			t.Fatalf("expected internal implementation file to skip documentation rules, got %+v", issue)
+		}
+	}
+}
+
+func TestScanProject_DeadCode_SkipsTestFiles(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "helper_test.go"), strings.Join([]string{
+		"package demo",
+		"",
+		"func helperOnlyInThisTest() int {",
+		"\treturn 1",
+		"}",
+		"",
+		"func TestUsesHelper(t *testing.T) {",
+		"\t_ = helperOnlyInThisTest()",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Rule == "dead-code.unreferenced-symbol" && issue.File == "packages/demo/helper_test.go" {
+			t.Fatalf("expected dead-code rule to skip test files, got %+v", issue)
+		}
+	}
+}
+
 func TestScanProject_DuplicateSeverity_PrioritizesSubstantialOverlap(t *testing.T) {
 	project := t.TempDir()
 	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\npackages/demo/dup/\n")
@@ -365,6 +417,94 @@ func TestScanProject_DuplicateSeverity_OneLineExactDuplicateIsIgnored(t *testing
 	for _, issue := range report.Issues {
 		if issue.Category == "duplicate-content" && issue.File == "packages/demo/single-b.go" {
 			t.Fatalf("expected one-line exact duplicate to be ignored as low-signal noise, got %+v", issue)
+		}
+	}
+}
+
+func TestScanProject_DuplicateSeverity_FourLineLowConfidenceDuplicateIsIgnored(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "small-a.ts"), strings.Join([]string{
+		"export function alpha() {",
+		"  const prefix = 'a'",
+		"  const seed = 10",
+		"  const alphaOnlyOne = seed + 1",
+		"  const alphaOnlyTwo = alphaOnlyOne + 2",
+		"  const alphaOnlyThree = alphaOnlyTwo + 3",
+		"  const alphaOnlyFour = alphaOnlyThree + 4",
+		"  const value = 1",
+		"  const shared = seed + value",
+		"  const finalValue = shared + 5",
+		"  console.log(prefix, finalValue)",
+		"  const alphaTailOne = finalValue + 6",
+		"  const alphaTailTwo = alphaTailOne + 7",
+		"  const alphaTailThree = alphaTailTwo + 8",
+		"  return value",
+		"}",
+	}, "\n"))
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "small-b.ts"), strings.Join([]string{
+		"export function beta() {",
+		"  const prefix = 'b'",
+		"  const seed = 20",
+		"  const betaOnlyOne = seed + 11",
+		"  const betaOnlyTwo = betaOnlyOne + 12",
+		"  const betaOnlyThree = betaOnlyTwo + 13",
+		"  const betaOnlyFour = betaOnlyThree + 14",
+		"  const value = 1",
+		"  const shared = seed + value",
+		"  const finalValue = shared + 5",
+		"  console.log(prefix, finalValue)",
+		"  const betaTailOne = finalValue + 16",
+		"  const betaTailTwo = betaTailOne + 17",
+		"  const betaTailThree = betaTailTwo + 18",
+		"  return value",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Category == "duplicate-content" && issue.File == "packages/demo/small-b.ts" {
+			t.Fatalf("expected tiny low-confidence duplicate to be ignored, got %+v", issue)
+		}
+	}
+}
+
+func TestScanProject_DuplicateSeverity_SkipsTestFiles(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "dup_a_test.go"), strings.Join([]string{
+		"package demo",
+		"",
+		"func helperA() {",
+		"\tvalue := 1",
+		"\tvalue += 2",
+		"\tvalue += 3",
+		"\t_ = value",
+		"}",
+	}, "\n"))
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "dup_b_test.go"), strings.Join([]string{
+		"package demo",
+		"",
+		"func helperB() {",
+		"\tvalue := 1",
+		"\tvalue += 2",
+		"\tvalue += 3",
+		"\t_ = value",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Rule == "duplicate.largest-overlap" {
+			t.Fatalf("expected duplicate findings to skip test files, got %+v", issue)
 		}
 	}
 }
@@ -927,7 +1067,7 @@ func TestScanProject_BehavioralShift_FlagsPublicSideEffectCallChain(t *testing.T
 	}
 }
 
-func TestScanProject_BehavioralShift_CannotBeSilencedByOffOverride(t *testing.T) {
+func TestScanProject_BehavioralShift_CanBeSilencedByOffOverride(t *testing.T) {
 	project := t.TempDir()
 	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
 	writeQualityTestFile(t, filepath.Join(project, ".engine", "quality-rules.json"), strings.Join([]string{
@@ -958,8 +1098,8 @@ func TestScanProject_BehavioralShift_CannotBeSilencedByOffOverride(t *testing.T)
 			break
 		}
 	}
-	if !found {
-		t.Fatalf("expected behavioral-shift side-effect-chain to remain active when override requests off")
+	if found {
+		t.Fatalf("expected behavioral-shift side-effect-chain to be disabled when override requests off")
 	}
 }
 
@@ -1040,6 +1180,59 @@ func TestScanProject_BehavioralShift_FindsRiskAcrossSiblingBranches(t *testing.T
 	}
 }
 
+func TestScanProject_BehavioralShift_SkipsTestFiles(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "chain_test.go"), strings.Join([]string{
+		"package demo",
+		"",
+		"func saveThing() {}",
+		"func TestRootFlow() {",
+		"\tsaveThing()",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Rule == "behavioral-shift.side-effect-chain" && issue.File == "packages/demo/chain_test.go" {
+			t.Fatalf("expected behavioral-shift side-effect-chain to skip test files, got %+v", issue)
+		}
+	}
+}
+
+func TestScanProject_BehavioralShift_IgnoresWriteStringFormattingChains(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "format.go"), strings.Join([]string{
+		"package demo",
+		"",
+		"func WriteString() {}",
+		"",
+		"func renderPrompt() {",
+		"\tWriteString()",
+		"}",
+		"",
+		"func FormatPrompt() {",
+		"\trenderPrompt()",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Rule == "behavioral-shift.side-effect-chain" && issue.File == "packages/demo/format.go" {
+			t.Fatalf("expected formatting-only WriteString chain to be ignored, got %+v", issue)
+		}
+	}
+}
+
 func TestScanProject_Maintainability_FlagsLongFiles(t *testing.T) {
 	project := t.TempDir()
 	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
@@ -1072,7 +1265,31 @@ func TestScanProject_Maintainability_FlagsLongFiles(t *testing.T) {
 	}
 }
 
-func TestScanProject_Maintainability_WarnsWhenTestsSitNextToSource(t *testing.T) {
+func TestScanProject_Maintainability_SkipsLongTestFiles(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+
+	lines := make([]string, 0, 980)
+	lines = append(lines, "package demo", "", "func TestVeryLongFile() {")
+	for i := 0; i < 950; i++ {
+		lines = append(lines, "\t_ = 1")
+	}
+	lines = append(lines, "}")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "very_long_test.go"), strings.Join(lines, "\n"))
+
+	report, err := ScanProject(project, 500)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Rule == "maintainability.long-file" && issue.File == "packages/demo/very_long_test.go" {
+			t.Fatalf("expected long-file rule to skip test files, got %+v", issue)
+		}
+	}
+}
+
+func TestScanProject_Maintainability_AllowsColocatedTests(t *testing.T) {
 	project := t.TempDir()
 	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
 	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "sample.go"), "package demo\nfunc Sample() int { return 1 }\n")
@@ -1083,20 +1300,9 @@ func TestScanProject_Maintainability_WarnsWhenTestsSitNextToSource(t *testing.T)
 		t.Fatalf("scan project: %v", err)
 	}
 
-	found := false
 	for _, issue := range report.Issues {
 		if issue.Rule == "maintainability.test-source-colocation" {
-			found = true
-			if issue.File != "packages/demo" {
-				t.Fatalf("expected colocation warning at directory scope, got %+v", issue)
-			}
-			if !strings.Contains(issue.Message, "colocated") {
-				t.Fatalf("expected colocation language in message, got %+v", issue)
-			}
-			break
+			t.Fatalf("expected colocated tests to be allowed, got %+v", issue)
 		}
-	}
-	if !found {
-		t.Fatalf("expected maintainability.test-source-colocation issue, got %+v", report.Issues)
 	}
 }

@@ -3,24 +3,31 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import UsageDashboard from '../components/Usage/UsageDashboard.js';
 import type { ServerMessage, UsageDashboard as UsageDashboardPayload } from '@engine/shared';
 
-const { sendMock, handlers } = vi.hoisted(() => ({
-  sendMock: vi.fn(),
-  handlers: new Set<(msg: ServerMessage) => void>(),
-}));
+const { sendMock, handlers, emitToAllHandlers, mockDefinition } = vi.hoisted(() => {
+  const sendMock = vi.fn();
+  const handlers = new Set<(msg: ServerMessage) => void>();
+
+  return {
+    sendMock,
+    handlers,
+    emitToAllHandlers: (msg: ServerMessage) => {
+      handlers.forEach((handler) => handler(msg));
+    },
+    mockDefinition: {
+      onMessage: (handler: (msg: ServerMessage) => void) => {
+        handlers.add(handler);
+        return () => handlers.delete(handler);
+      },
+    },
+  };
+});
 
 vi.mock('../ws/client.js', () => ({
   wsClient: {
     send: sendMock,
-    onMessage: (handler: (msg: ServerMessage) => void) => {
-      handlers.add(handler);
-      return () => handlers.delete(handler);
-    },
+    ...mockDefinition,
   },
 }));
-
-function emitMessage(msg: ServerMessage): void {
-  handlers.forEach((handler) => handler(msg));
-}
 
 /** Factory: create a realistic UsageDashboard payload for testing. Merge overrides to customize. */
 function makeDashboard(overrides?: Partial<UsageDashboardPayload>): UsageDashboardPayload {
@@ -112,7 +119,7 @@ describe('UsageDashboard', () => {
       model: undefined,
     });
 
-    emitMessage({ type: 'usage.dashboard', dashboard: makeDashboard() });
+    emitToAllHandlers({ type: 'usage.dashboard', dashboard: makeDashboard() });
 
     expect(await screen.findByText('Spend & Token Analytics')).toBeTruthy();
     expect(screen.getByText('Total Spend')).toBeTruthy();
@@ -127,7 +134,7 @@ describe('UsageDashboard', () => {
 
   it('switches scope in both directions and re-requests dashboard', async () => {
     render(<UsageDashboard projectPath="/workspace/project-a" />);
-    emitMessage({ type: 'usage.dashboard', dashboard: makeDashboard() });
+    emitToAllHandlers({ type: 'usage.dashboard', dashboard: makeDashboard() });
 
     fireEvent.click(await screen.findByRole('button', { name: 'User' }));
 
@@ -166,13 +173,13 @@ describe('UsageDashboard', () => {
     }));
 
     render(<UsageDashboard projectPath="/workspace/project-a" />);
-    emitMessage({
+    emitToAllHandlers({
       type: 'usage.dashboard',
       dashboard: makeDashboard({ projects: manyProjects }),
     });
 
     fireEvent.click(await screen.findByRole('button', { name: 'User' }));
-    emitMessage({
+    emitToAllHandlers({
       type: 'usage.dashboard',
       dashboard: makeDashboard({
         scope: 'user',
@@ -188,7 +195,7 @@ describe('UsageDashboard', () => {
 
   it('filters by model and includes model in subsequent request', async () => {
     render(<UsageDashboard projectPath="/workspace/project-a" />);
-    emitMessage({ type: 'usage.dashboard', dashboard: makeDashboard() });
+    emitToAllHandlers({ type: 'usage.dashboard', dashboard: makeDashboard() });
 
     await screen.findByText('Per Model');
 
@@ -208,7 +215,7 @@ describe('UsageDashboard', () => {
 
   it('refresh button re-requests with current scope and filter', async () => {
     render(<UsageDashboard projectPath="/workspace/project-a" />);
-    emitMessage({ type: 'usage.dashboard', dashboard: makeDashboard() });
+    emitToAllHandlers({ type: 'usage.dashboard', dashboard: makeDashboard() });
     await screen.findByText('Per Project');
 
     fireEvent.change(screen.getByLabelText('Model'), {
@@ -239,7 +246,7 @@ describe('UsageDashboard', () => {
   it('renders empty table states and unknown project/provider fallbacks', async () => {
     render(<UsageDashboard projectPath="/workspace/project-a" />);
 
-    emitMessage({
+    emitToAllHandlers({
       type: 'usage.dashboard',
       dashboard: makeDashboard({
         projects: [
@@ -300,7 +307,7 @@ describe('UsageDashboard', () => {
   it('shows project empty state while model table still has rows', async () => {
     render(<UsageDashboard projectPath="/workspace/project-a" />);
 
-    emitMessage({
+    emitToAllHandlers({
       type: 'usage.dashboard',
       dashboard: makeDashboard({
         projects: [],
@@ -327,7 +334,7 @@ describe('UsageDashboard', () => {
   it('shows model spend chart fallback when no model data exists', async () => {
     render(<UsageDashboard projectPath="/workspace/project-a" />);
 
-    emitMessage({
+    emitToAllHandlers({
       type: 'usage.dashboard',
       dashboard: makeDashboard({
         models: [],
@@ -341,8 +348,8 @@ describe('UsageDashboard', () => {
   it('ignores unrelated WS messages and handles missing dashboard payload', async () => {
     render(<UsageDashboard projectPath="/workspace/project-a" />);
 
-    emitMessage({ type: 'chat.started', sessionId: 'abc' });
-    emitMessage({ type: 'usage.dashboard' });
+    emitToAllHandlers({ type: 'chat.started', sessionId: 'abc' });
+    emitToAllHandlers({ type: 'usage.dashboard' });
 
     await waitFor(() => {
       expect(screen.queryByText('Per Project')).toBeNull();
@@ -352,7 +359,7 @@ describe('UsageDashboard', () => {
   it('formats zero, second, and hour-scale durations', async () => {
     render(<UsageDashboard projectPath="/workspace/project-a" />);
 
-    emitMessage({
+    emitToAllHandlers({
       type: 'usage.dashboard',
       dashboard: makeDashboard({
         totals: {
@@ -388,7 +395,7 @@ describe('UsageDashboard', () => {
 
   it('refresh click triggers explicit request when idle', async () => {
     render(<UsageDashboard projectPath="/workspace/project-a" />);
-    emitMessage({ type: 'usage.dashboard', dashboard: makeDashboard() });
+    emitToAllHandlers({ type: 'usage.dashboard', dashboard: makeDashboard() });
 
     await screen.findByText('Per Project');
     fireEvent.click(screen.getByTitle(/Refresh usage analytics/i));
@@ -406,7 +413,7 @@ describe('UsageDashboard', () => {
   it('shows dashboard request errors', async () => {
     render(<UsageDashboard projectPath="/workspace/project-a" />);
 
-    emitMessage({ type: 'usage.dashboard', error: 'dashboard unavailable' });
+    emitToAllHandlers({ type: 'usage.dashboard', error: 'dashboard unavailable' });
 
     expect(await screen.findByText('dashboard unavailable')).toBeTruthy();
   });
@@ -440,7 +447,7 @@ describe('UsageDashboard', () => {
     render(<UsageDashboard projectPath="/workspace/project-a" />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'User' }));
-    emitMessage({
+    emitToAllHandlers({
       type: 'usage.dashboard',
       dashboard: makeDashboard({ scope: 'user', projectPath: undefined, projects }),
     });
@@ -460,7 +467,7 @@ describe('UsageDashboard', () => {
       });
     });
 
-    emitMessage({
+    emitToAllHandlers({
       type: 'usage.dashboard',
       dashboard: makeDashboard({ scope: 'project', projectPath: '/workspace/project-b' }),
     });
@@ -486,7 +493,7 @@ describe('UsageDashboard', () => {
     render(<UsageDashboard projectPath="/workspace/project-a" />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'User' }));
-    emitMessage({
+    emitToAllHandlers({
       type: 'usage.dashboard',
       dashboard: makeDashboard({ scope: 'user', projectPath: undefined, projects }),
     });
@@ -494,7 +501,7 @@ describe('UsageDashboard', () => {
     const rows = await screen.findAllByTitle(/View breakdown for/i);
     fireEvent.click(rows[0]);
 
-    emitMessage({
+    emitToAllHandlers({
       type: 'usage.dashboard',
       dashboard: makeDashboard({ scope: 'project', projectPath: '/workspace/project-a' }),
     });

@@ -79,7 +79,8 @@ func TestHandler_DiscordHistorySearch_NilBridge(t *testing.T) {
 	}, "DISCORD_UNAVAILABLE")
 }
 
-// TestHandler_DiscordHistorySearch_WithBridge_Success verifies search returns hits when bridge is available.
+// TestHandler_DiscordHistorySearch_WithBridge_Success writes a websocket request
+// and verifies the handler emits the expected discord search result payload.
 func TestHandler_DiscordHistorySearch_WithBridge_Success(t *testing.T) {
 	stub := &testDiscordBridge{
 		searchHits: []db.DiscordSearchHit{{DiscordMessage: db.DiscordMessage{ID: "m1", Content: "cave AI"}}},
@@ -127,7 +128,8 @@ func TestHandler_DiscordHistoryRecent_NilBridge(t *testing.T) {
 	}, "DISCORD_UNAVAILABLE")
 }
 
-// TestHandler_DiscordHistoryRecent_WithBridge_Success verifies recent returns message rows when bridge is available.
+// TestHandler_DiscordHistoryRecent_WithBridge_Success writes a websocket request
+// and verifies the handler emits the expected recent-history rows payload.
 func TestHandler_DiscordHistoryRecent_WithBridge_Success(t *testing.T) {
 	stub := &testDiscordBridge{
 		recentRows: []db.DiscordMessage{{ID: "r1", Content: "hello"}},
@@ -162,7 +164,8 @@ func TestHandler_DiscordHistoryRecent_WithBridge_Error(t *testing.T) {
 
 // ─── Discord config set ───────────────────────────────────────────────────────
 
-// TestHandler_DiscordConfigSet_NilBridgeDisabledConfig verifies disabled config is always saved without bridge.
+// TestHandler_DiscordConfigSet_NilBridgeDisabledConfig writes a disabled config
+// update and verifies the handler still emits the saved confirmation without a bridge.
 func TestHandler_DiscordConfigSet_NilBridgeDisabledConfig(t *testing.T) {
 	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
@@ -305,8 +308,7 @@ func TestHandler_QualityReportGet_ProgressEvent(t *testing.T) {
 		return quality.Report{ProjectPath: projectPath, IssueCount: 0, Issues: []quality.Issue{}}, nil
 	})()
 
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{"type": "quality.report.get"})
@@ -396,8 +398,7 @@ func TestHandler_GitHubIssues_MockHTTP_APIError(t *testing.T) {
 // ─── approval.respond dispatch ────────────────────────────────────────────────
 
 func TestHandler_ApprovalRespond_BadPayload(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	// Send valid JSON but with id as a non-string to trigger inner unmarshal error.
@@ -411,8 +412,7 @@ func TestHandler_ApprovalRespond_BadPayload(t *testing.T) {
 }
 
 func TestHandler_ApprovalRespond_MissingID(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -428,10 +428,8 @@ func TestHandler_ApprovalRespond_MissingID(t *testing.T) {
 
 func TestHandler_ApprovalRespond_UnknownID_NoOp(t *testing.T) {
 	// resolveApproval with unknown ID is a no-op — no response sent, no crash.
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	_, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
-
 	// Send approval.respond with an unknown ID — then send another message
 	// to confirm the connection is still alive.
 	writeWSMessage(t, conn, map[string]any{
@@ -457,8 +455,7 @@ func TestHandler_RequestApproval_Timeout(t *testing.T) {
 	approvalTimeout = 20 * time.Millisecond
 	defer func() { approvalTimeout = origTimeout }()
 
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	origRunAIChat := runAIChat
@@ -504,8 +501,7 @@ func TestHandler_RequestApproval_Timeout(t *testing.T) {
 // ─── requestApproval: allow path ─────────────────────────────────────────────
 
 func TestHandler_RequestApproval_Allow(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	allowedResult := make(chan bool, 1)
@@ -550,8 +546,7 @@ func TestHandler_RequestApproval_Allow(t *testing.T) {
 }
 
 func TestHandler_RequestApproval_Deny(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	allowedResult := make(chan bool, 1)
@@ -597,8 +592,7 @@ func TestHandler_RequestApproval_Deny(t *testing.T) {
 // ─── session.list / session.create / session.load ─────────────────────────────
 
 func TestHandler_SessionList(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
@@ -616,8 +610,7 @@ func TestHandler_SessionList(t *testing.T) {
 }
 
 func TestHandler_SessionCreate(t *testing.T) {
-	projectDir := setupWSProject(t)
-	conn, cleanup := openWSTestConnection(t, projectDir)
+	projectDir, conn, cleanup := setupWSProjectAndConnection(t)
 	defer cleanup()
 
 	writeWSMessage(t, conn, map[string]any{
