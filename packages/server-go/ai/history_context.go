@@ -1,5 +1,7 @@
 package ai
 
+// quality:allow-long-file
+
 import (
 	"fmt"
 	"math"

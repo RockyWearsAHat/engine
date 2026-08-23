@@ -8,21 +8,21 @@ import "testing"
 func TestGithubRepoOverride_AllCases(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_OWNER", "")
 	t.Setenv("ENGINE_GITHUB_REPO", "")
-	owner, repo, ok := githubRepoOverride()
+	owner, repo, ok := githubRepoOverride("")
 	if owner != "" || repo != "" || ok {
 		t.Fatalf("expected empty override, got owner=%q repo=%q ok=%v", owner, repo, ok)
 	}
 
 	t.Setenv("ENGINE_GITHUB_OWNER", "octo")
 	t.Setenv("ENGINE_GITHUB_REPO", "")
-	owner, repo, ok = githubRepoOverride()
+	owner, repo, ok = githubRepoOverride("")
 	if owner != "octo" || repo != "" || !ok {
 		t.Fatalf("expected owner-only override, got owner=%q repo=%q ok=%v", owner, repo, ok)
 	}
 
 	t.Setenv("ENGINE_GITHUB_OWNER", "")
 	t.Setenv("ENGINE_GITHUB_REPO", "demo")
-	owner, repo, ok = githubRepoOverride()
+	owner, repo, ok = githubRepoOverride("")
 	if owner != "" || repo != "demo" || !ok {
 		t.Fatalf("expected repo-only override, got owner=%q repo=%q ok=%v", owner, repo, ok)
 	}

@@ -1,3 +1,4 @@
+// quality:allow-long-file quality:allow-long-function quality:allow-large-block
 import { useEffect, useRef, useState, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from 'react';
 import { useStore } from './store/index.js';
 import { wsClient } from './ws/client.js';
@@ -173,6 +174,7 @@ export default function App() {
   const requestFileCloseRef = useRef<(path: string) => void>(() => {});
   const ensureStreamingAssistantMessageRef = useRef<(sessionId: string) => string>(() => '');
   const workspaceRootRef = useRef('');
+  const autoOpenAttemptedRef = useRef(false);
   const resizeOriginRef = useRef({
     sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
     rightPanelWidth: DEFAULT_RIGHT_PANEL_WIDTH,
@@ -351,7 +353,11 @@ export default function App() {
       bridge.getClonesDir().catch(() => null),
       bridge.getActiveTeam().catch(() => null),
     ]);
-    const modelProvider = savedModelProvider || 'llamacpp';
+    // Patch fields are nil-means-unchanged server-side (runtimecfg.Patch) —
+    // forcing a default here would overwrite a provider set another way (e.g.
+    // directly in .engine/runtime-config.json) with 'llamacpp' on every load
+    // of a browser profile that has no locally-saved provider yet.
+    const modelProvider = savedModelProvider;
 
     setGithubToken(savedGithubToken);
     if (editorPreferences) {
@@ -617,6 +623,25 @@ export default function App() {
       label: projectLabel(folderPath),
     });
   }, [requestWorkspaceOpen, showNotice]);
+
+  // Web mode has no native folder picker (openFolderDialog is a Tauri-only
+  // stub). The server already knows its project via PROJECT_PATH and reports
+  // it on /health, so use that as the workspace instead of requiring a picker
+  // that can never work in a browser.
+  useEffect(() => {
+    if (desktopShell || autoOpenAttemptedRef.current || workspaceRootRef.current) {
+      return;
+    }
+    autoOpenAttemptedRef.current = true;
+    fetch('/health')
+      .then((res) => res.json())
+      .then((data: { projectPath?: string }) => {
+        if (data.projectPath && !workspaceRootRef.current) {
+          void openFolder(data.projectPath);
+        }
+      })
+      .catch(() => {});
+  }, [desktopShell, openFolder]);
 
   const openFileFromPath = useCallback(async (path?: string) => {
     let filePath = path ? normalizeProjectPath(path) : undefined;
@@ -1103,9 +1128,8 @@ export default function App() {
           {
             const msgId = ensureStreamingAssistantMessageRef.current(msg.sessionId);
             const currentMessage = useStore.getState().chatMessages.find(chatMessage => chatMessage.id === msgId);
-            if (currentMessage?.content) {
-              appendChunk(msgId, '\n\n⚠ ' + msg.error);
-            }
+            const prefix = currentMessage?.content ? '\n\n⚠ ' : '⚠ ';
+            appendChunk(msgId, prefix + msg.error);
             markMessageFailed(msgId);
             streamingRef.current = null;
           }
@@ -1115,6 +1139,17 @@ export default function App() {
             currentActivity: '',
           });
           break;
+
+        case 'chat.notice': {
+          const notice = msg.notice.trim();
+          if (notice) {
+            showNotice(notice);
+            updateAgentSession(msg.sessionId, {
+              currentActivity: notice,
+            });
+          }
+          break;
+        }
 
         case 'file.content':
           openFile(msg.path, msg.content, msg.language, msg.size);

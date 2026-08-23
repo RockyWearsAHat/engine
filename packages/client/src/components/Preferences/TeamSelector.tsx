@@ -52,10 +52,6 @@ function parseEngineConfigYaml(yaml: string): EngineConfig {
         name: currentTeam,
         description: '',
         orchestrator: emptyAgentModel(),
-        architect: emptyAgentModel(),
-        implementer: emptyAgentModel(),
-        tester: emptyAgentModel(),
-        documenter: emptyAgentModel(),
       };
       continue;
     }
@@ -73,10 +69,7 @@ function parseEngineConfigYaml(yaml: string): EngineConfig {
 
     if (indent === 6 && currentRole) {
       const team = config.teams[currentTeam];
-      const roleKey = currentRole as keyof Pick<
-        EngineTeamConfig,
-        'orchestrator' | 'architect' | 'implementer' | 'tester' | 'documenter'
-      >;
+      const roleKey = currentRole as keyof Pick<EngineTeamConfig, 'orchestrator'>;
       if (!team[roleKey]) continue;
       const agentModel = team[roleKey] as EngineAgentModel;
 
@@ -96,18 +89,10 @@ function parseEngineConfigYaml(yaml: string): EngineConfig {
 type CostTier = 'free' | 'low' | 'medium' | 'high';
 
 function teamCostTier(team: EngineTeamConfig): CostTier {
-  const models = [
-    team.orchestrator.model,
-    team.architect.model,
-    team.implementer.model,
-    team.tester.model,
-    team.documenter.model,
-  ];
-  const hasOpus = models.some(m => m.includes('opus'));
-  const hasAnthropicOrOpenAI = models.some(
-    m => m.startsWith('anthropic:') || m.startsWith('openai:'),
-  );
-  const allOllama = models.every(m => m.startsWith('ollama:'));
+  const model = team.orchestrator.model;
+  const hasOpus = model.includes('opus');
+  const hasAnthropicOrOpenAI = model.startsWith('anthropic:') || model.startsWith('openai:');
+  const allOllama = model.startsWith('ollama:');
 
   if (allOllama) return 'free';
   if (hasOpus) return 'high';
@@ -328,33 +313,22 @@ export default function TeamSelector() {
                 </div>
               )}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                {(
-                  [
-                    ['Orchestrator', team.orchestrator],
-                    ['Architect', team.architect],
-                    ['Implementer', team.implementer],
-                    ['Tester', team.tester],
-                    ['Documenter', team.documenter],
-                  ] as [string, EngineAgentModel][]
-                ).map(([role, agentModel]) => (
-                  <span
-                    key={role}
-                    title={`${role}: ${agentModel.model}`}
-                    style={{
-                      fontSize: 10,
-                      color: 'var(--tx-3)',
-                      background: 'var(--surface-3)',
-                      padding: '1px 5px',
-                      borderRadius: 3,
-                      fontFamily: 'monospace',
-                    }}
-                  >
-                    {role[0]}:{' '}
-                    {agentModel.modelDisplay ||
-                      agentModel.model.split(':').pop() ||
-                      agentModel.model}
-                  </span>
-                ))}
+                <span
+                  title={`Manager model: ${team.orchestrator.model}`}
+                  style={{
+                    fontSize: 10,
+                    color: 'var(--tx-3)',
+                    background: 'var(--surface-3)',
+                    padding: '1px 5px',
+                    borderRadius: 3,
+                    fontFamily: 'monospace',
+                  }}
+                >
+                  M:{' '}
+                  {team.orchestrator.modelDisplay ||
+                    team.orchestrator.model.split(':').pop() ||
+                    team.orchestrator.model}
+                </span>
               </div>
             </div>
 

@@ -421,3 +421,46 @@ func TestBuildInitialProjectDirection_MissingFiles_ReturnsEmpty(t *testing.T) {
 		t.Errorf("expected empty for missing files, got %q", result)
 	}
 }
+
+// ── AppendHumanDirectiveToProjectDirection ────────────────────────────────────
+
+func TestAppendHumanDirectiveToProjectDirection_NoExisting_SetsDirective(t *testing.T) {
+	dir := t.TempDir()
+	initSessionSummaryTestDB(t, dir)
+	AppendHumanDirectiveToProjectDirection(dir, "start with the terminal panel")
+	result, _ := db.GetProjectDirection(dir)
+	if !strings.Contains(result, "Human directive: start with the terminal panel") {
+		t.Errorf("expected directive set when no prior direction, got %q", result)
+	}
+}
+
+func TestAppendHumanDirectiveToProjectDirection_AppendsToExisting(t *testing.T) {
+	dir := t.TempDir()
+	initSessionSummaryTestDB(t, dir)
+	if err := db.UpsertProjectDirection(dir, "Project goal: build AI editor"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	AppendHumanDirectiveToProjectDirection(dir, "focus on the terminal panel first")
+	result, _ := db.GetProjectDirection(dir)
+	if !strings.Contains(result, "Project goal: build AI editor") {
+		t.Errorf("expected original direction preserved, got %q", result)
+	}
+	if !strings.Contains(result, "Human directive: focus on the terminal panel first") {
+		t.Errorf("expected appended directive, got %q", result)
+	}
+}
+
+func TestAppendHumanDirectiveToProjectDirection_EmptyPath_NoOp(t *testing.T) {
+	// Must not panic.
+	AppendHumanDirectiveToProjectDirection("", "some directive")
+}
+
+func TestAppendHumanDirectiveToProjectDirection_EmptyDirective_NoOp(t *testing.T) {
+	dir := t.TempDir()
+	initSessionSummaryTestDB(t, dir)
+	AppendHumanDirectiveToProjectDirection(dir, "")
+	result, _ := db.GetProjectDirection(dir)
+	if result != "" {
+		t.Errorf("expected no direction stored for empty directive, got %q", result)
+	}
+}

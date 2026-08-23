@@ -273,6 +273,52 @@ func TestScanProject_DeadCode_SkipsTestFiles(t *testing.T) {
 	}
 }
 
+func TestScanProject_LargeBlockRule_SkipsTestFiles(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+
+	lines := []string{"package demo", "", "func TestHugeBlock(t *testing.T) {"}
+	for i := 0; i < 80; i++ {
+		lines = append(lines, "\tvalue := "+string(rune('0'+(i%10))))
+	}
+	lines = append(lines, "\t_ = value", "}")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "huge_test.go"), strings.Join(lines, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Rule == "maintainability.large-uncommented-block" && issue.File == "packages/demo/huge_test.go" {
+			t.Fatalf("expected large-uncommented-block to skip test files, got %+v", issue)
+		}
+	}
+}
+
+func TestScanProject_LargeBlockRule_RecognizesJSXComments(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+
+	lines := []string{"export function BigPanel() {", "  return (", "    <section>", "      {/* This branch intentionally groups dashboard controls. */}"}
+	for i := 0; i < 70; i++ {
+		lines = append(lines, "      <div className=\"row\">row"+string(rune('0'+(i%10)))+"</div>")
+	}
+	lines = append(lines, "    </section>", "  )", "}")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "panel.tsx"), strings.Join(lines, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Rule == "maintainability.large-uncommented-block" && issue.File == "packages/demo/panel.tsx" {
+			t.Fatalf("expected JSX comments to satisfy large block guidance, got %+v", issue)
+		}
+	}
+}
+
 func TestScanProject_DuplicateSeverity_PrioritizesSubstantialOverlap(t *testing.T) {
 	project := t.TempDir()
 	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\npackages/demo/dup/\n")
@@ -400,6 +446,49 @@ func TestScanProject_DuplicateDetection_IgnoresCommentsAndUsesLargestRunSeverity
 	}
 	if !strings.Contains(target.Message, "helper/module") && !strings.Contains(target.Message, "source of truth") {
 		t.Fatalf("expected actionable fix guidance in duplicate message, got %+v", target)
+	}
+}
+
+func TestScanProject_DuplicateSeverity_LowConfidenceElevenLineOverlapIsIgnored(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+
+	shared := []string{
+		"const sharedOne = seed + 1",
+		"const sharedTwo = sharedOne + 1",
+		"const sharedThree = sharedTwo + 1",
+		"const sharedFour = sharedThree + 1",
+		"const sharedFive = sharedFour + 1",
+		"const sharedSix = sharedFive + 1",
+		"const sharedSeven = sharedSix + 1",
+		"const sharedEight = sharedSeven + 1",
+		"const sharedNine = sharedEight + 1",
+		"const sharedTen = sharedNine + 1",
+		"return sharedTen",
+	}
+
+	makeFile := func(name string) string {
+		lines := []string{"export function " + name + "() {", "const seed = 0"}
+		for i := 0; i < 120; i++ {
+			lines = append(lines, "const uniqueLine"+name+strings.Repeat("x", i%3)+" = "+string(rune('0'+(i%10))))
+		}
+		lines = append(lines, shared...)
+		lines = append(lines, "}")
+		return strings.Join(lines, "\n")
+	}
+
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "low-a.ts"), makeFile("alpha"))
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "low-b.ts"), makeFile("beta"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Rule == "duplicate.largest-overlap" && issue.File == "packages/demo/low-b.ts" {
+			t.Fatalf("expected low-confidence 11-line duplicate overlap to be ignored, got %+v", issue)
+		}
 	}
 }
 
@@ -1067,7 +1156,7 @@ func TestScanProject_BehavioralShift_FlagsPublicSideEffectCallChain(t *testing.T
 	}
 }
 
-func TestScanProject_BehavioralShift_CanBeSilencedByOffOverride(t *testing.T) {
+func TestScanProject_BehavioralShift_CannotBeSilencedByOffOverride(t *testing.T) {
 	project := t.TempDir()
 	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
 	writeQualityTestFile(t, filepath.Join(project, ".engine", "quality-rules.json"), strings.Join([]string{
@@ -1098,8 +1187,8 @@ func TestScanProject_BehavioralShift_CanBeSilencedByOffOverride(t *testing.T) {
 			break
 		}
 	}
-	if found {
-		t.Fatalf("expected behavioral-shift side-effect-chain to be disabled when override requests off")
+	if !found {
+		t.Fatalf("expected behavioral-shift side-effect-chain to remain active even when override requests off")
 	}
 }
 
@@ -1204,6 +1293,31 @@ func TestScanProject_BehavioralShift_SkipsTestFiles(t *testing.T) {
 	}
 }
 
+func TestScanProject_BehavioralShift_SkipsExportedReactComponentFunctions(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "component.tsx"), strings.Join([]string{
+		"function persistPrefs() {",
+		"  savePrefs()",
+		"}",
+		"export function PreferencesPanel() {",
+		"  persistPrefs()",
+		"  return null",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Rule == "behavioral-shift.side-effect-chain" && issue.File == "packages/demo/component.tsx" {
+			t.Fatalf("expected exported React component entry function to skip behavioral-shift findings, got %+v", issue)
+		}
+	}
+}
+
 func TestScanProject_BehavioralShift_IgnoresWriteStringFormattingChains(t *testing.T) {
 	project := t.TempDir()
 	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
@@ -1229,6 +1343,85 @@ func TestScanProject_BehavioralShift_IgnoresWriteStringFormattingChains(t *testi
 	for _, issue := range report.Issues {
 		if issue.Rule == "behavioral-shift.side-effect-chain" && issue.File == "packages/demo/format.go" {
 			t.Fatalf("expected formatting-only WriteString chain to be ignored, got %+v", issue)
+		}
+	}
+}
+
+func TestScanProject_BehavioralShift_SkipsExplicitSideEffectBoundaryNames(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "boundary.go"), strings.Join([]string{
+		"package demo",
+		"",
+		"func saveSnapshot() {}",
+		"",
+		"func InitState() {",
+		"\tsaveSnapshot()",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Rule == "behavioral-shift.side-effect-chain" && issue.File == "packages/demo/boundary.go" {
+			t.Fatalf("expected explicit boundary name to skip behavioral-shift issue, got %+v", issue)
+		}
+	}
+}
+
+func TestScanProject_BehavioralShift_SkipsFunctionWithBoundaryContractTag(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, ".github", "boundary-contracts.md"), strings.Join([]string{
+		"# Boundary Contracts",
+		"contract: packages/demo/contract.go::runworkflow",
+	}, "\n"))
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "contract.go"), strings.Join([]string{
+		"package demo",
+		"",
+		"func persistState() {}",
+		"",
+		"func RunWorkflow() {",
+		"\tpersistState()",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Rule == "behavioral-shift.side-effect-chain" && issue.File == "packages/demo/contract.go" {
+			t.Fatalf("expected boundary contract tag to suppress behavioral-shift issue, got %+v", issue)
+		}
+	}
+}
+
+func TestScanProject_BehavioralShift_IgnoresProtocolWriteCalls(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "http.go"), strings.Join([]string{
+		"package demo",
+		"",
+		"func WriteHeader(code int) {}",
+		"",
+		"func ServeHTTP() {",
+		"\tWriteHeader(200)",
+		"}",
+	}, "\n"))
+
+	report, err := ScanProject(project, 200)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Rule == "behavioral-shift.side-effect-chain" && issue.File == "packages/demo/http.go" {
+			t.Fatalf("expected protocol-style write call to be ignored, got %+v", issue)
 		}
 	}
 }
@@ -1285,6 +1478,94 @@ func TestScanProject_Maintainability_SkipsLongTestFiles(t *testing.T) {
 	for _, issue := range report.Issues {
 		if issue.Rule == "maintainability.long-file" && issue.File == "packages/demo/very_long_test.go" {
 			t.Fatalf("expected long-file rule to skip test files, got %+v", issue)
+		}
+	}
+}
+
+func TestScanProject_Maintainability_SkipsLongStyleFiles(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+
+	lines := make([]string, 0, 760)
+	for i := 0; i < 750; i++ {
+		lines = append(lines, ".row"+string(rune('a'+(i%26)))+" { color: #fff; }")
+	}
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "styles.css"), strings.Join(lines, "\n"))
+
+	report, err := ScanProject(project, 300)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+
+	for _, issue := range report.Issues {
+		if issue.Rule == "maintainability.long-file" && issue.File == "packages/demo/styles.css" {
+			t.Fatalf("expected long-file rule to skip style sheets, got %+v", issue)
+		}
+	}
+}
+
+func TestScanProject_Maintainability_SkipsLongFileWithPragma(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+
+	lines := []string{"// quality:allow-long-file", "package demo", "", "func X() int {", "\ttotal := 0"}
+	for i := 0; i < 900; i++ {
+		lines = append(lines, "\ttotal += 1")
+	}
+	lines = append(lines, "\treturn total", "}")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "waived.go"), strings.Join(lines, "\n"))
+
+	report, err := ScanProject(project, 300)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+	for _, issue := range report.Issues {
+		if issue.Rule == "maintainability.long-file" && issue.File == "packages/demo/waived.go" {
+			t.Fatalf("expected long-file pragma to suppress file issue, got %+v", issue)
+		}
+	}
+}
+
+func TestScanProject_Maintainability_SkipsLongFunctionWithPragma(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+
+	lines := []string{"// quality:allow-long-function", "package demo", "", "func Big() int {", "\ttotal := 0"}
+	for i := 0; i < 260; i++ {
+		lines = append(lines, "\tif total > 0 { total++ } else { total += 2 }")
+	}
+	lines = append(lines, "\treturn total", "}")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "waived_func.go"), strings.Join(lines, "\n"))
+
+	report, err := ScanProject(project, 300)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+	for _, issue := range report.Issues {
+		if issue.Rule == "cs.single-responsibility.long-function" && issue.File == "packages/demo/waived_func.go" {
+			t.Fatalf("expected long-function pragma to suppress function issue, got %+v", issue)
+		}
+	}
+}
+
+func TestScanProject_Maintainability_SkipsLargeBlockWithPragma(t *testing.T) {
+	project := t.TempDir()
+	writeQualityTestFile(t, filepath.Join(project, ".github", "WORKING_BEHAVIORS.md"), "# Behaviors\n")
+
+	lines := []string{"// quality:allow-large-block", "package demo", "", "func BigBlock() {"}
+	for i := 0; i < 80; i++ {
+		lines = append(lines, "\tvalue := "+string(rune('0'+(i%10))))
+	}
+	lines = append(lines, "\t_ = 1", "}")
+	writeQualityTestFile(t, filepath.Join(project, "packages", "demo", "waived_block.go"), strings.Join(lines, "\n"))
+
+	report, err := ScanProject(project, 300)
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+	for _, issue := range report.Issues {
+		if issue.Rule == "maintainability.large-uncommented-block" && issue.File == "packages/demo/waived_block.go" {
+			t.Fatalf("expected large-block pragma to suppress issue, got %+v", issue)
 		}
 	}
 }

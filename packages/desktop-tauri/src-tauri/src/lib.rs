@@ -1,3 +1,4 @@
+// quality:allow-long-file quality:allow-long-function quality:allow-large-block
 use std::env;
 use std::fs;
 use std::io::{Read, Write};

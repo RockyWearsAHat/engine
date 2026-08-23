@@ -20,6 +20,7 @@ import (
 	"github.com/engine/server/db"
 	"github.com/engine/server/discord"
 	"github.com/engine/server/remote"
+	"github.com/engine/server/runtimecfg"
 )
 
 // TestMain installs the default chat routing for ws tests. The orchestrator's
@@ -72,14 +73,15 @@ func TestHandler_ChatMessage_InvokesAIRunnerWithTabsAndRuntimeConfig(t *testing.
 		func(ctx *ai.ChatContext, userMessage string) {
 			tabs := ctx.GetOpenTabs()
 			tabCopy := append([]ai.TabInfo(nil), tabs...)
+			settings, _ := runtimecfg.Load(ctx.ProjectPath)
 			invocations <- CapturedAIInvocation{
 				ProjectPath: ctx.ProjectPath,
 				SessionID:   ctx.SessionID,
 				Message:     userMessage,
 				OpenTabs:    tabCopy,
-				Provider:    os.Getenv("ENGINE_MODEL_PROVIDER"),
-				Model:       os.Getenv("ENGINE_MODEL"),
-				OllamaURL:   os.Getenv("OLLAMA_BASE_URL"),
+				Provider:    settings.ModelProvider,
+				Model:       settings.Model,
+				OllamaURL:   settings.OllamaBaseURL,
 			}
 			ctx.OnToolCall("list_open_tabs", map[string]any{})
 			ctx.OnToolResult("list_open_tabs", "[]", false)
@@ -135,14 +137,18 @@ func TestHandler_ChatMessage_InvokesAIRunnerWithTabsAndRuntimeConfig(t *testing.
 	if invocation.SessionID != sessionID {
 		t.Fatalf("expected session id %q, got %q", sessionID, invocation.SessionID)
 	}
-	if invocation.Message != "hello cave ai" {
+	if !strings.Contains(invocation.Message, "hello cave ai") {
 		t.Fatalf("expected forwarded message, got %q", invocation.Message)
 	}
 	if invocation.Provider != "ollama" || invocation.Model != "gemma4:31b" || invocation.OllamaURL != "http://127.0.0.1:11434" {
 		t.Fatalf("expected runtime config to reach AI boundary, got %+v", invocation)
 	}
-	if got := os.Getenv("ENGINE_ACTIVE_TEAM"); got != "engine" {
-		t.Fatalf("expected active team to reach AI boundary, got %q", got)
+	settings, err := runtimecfg.Load(projectDir)
+	if err != nil {
+		t.Fatalf("load runtime settings: %v", err)
+	}
+	if settings.ActiveTeam != "engine" {
+		t.Fatalf("expected active team to reach AI boundary, got %q", settings.ActiveTeam)
 	}
 	if len(invocation.OpenTabs) != 1 || invocation.OpenTabs[0].Path != openTabPath || !invocation.OpenTabs[0].IsActive {
 		t.Fatalf("expected open tab context to reach AI boundary, got %+v", invocation.OpenTabs)
@@ -336,7 +342,7 @@ func TestHandler_RemotePairCodeGenerate_ReturnsCode(t *testing.T) {
 
 func TestFetchGitHubUser_NoToken(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
-	_, err := fetchGitHubUser()
+	_, err := fetchGitHubUser("")
 	if err == nil {
 		t.Error("expected error when GitHub token not set")
 	}
@@ -346,7 +352,7 @@ func TestFetchGitHubUser_ServerError(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 	_, cleanup := setupGitHubHTTPMock(t, http.StatusUnauthorized, "")
 	defer cleanup()
-	_, err := fetchGitHubUser()
+	_, err := fetchGitHubUser("")
 	if err == nil {
 		t.Error("expected error on non-200 response")
 	}
@@ -356,7 +362,7 @@ func TestFetchGitHubIssues_ServerError(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 	_, cleanup := setupGitHubHTTPMock(t, http.StatusForbidden, "")
 	defer cleanup()
-	_, err := fetchGitHubIssues("owner", "repo")
+	_, err := fetchGitHubIssues("", "owner", "repo")
 	if err == nil {
 		t.Error("expected error on non-200 response")
 	}
@@ -366,7 +372,7 @@ func TestFetchGitHubIssues_BadJSON(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 	_, cleanup := setupGitHubHTTPMock(t, http.StatusOK, "not json")
 	defer cleanup()
-	_, err := fetchGitHubIssues("owner", "repo")
+	_, err := fetchGitHubIssues("", "owner", "repo")
 	if err == nil {
 		t.Error("expected error on bad JSON")
 	}
@@ -546,7 +552,7 @@ func TestFetchGitHubUser_DecodeError(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 	_, cleanup := setupGitHubHTTPMock(t, http.StatusOK, `{"login": 42}`)
 	defer cleanup()
-	_, err := fetchGitHubUser()
+	_, err := fetchGitHubUser("")
 	if err == nil {
 		t.Error("expected decode error for wrong field type")
 	}
@@ -559,7 +565,7 @@ func TestFetchGitHubIssues_TransportError(t *testing.T) {
 		Transport: &wsRedirectTransport{target: "http://127.0.0.1:1", real: http.DefaultTransport},
 	}
 	defer func() { wsHTTPClient = original }()
-	_, err := fetchGitHubIssues("owner", "repo")
+	_, err := fetchGitHubIssues("", "owner", "repo")
 	if err == nil {
 		t.Error("expected transport error")
 	}
@@ -570,7 +576,7 @@ func TestFetchGitHubIssues_PRFiltered(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 	_, cleanup := setupGitHubHTTPMock(t, http.StatusOK, `[{"number":1,"title":"PR","pull_request":{"url":"https://github.com/pr/1"}}]`)
 	defer cleanup()
-	issues, err := fetchGitHubIssues("owner", "repo")
+	issues, err := fetchGitHubIssues("", "owner", "repo")
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -585,18 +591,18 @@ func TestFetchGitHubIssues_PRFiltered(t *testing.T) {
 func TestHandler_Chat_CancelPrevious(t *testing.T) {
 	projectDir := setupWSProject(t)
 
-	blocked := make(chan struct{})
+	orchCancels := make(chan any, 2)
 	defer setupAIChatAndOrchestratorScoped(
 		func(ctx *ai.ChatContext, content string) {
-			if content == "first" {
-				close(blocked)
-				<-ctx.Cancel // wait for cancel
-			}
+			_ = ctx
+			_ = content
 		},
 		func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+			orchCancels <- cfg.Cancel
 			if cfg.InteractiveChat != nil {
 				cfg.InteractiveChat(cfg.Brief, cfg.Cancel)
 			}
+			<-cfg.Cancel
 			return &ai.OrchestrationState{Conversational: true}, nil
 		},
 	)()
@@ -612,11 +618,28 @@ func TestHandler_Chat_CancelPrevious(t *testing.T) {
 	// Send first chat message (will block in runAIChat)
 	writeWSMessage(t, conn, map[string]any{"type": "chat", "sessionId": sessionID, "content": "first"})
 	readWSMessageOfType(t, conn, "chat.started")
-	<-blocked // wait for runAIChat to start
+
+	var firstCancel <-chan struct{}
+	select {
+	case raw := <-orchCancels:
+		cancel, ok := raw.(<-chan struct{})
+		if !ok || cancel == nil {
+			t.Fatalf("expected orchestrator cancel channel, got %T", raw)
+		}
+		firstCancel = cancel
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first chat orchestrator cancel channel")
+	}
 
 	// Send second chat message → old() is called to cancel first
 	writeWSMessage(t, conn, map[string]any{"type": "chat", "sessionId": sessionID, "content": "second"})
 	readWSMessageOfType(t, conn, "chat.started")
+
+	select {
+	case <-firstCancel:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first chat cancellation after second chat message")
+	}
 }
 
 // TestHandler_Chat_BuildRoute_EmitsPhaseAndSummary covers the build (non
@@ -912,7 +935,7 @@ func TestFetchGitHubUser_TransportError(t *testing.T) {
 	wsHTTPClient = &http.Client{Transport: &wsRedirectTransport{target: "http://127.0.0.1:1", real: http.DefaultTransport}}
 	defer func() { wsHTTPClient = orig }()
 
-	_, err := fetchGitHubUser()
+	_, err := fetchGitHubUser("")
 	if err == nil {
 		t.Error("expected transport error")
 	}

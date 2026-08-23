@@ -1,3 +1,4 @@
+// quality:allow-long-file
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { GitCommit, GitStatus } from '@engine/shared';

@@ -1,5 +1,7 @@
 package discord
 
+// quality:allow-long-file
+
 import (
 	"encoding/json"
 	"fmt"
@@ -31,6 +33,9 @@ const (
 	// or role hierarchy mismatches during initial bootstrap.
 	requiredInvitePerms = discordgo.PermissionAdministrator
 )
+
+// discordApprovalTimeout is how long Engine waits for an !approve/!deny reply.
+var discordApprovalTimeout = 10 * time.Minute
 
 // Config controls Discord bot behavior.
 type Config struct {
@@ -96,6 +101,9 @@ type Service struct {
 	active          map[string]bool
 	activeByChannel map[string]bool
 	cloneProjectFn  func(url, dest string) error
+	// pendingApprovals holds response channels for outstanding !approve / !deny requests.
+	pendingApprovalMu sync.Mutex
+	pendingApprovals  map[string]chan bool
 	// testSendHook, when non-nil, intercepts send() calls instead of hitting
 	// the live discordgo session. Used by control_test.go to inspect the
 	// messages a handler would have posted.
@@ -251,6 +259,7 @@ func NewService(cfg Config, projectPath string) (*Service, error) {
 		},
 		active:          make(map[string]bool),
 		activeByChannel: make(map[string]bool),
+		pendingApprovals: make(map[string]chan bool),
 		cloneProjectFn: func(url, dest string) error {
 			cmd := exec.Command("git", "clone", url, dest)
 			if out, err := cmd.CombinedOutput(); err != nil {
@@ -403,6 +412,10 @@ func (s *Service) onMessage(_ *discordgo.Session, m *discordgo.MessageCreate) {
 		s.handleIssuesCommand(m, args)
 	case "identity":
 		s.handleIdentityCommand(m)
+	case "approve":
+		s.handleApproveCommand(m, args, true)
+	case "deny":
+		s.handleApproveCommand(m, args, false)
 	default:
 		s.send(m.ChannelID, "Unknown command. Use !help.")
 	}
@@ -701,6 +714,96 @@ func (s *Service) SendDMToOwner(message string) error {
 		return fmt.Errorf("no allowed Discord users configured")
 	}
 	return s.SendDM(userID, message)
+}
+
+// approvalShortID generates a compact hex ID for an approval request.
+func approvalShortID() string {
+	return fmt.Sprintf("%06x", time.Now().UnixNano()&0xffffff)
+}
+
+// requestApprovalViaDM posts an approval request to the project channel,
+// DMs the owner, and blocks until the user responds with !approve <id> or
+// !deny <id>. Returns immediately when no users are configured.
+func (s *Service) requestApprovalViaDM(projectPath, kind, title, message, command string) (bool, error) {
+	s.stateMu.RLock()
+	hasUsers := len(s.cfg.AllowedUsers) > 0
+	s.stateMu.RUnlock()
+	if !hasUsers {
+		return false, fmt.Errorf("approval required but no Discord users configured")
+	}
+
+	id := approvalShortID()
+	preview := command
+	if len(preview) > 200 {
+		preview = preview[:197] + "\u2026"
+	}
+	channelMsg := fmt.Sprintf(
+		"\u23f3 **Approval needed** (ID: `%s`)\n%s: `%s`\nReply `!approve %s` to allow or `!deny %s` to block.",
+		id, title, preview, id, id,
+	)
+	dmMsg := fmt.Sprintf(
+		"\U0001f510 **Engine needs your approval**\n%s\nCommand: `%s`\n\nIn the project channel, reply:\n\u2022 `!approve %s` \u2014 allow\n\u2022 `!deny %s` \u2014 block",
+		message, preview, id, id,
+	)
+
+	ch := make(chan bool, 1)
+	s.pendingApprovalMu.Lock()
+	if s.pendingApprovals == nil {
+		s.pendingApprovals = make(map[string]chan bool)
+	}
+	s.pendingApprovals[id] = ch
+	s.pendingApprovalMu.Unlock()
+
+	s.stateMu.RLock()
+	binding, ok := s.state.Projects[projectPath]
+	s.stateMu.RUnlock()
+	if ok {
+		s.send(binding.ChannelID, channelMsg)
+	}
+	_ = s.SendDMToOwner(dmMsg)
+
+	select {
+	case allow := <-ch:
+		return allow, nil
+	case <-time.After(discordApprovalTimeout):
+		s.pendingApprovalMu.Lock()
+		delete(s.pendingApprovals, id)
+		s.pendingApprovalMu.Unlock()
+		return false, fmt.Errorf("approval timed out after %v", discordApprovalTimeout)
+	}
+}
+
+// handleApproveCommand resolves a pending approval. allow=true for !approve, allow=false for !deny.
+func (s *Service) handleApproveCommand(m *discordgo.MessageCreate, args []string, allow bool) {
+	if len(args) == 0 {
+		verb := "approve"
+		if !allow {
+			verb = "deny"
+		}
+		s.send(m.ChannelID, fmt.Sprintf("Usage: !%s <id>", verb))
+		return
+	}
+	id := strings.TrimSpace(args[0])
+	s.pendingApprovalMu.Lock()
+	if s.pendingApprovals == nil {
+		s.pendingApprovals = make(map[string]chan bool)
+	}
+	ch, ok := s.pendingApprovals[id]
+	if ok {
+		delete(s.pendingApprovals, id)
+	}
+	s.pendingApprovalMu.Unlock()
+	if !ok {
+		s.send(m.ChannelID, fmt.Sprintf("No pending approval with ID `%s`.", id))
+		return
+	}
+	ch <- allow
+	close(ch)
+	if allow {
+		s.send(m.ChannelID, fmt.Sprintf("\u2705 Approved (`%s`).", id))
+	} else {
+		s.send(m.ChannelID, fmt.Sprintf("\U0001f6ab Denied (`%s`).", id))
+	}
 }
 
 func (s *Service) listProjects(channelID string) {
@@ -1039,11 +1142,7 @@ func (s *Service) buildChatContext(binding ProjectBinding, sessionID, replyChann
 				OnError:          func(err string) { *lastErr = strings.TrimSpace(err) },
 				OnSessionUpdated: func(_ *db.Session) {},
 				RequestApproval: func(kind, title, message, command string) (bool, error) {
-					_ = kind
-					_ = title
-					_ = message
-					_ = command
-					return false, fmt.Errorf("approval required but unavailable in discord command mode")
+					return s.requestApprovalViaDM(binding.ProjectPath, kind, title, message, command)
 				},
 			}, brief)
 		},

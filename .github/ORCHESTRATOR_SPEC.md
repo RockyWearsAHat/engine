@@ -20,13 +20,13 @@ Engine has two orchestration modes:
 - Entry: RunAutonomousProject in orchestrator.go
 - Flow: intake -> PRD -> plan -> execute step -> review step -> validate -> done
 - Persistence: .engine/orchestration.json and .engine/plan.md
-- Default mode unless USE_EVENT_ORCHESTRATOR=1
+- Default mode unless both USE_EVENT_ORCHESTRATOR=1 and ENGINE_EXPERIMENTAL_EVENT_ORCHESTRATOR=1
 
 2. Event-driven team orchestration
 - Entry: RunEventOrchestrator or RunEventOrchestratorAsState in orchestrator_event.go
 - Flow: intake -> plan -> dispatch multiple teams -> wait on events -> validate -> replan if needed
 - Persistence: .engine/brain.json (via OrchestrationBrain)
-- Enabled when USE_EVENT_ORCHESTRATOR=1
+- Enabled only when USE_EVENT_ORCHESTRATOR=1 and ENGINE_EXPERIMENTAL_EVENT_ORCHESTRATOR=1
 
 ## Teammate Communication (Independent Agents)
 
@@ -163,6 +163,16 @@ These are current implementation facts:
 - Event mode uses .engine/brain.json
 - Classic mode uses .engine/orchestration.json and .engine/plan.md
 
+4. Event-mode teams are not true specialist members yet.
+- `createTeamsFromPlan` groups plan steps by title heuristics rather than by an explicit manager-built specialist composition.
+- `TeamWorker.runStep` executes all team work with `RoleAutonomousBuilder`, regardless of stored team role.
+- The `lead_planner.go` specialist composition model exists in code, but it is not currently the runtime source for event-team creation.
+
+5. Current "team" terminology is overloaded.
+- Config-selected "team" means which orchestrator model to run.
+- Event-mode "team" currently means a bucket of grouped plan steps.
+- Neither surface currently equals a durable subordinate manager with its own capability-specific runtime contract.
+
 ## Teammate Communication Contract
 
 When team mode is active, communication behavior is:
@@ -175,6 +185,7 @@ When team mode is active, communication behavior is:
 ## Operational Summary
 
 - If USE_EVENT_ORCHESTRATOR is unset: classic step-by-step orchestrator path runs.
-- If USE_EVENT_ORCHESTRATOR=1: event-driven team orchestration path runs and enables independent teammate communication lines through AgentCommsHub and agent_* tools.
+- If USE_EVENT_ORCHESTRATOR=1 but ENGINE_EXPERIMENTAL_EVENT_ORCHESTRATOR is unset: classic step-by-step orchestrator path still runs.
+- If both USE_EVENT_ORCHESTRATOR=1 and ENGINE_EXPERIMENTAL_EVENT_ORCHESTRATOR=1: event-driven team orchestration path runs and enables independent teammate communication lines through AgentCommsHub and agent_* tools.
 
 This is the source-of-truth behavior as of current code.

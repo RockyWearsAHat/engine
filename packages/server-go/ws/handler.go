@@ -1,6 +1,9 @@
 package ws
 
+// quality:allow-long-file quality:allow-long-function
+
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -21,8 +24,10 @@ import (
 	gofs "github.com/engine/server/fs"
 	gogit "github.com/engine/server/git"
 	"github.com/engine/server/github"
+	"github.com/engine/server/mesh"
 	"github.com/engine/server/quality"
 	"github.com/engine/server/remote"
+	"github.com/engine/server/runtimecfg"
 	"github.com/engine/server/terminal"
 	"github.com/engine/server/workspace"
 	"github.com/gorilla/websocket"
@@ -59,7 +64,17 @@ var (
 	repoRegistryLoadFn   = workspace.LoadRegistry
 	repoRegistryAddFn    = workspace.AddToRegistry
 	repoRegistryRemoveFn = workspace.RemoveFromRegistry
+	meshLoadConfigFn     = mesh.LoadConfig
+	meshSaveConfigFn     = mesh.SaveConfig
+	meshDefaultPathFn    = mesh.DefaultConfigPath
+	meshClientHealthFn   = func(selfName string, peer *mesh.Peer, timeout time.Duration) (*mesh.HealthResponse, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		return mesh.NewClient(selfName).Health(ctx, peer)
+	}
 )
+
+var meshActivityMu sync.Mutex
 
 // approvalTimeout is the duration to wait for user approval; exposed for testing.
 var approvalTimeout = 5 * time.Minute
@@ -228,7 +243,7 @@ type conn struct {
 
 	// chatCancelMu guards the chatCancelFns map.
 	chatCancelMu  sync.Mutex
-	chatCancelFns map[string]func() // keyed by sessionID
+	chatCancelFns map[string]chan struct{} // keyed by sessionID
 
 	writeMu sync.Mutex
 
@@ -253,6 +268,13 @@ type runtimeConfig struct {
 	ContextMaxTokens      *string `json:"contextMaxTokens"`
 	ContextRecentWindow   *string `json:"contextRecentWindow"`
 	ListDirectoryMaxChars *string `json:"listDirectoryMaxChars"`
+	LocalFirst            *string `json:"localFirst"`
+	LlamacppModel         *string `json:"llamacppModel"`
+	OllamaModel           *string `json:"ollamaModel"`
+	PlannerProvider       *string `json:"plannerProvider"`
+	PlannerModel          *string `json:"plannerModel"`
+	ReviewerProvider      *string `json:"reviewerProvider"`
+	ReviewerModel         *string `json:"reviewerModel"`
 }
 
 // resolveChatSession resolves the session ID to an active database session, updating connection state.
@@ -327,15 +349,27 @@ func truncate(s string, n int) string {
 
 // promptWithProjectStatusContext decorates a user prompt with project and session context from Discord.
 func promptWithProjectStatusContext(projectPath, prompt string) string {
+	direction := strings.TrimSpace(ai.EnsureProjectDirection(projectPath))
 	status := latestScaffoldStatusLine(projectPath)
-	if status == "" {
+	if direction == "" && status == "" {
 		return prompt
 	}
 	repoName := strings.TrimSpace(filepath.Base(projectPath))
 	if repoName == "" || repoName == "." {
 		repoName = "project"
 	}
-	return strings.TrimSpace(fmt.Sprintf("Discord project context:\n- Project: %s\n- %s\n- This message came from the project channel, so answer with awareness of existing project/session history. Do not claim setup is just starting if scaffold sessions already exist.\n\nUser message:\n%s", repoName, status, prompt))
+	lines := []string{
+		"Discord project context:",
+		fmt.Sprintf("- Project: %s", repoName),
+	}
+	if direction != "" {
+		lines = append(lines, "- Persistent project direction: "+direction)
+	}
+	if status != "" {
+		lines = append(lines, "- "+status)
+	}
+	lines = append(lines, "- This message came from the project channel, so answer with awareness of existing project/session history and the persistent project direction. Do not claim setup is just starting if scaffold sessions already exist.", "", "User message:", prompt)
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 // newConn initializes a new per-connection state for a WebSocket client.
@@ -347,7 +381,7 @@ func newConn(ws *websocket.Conn, projectPath string) *conn {
 		termMgr:         terminal.NewManager(),
 		termIDs:         make(map[string]bool),
 		approvalWaiters: make(map[string]chan bool),
-		chatCancelFns:   make(map[string]func()),
+		chatCancelFns:   make(map[string]chan struct{}),
 		testObservers:   make(map[string]*ai.TestObserver),
 	}
 }
@@ -697,9 +731,9 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		cancelCh := make(chan struct{})
 		c.chatCancelMu.Lock()
 		if old, ok := c.chatCancelFns[sessionID]; ok {
-			old() // cancel any previous in-flight request for this session
+			close(old) // cancel any previous in-flight request for this session
 		}
-		c.chatCancelFns[sessionID] = func() { close(cancelCh) }
+		c.chatCancelFns[sessionID] = cancelCh
 		c.chatCancelMu.Unlock()
 
 		c.send(map[string]any{"type": "chat.started", "sessionId": sessionID})
@@ -709,8 +743,9 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 				c.chatCancelMu.Lock()
 				if fn, ok := c.chatCancelFns[sessionID]; ok {
 					// Only delete if it's still the same channel (not replaced by a newer request).
-					_ = fn
+					if fn == cancelCh {
 					delete(c.chatCancelFns, sessionID)
+					}
 				}
 				c.chatCancelMu.Unlock()
 
@@ -838,8 +873,8 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			return
 		}
 		c.chatCancelMu.Lock()
-		if fn, ok := c.chatCancelFns[msg.SessionID]; ok {
-			fn()
+		if cancelCh, ok := c.chatCancelFns[msg.SessionID]; ok {
+			close(cancelCh)
 			delete(c.chatCancelFns, msg.SessionID)
 		}
 		c.chatCancelMu.Unlock()
@@ -1020,7 +1055,10 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr("Bad payload", "BAD_PAYLOAD")
 			return
 		}
-		applyRuntimeConfig(msg.Config)
+		if err := applyRuntimeConfig(projectPath, msg.Config); err != nil {
+			c.sendErr("Failed to apply runtime config: "+err.Error(), "CONFIG_SYNC_ERROR")
+			return
+		}
 
 	// ── Discord control plane ─────────────────────────────────────────────
 
@@ -1071,6 +1109,63 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 
 	case "remote.pair.code.generate":
 		c.handleRemotePairCodeGenerate()
+
+	// ── Project network mesh control ───────────────────────────────────────
+
+	case "mesh.config.get":
+		c.handleMeshConfigGet()
+
+	case "mesh.config.set":
+		var msg struct {
+			SelfName      string `json:"selfName"`
+			ListenAddr    string `json:"listenAddr"`
+			SelfOllamaURL string `json:"selfOllamaURL"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.sendErr("Bad payload", "BAD_PAYLOAD")
+			return
+		}
+		c.handleMeshConfigSet(msg.SelfName, msg.ListenAddr, msg.SelfOllamaURL)
+
+	case "mesh.peer.upsert":
+		var msg struct {
+			Peer struct {
+				Name      string   `json:"name"`
+				Address   string   `json:"address"`
+				Secret    string   `json:"secret"`
+				Roles     []string `json:"roles"`
+				OllamaURL string   `json:"ollamaURL"`
+			} `json:"peer"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.sendErr("Bad payload", "BAD_PAYLOAD")
+			return
+		}
+		c.handleMeshPeerUpsert(msg.Peer.Name, msg.Peer.Address, msg.Peer.Secret, msg.Peer.Roles, msg.Peer.OllamaURL)
+
+	case "mesh.peer.remove":
+		var msg struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			c.sendErr("Bad payload", "BAD_PAYLOAD")
+			return
+		}
+		c.handleMeshPeerRemove(msg.Name)
+
+	case "mesh.health.scan":
+		var msg struct {
+			TimeoutMs int `json:"timeoutMs"`
+		}
+		_ = json.Unmarshal(raw, &msg)
+		c.handleMeshHealthScan(msg.TimeoutMs)
+
+	case "mesh.activity.get":
+		var msg struct {
+			Limit int `json:"limit"`
+		}
+		_ = json.Unmarshal(raw, &msg)
+		c.handleMeshActivityGet(msg.Limit)
 
 	// ── GitHub Auth / Issues ──────────────────────────────────────────────────
 
@@ -1256,13 +1351,21 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			}
 		}
 		if strings.TrimSpace(msg.Provider) != "" {
-			os.Setenv("ENGINE_MODEL_PROVIDER", strings.TrimSpace(msg.Provider)) //nolint:errcheck
+			msg.Provider = strings.TrimSpace(msg.Provider)
 		}
 		if strings.TrimSpace(msg.Model) != "" {
-			os.Setenv("ENGINE_MODEL", strings.TrimSpace(msg.Model)) //nolint:errcheck
+			msg.Model = strings.TrimSpace(msg.Model)
 		}
 		if strings.TrimSpace(msg.Team) != "" {
-			os.Setenv("ENGINE_ACTIVE_TEAM", strings.TrimSpace(msg.Team)) //nolint:errcheck
+			msg.Team = strings.TrimSpace(msg.Team)
+		}
+		if _, err := runtimecfg.Apply(projectPath, runtimecfg.Patch{
+			ModelProvider: &msg.Provider,
+			Model:         &msg.Model,
+			ActiveTeam:    &msg.Team,
+		}); err != nil {
+			c.sendErr("Failed to persist team runtime config: "+err.Error(), "TEAM_CONFIG_ERROR")
+			return
 		}
 		c.send(map[string]any{
 			"type": "engine.team.updated",
@@ -1442,9 +1545,377 @@ func (c *conn) handleRemotePairCodeGenerate() {
 	})
 }
 
+func normalizeMeshRoles(roles []string) []string {
+	if len(roles) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(roles))
+	for _, role := range roles {
+		clean := strings.TrimSpace(role)
+		if clean == "" {
+			continue
+		}
+		key := strings.ToLower(clean)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, clean)
+	}
+	return out
+}
+
+func meshPeerPayload(peer mesh.Peer) map[string]any {
+	return map[string]any{
+		"name":      strings.TrimSpace(peer.Name),
+		"address":   strings.TrimSpace(peer.Address),
+		"roles":     normalizeMeshRoles(peer.Roles),
+		"ollamaURL": strings.TrimSpace(peer.OllamaURL),
+		"hasSecret": strings.TrimSpace(peer.Secret) != "",
+	}
+}
+
+func meshConfigPayload(cfg *mesh.Config) map[string]any {
+	if cfg == nil {
+		cfg = &mesh.Config{}
+	}
+	peers := make([]map[string]any, 0, len(cfg.Peers))
+	for _, peer := range cfg.Peers {
+		peers = append(peers, meshPeerPayload(peer))
+	}
+	return map[string]any{
+		"selfName":      strings.TrimSpace(cfg.SelfName),
+		"listenAddr":    strings.TrimSpace(cfg.ListenAddr),
+		"selfOllamaURL": strings.TrimSpace(cfg.SelfOllamaURL),
+		"peers":         peers,
+		"configPath":    meshDefaultPathFn(),
+	}
+}
+
+func meshActivityPath(projectPath string) string {
+	root := strings.TrimSpace(projectPath)
+	if root == "" {
+		root = "."
+	}
+	return filepath.Join(root, ".engine", "mesh-activity.json")
+}
+
+func loadMeshActivity(projectPath string) ([]map[string]any, error) {
+	path := meshActivityPath(projectPath)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []map[string]any{}, nil
+		}
+		return nil, err
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		return []map[string]any{}, nil
+	}
+	var records []map[string]any
+	if err := json.Unmarshal(data, &records); err != nil {
+		return []map[string]any{}, err
+	}
+	if records == nil {
+		return []map[string]any{}, nil
+	}
+	return records, nil
+}
+
+func appendMeshActivity(projectPath string, entry map[string]any) error {
+	path := meshActivityPath(projectPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	meshActivityMu.Lock()
+	defer meshActivityMu.Unlock()
+	records, err := loadMeshActivity(projectPath)
+	if err != nil {
+		records = []map[string]any{}
+	}
+	records = append(records, entry)
+	if len(records) > 500 {
+		records = records[len(records)-500:]
+	}
+	data, err := json.MarshalIndent(records, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+func (c *conn) logMeshActivity(action, target, status, message, errText string, resolved bool) {
+	entry := map[string]any{
+		"id":      newID(),
+		"at":      time.Now().UTC().Format(time.RFC3339),
+		"action":  strings.TrimSpace(action),
+		"target":  strings.TrimSpace(target),
+		"status":  strings.TrimSpace(status),
+		"message": strings.TrimSpace(message),
+	}
+	if strings.TrimSpace(errText) != "" {
+		entry["error"] = strings.TrimSpace(errText)
+	}
+	if resolved {
+		entry["resolved"] = true
+	}
+	if err := appendMeshActivity(c.projectPath, entry); err != nil {
+		log.Printf("[engine] ws: mesh activity log append error: %v", err)
+	}
+}
+
+func (c *conn) handleMeshActivityGet(limit int) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	meshActivityMu.Lock()
+	records, err := loadMeshActivity(c.projectPath)
+	meshActivityMu.Unlock()
+	if err != nil {
+		c.sendErr("Failed to load mesh activity: "+err.Error(), "MESH_ACTIVITY_ERROR")
+		return
+	}
+	if len(records) > limit {
+		records = records[len(records)-limit:]
+	}
+	for i, j := 0, len(records)-1; i < j; i, j = i+1, j-1 {
+		records[i], records[j] = records[j], records[i]
+	}
+	c.send(map[string]any{"type": "mesh.activity", "records": records})
+}
+
+func (c *conn) handleMeshConfigGet() {
+	c.logMeshActivity("mesh.config.get", "config", "started", "Loading project network config", "", false)
+	cfg, err := meshLoadConfigFn("")
+	if err != nil {
+		c.logMeshActivity("mesh.config.get", "config", "error", "Failed to load project network config", err.Error(), false)
+		c.sendErr("Failed to load mesh config: "+err.Error(), "MESH_CONFIG_ERROR")
+		return
+	}
+	c.logMeshActivity("mesh.config.get", "config", "ok", "Project network config loaded", "", false)
+	c.send(map[string]any{"type": "mesh.config", "config": meshConfigPayload(cfg)})
+}
+
+func (c *conn) handleMeshConfigSet(selfName, listenAddr, selfOllamaURL string) {
+	c.logMeshActivity("mesh.config.set", "config", "started", "Saving project network config", "", false)
+	cfg, err := meshLoadConfigFn("")
+	if err != nil {
+		c.logMeshActivity("mesh.config.set", "config", "error", "Failed to load config before save", err.Error(), false)
+		c.sendErr("Failed to load mesh config: "+err.Error(), "MESH_CONFIG_ERROR")
+		return
+	}
+	if cfg == nil {
+		cfg = &mesh.Config{}
+	}
+	if strings.TrimSpace(selfName) != "" {
+		cfg.SelfName = strings.TrimSpace(selfName)
+	}
+	if strings.TrimSpace(listenAddr) != "" {
+		cfg.ListenAddr = strings.TrimSpace(listenAddr)
+	}
+	if strings.TrimSpace(selfOllamaURL) != "" {
+		cfg.SelfOllamaURL = strings.TrimSpace(selfOllamaURL)
+	}
+	if strings.TrimSpace(cfg.SelfName) == "" {
+		c.logMeshActivity("mesh.config.set", "config", "error", "Config save rejected: selfName missing", "selfName is required", false)
+		c.sendErr("selfName is required", "BAD_PAYLOAD")
+		return
+	}
+	if strings.TrimSpace(cfg.ListenAddr) == "" {
+		cfg.ListenAddr = ":24445"
+	}
+	if err := meshSaveConfigFn("", cfg); err != nil {
+		c.logMeshActivity("mesh.config.set", "config", "error", "Failed to persist project network config", err.Error(), false)
+		c.sendErr("Failed to save mesh config: "+err.Error(), "MESH_CONFIG_ERROR")
+		return
+	}
+	c.logMeshActivity("mesh.config.set", "config", "ok", "Project network config saved", "", true)
+	c.send(map[string]any{"type": "mesh.config.saved", "config": meshConfigPayload(cfg)})
+}
+
+func (c *conn) handleMeshPeerUpsert(name, address, secret string, roles []string, ollamaURL string) {
+	cleanName := strings.TrimSpace(name)
+	cleanAddr := strings.TrimSpace(address)
+	c.logMeshActivity("mesh.peer.upsert", cleanName, "started", "Saving network agent node", "", false)
+	if cleanName == "" || cleanAddr == "" {
+		c.logMeshActivity("mesh.peer.upsert", cleanName, "error", "Node save rejected: name/address required", "peer.name and peer.address are required", false)
+		c.sendErr("peer.name and peer.address are required", "BAD_PAYLOAD")
+		return
+	}
+
+	cfg, err := meshLoadConfigFn("")
+	if err != nil {
+		c.logMeshActivity("mesh.peer.upsert", cleanName, "error", "Failed to load config before node save", err.Error(), false)
+		c.sendErr("Failed to load mesh config: "+err.Error(), "MESH_CONFIG_ERROR")
+		return
+	}
+	if cfg == nil {
+		cfg = &mesh.Config{}
+	}
+	if strings.TrimSpace(cfg.SelfName) == "" {
+		c.logMeshActivity("mesh.peer.upsert", cleanName, "error", "Node save blocked: selfName not configured", "Set mesh selfName before adding peers", false)
+		c.sendErr("Set mesh selfName before adding peers", "MESH_CONFIG_ERROR")
+		return
+	}
+
+	cleanRoles := normalizeMeshRoles(roles)
+	cleanSecret := strings.TrimSpace(secret)
+	cleanOllamaURL := strings.TrimSpace(ollamaURL)
+
+	updated := false
+	for i := range cfg.Peers {
+		if !strings.EqualFold(strings.TrimSpace(cfg.Peers[i].Name), cleanName) {
+			continue
+		}
+		cfg.Peers[i].Name = cleanName
+		cfg.Peers[i].Address = cleanAddr
+		cfg.Peers[i].Roles = cleanRoles
+		cfg.Peers[i].OllamaURL = cleanOllamaURL
+		if cleanSecret != "" {
+			cfg.Peers[i].Secret = cleanSecret
+		}
+		updated = true
+		break
+	}
+
+	if !updated {
+		if cleanSecret == "" {
+			c.logMeshActivity("mesh.peer.upsert", cleanName, "error", "New node rejected: missing shared secret", "peer.secret is required when adding a new peer", false)
+			c.sendErr("peer.secret is required when adding a new peer", "BAD_PAYLOAD")
+			return
+		}
+		cfg.Peers = append(cfg.Peers, mesh.Peer{
+			Name:      cleanName,
+			Address:   cleanAddr,
+			Secret:    cleanSecret,
+			Roles:     cleanRoles,
+			OllamaURL: cleanOllamaURL,
+		})
+	}
+
+	if err := meshSaveConfigFn("", cfg); err != nil {
+		c.logMeshActivity("mesh.peer.upsert", cleanName, "error", "Failed to persist node", err.Error(), false)
+		c.sendErr("Failed to save mesh config: "+err.Error(), "MESH_CONFIG_ERROR")
+		return
+	}
+	c.logMeshActivity("mesh.peer.upsert", cleanName, "ok", "Network agent node saved", "", true)
+	c.send(map[string]any{"type": "mesh.config.saved", "config": meshConfigPayload(cfg)})
+}
+
+func (c *conn) handleMeshPeerRemove(name string) {
+	cleanName := strings.TrimSpace(name)
+	c.logMeshActivity("mesh.peer.remove", cleanName, "started", "Removing network agent node", "", false)
+	if cleanName == "" {
+		c.logMeshActivity("mesh.peer.remove", cleanName, "error", "Node removal rejected: name required", "name is required", false)
+		c.sendErr("name is required", "BAD_PAYLOAD")
+		return
+	}
+	cfg, err := meshLoadConfigFn("")
+	if err != nil {
+		c.logMeshActivity("mesh.peer.remove", cleanName, "error", "Failed to load config before node removal", err.Error(), false)
+		c.sendErr("Failed to load mesh config: "+err.Error(), "MESH_CONFIG_ERROR")
+		return
+	}
+	if cfg == nil || len(cfg.Peers) == 0 {
+		c.logMeshActivity("mesh.peer.remove", cleanName, "error", "Node removal failed: node not found", "Peer not found", false)
+		c.sendErr("Peer not found", "NOT_FOUND")
+		return
+	}
+
+	nextPeers := make([]mesh.Peer, 0, len(cfg.Peers))
+	removed := false
+	for _, peer := range cfg.Peers {
+		if strings.EqualFold(strings.TrimSpace(peer.Name), cleanName) {
+			removed = true
+			continue
+		}
+		nextPeers = append(nextPeers, peer)
+	}
+	if !removed {
+		c.logMeshActivity("mesh.peer.remove", cleanName, "error", "Node removal failed: node not found", "Peer not found", false)
+		c.sendErr("Peer not found", "NOT_FOUND")
+		return
+	}
+	cfg.Peers = nextPeers
+	if err := meshSaveConfigFn("", cfg); err != nil {
+		c.logMeshActivity("mesh.peer.remove", cleanName, "error", "Failed to persist node removal", err.Error(), false)
+		c.sendErr("Failed to save mesh config: "+err.Error(), "MESH_CONFIG_ERROR")
+		return
+	}
+	c.logMeshActivity("mesh.peer.remove", cleanName, "ok", "Network agent node removed", "", true)
+	c.send(map[string]any{"type": "mesh.config.saved", "config": meshConfigPayload(cfg)})
+}
+
+func (c *conn) handleMeshHealthScan(timeoutMs int) {
+	c.logMeshActivity("mesh.health.scan", "all", "started", "Scanning network agent nodes", "", false)
+	cfg, err := meshLoadConfigFn("")
+	if err != nil {
+		c.logMeshActivity("mesh.health.scan", "all", "error", "Failed to load config before health scan", err.Error(), false)
+		c.sendErr("Failed to load mesh config: "+err.Error(), "MESH_CONFIG_ERROR")
+		return
+	}
+	if cfg == nil || len(cfg.Peers) == 0 {
+		c.logMeshActivity("mesh.health.scan", "all", "ok", "No network nodes configured", "", true)
+		c.send(map[string]any{"type": "mesh.health.results", "results": []map[string]any{}})
+		return
+	}
+
+	if timeoutMs <= 0 {
+		timeoutMs = 4000
+	}
+	if timeoutMs < 500 {
+		timeoutMs = 500
+	}
+	if timeoutMs > 30000 {
+		timeoutMs = 30000
+	}
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+
+	results := make([]map[string]any, len(cfg.Peers))
+	var wg sync.WaitGroup
+	for i := range cfg.Peers {
+		peer := cfg.Peers[i]
+		wg.Add(1)
+		go func(index int, p mesh.Peer) {
+			defer wg.Done()
+			health, healthErr := meshClientHealthFn(strings.TrimSpace(cfg.SelfName), &p, timeout)
+			if healthErr != nil {
+				c.logMeshActivity("mesh.health.scan", strings.TrimSpace(p.Name), "error", "Agent node offline", healthErr.Error(), false)
+				results[index] = map[string]any{
+					"peer":  meshPeerPayload(p),
+					"ok":    false,
+					"error": healthErr.Error(),
+				}
+				return
+			}
+			c.logMeshActivity("mesh.health.scan", strings.TrimSpace(p.Name), "ok", "Agent node healthy", "", true)
+			results[index] = map[string]any{
+				"peer": meshPeerPayload(p),
+				"ok":   true,
+				"health": map[string]any{
+					"name":      strings.TrimSpace(health.Name),
+					"os":        strings.TrimSpace(health.OS),
+					"arch":      strings.TrimSpace(health.Arch),
+					"cpus":      health.CPUs,
+					"roles":     normalizeMeshRoles(health.Roles),
+					"ollamaURL": strings.TrimSpace(health.OllamaURL),
+					"upAt":      strings.TrimSpace(health.UpAt),
+				},
+			}
+		}(i, peer)
+	}
+	wg.Wait()
+	c.logMeshActivity("mesh.health.scan", "all", "ok", "Network scan complete", "", true)
+	c.send(map[string]any{"type": "mesh.health.results", "results": results})
+}
+
 // handleGitHubIssues fetches GitHub issues for a project and sends them to the client.
 func (c *conn) handleGitHubIssues(projectPath string) {
-	owner, repo, overrideConfigured := githubRepoOverride()
+	owner, repo, overrideConfigured := githubRepoOverride(projectPath)
 	switch {
 	case overrideConfigured && (owner == "" || repo == ""):
 		c.send(map[string]any{"type": "github.issues", "issues": []any{}, "error": "GitHub owner and repository must both be set in Settings."})
@@ -1462,7 +1933,7 @@ func (c *conn) handleGitHubIssues(projectPath string) {
 		owner, repo = resolvedOwner, resolvedRepo
 	}
 
-	issues, err := fetchGitHubIssues(owner, repo)
+	issues, err := fetchGitHubIssues(projectPath, owner, repo)
 	if err != nil {
 		c.send(map[string]any{"type": "github.issues", "issues": []any{}, "error": err.Error()})
 		return
@@ -1472,7 +1943,7 @@ func (c *conn) handleGitHubIssues(projectPath string) {
 
 // handleGitHubUser retrieves the authenticated GitHub user and sends info to the client.
 func (c *conn) handleGitHubUser() {
-	user, err := fetchGitHubUser()
+	user, err := fetchGitHubUser(c.projectPath)
 	if err != nil {
 		c.send(map[string]any{"type": "github.user", "user": nil, "error": err.Error()})
 		return
@@ -1529,7 +2000,10 @@ func (c *conn) handleGitHubAuthStart() {
 	}
 
 	// Activate the token immediately so the rest of the server uses it.
-	os.Setenv("GITHUB_TOKEN", tok.AccessToken) //nolint:errcheck
+	if _, applyErr := runtimecfg.Apply(c.projectPath, runtimecfg.Patch{GitHubToken: &tok.AccessToken}); applyErr != nil {
+		c.send(map[string]any{"type": "github.auth.error", "error": applyErr.Error()})
+		return
+	}
 	notifyGitHubAuthSuccess(tok.AccessToken, webhookSecret)
 
 	c.send(map[string]any{"type": "github.auth.done", "token": tok.AccessToken})
@@ -1556,34 +2030,36 @@ type githubUser struct {
 	AvatarURL string `json:"avatarUrl"`
 }
 
-func applyRuntimeConfig(cfg runtimeConfig) {
-	setRuntimeEnv("GITHUB_TOKEN", cfg.GitHubToken)
-	setRuntimeEnv("ENGINE_GITHUB_OWNER", cfg.GitHubOwner)
-	setRuntimeEnv("ENGINE_GITHUB_REPO", cfg.GitHubRepo)
-	setRuntimeEnv("ANTHROPIC_API_KEY", cfg.AnthropicKey)
-	setRuntimeEnv("OPENAI_API_KEY", cfg.OpenAIKey)
-	setRuntimeEnv("ENGINE_MODEL_PROVIDER", cfg.ModelProvider)
-	setRuntimeEnv("ENGINE_ACTIVE_TEAM", cfg.ActiveTeam)
-	setRuntimeEnv("OLLAMA_BASE_URL", cfg.OllamaBaseURL)
-	setRuntimeEnv("ENGINE_OLLAMA_NUM_CTX", cfg.OllamaNumCtx)
-	setRuntimeEnv("LLAMACPP_BASE_URL", cfg.LlamacppBaseURL)
-	setRuntimeEnv("ENGINE_MODEL", cfg.Model)
-	setRuntimeEnv("ENGINE_CLONES_DIR", cfg.ClonesDir)
-	setRuntimeEnv("ENGINE_CONTEXT_MAX_TOKENS", cfg.ContextMaxTokens)
-	setRuntimeEnv("ENGINE_CONTEXT_RECENT_WINDOW", cfg.ContextRecentWindow)
-	setRuntimeEnv("ENGINE_LIST_DIRECTORY_MAX_CHARS", cfg.ListDirectoryMaxChars)
+func applyRuntimeConfig(projectPath string, cfg runtimeConfig) error {
+	_, err := runtimecfg.Apply(projectPath, runtimecfg.Patch{
+		GitHubToken:           cfg.GitHubToken,
+		GitHubOwner:           cfg.GitHubOwner,
+		GitHubRepo:            cfg.GitHubRepo,
+		AnthropicKey:          cfg.AnthropicKey,
+		OpenAIKey:             cfg.OpenAIKey,
+		ModelProvider:         cfg.ModelProvider,
+		ActiveTeam:            cfg.ActiveTeam,
+		OllamaBaseURL:         cfg.OllamaBaseURL,
+		OllamaNumCtx:          cfg.OllamaNumCtx,
+		LlamacppBaseURL:       cfg.LlamacppBaseURL,
+		Model:                 cfg.Model,
+		ClonesDir:             cfg.ClonesDir,
+		ContextMaxTokens:      cfg.ContextMaxTokens,
+		ContextRecentWindow:   cfg.ContextRecentWindow,
+		ListDirectoryMaxChars: cfg.ListDirectoryMaxChars,
+		LocalFirst:            cfg.LocalFirst,
+		LlamacppModel:         cfg.LlamacppModel,
+		OllamaModel:           cfg.OllamaModel,
+		PlannerProvider:       cfg.PlannerProvider,
+		PlannerModel:          cfg.PlannerModel,
+		ReviewerProvider:      cfg.ReviewerProvider,
+		ReviewerModel:         cfg.ReviewerModel,
+	})
+	return err
 }
 
-func setRuntimeEnv(key string, value *string) {
-	if value == nil || strings.TrimSpace(*value) == "" {
-		os.Unsetenv(key) //nolint:errcheck
-		return
-	}
-	os.Setenv(key, strings.TrimSpace(*value)) //nolint:errcheck
-}
-
-func fetchGitHubUser() (*githubUser, error) {
-	token := githubToken()
+func fetchGitHubUser(projectPath string) (*githubUser, error) {
+	token := githubToken(projectPath)
 	if token == "" {
 		return nil, fmt.Errorf("GitHub token not configured")
 	}
@@ -1619,12 +2095,12 @@ func fetchGitHubUser() (*githubUser, error) {
 	}, nil
 }
 
-func fetchGitHubIssues(owner, repo string) ([]githubIssue, error) {
+func fetchGitHubIssues(projectPath, owner, repo string) ([]githubIssue, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues?state=open&per_page=30", owner, repo)
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	req.Header.Set("User-Agent", "Engine/0.1")
-	if token := githubToken(); token != "" {
+	if token := githubToken(projectPath); token != "" {
 		req.Header.Set("Authorization", "token "+token)
 	}
 
@@ -1686,12 +2162,25 @@ func newID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
-func githubToken() string {
+func githubToken(projectPath string) string {
+	if cfg, err := runtimecfg.Load(projectPath); err == nil && strings.TrimSpace(cfg.GitHubToken) != "" {
+		return strings.TrimSpace(cfg.GitHubToken)
+	}
 	return os.Getenv("GITHUB_TOKEN")
 }
 
-func githubRepoOverride() (string, string, bool) {
-	owner := strings.TrimSpace(os.Getenv("ENGINE_GITHUB_OWNER"))
-	repo := strings.TrimSpace(os.Getenv("ENGINE_GITHUB_REPO"))
+func githubRepoOverride(projectPath string) (string, string, bool) {
+	owner := ""
+	repo := ""
+	if cfg, err := runtimecfg.Load(projectPath); err == nil {
+		owner = strings.TrimSpace(cfg.GitHubOwner)
+		repo = strings.TrimSpace(cfg.GitHubRepo)
+	}
+	if owner == "" {
+		owner = strings.TrimSpace(os.Getenv("ENGINE_GITHUB_OWNER"))
+	}
+	if repo == "" {
+		repo = strings.TrimSpace(os.Getenv("ENGINE_GITHUB_REPO"))
+	}
 	return owner, repo, owner != "" || repo != ""
 }

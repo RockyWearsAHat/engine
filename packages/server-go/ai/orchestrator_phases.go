@@ -53,7 +53,108 @@ func orchestratorPlanPhase(cfg OrchestratorConfig, state *OrchestrationState, ca
 		return nil
 	}
 	state.Plan = steps
+
+	// Structure is sound — now run ONE adversarial completeness critique. A
+	// well-formatted but weak plan passes validatePlanQuality; this gate asks
+	// whether the plan is actually ambitious enough to satisfy the brief.
+	verdict, gaps := orchestratorPlanCritiquePhase(cfg, state, oc.String(), cancel)
+	if verdict == "INCOMPLETE" && strings.TrimSpace(gaps) != "" {
+		if improved := orchestratorRegeneratePlanForGaps(cfg, state, gaps, cancel); len(improved) > 0 {
+			state.Plan = improved
+		}
+	}
 	return nil
+}
+
+// orchestratorPlanCritiquePhase runs one adversarial critique of planText against
+// the brief. It returns ("COMPLETE","") when the plan is judged sufficient and
+// ("INCOMPLETE", gaps) when it misses capabilities/requirements/edge-cases the
+// brief demands. Any unparsable result fails open as ("COMPLETE","") so a parse
+// miss never blocks a build.
+func orchestratorPlanCritiquePhase(cfg OrchestratorConfig, state *OrchestrationState, planText string, cancel <-chan struct{}) (verdict string, gaps string) {
+	sessionID := fmt.Sprintf("%s-plan-critique-%d", chooseSessionPrefix(cfg), time.Now().UnixNano())
+	if err := db.CreateSession(sessionID, cfg.ProjectPath, ""); err != nil {
+		return "COMPLETE", ""
+	}
+
+	ctx, oc := newChatContextForRole(cfg, sessionID, RolePlanner, cancel)
+
+	prompt := buildPlanCritiquePrompt(state.Brief, planText)
+	cfg.chatFnFor()(ctx, prompt)
+
+	return parsePlanCritiqueVerdict(oc.String())
+}
+
+// parsePlanCritiqueVerdict inspects the final non-empty line of a critique
+// response. "COMPLETE" → ("COMPLETE",""); "INCOMPLETE: <gaps>" → ("INCOMPLETE",
+// gaps). Anything else fails open to ("COMPLETE","").
+func parsePlanCritiqueVerdict(out string) (string, string) {
+	lines := strings.Split(out, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		// The prompt asks for a backticked verdict line; tolerate stray backticks.
+		line = strings.TrimSpace(strings.Trim(line, "`"))
+		upper := strings.ToUpper(line)
+		if upper == "COMPLETE" {
+			return "COMPLETE", ""
+		}
+		if strings.HasPrefix(upper, "INCOMPLETE") {
+			gaps := ""
+			if idx := strings.Index(line, ":"); idx > 0 && idx < len(line)-1 {
+				gaps = strings.TrimSpace(line[idx+1:])
+			}
+			return "INCOMPLETE", gaps
+		}
+		// Terminal line is neither verdict — fail open, do not block the build.
+		return "COMPLETE", ""
+	}
+	return "COMPLETE", ""
+}
+
+// orchestratorRegeneratePlanForGaps regenerates the plan ONCE, appending the
+// critique's gaps to the planner context. Returns the regenerated steps only if
+// they pass structural validation; an empty result tells the caller to keep the
+// original plan. Bounded to a single pass — never loops.
+func orchestratorRegeneratePlanForGaps(cfg OrchestratorConfig, state *OrchestrationState, gaps string, cancel <-chan struct{}) []PlanStep {
+	sessionID := fmt.Sprintf("%s-plan-regen-%d", chooseSessionPrefix(cfg), time.Now().UnixNano())
+	if err := db.CreateSession(sessionID, cfg.ProjectPath, ""); err != nil {
+		return nil
+	}
+
+	ctx, oc := newChatContextForRole(cfg, sessionID, RolePlanner, cancel)
+
+	contextDoc := ComposeDocContext(cfg.ProjectPath, DocDesign, DocVocabulary, DocPRD)
+	if contextDoc == "" {
+		contextDoc = readContextDoc(cfg.ProjectPath) // legacy fallback
+	}
+	briefWithGaps := state.Brief + "\n\nADDRESS THESE GAPS THE PRIOR PLAN MISSED:\n" + strings.TrimSpace(gaps)
+	prompt := buildPlannerPromptWithContext(briefWithGaps, contextDoc)
+	cfg.chatFnFor()(ctx, prompt)
+
+	steps := parsePlanFromText(oc.String())
+	if len(steps) == 0 {
+		return nil
+	}
+	if err := validatePlanQuality(steps); err != nil {
+		return nil
+	}
+	return steps
+}
+
+// buildPlanCritiquePrompt frames the adversarial completeness review of a plan
+// against its brief.
+func buildPlanCritiquePrompt(brief, planText string) string {
+	var b strings.Builder
+	b.WriteString("You are reviewing a build plan against its brief. Identify any capability, requirement, edge case, or quality bar in the brief that the plan fails to deliver, and judge whether the plan is ambitious enough to fully satisfy the brief.\n\n")
+	b.WriteString("BRIEF:\n")
+	b.WriteString(strings.TrimSpace(brief))
+	b.WriteString("\n\nPLAN:\n")
+	b.WriteString(strings.TrimSpace(planText))
+	b.WriteString("\n\nEnd your response with exactly one line: `COMPLETE` or `INCOMPLETE: <comma-separated concrete gaps>`.\n")
+	return b.String()
 }
 
 // orchestratorRepairPlanPhase gives the planner one more chance when the first

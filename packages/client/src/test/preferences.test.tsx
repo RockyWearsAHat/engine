@@ -8,16 +8,63 @@
  */
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { sendWsMessage, createBridgeMock, setupStoreForUITests, createWsClientMockFactory } from './test-helpers.js';
+import { sendWsMessage, setupStoreForUITests } from './test-helpers.js';
 
 // ── WS mock with callback capture using vi.hoisted ──────────────────────────────
 
-const { mockDef: wsMockDef, wsCallbacks } = vi.hoisted(() => createWsClientMockFactory());
+const { mockDef: wsMockDef, wsCallbacks } = vi.hoisted(() => {
+  let capturedWsCallback: ((data: unknown) => void) | null = null;
+  let capturedOnOpenCallback: (() => void) | null = null;
 
-vi.mock('../ws/client.js', () => wsMockDef);
+  const wsCallbacks = {
+    setCapturedWsCallback(cb: ((data: unknown) => void) | null) {
+      capturedWsCallback = cb;
+    },
+    setCapturedOnOpenCallback(cb: (() => void) | null) {
+      capturedOnOpenCallback = cb;
+    },
+    get getCapturedWsCallback() {
+      return capturedWsCallback;
+    },
+    get getCapturedOnOpenCallback() {
+      return capturedOnOpenCallback;
+    },
+  };
 
-vi.mock('../bridge.js', () =>
-  createBridgeMock({
+  return {
+    wsCallbacks,
+    mockDef: {
+      wsClient: {
+        send: vi.fn(),
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        onMessage: vi.fn((cb: (data: unknown) => void) => {
+          wsCallbacks.setCapturedWsCallback(cb);
+          return () => { wsCallbacks.setCapturedWsCallback(null); };
+        }),
+        onOpen: vi.fn((cb: () => void) => {
+          wsCallbacks.setCapturedOnOpenCallback(cb);
+          return () => { wsCallbacks.setCapturedOnOpenCallback(null); };
+        }),
+        onClose: vi.fn(() => () => {}),
+      },
+    },
+  };
+});
+
+const bridgeMockDef = vi.hoisted(() => ({
+  bridge: {
+    openFolderDialog: vi.fn().mockResolvedValue(null),
+    setLastProjectPath: vi.fn().mockResolvedValue(undefined),
+    getEditorPreferences: vi.fn().mockResolvedValue({
+      fontFamily: 'monospace',
+      fontSize: 13,
+      lineHeight: 1.5,
+      tabSize: 2,
+      markdownViewMode: 'text',
+      wordWrap: false,
+    }),
+    setEditorPreferences: vi.fn().mockResolvedValue(true),
     openExternal: vi.fn(),
     getLocalServerToken: vi.fn().mockResolvedValue('tok-123'),
     getGithubToken: vi.fn().mockResolvedValue(null),
@@ -36,8 +83,19 @@ vi.mock('../bridge.js', () =>
     setAnthropicKey: vi.fn().mockResolvedValue(true),
     setOpenAiKey: vi.fn().mockResolvedValue(true),
     setOllamaBaseUrl: vi.fn().mockResolvedValue(true),
-  })
-);
+    agentServiceStatus: vi.fn().mockResolvedValue({ installed: false, running: false }),
+    installAgentService: vi.fn().mockResolvedValue(''),
+    uninstallAgentService: vi.fn().mockResolvedValue(''),
+    setActiveTeam: vi.fn().mockResolvedValue(undefined),
+    getActiveTeam: vi.fn().mockResolvedValue(null),
+    getClonesDir: vi.fn().mockResolvedValue(null),
+    setClonesDir: vi.fn().mockResolvedValue(true),
+  },
+}));
+
+vi.mock('../ws/client.js', () => wsMockDef);
+
+vi.mock('../bridge.js', () => bridgeMockDef);
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
@@ -1174,7 +1232,7 @@ describe('PreferencesPanel — Model Provider form saves', () => {
     render(<PreferencesPanel />);
     fireEvent.click(getTab(/model/i));
 
-    const urlInput = screen.getByPlaceholderText(/http:\/\/127.0.0.1/);
+    const urlInput = screen.getByLabelText(/Ollama base URL/i) as HTMLInputElement;
     fireEvent.change(urlInput, { target: { value: 'http://localhost:11434' } });
 
     const saveBtn = screen.getByRole('button', { name: /save ollama url/i });

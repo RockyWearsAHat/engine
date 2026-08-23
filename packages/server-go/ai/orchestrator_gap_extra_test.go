@@ -17,6 +17,34 @@ func TestRunAutonomousProject_ProjectPathRequired(t *testing.T) {
 	}
 }
 
+func TestEnrichOrchestratorBrief_IncludesProjectDirectionAndRequest(t *testing.T) {
+	projectPath := t.TempDir()
+	t.Setenv("ENGINE_STATE_DIR", t.TempDir())
+	if err := db.Init(projectPath); err != nil {
+		t.Fatalf("db init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectPath, "PROJECT_GOAL.md"), []byte("Build a resilient orchestrator."), 0o644); err != nil {
+		t.Fatalf("write project goal: %v", err)
+	}
+
+	got := enrichOrchestratorBrief(projectPath, "Fix issue #42 and validate")
+	if !strings.Contains(got, "PERSISTENT PROJECT DIRECTION") {
+		t.Fatalf("expected direction header in enriched brief, got %q", got)
+	}
+	if !strings.Contains(got, "CURRENT REQUEST") || !strings.Contains(got, "Fix issue #42 and validate") {
+		t.Fatalf("expected current request in enriched brief, got %q", got)
+	}
+}
+
+func TestEnrichOrchestratorBrief_DoesNotDoubleInject(t *testing.T) {
+	projectPath := t.TempDir()
+	already := "PERSISTENT PROJECT DIRECTION:\n- keep context\n\nCURRENT REQUEST:\nDo work"
+	got := enrichOrchestratorBrief(projectPath, already)
+	if got != already {
+		t.Fatalf("expected already-enriched brief to remain unchanged, got %q", got)
+	}
+}
+
 func TestRunAutonomousProject_LoadStateError(t *testing.T) {
 	base := t.TempDir()
 	projectPath := filepath.Join(base, "project-file")
@@ -553,11 +581,17 @@ func TestRunAutonomousProject_SkipsExhaustedAndEmitsSkip(t *testing.T) {
 	}
 
 	st, err := RunAutonomousProject(cfg)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	// A skipped step is marked Done so the loop advances and emits the skip
+	// phase, but it must NOT let the project report done: validation passing
+	// while a step was skipped is a hard block.
+	if err == nil || !strings.Contains(err.Error(), "skipped without satisfying acceptance") {
+		t.Fatalf("expected skip-block error, got %v", err)
 	}
 	if st == nil || len(st.Plan) == 0 || !st.Plan[0].Done {
 		t.Fatalf("expected skipped step done, got %+v", st)
+	}
+	if st.CompletedAt != "" {
+		t.Fatalf("expected no completion timestamp for skipped step, got %q", st.CompletedAt)
 	}
 	foundSkip := false
 	for _, p := range phases {

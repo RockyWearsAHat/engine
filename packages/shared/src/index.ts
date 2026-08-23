@@ -302,6 +302,12 @@ export type ClientMessage =
   | { type: 'repo.add'; urlOrPath: string }
   | { type: 'repo.remove'; name: string }
   | { type: 'remote.pair.code.generate' }
+  | { type: 'mesh.config.get' }
+  | { type: 'mesh.config.set'; selfName: string; listenAddr?: string; selfOllamaURL?: string }
+  | { type: 'mesh.peer.upsert'; peer: { name: string; address: string; secret?: string; roles?: string[]; ollamaURL?: string } }
+  | { type: 'mesh.peer.remove'; name: string }
+  | { type: 'mesh.health.scan'; timeoutMs?: number }
+  | { type: 'mesh.activity.get'; limit?: number }
   | { type: 'usage.dashboard.get'; scope: 'project' | 'user'; projectPath?: string; model?: string }
   | { type: 'quality.report.get'; projectPath?: string; maxIssues?: number }
   | { type: 'github.auth.start' };
@@ -312,6 +318,7 @@ export type ServerMessage =
   | { type: 'chat.tool_call'; sessionId: string; name: string; input: unknown }
   | { type: 'chat.tool_result'; sessionId: string; name: string; result: unknown; isError: boolean }
   | { type: 'chat.error'; sessionId: string; error: string }
+  | { type: 'chat.notice'; sessionId: string; notice: string }
   | { type: 'session.list'; sessions: Session[] }
   | { type: 'session.created'; session: Session }
   | { type: 'session.updated'; session: Session }
@@ -341,6 +348,10 @@ export type ServerMessage =
   | { type: 'engine.team.updated'; team: string }
   | { type: 'llama.fleet.scan.result'; result?: LlamaFleetScanResult; error?: string }
   | { type: 'remote.pair.code'; code: string; expiresIn: number }
+  | { type: 'mesh.config'; config: MeshConfigView }
+  | { type: 'mesh.config.saved'; config: MeshConfigView }
+  | { type: 'mesh.health.results'; results: MeshPeerHealth[] }
+  | { type: 'mesh.activity'; records: MeshActivityEvent[] }
   | { type: 'test.summary'; sessionId: string; summary: TestSummary }
   | { type: 'discord.config'; config: DiscordConfig; active: boolean }
   | { type: 'discord.config.saved'; config: DiscordConfig; active: boolean; warning?: string }
@@ -431,10 +442,6 @@ export interface EngineTeamConfig {
   name: string;
   description: string;
   orchestrator: EngineAgentModel;
-  architect: EngineAgentModel;
-  implementer: EngineAgentModel;
-  tester: EngineAgentModel;
-  documenter: EngineAgentModel;
 }
 
 export interface EngineConfig {
@@ -461,4 +468,47 @@ export interface PairingResult {
   token?: string;
   deviceId?: string;
   error?: string;
+}
+
+// Mesh network control types
+export interface MeshPeer {
+  name: string;
+  address: string;
+  roles: string[];
+  ollamaURL?: string;
+  hasSecret?: boolean;
+}
+
+export interface MeshConfigView {
+  selfName: string;
+  listenAddr: string;
+  selfOllamaURL?: string;
+  peers: MeshPeer[];
+  configPath: string;
+}
+
+export interface MeshPeerHealth {
+  peer: MeshPeer;
+  ok: boolean;
+  error?: string;
+  health?: {
+    name: string;
+    os: string;
+    arch: string;
+    cpus: number;
+    roles: string[];
+    ollamaURL?: string;
+    upAt: string;
+  };
+}
+
+export interface MeshActivityEvent {
+  id: string;
+  at: string;
+  action: string;
+  target?: string;
+  status: 'started' | 'ok' | 'error';
+  message?: string;
+  error?: string;
+  resolved?: boolean;
 }

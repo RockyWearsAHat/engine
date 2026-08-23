@@ -6,6 +6,9 @@ func GetProjectDirection(projectPath string) (string, error) {
 	if projectPath == "" {
 		return "", nil
 	}
+	if globalDB == nil {
+		return "", nil
+	}
 
 	row := globalDB.QueryRow(
 		`SELECT summary FROM project_directions WHERE project_path = ? LIMIT 1`,
@@ -23,6 +26,9 @@ func GetProjectDirection(projectPath string) (string, error) {
 
 func UpsertProjectDirection(projectPath, summary string) error {
 	if projectPath == "" {
+		return nil
+	}
+	if globalDB == nil {
 		return nil
 	}
 	t := now()

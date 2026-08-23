@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, Key, Laptop, Link2, Plus, RefreshCw, Wifi } from 'lucide-react';
 import { wsClient } from '../../ws/client.js';
+import type { MeshActivityEvent, MeshConfigView, MeshPeerHealth } from '@engine/shared';
 import {
   clearConnectionProfiles,
   deleteConnectionProfile,
@@ -18,6 +19,15 @@ type ConnectionDraft = {
   port: string;
   workspacePath: string;
   pairCode: string;
+  
+};
+
+type MeshPeerDraft = {
+  name: string;
+  address: string;
+  roles: string;
+  secret: string;
+  ollamaURL: string;
 };
 
 const emptyDraft: ConnectionDraft = {
@@ -26,6 +36,14 @@ const emptyDraft: ConnectionDraft = {
   port: '3443',
   workspacePath: '',
   pairCode: '',
+};
+
+const emptyMeshPeerDraft: MeshPeerDraft = {
+  name: '',
+  address: '',
+  roles: '',
+  secret: '',
+  ollamaURL: '',
 };
 
 function profileLabel(profile: ConnectionProfile): string {
@@ -47,6 +65,14 @@ export default function MachineConnectionsPanel({
 
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
   const [codeExpiresIn, setCodeExpiresIn] = useState<number>(0);
+  const [meshConfig, setMeshConfig] = useState<MeshConfigView | null>(null);
+  const [meshHealth, setMeshHealth] = useState<MeshPeerHealth[]>([]);
+  const [meshActivity, setMeshActivity] = useState<MeshActivityEvent[]>([]);
+  const [meshStatus, setMeshStatus] = useState<string>('');
+  const [meshSelfName, setMeshSelfName] = useState<string>('');
+  const [meshListenAddr, setMeshListenAddr] = useState<string>(':24445');
+  const [meshSelfOllamaURL, setMeshSelfOllamaURL] = useState<string>('');
+  const [meshPeerDraft, setMeshPeerDraft] = useState<MeshPeerDraft>(emptyMeshPeerDraft);
 
   // Listen for the generated pairing code pushed back from the server.
   useEffect(() => {
@@ -55,7 +81,29 @@ export default function MachineConnectionsPanel({
         setGeneratedCode(msg.code);
         setCodeExpiresIn(msg.expiresIn);
       }
+      if (msg.type === 'mesh.config' || msg.type === 'mesh.config.saved') {
+        setMeshConfig(msg.config);
+        setMeshSelfName(msg.config.selfName || '');
+        setMeshListenAddr(msg.config.listenAddr || ':24445');
+        setMeshSelfOllamaURL(msg.config.selfOllamaURL || '');
+        if (msg.type === 'mesh.config.saved') {
+          setMeshStatus('Project network settings saved.');
+        }
+      }
+      if (msg.type === 'mesh.health.results') {
+        setMeshHealth(msg.results);
+        setMeshStatus('Project network scan complete.');
+      }
+      if (msg.type === 'mesh.activity') {
+        setMeshActivity(msg.records ?? []);
+      }
     });
+  }, []);
+
+  useEffect(() => {
+    wsClient.send({ type: 'mesh.config.get' });
+    wsClient.send({ type: 'mesh.health.scan', timeoutMs: 4000 });
+    wsClient.send({ type: 'mesh.activity.get', limit: 50 });
   }, []);
 
   const selectedProfile = useMemo(
@@ -164,6 +212,65 @@ export default function MachineConnectionsPanel({
     /* istanbul ignore next */
     window.location.reload();
   };
+
+  const saveMeshSettings = () => {
+    const selfName = meshSelfName.trim();
+    if (!selfName) {
+      setMeshStatus('Project network self name is required.');
+      return;
+    }
+    wsClient.send({
+      type: 'mesh.config.set',
+      selfName,
+      listenAddr: meshListenAddr.trim() || ':24445',
+      selfOllamaURL: meshSelfOllamaURL.trim(),
+    });
+    setMeshStatus('Saving project network settings...');
+  };
+
+  const upsertMeshPeer = () => {
+    const name = meshPeerDraft.name.trim();
+    const address = meshPeerDraft.address.trim();
+    if (!name || !address) {
+      setMeshStatus('Peer name and address are required.');
+      return;
+    }
+    const roles = meshPeerDraft.roles
+      .split(',')
+      .map(role => role.trim())
+      .filter(Boolean);
+    wsClient.send({
+      type: 'mesh.peer.upsert',
+      peer: {
+        name,
+        address,
+        secret: meshPeerDraft.secret.trim(),
+        roles,
+        ollamaURL: meshPeerDraft.ollamaURL.trim(),
+      },
+    });
+    setMeshStatus('Saving peer...');
+    setMeshPeerDraft(emptyMeshPeerDraft);
+  };
+
+  const refreshMeshHealth = () => {
+    wsClient.send({ type: 'mesh.health.scan', timeoutMs: 4000 });
+    setMeshStatus('Scanning project network...');
+  };
+
+  const refreshMeshActivity = () => {
+    wsClient.send({ type: 'mesh.activity.get', limit: 50 });
+    setMeshStatus('Refreshing project activity...');
+  };
+
+  const removeMeshPeer = (name: string) => {
+    wsClient.send({ type: 'mesh.peer.remove', name });
+    setMeshStatus(`Removing peer ${name}...`);
+  };
+
+  const meshHealthByName = new Map(
+    meshHealth.map(item => [item.peer.name.trim().toLowerCase(), item]),
+  );
 
   return (
     <article className={`connections-panel ${compact ? 'compact' : ''}`}>
@@ -347,6 +454,203 @@ export default function MachineConnectionsPanel({
             {status}
           </div>
         )}
+      </div>
+
+      <div className="connections-form">
+        <div className="connections-form-title">
+          <Wifi size={14} />
+          <span>Project network control</span>
+        </div>
+        <span className="connections-muted">
+          Each joined user can manage peer machines and scan cross-machine health directly from this project.
+        </span>
+        <label className="connections-field">
+          <span className="connections-label">Self name</span>
+          <input
+            value={meshSelfName}
+            onChange={(event) => setMeshSelfName(event.target.value)}
+            placeholder="mac-studio"
+            className="connections-input"
+          />
+        </label>
+        <div className="connections-row two-up">
+          <label className="connections-field">
+            <span className="connections-label">Listen address</span>
+            <input
+              value={meshListenAddr}
+              onChange={(event) => setMeshListenAddr(event.target.value)}
+              placeholder=":24445"
+              className="connections-input"
+            />
+          </label>
+          <label className="connections-field">
+            <span className="connections-label">Local Ollama URL</span>
+            <input
+              value={meshSelfOllamaURL}
+              onChange={(event) => setMeshSelfOllamaURL(event.target.value)}
+              placeholder="http://127.0.0.1:11434"
+              className="connections-input"
+            />
+          </label>
+        </div>
+        <div className="connections-actions">
+          <button className="btn-secondary" type="button" onClick={saveMeshSettings}>
+            Save network settings
+          </button>
+          <button className="btn-secondary" type="button" onClick={refreshMeshHealth}>
+            Scan network health
+          </button>
+          <button className="btn-secondary" type="button" onClick={refreshMeshActivity}>
+            Refresh activity
+          </button>
+          <button className="btn-secondary" type="button" onClick={() => wsClient.send({ type: 'mesh.config.get' })}>
+            Reload config
+          </button>
+        </div>
+
+        <div className="connections-list">
+          {meshConfig?.peers?.length ? meshConfig.peers.map((peer) => {
+            const health = meshHealthByName.get(peer.name.trim().toLowerCase());
+            const online = !!health?.ok;
+            return (
+              <div className="connections-item" key={peer.name}>
+                <div className="connections-item-top">
+                  <div className="connections-item-name">
+                    <Laptop size={14} />
+                    <span>{peer.name}</span>
+                  </div>
+                  <span className={`connections-badge ${online ? 'active' : ''}`}>
+                    <Wifi size={10} />
+                    {online ? 'online' : 'offline'}
+                  </span>
+                </div>
+                <div className="connections-item-meta">
+                  {peer.address}
+                  {peer.roles.length ? ` • ${peer.roles.join(', ')}` : ''}
+                </div>
+                {health?.error && (
+                  <div className="connections-muted">Error: {health.error}</div>
+                )}
+                <div className="connections-actions">
+                  <button
+                    className="btn-secondary"
+                    type="button"
+                    onClick={() => setMeshPeerDraft({
+                      name: peer.name,
+                      address: peer.address,
+                      roles: peer.roles.join(', '),
+                      secret: '',
+                      ollamaURL: peer.ollamaURL || '',
+                    })}
+                  >
+                    Edit
+                  </button>
+                  <button className="btn-secondary" type="button" onClick={() => removeMeshPeer(peer.name)}>
+                    Remove
+                  </button>
+                </div>
+              </div>
+            );
+          }) : (
+            <div className="connections-empty">No project-network peers yet.</div>
+          )}
+        </div>
+
+        <div className="connections-form-title">
+          <Plus size={14} />
+          <span>Add or update peer</span>
+        </div>
+        <div className="connections-row two-up">
+          <label className="connections-field">
+            <span className="connections-label">Peer name</span>
+            <input
+              value={meshPeerDraft.name}
+              onChange={(event) => setMeshPeerDraft(current => ({ ...current, name: event.target.value }))}
+              placeholder="windows-rig"
+              className="connections-input"
+            />
+          </label>
+          <label className="connections-field">
+            <span className="connections-label">Peer address</span>
+            <input
+              value={meshPeerDraft.address}
+              onChange={(event) => setMeshPeerDraft(current => ({ ...current, address: event.target.value }))}
+              placeholder="192.168.1.30:24445"
+              className="connections-input"
+            />
+          </label>
+        </div>
+        <div className="connections-row two-up">
+          <label className="connections-field">
+            <span className="connections-label">Roles (comma-separated)</span>
+            <input
+              value={meshPeerDraft.roles}
+              onChange={(event) => setMeshPeerDraft(current => ({ ...current, roles: event.target.value }))}
+              placeholder="tests, inference"
+              className="connections-input"
+            />
+          </label>
+          <label className="connections-field">
+            <span className="connections-label">Peer Ollama URL</span>
+            <input
+              value={meshPeerDraft.ollamaURL}
+              onChange={(event) => setMeshPeerDraft(current => ({ ...current, ollamaURL: event.target.value }))}
+              placeholder="http://127.0.0.1:11434"
+              className="connections-input"
+            />
+          </label>
+        </div>
+        <label className="connections-field">
+          <span className="connections-label">Shared secret</span>
+          <input
+            value={meshPeerDraft.secret}
+            onChange={(event) => setMeshPeerDraft(current => ({ ...current, secret: event.target.value }))}
+            placeholder="required for new peers"
+            className="connections-input"
+          />
+        </label>
+        <div className="connections-actions">
+          <button className="btn-secondary" type="button" onClick={upsertMeshPeer}>
+            Save peer
+          </button>
+          <button className="btn-secondary" type="button" onClick={() => setMeshPeerDraft(emptyMeshPeerDraft)}>
+            Clear peer form
+          </button>
+        </div>
+
+        <div className="connections-form-title">
+          <Wifi size={14} />
+          <span>Project agent activity</span>
+        </div>
+        <div className="connections-list">
+          {meshActivity.length ? meshActivity.map((entry) => {
+            const isOk = entry.status === 'ok';
+            return (
+              <div className="connections-item" key={entry.id}>
+                <div className="connections-item-top">
+                  <div className="connections-item-name">
+                    <Laptop size={14} />
+                    <span>{entry.action}</span>
+                  </div>
+                  <span className={`connections-badge ${isOk ? 'active' : ''}`}>
+                    <Wifi size={10} />
+                    {entry.status}
+                  </span>
+                </div>
+                <div className="connections-item-meta">
+                  {(entry.target || 'system')}
+                  {entry.resolved ? ' • resolved' : ''}
+                </div>
+                {entry.message && <div className="connections-muted">{entry.message}</div>}
+                {entry.error && <div className="connections-muted">Error: {entry.error}</div>}
+                <div className="connections-muted">{new Date(entry.at).toLocaleString()}</div>
+              </div>
+            );
+          }) : (
+            <div className="connections-empty">No activity recorded yet.</div>
+          )}
+        </div>
+        {meshStatus && <div className="connections-status">{meshStatus}</div>}
       </div>
     </article>
   );

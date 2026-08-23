@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../App.js';
 import { useStore } from '../store/index.js';
-import { resetStoreForTests, mockWsClientModule } from './store-test-helpers.js';
+import { resetStoreForTests } from './store-test-helpers.js';
 import { OPEN_ISSUES_TAB_EVENT } from '../editorEvents.js';
 
 const wsMocks = vi.hoisted(() => ({
@@ -287,5 +287,43 @@ describe('App websocket lifecycle', () => {
       projectPath: '/tmp/project',
       maxIssues: 0,
     });
+  });
+
+  it('ChatNotice_UpdatesAgentActivityAndShowsShellNotice', async () => {
+    useStore.setState({
+      activeSession: {
+        id: 'session-1',
+        projectPath: '/tmp/project',
+        branchName: 'main',
+        createdAt: '',
+        updatedAt: '',
+        summary: '',
+        messageCount: 0,
+      },
+      sessions: [{
+        id: 'session-1',
+        projectPath: '/tmp/project',
+        branchName: 'main',
+        createdAt: '',
+        updatedAt: '',
+        summary: '',
+        messageCount: 0,
+      }],
+    });
+
+    render(<App />);
+    expect(capturedMessageHandler).not.toBeNull();
+
+    await act(async () => {
+      capturedMessageHandler?.({
+        type: 'chat.notice',
+        sessionId: 'session-1',
+        notice: 'Orchestrator plan: generating TDD-style plan',
+      });
+    });
+
+    expect(screen.getByText(/orchestrator plan: generating tdd-style plan/i)).toBeTruthy();
+    expect(useStore.getState().agentSessions.find(session => session.id === 'session-1')?.currentActivity)
+      .toBe('Orchestrator plan: generating TDD-style plan');
   });
 });

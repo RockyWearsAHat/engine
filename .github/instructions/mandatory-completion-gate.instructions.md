@@ -34,14 +34,15 @@ Required booleans:
 
 ## Required validation sequence
 
-1. Run lint and fix all failures.
+1. Run lint via `gsh strict lint` (MCP tool) in agent context. `pnpm lint` is a no-op stub (exits 0 always) and must not be used as evidence of clean lint. Fix all failures.
 2. Run typecheck and fix all failures.
 3. Run client coverage with 100% thresholds.
 4. Run Go coverage and confirm total is 100.0%.
 5. Run behavioral completion check (`node scripts/behavioral-completion-check.mjs`). If Playwright is not installed the check is skipped and still counts as passed.
-6. Verify CS 3500 principles were followed in the implementation.
-7. Review the full request and relevant chat history for completeness.
-8. Update the completion report file with accurate attestation and timestamp.
+6. Run context-docs freshness check: `pnpm check:context-freshness`. If it reports drift, regenerate with `pnpm gen:context-docs` and commit the updated `.github/` files before proceeding.
+7. Verify CS 3500 principles were followed in the implementation.
+8. Review the full request and relevant chat history for completeness.
+9. Update the completion report file with accurate attestation and timestamp.
 
 If any step fails, keep working. Do not return completion claims.
 

@@ -1,11 +1,31 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { sendWsMessage, setupStoreForUITests, createWsClientMockFactory } from './test-helpers.js';
+import { sendWsMessage, setupStoreForUITests } from './test-helpers.js';
 
 // ── Terminal & xterm mocks with all handlers ─────────────────────────────────
 
 const { sendMock, writeMock, openMock, disposeMock, onDataMock, fitMock, proposeDimensionsMock, wsCallbacks, mockDef: wsMockDef } = vi.hoisted(() => {
-  const { wsCallbacks: wsCallbacksBase, mockDef: baseWsMock } = createWsClientMockFactory();
+  let capturedWsCallback: ((data: unknown) => void) | null = null;
+  let capturedOnOpenCallback: (() => void) | null = null;
+
+  const wsCallbacksBase = {
+    capturedWsCallback,
+    capturedOnOpenCallback,
+    setCapturedWsCallback(cb: ((data: unknown) => void) | null) {
+      capturedWsCallback = cb;
+      wsCallbacksBase.capturedWsCallback = cb;
+    },
+    setCapturedOnOpenCallback(cb: (() => void) | null) {
+      capturedOnOpenCallback = cb;
+      wsCallbacksBase.capturedOnOpenCallback = cb;
+    },
+    get getCapturedWsCallback() {
+      return capturedWsCallback;
+    },
+    get getCapturedOnOpenCallback() {
+      return capturedOnOpenCallback;
+    },
+  };
 
   const sendMock = vi.fn();
   const writeMock = vi.fn();
@@ -20,7 +40,17 @@ const { sendMock, writeMock, openMock, disposeMock, onDataMock, fitMock, propose
 
   const mockDef = {
     wsClient: {
-      ...baseWsMock.wsClient,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      onMessage: vi.fn((cb: (data: unknown) => void) => {
+        wsCallbacksBase.setCapturedWsCallback(cb);
+        return () => { wsCallbacksBase.setCapturedWsCallback(null); };
+      }),
+      onOpen: vi.fn((cb: () => void) => {
+        wsCallbacksBase.setCapturedOnOpenCallback(cb);
+        return () => { wsCallbacksBase.setCapturedOnOpenCallback(null); };
+      }),
+      onClose: vi.fn(() => () => {}),
       send: sendMock,
     },
   };

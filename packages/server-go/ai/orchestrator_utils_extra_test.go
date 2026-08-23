@@ -282,34 +282,102 @@ func TestRunAutonomousProject_CancelWhilePaused(t *testing.T) {
 	}
 }
 
-// TestRunAutonomousProject_EventOrchestratorRoute verifies USE_EVENT_ORCHESTRATOR=1
-// routes to the event orchestrator path.
-func TestRunAutonomousProject_EventOrchestratorRoute(t *testing.T) {
+// TestRunAutonomousProject_EventOrchestratorRouteDisabled verifies the
+// top-level autonomous entrypoint stays on the classic orchestrator path even
+// when legacy event-mode env flags are set.
+func TestRunAutonomousProject_EventOrchestratorRouteDisabled(t *testing.T) {
 	t.Setenv("USE_EVENT_ORCHESTRATOR", "1")
-	dir := t.TempDir()
+	t.Setenv("ENGINE_EXPERIMENTAL_EVENT_ORCHESTRATOR", "1")
+	dir := setupPhasesDB(t)
 	cfg := OrchestratorConfig{
 		ProjectPath:        dir,
-		Owner:              "",
-		Repo:               "",
+		Owner:              "acme",
+		Repo:               "demo",
 		Brief:              "test brief",
-		MaxOuterIterations: 1,
+		MaxOuterIterations: 8,
 		ChatFn: func(ctx *ChatContext, msg string) {
-			ctx.OnChunk("design output", false)
+			switch ctx.Role {
+			case RoleGriller:
+				ctx.OnChunk("# Design\nA tiny app.", false)
+			case RolePRDWriter:
+				ctx.OnChunk("term | meaning\n---SPLIT---\n# PRD\nmodule: app", false)
+			case RolePlanner:
+				ctx.OnChunk("1. Build app\n   Add app code\n   Acceptance: `echo ok` returns 0\n", false)
+			case RoleAutonomousBuilder:
+				ctx.OnChunk("builder completed step", false)
+			case RoleModuleIndexer:
+				ctx.OnChunk("| module | purpose |\n| app | demo |", false)
+			case RoleReviewer:
+				if strings.Contains(msg, "Final behavioral validation") {
+					ctx.OnChunk("validated behavior\nAPPROVE", false)
+					return
+				}
+				ctx.OnChunk("reviewed\nAPPROVE", false)
+			}
 		},
 		OnProgress: func(string) {},
 		OnPhase:    func(string, string) {},
 		OnError:    func(string) {},
 	}
-	// This calls RunEventOrchestratorAsState which returns quickly with
-	// an EventOrchestrator running in a goroutine.
 	state, err := RunAutonomousProject(cfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if state == nil {
-		t.Error("expected non-nil state from event orchestrator path")
+		t.Fatal("expected non-nil state from classic orchestrator path")
 	}
-	// Give goroutine a moment to start before test exits.
-	time.Sleep(20 * time.Millisecond)
+	if state.CompletedAt == "" {
+		t.Fatal("expected classic orchestrator to complete the run")
+	}
 }
 
+// ── countSkippedInState ───────────────────────────────────────────────────────
+
+func TestCountSkippedInState_CountsOnlySkippedSteps(t *testing.T) {
+	state := &OrchestrationState{
+		Plan: []PlanStep{
+			{Index: 1, Done: true, LastFeedback: "skipped after 5 failed attempts"},
+			{Index: 2, Done: true, LastFeedback: "approved"},
+			{Index: 3, Done: true, LastFeedback: "skipped after 3 failed attempts"},
+			{Index: 4, Done: false, LastFeedback: ""},
+		},
+	}
+	if got := countSkippedInState(state); got != 2 {
+		t.Errorf("expected 2 skipped, got %d", got)
+	}
+}
+
+func TestCountSkippedInState_EmptyPlan(t *testing.T) {
+	if got := countSkippedInState(&OrchestrationState{}); got != 0 {
+		t.Errorf("expected 0 skipped for empty plan, got %d", got)
+	}
+}
+
+// ── resetSkippedSteps ─────────────────────────────────────────────────────────
+
+func TestResetSkippedSteps_ReactivatesSkippedLeavesApproved(t *testing.T) {
+	state := &OrchestrationState{
+		Plan: []PlanStep{
+			{Index: 1, Done: true, LastFeedback: "skipped after 5 failed attempts", Attempts: 5},
+			{Index: 2, Done: true, LastFeedback: "approved", Attempts: 1},
+		},
+	}
+	resetSkippedSteps(state)
+	if state.Plan[0].Done {
+		t.Error("expected skipped step to be reset to not-done")
+	}
+	if state.Plan[0].Attempts != 0 {
+		t.Errorf("expected attempts reset to 0, got %d", state.Plan[0].Attempts)
+	}
+	if !state.Plan[1].Done {
+		t.Error("expected approved step to remain done")
+	}
+	if state.Plan[1].Attempts != 1 {
+		t.Errorf("expected approved step attempts unchanged, got %d", state.Plan[1].Attempts)
+	}
+}
+
+func TestResetSkippedSteps_NoPlan_NoOp(t *testing.T) {
+	state := &OrchestrationState{}
+	resetSkippedSteps(state) // must not panic
+}

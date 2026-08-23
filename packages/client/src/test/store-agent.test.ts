@@ -10,10 +10,20 @@ import type { AgentSession, LiveToolCall, Message, Session } from '@engine/share
 import { useStore } from '../store/index.js';
 import { resetStoreForProjectAndAgentTests } from './store-test-helpers.js';
 
-vi.mock('../ws/client.js', async () => {
-  const { mockWsClientModule } = await import('./ws-client-mock.js');
-  return mockWsClientModule();
-});
+const { send } = vi.hoisted(() => ({
+  send: vi.fn(),
+}));
+
+vi.mock('../ws/client.js', () => ({
+  wsClient: {
+    send,
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    onMessage: vi.fn(),
+    onOpen: vi.fn(),
+    onClose: vi.fn(),
+  },
+}));
 
 beforeEach(resetStoreForProjectAndAgentTests);
 

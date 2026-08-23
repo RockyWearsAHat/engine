@@ -35,6 +35,8 @@
     "test:all-parallel": "concurrently -k -n client,go,rust -c green,blue,red \"pnpm test:client\" \"pnpm test:go\" \"pnpm test:rust\"",
     "lint": "node -e \"console.log('Lint disabled in npm scripts. Use gsh strict lint.')\"",
     "sync:obsidian": "node ./scripts/sync-obsidian-memory.mjs",
+    "gen:context-docs": "node ./scripts/gen-context-docs.mjs",
+    "check:context-freshness": "node ./scripts/gen-context-docs.mjs --check",
     "verify:agent-completion": "node ./scripts/agent-completion-gate.mjs",
     "install:all": "pnpm install"
   },

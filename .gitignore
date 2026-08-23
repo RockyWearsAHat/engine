@@ -107,3 +107,6 @@ engine-45mb-test.ts
 # StoragePath to write it next to the source; keep it gitignored so any future
 # regression doesn't pollute the source tree.
 packages/server-go/discord/discord-state.json
+
+# compiled demo binary (16MB build artifact)
+packages/server-go/enginedemo

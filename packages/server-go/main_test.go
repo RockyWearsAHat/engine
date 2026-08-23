@@ -884,14 +884,18 @@ func TestEnsureAutonomousRepoWorkspace_PullError(t *testing.T) {
 func TestBuildReadmeAutonomousBuildPrompt_ContainsFullPhases(t *testing.T) {
 	prompt := buildReadmeAutonomousBuildPrompt("octo", "demo", "/tmp/demo")
 	required := []string{
+		"The README idea plus the @engine tag are the entire request",
 		"Execution contract (must complete all phases)",
 		"1. Understand",
+		"Treat the README as the source of product intent and success criteria",
 		"2. Scaffold",
 		"3. Implement",
 		"4. Validate",
 		"5. Deliver",
 		"Run the real build/test commands",
 		"Commit all completed work with git_commit",
+		"do NOT ask for a prompt",
+		"do NOT wait for the user to restate the idea in another format",
 	}
 	for _, fragment := range required {
 		if !strings.Contains(prompt, fragment) {
@@ -2363,36 +2367,28 @@ func TestTriggerIssueSession_RetriesRetryableErrorBeforeBlocking(t *testing.T) {
 	ws.SetDiscordBridge(notifier)
 	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
 
-	callCount := 0
-	var prompts []string
-	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
-		callCount++
-		prompts = append(prompts, prompt)
-		if callCount == 1 {
-			ctx.OnError("autonomous builder stopped after 20 turns without signal_done")
-			return
-		}
-		ctx.OnChunk("done", false)
+	runCount := 0
+	var capturedBrief string
+	origRun := runOrchestratorFn
+	runOrchestratorFn = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		runCount++
+		capturedBrief = cfg.Brief
+		return nil, fmt.Errorf("autonomous builder stopped after 20 turns without signal_done")
 	}
+	t.Cleanup(func() { runOrchestratorFn = origRun })
 
 	payload := json.RawMessage(`{"action":"created","comment":{"body":"@engine fix it","user":{"login":"bob"}},"issue":{"number":9,"title":"Bug"},"repository":{"full_name":"owner/retryable-issue"}}`)
 	triggerIssueSession(projectPath, payload)
 
-	if callCount != 2 {
-		t.Fatalf("expected 2 AI calls, got %d", callCount)
+	if runCount != 1 {
+		t.Fatalf("expected 1 orchestrator invocation, got %d", runCount)
 	}
-	if len(prompts) < 2 || !strings.Contains(prompts[1], "Recovery attempt 2 of 3") {
-		t.Fatalf("expected recovery prompt on second attempt, got %v", prompts)
+	if !strings.Contains(capturedBrief, "GitHub issue #9") {
+		t.Fatalf("expected issue context in orchestrator brief, got %q", capturedBrief)
 	}
 	joined := strings.Join(notifier.notified, "\n")
-	if !strings.Contains(joined, "Retrying automatically (2/3)") {
-		t.Fatalf("expected retry notification, got: %v", notifier.notified)
-	}
-	if strings.Contains(joined, "Issue session blocked") {
-		t.Fatalf("expected retry to avoid blocked notification, got: %v", notifier.notified)
-	}
-	if !strings.Contains(joined, "✅ Issue session issue-9-") {
-		t.Fatalf("expected final success notification, got: %v", notifier.notified)
+	if !strings.Contains(joined, "Issue session blocked") {
+		t.Fatalf("expected blocked notification, got: %v", notifier.notified)
 	}
 }
 
@@ -2404,22 +2400,21 @@ func TestTriggerIssueOpenedSession_RetryableErrorStopsAfterMaxAttempts(t *testin
 	ws.SetDiscordBridge(notifier)
 	t.Cleanup(func() { ws.SetDiscordBridge(nil) })
 
-	callCount := 0
-	aiChatFn = func(ctx *ai.ChatContext, prompt string) {
-		callCount++
-		ctx.OnError("tool error: command not found")
+	runCount := 0
+	origRun := runOrchestratorFn
+	runOrchestratorFn = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		runCount++
+		return nil, fmt.Errorf("tool error: command not found")
 	}
+	t.Cleanup(func() { runOrchestratorFn = origRun })
 
 	payload := json.RawMessage(`{"action":"opened","issue":{"number":11,"title":"Feature","body":"Please add X"},"repository":{"full_name":"owner/retryable-opened"},"sender":{"login":"alice"}}`)
 	triggerIssueOpenedSession(projectPath, payload)
 
-	if callCount != autonomousIssueMaxAttempts {
-		t.Fatalf("expected %d AI calls, got %d", autonomousIssueMaxAttempts, callCount)
+	if runCount != 1 {
+		t.Fatalf("expected 1 orchestrator invocation, got %d", runCount)
 	}
 	joined := strings.Join(notifier.notified, "\n")
-	if strings.Count(joined, "Retrying automatically") != autonomousIssueMaxAttempts-1 {
-		t.Fatalf("expected %d retry notifications, got: %v", autonomousIssueMaxAttempts-1, notifier.notified)
-	}
 	if !strings.Contains(joined, "Issue-opened session blocked") {
 		t.Fatalf("expected blocked notification after retries exhausted, got: %v", notifier.notified)
 	}
@@ -2787,13 +2782,12 @@ func TestTriggerIssueOpenedSession_DBInitFails_LogsError(t *testing.T) {
 	triggerIssueOpenedSession(projectPath, payload)
 }
 
-// ── triggerIssueSession: no @engine mention branch ────────────────────────────
+// ── triggerIssueSession: plain issue comment branch ───────────────────────────
 
-func TestTriggerIssueSession_NoEngineMention(t *testing.T) {
-	projectPath := t.TempDir()
-	setupTestDB(t, projectPath)
-	payload := json.RawMessage(`{"action":"created","comment":{"body":"just a comment","user":{"login":"bob"}},"issue":{"number":1,"title":"Bug"},"repository":{"full_name":"owner/somerepo"}}`)
-	triggerIssueSession(projectPath, payload)
+func TestTriggerIssueSession_CommentWithoutEngineMentionCreatesSession(t *testing.T) {
+	projectPath, targetPath := setupTriggerFullStack(t, "owner", "repo", "# Demo\n@engine")
+	payload := json.RawMessage(`{"action":"created","comment":{"body":"just a comment","user":{"login":"bob"},"id":9002},"issue":{"number":1,"title":"Bug"},"repository":{"full_name":"owner/repo"}}`)
+	triggerAndAssertSessionCreated(t, triggerIssueSession, projectPath, targetPath, payload)
 }
 
 // ── triggerScaffoldSession: first attempt makes progress ──────────────────────

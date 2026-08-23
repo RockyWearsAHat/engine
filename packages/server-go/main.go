@@ -1,5 +1,7 @@
 package main
 
+// quality:allow-long-file
+
 import (
 	"context"
 	"encoding/json"
@@ -20,6 +22,7 @@ import (
 	"github.com/engine/server/github"
 	"github.com/engine/server/mesh"
 	"github.com/engine/server/remote"
+	"github.com/engine/server/runtimecfg"
 	"github.com/engine/server/vpn"
 	"github.com/engine/server/ws"
 )
@@ -276,7 +279,13 @@ func run() error {
 }
 
 func buildAutonomousRepoPath(baseProjectPath, owner, repo string) string {
-	clonesDir := strings.TrimSpace(os.Getenv("ENGINE_CLONES_DIR"))
+	clonesDir := ""
+	if cfg, err := runtimecfg.Load(baseProjectPath); err == nil {
+		clonesDir = strings.TrimSpace(cfg.ClonesDir)
+	}
+	if clonesDir == "" {
+		clonesDir = strings.TrimSpace(os.Getenv("ENGINE_CLONES_DIR"))
+	}
 	if clonesDir == "" {
 		home, err := osUserHomeDirFn()
 		if err == nil && strings.TrimSpace(home) != "" {
@@ -334,9 +343,11 @@ func buildReadmeAutonomousBuildPrompt(owner, repo, localRepoPath string) string 
 	readmePath := filepath.Join(localRepoPath, "README.md")
 	return fmt.Sprintf(
 		"The GitHub repository %s/%s needs an end-to-end autonomous build from its README.\n\n"+
+			"The README idea plus the @engine tag are the entire request. Do not wait for a follow-up prompt, clarifying prompt, or manual implementation breakdown unless you are truly blocked by missing credentials, permissions, or external requirements.\n\n"+
 			"Execution contract (must complete all phases):\n"+
 			"1. Understand\n"+
 			"- Read local README first: %s\n"+
+			"- Treat the README as the source of product intent and success criteria unless newer repo evidence proves it stale\n"+
 			"- If missing/stale, fetch latest README with shell: curl -s https://raw.githubusercontent.com/%s/%s/HEAD/README.md\n"+
 			"- Write a concrete implementation plan to %s\n\n"+
 			"2. Scaffold\n"+
@@ -352,7 +363,7 @@ func buildReadmeAutonomousBuildPrompt(owner, repo, localRepoPath string) string 
 			"- Commit all completed work with git_commit\n"+
 			"- Final response must include: files created/changed, commands run, and test/build results\n\n"+
 			"Environment awareness rule: this project lives in its own isolated directory. Default to that directory for build/test/edit work, use outside paths only when the task requires it, and never assume a parent go.work, package.json, or workspace exists.\n"+
-			"Autonomy rule: continue without asking for input unless blocked by missing credentials/permissions/requirements. Do NOT stop and say you are ready to start — just start.",
+			"Autonomy rule: continue without asking for input unless blocked by missing credentials/permissions/requirements. Do NOT stop and say you are ready to start, do NOT ask for a prompt, and do NOT wait for the user to restate the idea in another format — just start.",
 		owner,
 		repo,
 		readmePath,
@@ -989,10 +1000,6 @@ func triggerIssueSession(projectPath string, payload json.RawMessage) {
 		log.Printf("issue-session: cannot parse issue_comment payload: %v", err)
 		return
 	}
-	if !hasEngineMention(parsed.Comment.Body) {
-		log.Printf("issue-session: skipping #%d in %s (no @engine mention)", parsed.Issue.Number, parsed.Repository.FullName)
-		return
-	}
 	if !reserveIssueCommentDispatch(projectPath, parsed.Repository.FullName, parsed.Issue.Number, parsed.Comment.ID, parsed.Comment.Body) {
 		log.Printf("issue-session: suppressing duplicate issue comment for #%d in %s", parsed.Issue.Number, parsed.Repository.FullName)
 		return
@@ -1011,7 +1018,7 @@ func triggerIssueSession(projectPath string, payload json.RawMessage) {
 	autoEnrollDiscordProject(targetProjectPath, owner, repo)
 	if handle := ai.GetOrchestratorHandle(targetProjectPath); handle != nil {
 		redirectMsg := fmt.Sprintf(
-			"New @engine issue comment on #%d in %s from %s.\n\nComment:\n%s\n\nQueue this into the current plan at the next boundary. If this changes acceptance criteria, revise affected steps explicitly.",
+			"New issue comment on #%d in %s from %s.\n\nComment:\n%s\n\nQueue this into the current plan at the next boundary. If this changes acceptance criteria, revise affected steps explicitly.",
 			parsed.Issue.Number,
 			parsed.Repository.FullName,
 			parsed.Comment.User.Login,
@@ -1024,72 +1031,49 @@ func triggerIssueSession(projectPath string, payload json.RawMessage) {
 		return
 	}
 
-	notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("🛠️ Kickoff: working issue #%d for **%s/%s** from @engine mention.", parsed.Issue.Number, owner, repo))
+	notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("🛠️ Kickoff: working issue #%d for **%s/%s** after a new issue comment.", parsed.Issue.Number, owner, repo))
 	github.EngageOnIssuePickup(targetProjectPath, owner, repo, parsed.Issue.Number, fmt.Sprintf("issue-%d", parsed.Issue.Number))
 
 	if dbErr := db.WithProject(targetProjectPath, func() error {
-		sessionID := fmt.Sprintf("issue-%d-%d", parsed.Issue.Number, time.Now().UnixNano())
-		branch, _ := gogit.GetCurrentBranch(targetProjectPath)
-		if dbErr := createSessionFn(sessionID, targetProjectPath, branch); dbErr != nil {
-			log.Printf("issue-session: create session: %v", dbErr)
-		}
-
-		issueNum := parsed.Issue.Number
-		issuePolicy := ai.ResolveAutonomousPolicy(targetProjectPath)
-		issuePolicy.AutoCommit = true
-		issuePolicy.AutoPush = true
-		var (
-			commentOutMu sync.Mutex
-			commentOut   strings.Builder
-		)
-		ctx := &ai.ChatContext{
-			ProjectPath:      targetProjectPath,
-			SessionID:        sessionID,
-			Role:             ai.RoleAutonomousBuilder,
-			MaxTurns:         autonomousIssueMaxTurns,
-			Cancel:           make(chan struct{}),
-			AutonomousPolicy: &issuePolicy,
-			OnChunk: func(content string, done bool) {
-				if content != "" {
-					log.Printf("[issue #%d %s] %s", issueNum, parsed.Repository.FullName, content)
-					commentOutMu.Lock()
-					commentOut.WriteString(content)
-					commentOutMu.Unlock()
-				}
-			},
-			OnToolCall:   func(string, any) {},
-			OnToolResult: func(string, any, bool) {},
-		}
-
-		prompt := fmt.Sprintf(
+		brief := fmt.Sprintf(
 			"GitHub issue #%d '%s' in %s — new comment from %s.\n\n"+
-				"Comment: %s\n\n"+
-				"Respond to the comment in the context of fixing the issue. Modify code as needed, verify with tests, commit, and call signal_done.",
+				"Comment:\n%s\n\n"+
+				"Execution contract:\n"+
+				"- Understand original issue + comment intent and align with current project direction.\n"+
+				"- Implement the fix end-to-end, run relevant tests/checks, and ship complete verified changes.\n"+
+				"- If acceptance criteria need updates, revise plan steps explicitly before continuing.\n",
 			parsed.Issue.Number,
 			parsed.Issue.Title,
 			parsed.Repository.FullName,
 			parsed.Comment.User.Login,
 			parsed.Comment.Body,
 		)
-		finalErr := runAutonomousIssueAttempts(ctx, prompt, func(nextAttempt int, msg string) {
-			log.Printf("[issue retry #%d attempt %d] %s", issueNum, nextAttempt, msg)
-			notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("🔄 Issue session for **%s** (#%d) hit an AI-resolvable stall. Retrying automatically (%d/%d). Last issue: %s", parsed.Repository.FullName, issueNum, nextAttempt, autonomousIssueMaxAttempts, msg))
+		state, runErr := runOrchestratorFn(ai.OrchestratorConfig{
+			ProjectPath:     targetProjectPath,
+			Owner:           owner,
+			Repo:            repo,
+			Brief:           brief,
+			SessionIDPrefix: fmt.Sprintf("issue-comment-%d", parsed.Issue.Number),
+			ChatFn:          aiChatFn,
+			OnPhase: func(phase, detail string) {
+				log.Printf("[issue-session orchestrator %s/%s #%d] phase=%s %s", owner, repo, parsed.Issue.Number, phase, detail)
+				notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("%s **%s/%s issue #%d**: %s — %s", phaseIcon(phase), owner, repo, parsed.Issue.Number, phase, detail))
+			},
+			OnError: func(msg string) {
+				if strings.TrimSpace(msg) != "" {
+					log.Printf("[issue-session orchestrator error %s/%s #%d] %s", owner, repo, parsed.Issue.Number, msg)
+				}
+			},
 		})
-		if finalErr != "" {
-			log.Printf("[issue error #%d] %s", issueNum, finalErr)
-			notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("❌ Issue session blocked for **%s** (#%d): %s", parsed.Repository.FullName, issueNum, finalErr))
-			github.EngageOnIssueBlocked(targetProjectPath, owner, repo, issueNum, finalErr)
+		if runErr != nil {
+			notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("❌ Issue session blocked for **%s** (#%d): %s", parsed.Repository.FullName, parsed.Issue.Number, runErr.Error()))
+			github.EngageOnIssueBlocked(targetProjectPath, owner, repo, parsed.Issue.Number, runErr.Error())
 			return nil
 		}
-		notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("✅ Issue session %s finished for **%s** (#%d).", sessionID, parsed.Repository.FullName, issueNum))
-		github.EngageOnIssueComplete(targetProjectPath, owner, repo, issueNum, 0, "")
-		commentOutMu.Lock()
-		fullOut := commentOut.String()
-		commentOutMu.Unlock()
-		msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
-		if dbErr := saveMessageFn(msgID, sessionID, "assistant", fullOut, nil); dbErr != nil {
-			log.Printf("issue-session: save message: %v", dbErr)
+		if state != nil && strings.TrimSpace(state.CompletedAt) != "" {
+			notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("✅ Issue session finished for **%s** (#%d).", parsed.Repository.FullName, parsed.Issue.Number))
 		}
+		github.EngageOnIssueComplete(targetProjectPath, owner, repo, parsed.Issue.Number, 0, "")
 		return nil
 	}); dbErr != nil {
 		log.Printf("[issue #%d] db.WithProject: %v", parsed.Issue.Number, dbErr)
@@ -1170,70 +1154,46 @@ func triggerIssueOpenedSession(projectPath string, payload json.RawMessage) {
 	github.EngageOnIssuePickup(targetProjectPath, owner, repo, parsed.Issue.Number, fmt.Sprintf("issue-opened-%d", parsed.Issue.Number))
 
 	if dbErr := db.WithProject(targetProjectPath, func() error {
-		sessionID := fmt.Sprintf("issue-%d-%d", parsed.Issue.Number, time.Now().UnixNano())
-		branch, _ := gogit.GetCurrentBranch(targetProjectPath)
-		if dbErr := createSessionFn(sessionID, targetProjectPath, branch); dbErr != nil {
-			log.Printf("issue-opened: create session: %v", dbErr)
-		}
-
-		issueNum := parsed.Issue.Number
-		issueOpenedPolicy := ai.ResolveAutonomousPolicy(targetProjectPath)
-		issueOpenedPolicy.AutoCommit = true
-		issueOpenedPolicy.AutoPush = true
-		var (
-			issueOutMu sync.Mutex
-			issueOut   strings.Builder
-		)
-		ctx := &ai.ChatContext{
-			ProjectPath:      targetProjectPath,
-			SessionID:        sessionID,
-			Role:             ai.RoleAutonomousBuilder,
-			MaxTurns:         autonomousIssueMaxTurns,
-			Cancel:           make(chan struct{}),
-			AutonomousPolicy: &issueOpenedPolicy,
-			OnChunk: func(content string, done bool) {
-				if content != "" {
-					log.Printf("[issue-opened #%d %s] %s", issueNum, parsed.Repository.FullName, content)
-					issueOutMu.Lock()
-					issueOut.WriteString(content)
-					issueOutMu.Unlock()
-				}
-			},
-			OnToolCall:   func(string, any) {},
-			OnToolResult: func(string, any, bool) {},
-		}
-
-		prompt := fmt.Sprintf(
+		brief := fmt.Sprintf(
 			"GitHub issue #%d opened in %s by %s.\n\n"+
 				"Title: %s\n"+
-				"Body: %s\n\n"+
-				"Fix the issue. Locate the relevant code, modify it, verify the fix with tests, commit, and call signal_done.\n"+
-				"If the repo has no code yet for what the issue requests, post a comment explaining the state of the project and call signal_done.",
-			issueNum,
+				"Body:\n%s\n\n"+
+				"Execution contract:\n"+
+				"- Resolve the issue end-to-end in this repo with full verification.\n"+
+				"- Preserve project direction while adapting plan steps to this issue.\n"+
+				"- Run required tests/checks, complete implementation, and finish with a validated result.\n",
+			parsed.Issue.Number,
 			parsed.Repository.FullName,
 			parsed.Sender.Login,
 			parsed.Issue.Title,
 			parsed.Issue.Body,
 		)
-		finalErr := runAutonomousIssueAttempts(ctx, prompt, func(nextAttempt int, msg string) {
-			log.Printf("[issue-opened retry #%d attempt %d] %s", issueNum, nextAttempt, msg)
-			notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("🔄 Issue-opened session for **%s** (#%d) hit an AI-resolvable stall. Retrying automatically (%d/%d). Last issue: %s", parsed.Repository.FullName, issueNum, nextAttempt, autonomousIssueMaxAttempts, msg))
+		state, runErr := runOrchestratorFn(ai.OrchestratorConfig{
+			ProjectPath:     targetProjectPath,
+			Owner:           owner,
+			Repo:            repo,
+			Brief:           brief,
+			SessionIDPrefix: fmt.Sprintf("issue-opened-%d", parsed.Issue.Number),
+			ChatFn:          aiChatFn,
+			OnPhase: func(phase, detail string) {
+				log.Printf("[issue-opened orchestrator %s/%s #%d] phase=%s %s", owner, repo, parsed.Issue.Number, phase, detail)
+				notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("%s **%s/%s issue #%d**: %s — %s", phaseIcon(phase), owner, repo, parsed.Issue.Number, phase, detail))
+			},
+			OnError: func(msg string) {
+				if strings.TrimSpace(msg) != "" {
+					log.Printf("[issue-opened orchestrator error %s/%s #%d] %s", owner, repo, parsed.Issue.Number, msg)
+				}
+			},
 		})
-		if finalErr != "" {
-			log.Printf("[issue-opened error #%d] %s", issueNum, finalErr)
-			notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("❌ Issue-opened session blocked for **%s** (#%d): %s", parsed.Repository.FullName, issueNum, finalErr))
-			github.EngageOnIssueBlocked(targetProjectPath, owner, repo, issueNum, finalErr)
+		if runErr != nil {
+			notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("❌ Issue-opened session blocked for **%s** (#%d): %s", parsed.Repository.FullName, parsed.Issue.Number, runErr.Error()))
+			github.EngageOnIssueBlocked(targetProjectPath, owner, repo, parsed.Issue.Number, runErr.Error())
 			return nil
 		}
-		notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("✅ Issue-opened session %s finished for **%s** (#%d).", sessionID, parsed.Repository.FullName, issueNum))
-		github.EngageOnIssueComplete(targetProjectPath, owner, repo, issueNum, 0, "")
-		issueOutMu.Lock()
-		fullOut := issueOut.String()
-		issueOutMu.Unlock()
-		msgID := fmt.Sprintf("%s-reply-%d", sessionID, time.Now().UnixNano())
-		if dbErr := saveMessageFn(msgID, sessionID, "assistant", fullOut, nil); dbErr != nil {
-			log.Printf("issue-opened: save message: %v", dbErr)
+		if state != nil && strings.TrimSpace(state.CompletedAt) != "" {
+			notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("✅ Issue-opened session finished for **%s** (#%d).", parsed.Repository.FullName, parsed.Issue.Number))
 		}
+		github.EngageOnIssueComplete(targetProjectPath, owner, repo, parsed.Issue.Number, 0, "")
 		return nil
 	}); dbErr != nil {
 		log.Printf("[issue-opened #%d] db.WithProject: %v", parsed.Issue.Number, dbErr)

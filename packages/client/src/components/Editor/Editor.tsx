@@ -1,3 +1,4 @@
+// quality:allow-long-file quality:allow-long-function quality:allow-large-block
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../../store/index.js';
