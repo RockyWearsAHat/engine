@@ -595,11 +595,11 @@ func (ctx *ChatContext) shouldExitTurnLoop(turns int, isAutonomousBuilder bool) 
 // TabInfo represents an open editor tab pushed by the client.
 type TabInfo struct {
 	// Path is the absolute file path of the tab.
-	Path     string `json:"path"`
+	Path string `json:"path"`
 	// IsActive indicates whether this tab is the currently focused tab.
-	IsActive bool   `json:"isActive"`
+	IsActive bool `json:"isActive"`
 	// IsDirty indicates whether the tab has unsaved changes.
-	IsDirty  bool   `json:"isDirty"`
+	IsDirty bool `json:"isDirty"`
 }
 
 // ToolCall records a single tool invocation, stored in the message history.
@@ -617,6 +617,34 @@ type anthropicTool struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	InputSchema any    `json:"input_schema"`
+	// CacheControl marks a prompt-cache breakpoint ending at this tool.
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
+}
+
+// cacheControl is an Anthropic prompt-cache breakpoint. A breakpoint caches the
+// entire rendered prefix up to and including the block it is attached to.
+// Render order is tools -> system -> messages, so a breakpoint on the last system
+// block covers the tool definitions as well.
+type cacheControl struct {
+	// Type is always "ephemeral".
+	Type string `json:"type"`
+	// TTL is the cache lifetime; empty means the default 5 minutes.
+	TTL string `json:"ttl,omitempty"`
+}
+
+// ephemeralCache returns a default (5-minute) cache breakpoint.
+func ephemeralCache() *cacheControl { return &cacheControl{Type: "ephemeral"} }
+
+// systemBlock is one block of the system prompt. The Anthropic API accepts the
+// system prompt either as a bare string or as an array of text blocks; only the
+// array form can carry a cache_control breakpoint, so Engine always sends the array.
+type systemBlock struct {
+	// Type is always "text".
+	Type string `json:"type"`
+	// Text is the system prompt content.
+	Text string `json:"text"`
+	// CacheControl marks a prompt-cache breakpoint ending at this block.
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
 }
 
 // anthropicMessage represents a message in the Anthropic API format.
@@ -647,6 +675,8 @@ type contentBlock struct {
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	// Content is the tool result text (for type="tool_result").
 	Content string `json:"content,omitempty"`
+	// CacheControl marks a prompt-cache breakpoint ending at this block.
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
 }
 
 // anthropicRequest is the HTTP request body for the Anthropic API.
@@ -656,8 +686,9 @@ type anthropicRequest struct {
 	Model string `json:"model"`
 	// MaxTokens is the max tokens in the response.
 	MaxTokens int `json:"max_tokens"`
-	// System is the system prompt.
-	System string `json:"system"`
+	// System is the system prompt, sent as text blocks so it can carry a
+	// prompt-cache breakpoint.
+	System []systemBlock `json:"system,omitempty"`
 	// Messages is the conversation history.
 	Messages []anthropicMessage `json:"messages"`
 	// Tools is the tool registry available for this request.
@@ -784,7 +815,7 @@ var toolRegistry = []anthropicTool{
 		Description: "Run a deterministic codebase quality index scan (no AI reasoning) to find dead-code candidates, duplicate logic chunks, large uncommented blocks, documentation drift, and CS 2420/3500 contention signals.",
 		InputSchema: objSchema(nil, map[string]any{
 			"projectPath": strProp("Optional project-relative directory to scan. Defaults to current project root."),
-			"maxIssues":  numProp("Optional maximum findings to return (default 120)."),
+			"maxIssues":   numProp("Optional maximum findings to return (default 120)."),
 		}),
 	},
 	// ── Git ──────────────────────────────────────────────────────────────────
@@ -2841,11 +2872,12 @@ func runAnthropicLoop(
 		req := anthropicRequest{
 			Model:     model,
 			MaxTokens: 8192,
-			System:    systemPrompt,
+			System:    buildSystemBlocks(systemPrompt),
 			Messages:  windowed,
 			Tools:     ctx.ActiveTools, // live set — grows as model calls search_tools
 			Stream:    true,
 		}
+		applyMessageCacheBreakpoint(&req)
 
 		var responseBlocks []contentBlock
 		var stopReason string
@@ -2863,8 +2895,18 @@ func runAnthropicLoop(
 			var apiDurationMs int64
 			responseBlocks, stopReason, usage, apiDurationMs, lastErr = streamRequest(apiKey, req, ctx, finalText)
 			if lastErr == nil {
-				totalTokens := usage.InputTokens + usage.OutputTokens
-				costUSD := EstimateCost(model, usage.InputTokens, usage.OutputTokens)
+				// With prompt caching on, input_tokens counts only the
+				// uncached remainder, so cached tokens must be folded back in
+				// or the usage log under-reports the real context size.
+				totalTokens := usage.InputTokens + usage.CacheCreationInputTokens +
+					usage.CacheReadInputTokens + usage.OutputTokens
+				// Cache writes bill at 1.25x an input token and reads at 0.1x.
+				// Costing them at face value would make caching look cheaper
+				// than it is; costing them at zero would hide the write premium.
+				billableInput := usage.InputTokens +
+					(usage.CacheCreationInputTokens*5)/4 +
+					usage.CacheReadInputTokens/10
+				costUSD := EstimateCost(model, billableInput, usage.OutputTokens)
 				db.LogUsageEvent( //nolint:errcheck
 					newID(),
 					ctx.SessionID,
@@ -2979,6 +3021,68 @@ func runAnthropicLoop(
 type usageSnapshot struct {
 	InputTokens  int
 	OutputTokens int
+	// CacheCreationInputTokens is the count written to the prompt cache this
+	// request (billed at a premium). CacheReadInputTokens is the count served
+	// from cache (billed at a large discount). Reads exceeding creations after
+	// the first turn is the signal that caching is working.
+	CacheCreationInputTokens int
+	CacheReadInputTokens     int
+}
+
+// buildSystemBlocks renders the system prompt as a single cacheable text block.
+//
+// The breakpoint here is the high-value one: render order is tools -> system ->
+// messages, so it caches the tool definitions and the whole system prompt in one
+// entry. Both are stable for the life of a session, so every turn after the first
+// reads this prefix instead of re-paying for it.
+//
+// Caveat worth knowing: ctx.ActiveTools grows when the model calls search_tools,
+// and tools render at position 0. Each such growth invalidates this entry once.
+// Tool discovery settles early in a session, so the steady state still hits.
+func buildSystemBlocks(prompt string) []systemBlock {
+	if strings.TrimSpace(prompt) == "" {
+		return nil
+	}
+	return []systemBlock{{
+		Type:         "text",
+		Text:         prompt,
+		CacheControl: ephemeralCache(),
+	}}
+}
+
+// applyMessageCacheBreakpoint marks the final content block of the last message,
+// so the conversation prefix accumulated so far is cached for the next turn.
+// Together with the system breakpoint this uses two of the four allowed per request.
+func applyMessageCacheBreakpoint(req *anthropicRequest) {
+	if req == nil || len(req.Messages) == 0 {
+		return
+	}
+	// Copy before marking. req.Messages normally shares a backing array with the
+	// caller's live history; writing the breakpoint in place would persist it into
+	// stored history and accumulate a new breakpoint every turn, eventually
+	// exceeding the four-per-request limit.
+	msgs := make([]anthropicMessage, len(req.Messages))
+	copy(msgs, req.Messages)
+	last := &msgs[len(msgs)-1]
+
+	switch c := last.Content.(type) {
+	case string:
+		if strings.TrimSpace(c) == "" {
+			return
+		}
+		last.Content = []contentBlock{{Type: "text", Text: c, CacheControl: ephemeralCache()}}
+	case []contentBlock:
+		if len(c) == 0 {
+			return
+		}
+		blocks := make([]contentBlock, len(c))
+		copy(blocks, c)
+		blocks[len(blocks)-1].CacheControl = ephemeralCache()
+		last.Content = blocks
+	default:
+		return
+	}
+	req.Messages = msgs
 }
 
 func tokenCountFromUsage(usage map[string]any, key string) int {
@@ -3109,6 +3213,8 @@ func streamRequest(
 				if usageMap != nil {
 					usage.InputTokens = tokenCountFromUsage(usageMap, "input_tokens")
 					usage.OutputTokens = tokenCountFromUsage(usageMap, "output_tokens")
+					usage.CacheCreationInputTokens = tokenCountFromUsage(usageMap, "cache_creation_input_tokens")
+					usage.CacheReadInputTokens = tokenCountFromUsage(usageMap, "cache_read_input_tokens")
 				}
 			}
 
