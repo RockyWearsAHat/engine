@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/engine/server/quota"
 )
 
 // claudecodeIdleTimeout returns how long the provider waits with NO output from
@@ -81,8 +83,6 @@ func (p *claudecodeProvider) RunLoop(
 		return
 	}
 
-	args := buildClaudeArgs(ctx, model, systemPrompt)
-
 	// Bridge ctx.Cancel into process termination. CommandContext kills the
 	// process tree when runCtx is cancelled.
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -97,9 +97,36 @@ func (p *claudecodeProvider) RunLoop(
 		}()
 	}
 
+	// Quota gate. This is the point where the engine finds out whether the
+	// subscription can actually pay for this run, WHICH account should, and how
+	// cheaply the work can be done — before spending anything.
+	//
+	// A blocked verdict is surfaced as an error rather than a silent skip: the
+	// orchestrator's retry path already knows how to back off and try again, and
+	// a step that vanishes without explanation is the harder failure to debug.
+	dispatch := quotaBefore(runCtx, ctx.Role, model, os.Environ())
+	if !dispatch.Allow {
+		if ctx.OnError != nil {
+			ctx.OnError(fmt.Sprintf("claudecode: out of subscription quota — %s; retry in %s",
+				dispatch.Reason, dispatch.RetryAfter.Round(time.Minute)))
+		}
+		return
+	}
+	if dispatch.Model != "" {
+		model = dispatch.Model
+	}
+
+	args := buildClaudeArgs(ctx, model, systemPrompt)
+
 	cmd := exec.CommandContext(runCtx, claudeBinary, args...)
 	if strings.TrimSpace(ctx.ProjectPath) != "" {
 		cmd.Dir = ctx.ProjectPath
+	}
+	// Account selection: same binary, different CLAUDE_CONFIG_DIR, different
+	// quota pool. Nil Env inherits the ambient login unchanged, which is exactly
+	// today's behaviour on a single-account machine.
+	if dispatch.Env != nil {
+		cmd.Env = dispatch.Env
 	}
 	cmd.Stdin = strings.NewReader(prompt)
 
@@ -143,9 +170,16 @@ func (p *claudecodeProvider) RunLoop(
 		}
 	}()
 
-	parseClaudeStream(ctx, &activityReader{r: stdout, last: &lastActivity}, allToolCalls, finalText)
+	stats := parseClaudeStreamWithStats(ctx, &activityReader{r: stdout, last: &lastActivity}, allToolCalls, finalText, dispatch.Account)
 
 	err = cmd.Wait()
+
+	// Record what this configuration actually cost and whether it worked, so the
+	// ledger can recommend a cheaper one next time it is safe to. The bar is
+	// deliberately coarse — finished, no error event, produced output — because
+	// it only has to be applied consistently across configurations.
+	quotaAfter(dispatch, stats, err == nil && !stats.SawError && finalText.Len() > 0)
+
 	if stalled.Load() {
 		if ctx.OnError != nil {
 			ctx.OnError(fmt.Sprintf("claudecode: no output for %s — killed as stalled; orchestrator will retry", idle))
@@ -203,13 +237,53 @@ func buildClaudeArgs(ctx *ChatContext, model, systemPrompt string) []string {
 // consume. Each line of `claude -p --output-format stream-json` output is one
 // such object. Unknown fields are ignored.
 type claudeStreamEvent struct {
-	Type    string `json:"type"` // "system" | "assistant" | "user" | "result" | ...
+	Type    string `json:"type"` // "system" | "assistant" | "user" | "result" | "rate_limit_event" | ...
 	Subtype string `json:"subtype"`
 	IsError bool   `json:"is_error"`
 	Result  string `json:"result"` // final text on the terminal "result" event
 	Message struct {
 		Content []claudeContentBlock `json:"content"`
 	} `json:"message"`
+	// Usage and CostUSD appear on the terminal "result" event. Field names
+	// verified against CLI v2.1.241 output.
+	Usage struct {
+		InputTokens              int64 `json:"input_tokens"`
+		OutputTokens             int64 `json:"output_tokens"`
+		CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+		CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	} `json:"usage"`
+	CostUSD      float64 `json:"total_cost_usd"`
+	NumTurns     int     `json:"num_turns"`
+	SubagentStat struct {
+		Spawned int `json:"spawned"`
+	} `json:"subagent_stats"`
+}
+
+// claudeRunStats is what one `claude -p` run actually consumed, harvested from
+// the terminal result event. Fed to the efficiency ledger so the engine can
+// learn which configurations deliver a result for the least quota.
+type claudeRunStats struct {
+	InputTokens         int64
+	OutputTokens        int64
+	CacheCreationTokens int64
+	CacheReadTokens     int64
+	CostUSD             float64
+	NumTurns            int
+	SubagentsSpawned    int
+	// SawError is true if the result event reported failure.
+	SawError bool
+	// LimitStatus is the last rate-limit status seen on this run.
+	LimitStatus string
+}
+
+// TotalTokens is every token the run was billed for.
+//
+// Cache reads are included deliberately. They are cheaper per token, not free,
+// and they are precisely what a bloated context spends — excluding them would
+// make the single biggest quota driver invisible to the ledger and reward the
+// exact behaviour we are trying to reduce.
+func (s claudeRunStats) TotalTokens() int64 {
+	return s.InputTokens + s.OutputTokens + s.CacheCreationTokens + s.CacheReadTokens
 }
 
 type claudeContentBlock struct {
@@ -225,7 +299,25 @@ type claudeContentBlock struct {
 // into allToolCalls (and ctx.OnToolCall). The terminal "result" event supplies
 // the final text only as a fallback when no assistant text streamed, and
 // surfaces errors via ctx.OnError.
+//
+// Kept for callers that do not care what the run cost.
 func parseClaudeStream(ctx *ChatContext, r io.Reader, allToolCalls *[]ToolCall, finalText *strings.Builder) {
+	parseClaudeStreamWithStats(ctx, r, allToolCalls, finalText, "")
+}
+
+// parseClaudeStreamWithStats is parseClaudeStream plus the two things quota
+// governance needs from a stream we are already reading:
+//
+//   - the rate_limit_event, which is the engine's fastest and only free signal
+//     that the limit state changed under it. Claude Code emits one near the
+//     start of every run, so this costs nothing beyond the parse.
+//   - the token counts on the result event, which are what the efficiency ledger
+//     accounts in.
+//
+// account names the Claude account this run used, so the observed limit state is
+// attributed to the right quota pool; empty means the ambient login.
+func parseClaudeStreamWithStats(ctx *ChatContext, r io.Reader, allToolCalls *[]ToolCall, finalText *strings.Builder, account string) claudeRunStats {
+	var stats claudeRunStats
 	sc := bufio.NewScanner(r)
 	// Event lines can be large (full assistant messages); raise the cap well
 	// above bufio's default 64KB token limit.
@@ -242,6 +334,25 @@ func parseClaudeStream(ctx *ChatContext, r io.Reader, allToolCalls *[]ToolCall, 
 		}
 
 		switch ev.Type {
+		case "rate_limit_event":
+			lev, ok := observeLimitEvent(account, line)
+			if !ok {
+				continue
+			}
+			stats.LimitStatus = lev.Status
+			// Surface only the states that change what the operator should do. An
+			// "allowed" event arrives on every single run; reporting it would bury
+			// the two that matter in noise.
+			if ctx.OnError != nil {
+				switch {
+				case lev.Status == "rejected":
+					ctx.OnError("claudecode: rate limited on " + lev.Type + describeReset(lev))
+				case lev.UsingOverage:
+					ctx.OnError("claudecode: this account is now spending PAID OVERAGE — the subscription is no longer flat-cost")
+				case lev.Status == "allowed_warning":
+					ctx.OnError("claudecode: approaching the " + lev.Type + " limit" + describeReset(lev))
+				}
+			}
 		case "assistant":
 			for _, blk := range ev.Message.Content {
 				switch blk.Type {
@@ -271,6 +382,14 @@ func parseClaudeStream(ctx *ChatContext, r io.Reader, allToolCalls *[]ToolCall, 
 				}
 			}
 		case "result":
+			stats.InputTokens = ev.Usage.InputTokens
+			stats.OutputTokens = ev.Usage.OutputTokens
+			stats.CacheCreationTokens = ev.Usage.CacheCreationInputTokens
+			stats.CacheReadTokens = ev.Usage.CacheReadInputTokens
+			stats.CostUSD = ev.CostUSD
+			stats.NumTurns = ev.NumTurns
+			stats.SubagentsSpawned = ev.SubagentStat.Spawned
+			stats.SawError = ev.IsError
 			if ev.IsError && ctx.OnError != nil {
 				detail := strings.TrimSpace(ev.Result)
 				if detail == "" {
@@ -288,6 +407,16 @@ func parseClaudeStream(ctx *ChatContext, r io.Reader, allToolCalls *[]ToolCall, 
 			}
 		}
 	}
+	return stats
+}
+
+// describeReset renders " (resets 3:04PM)" when the event carried a reset time,
+// and nothing when it did not — an absent reset must not print as 1970.
+func describeReset(ev quota.LimitEvent) string {
+	if !ev.HasReset {
+		return ""
+	}
+	return " (resets " + ev.ResetsAt.Format(time.Kitchen) + ")"
 }
 
 // flattenHistoryForCLI renders the Engine message history into a single prompt

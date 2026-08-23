@@ -21,6 +21,7 @@ import (
 	gogit "github.com/engine/server/git"
 	"github.com/engine/server/github"
 	"github.com/engine/server/mesh"
+	"github.com/engine/server/quota"
 	"github.com/engine/server/remote"
 	"github.com/engine/server/runtimecfg"
 	"github.com/engine/server/vpn"
@@ -229,6 +230,45 @@ func run() error {
 		fmt.Fprintf(w, `{"status":"ok","projectPath":%q}`, projectPath)
 	})
 
+	// Quota gauge. An external supervisor polls this to see how much of the
+	// rolling 5-hour and 7-day subscription windows is left, and what the engine
+	// has decided to do about it, without shelling out to the CLI itself.
+	//
+	// ?format=text returns the human report instead of JSON.
+	httpHandleFuncFn("/quota", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		// The gauge is read from a cache, but a cold read shells out to the CLI.
+		// Bound it so a hung probe cannot hold the connection open indefinitely.
+		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+		defer cancel()
+
+		if r.URL.Query().Get("format") == "text" {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			fmt.Fprintln(w, ai.QuotaReport(ctx))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		st, ok := ai.QuotaStatus(ctx)
+		if !ok {
+			// Not an error: governance is simply switched off. Say so explicitly
+			// rather than returning an empty gauge a caller could read as "0% used".
+			fmt.Fprint(w, `{"enabled":false,"reason":"quota governance is disabled (ENGINE_QUOTA=0)"}`)
+			return
+		}
+		payload := struct {
+			Enabled bool `json:"enabled"`
+			quota.Status
+		}{Enabled: true, Status: st}
+		if err := json.NewEncoder(w).Encode(payload); err != nil {
+			log.Printf("quota: encode status: %v", err)
+		}
+	})
+
 	// GitHub webhook receiver for repo monitoring.
 	webhookSecret := os.Getenv("GITHUB_WEBHOOK_SECRET")
 	webhookReceiver := newWebhookReceiverFn(webhookSecret)
@@ -312,7 +352,7 @@ func ensureAutonomousRepoWorkspace(baseProjectPath, owner, repo string) (string,
 		defer unlock()
 		// Remove stale lock files left by a killed git process — these block all
 		// subsequent git operations and only go away if cleaned up explicitly.
-		os.Remove(filepath.Join(dest, ".git", "index.lock"))      //nolint:errcheck
+		os.Remove(filepath.Join(dest, ".git", "index.lock"))       //nolint:errcheck
 		os.Remove(filepath.Join(dest, ".git", "MERGE_HEAD"))       //nolint:errcheck
 		os.Remove(filepath.Join(dest, ".git", "CHERRY_PICK_HEAD")) //nolint:errcheck
 		if out, cmdErr := runCommandCombinedOutputFn("git", "-C", dest, "fetch", "origin", "--prune"); cmdErr != nil {

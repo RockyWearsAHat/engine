@@ -57,16 +57,29 @@ var heavyCloudRoles = map[AgentRole]bool{
 // available — never a paid API key the user has to go get:
 //
 //   - LEAD / hard-reasoning roles run on the Claude Max SUBSCRIPTION via the
-//     claudecode provider (Opus, flat ~$0 marginal cost): grill, plan, PRD,
-//     architecture, review. Low call-count, high-value thinking.
+//     claudecode provider (Opus): grill, plan, PRD, architecture, review. Low
+//     call-count, high-value thinking.
 //   - WORKER roles prefer a LOCAL model (ollama/llama.cpp) when one is already
 //     configured — free, cheap, parallelisable — and otherwise fall back to the
 //     same subscription Opus. No worker is ever forced onto a paid API.
 //
-// With only the subscription, marginal cost is already ~$0; the win this enables
-// is SPEED (the orchestrator can run worker roles in parallel and keep their
-// sessions warm) at flat cost. A local model, if present, makes the bulk of
-// worker calls free and fast. Activate with ENGINE_HYBRID=1 (or runtimecfg).
+// A CORRECTION TO THE ORIGINAL PREMISE. This routing was written on the belief
+// that the subscription has "flat ~$0 marginal cost", and therefore that the
+// only thing worth optimising was SPEED. That is true in dollars and false in
+// the currency that actually runs out: the subscription is rationed by a rolling
+// 5-hour window and a 7-day window shared across every agent the orchestrator
+// starts, and when either is exhausted every role stops at once — for hours, or
+// for days.
+//
+// So subscription calls are not free, they are drawn against a budget that
+// nothing in this file could see. The quota package now measures that budget and
+// the gate in claudecode.go paces against it, which is what makes routing a
+// worker to Opus "because it costs nothing" no longer the whole story: it costs
+// window, and window is what the next role needs.
+//
+// A local model, if present, still makes the bulk of worker calls genuinely free
+// — no dollars AND no window — which is why it remains the preferred worker
+// backend. Activate with ENGINE_HYBRID=1 (or runtimecfg).
 //
 // Routing precedence: explicit per-role env/runtimecfg overrides still win; this
 // engages only when nothing more specific was pinned, same as local-first.
@@ -81,8 +94,8 @@ var hybridLeadRoles = map[AgentRole]bool{
 	RoleReviewer:  true,
 }
 
-// hybridWorkerRoles run cheap + parallel on the Haiku API, with full Engine
-// tools + comms.
+// hybridWorkerRoles run cheap + parallel, preferring a local model, with full
+// Engine tools + comms.
 var hybridWorkerRoles = map[AgentRole]bool{
 	RoleAutonomousBuilder: true,
 	RoleImplementer:       true,
