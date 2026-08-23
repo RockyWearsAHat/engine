@@ -56,11 +56,84 @@ func TestRunAutonomousProject_HappyPathCompletes(t *testing.T) {
 	}
 }
 
-func TestRunAutonomousProject_ValidationRejectReopensStep(t *testing.T) {
+// A failed behavioural validation is now handled by the repair loop first: it
+// diagnoses from the failure evidence and re-validates, so a fixable failure no
+// longer costs a full builder re-run of the step.
+func TestRunAutonomousProject_ValidationFailureRepairedWithoutRebuild(t *testing.T) {
 	dir := setupPhasesDB(t)
 	validateAttempts := 0
 
-	cfg := OrchestratorConfig{
+	origPlan := generateRepairPlanChatFn
+	t.Cleanup(func() { generateRepairPlanChatFn = origPlan })
+	repairPlans := 0
+	generateRepairPlanChatFn = func(ctx *ChatContext, input string) {
+		repairPlans++
+		ctx.OnChunk("Diagnosis: endpoint path is wrong\n1. app.go — fix route — mismatch", true)
+	}
+
+	cfg := repairTestConfig(dir, func(ctx *ChatContext, userMessage string) bool {
+		validateAttempts++
+		// Fails once, then passes — the repair loop's own re-validation.
+		return validateAttempts > 1
+	}, &validateAttempts)
+
+	state, err := RunAutonomousProject(cfg)
+	if err != nil {
+		t.Fatalf("RunAutonomousProject: %v", err)
+	}
+	if len(state.Plan) != 1 || !state.Plan[0].Done {
+		t.Fatalf("expected one completed step, got %+v", state.Plan)
+	}
+	if repairPlans == 0 {
+		t.Fatal("expected the repair loop to generate a plan")
+	}
+	if validateAttempts < 2 {
+		t.Fatalf("expected the repair loop to re-validate, got %d attempts", validateAttempts)
+	}
+	// The point of the change: the step was not bounced back to the builder.
+	if state.Plan[0].Attempts != 1 {
+		t.Fatalf("repair should have avoided a builder re-run, got %d attempts", state.Plan[0].Attempts)
+	}
+}
+
+// When the repair loop cannot fix it, the old guarantee must still hold: the
+// step is reopened and the builder gets another pass.
+func TestRunAutonomousProject_UnrepairableValidationReopensStep(t *testing.T) {
+	dir := setupPhasesDB(t)
+	validateAttempts := 0
+
+	origPlan := generateRepairPlanChatFn
+	t.Cleanup(func() { generateRepairPlanChatFn = origPlan })
+	generateRepairPlanChatFn = func(ctx *ChatContext, input string) {
+		ctx.OnChunk("Diagnosis: unknown\n1. app.go — inspect — unclear", true)
+	}
+
+	cfg := repairTestConfig(dir, func(ctx *ChatContext, userMessage string) bool {
+		validateAttempts++
+		// One initial failure plus maxRepairAttempts failures exhausts the
+		// repair loop; only then does the builder get another pass.
+		return validateAttempts > 1+maxRepairAttempts
+	}, &validateAttempts)
+
+	state, err := RunAutonomousProject(cfg)
+	if err != nil {
+		t.Fatalf("RunAutonomousProject: %v", err)
+	}
+	if len(state.Plan) != 1 || !state.Plan[0].Done {
+		t.Fatalf("expected one completed step, got %+v", state.Plan)
+	}
+	if state.Plan[0].Attempts < 2 {
+		t.Fatalf("expected reopened step to be attempted again, got %d", state.Plan[0].Attempts)
+	}
+	if validateAttempts < 2+maxRepairAttempts {
+		t.Fatalf("expected repair attempts before reopening, got %d", validateAttempts)
+	}
+}
+
+// repairTestConfig builds an orchestrator config whose reviewer approves normal
+// step reviews and defers the final behavioural validation to validatePasses.
+func repairTestConfig(dir string, validatePasses func(*ChatContext, string) bool, _ *int) OrchestratorConfig {
+	return OrchestratorConfig{
 		ProjectPath:        dir,
 		Owner:              "acme",
 		Repo:               "demo",
@@ -84,34 +157,16 @@ func TestRunAutonomousProject_ValidationRejectReopensStep(t *testing.T) {
 				ctx.OnChunk("| module | purpose |\n| app | demo |", false)
 			case RoleReviewer:
 				if strings.Contains(userMessage, "Final behavioral validation") {
-					validateAttempts++
-					if validateAttempts == 1 {
+					if validatePasses(ctx, userMessage) {
+						ctx.OnChunk("behavior fixed\nAPPROVE", false)
+					} else {
 						ctx.OnChunk("behavior failed\nREJECT: endpoint mismatch", false)
-						return
 					}
-					ctx.OnChunk("behavior fixed\nAPPROVE", false)
 					return
 				}
 				ctx.OnChunk("reviewed\nAPPROVE", false)
 			}
 		},
-	}
-
-	state, err := RunAutonomousProject(cfg)
-	if err != nil {
-		t.Fatalf("RunAutonomousProject: %v", err)
-	}
-	if state == nil {
-		t.Fatal("expected state")
-	}
-	if len(state.Plan) != 1 || !state.Plan[0].Done {
-		t.Fatalf("expected one completed step, got %+v", state.Plan)
-	}
-	if state.Plan[0].Attempts < 2 {
-		t.Fatalf("expected reopened step to be attempted again, got %d", state.Plan[0].Attempts)
-	}
-	if validateAttempts < 2 {
-		t.Fatalf("expected at least two validation attempts, got %d", validateAttempts)
 	}
 }
 
@@ -311,7 +366,7 @@ func TestRunAutonomousProject_RedirectInjectedIntoBuilderPrompt(t *testing.T) {
 		MaxOuterIterations: 8,
 		OnProgress:         func(string) {},
 		OnError:            func(string) {},
-		OnPhase:    func(string, string) {},
+		OnPhase:            func(string, string) {},
 		ChatFn: func(ctx *ChatContext, userMessage string) {
 			switch ctx.Role {
 			case RoleGriller:
