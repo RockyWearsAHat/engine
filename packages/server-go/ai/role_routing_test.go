@@ -9,7 +9,7 @@ func TestResolveLocalFirstRouting_DisabledReturnsEmpty(t *testing.T) {
 	localFirstEnabledFn = func() bool { return false }
 	t.Cleanup(func() { localFirstEnabledFn = prev })
 
-	if provider, model := ResolveLocalFirstRouting(RolePlanner); provider != "" || model != "" {
+	if provider, model := ResolveLocalFirstRouting("", RolePlanner); provider != "" || model != "" {
 		t.Errorf("disabled router should return empty, got (%q, %q)", provider, model)
 	}
 }
@@ -20,7 +20,7 @@ func TestResolveLocalFirstRouting_LightRoleRoutesLocal(t *testing.T) {
 	t.Cleanup(func() { localFirstEnabledFn = prev })
 	t.Setenv("ENGINE_OLLAMA_MODEL", "qwen2.5:7b")
 
-	provider, model := ResolveLocalFirstRouting(RolePlanner)
+	provider, model := ResolveLocalFirstRouting("", RoleIntaker)
 	if provider != "ollama" {
 		t.Errorf("provider = %q, want ollama", provider)
 	}
@@ -36,7 +36,7 @@ func TestResolveLocalFirstRouting_LightRoleRoutesLlamaCpp(t *testing.T) {
 	t.Setenv("ENGINE_OLLAMA_MODEL", "")
 	t.Setenv("ENGINE_LLAMACPP_MODEL", "llama-cpp-small")
 
-	provider, model := ResolveLocalFirstRouting(RolePlanner)
+	provider, model := ResolveLocalFirstRouting("", RoleIntaker)
 	if provider != "llamacpp" {
 		t.Fatalf("provider = %q, want llamacpp", provider)
 	}
@@ -50,13 +50,13 @@ func TestResolveLocalFirstRouting_HeavyRoleStaysCloud(t *testing.T) {
 	localFirstEnabledFn = func() bool { return true }
 	t.Cleanup(func() { localFirstEnabledFn = prev })
 
-	if provider, model := ResolveLocalFirstRouting(RoleArchitect); provider != "" || model != "" {
+	if provider, model := ResolveLocalFirstRouting("", RoleArchitect); provider != "" || model != "" {
 		t.Errorf("heavy role should not route local, got (%q, %q)", provider, model)
 	}
-	if provider, _ := ResolveLocalFirstRouting(RoleAutonomousBuilder); provider != "" {
+	if provider, _ := ResolveLocalFirstRouting("", RoleAutonomousBuilder); provider != "" {
 		t.Errorf("autonomous builder should not route local, got %q", provider)
 	}
-	if provider, _ := ResolveLocalFirstRouting(RoleImplementer); provider != "" {
+	if provider, _ := ResolveLocalFirstRouting("", RoleImplementer); provider != "" {
 		t.Errorf("implementer should not route local, got %q", provider)
 	}
 }
@@ -66,7 +66,7 @@ func TestResolveLocalFirstRouting_UnknownRoleDefers(t *testing.T) {
 	localFirstEnabledFn = func() bool { return true }
 	t.Cleanup(func() { localFirstEnabledFn = prev })
 
-	if provider, _ := ResolveLocalFirstRouting(RoleInteractive); provider != "" {
+	if provider, _ := ResolveLocalFirstRouting("", RoleInteractive); provider != "" {
 		t.Errorf("interactive (not in allowlist) should defer, got %q", provider)
 	}
 }
@@ -78,7 +78,7 @@ func TestResolveLocalFirstRouting_NoModelConfiguredDefers(t *testing.T) {
 
 	t.Setenv("ENGINE_OLLAMA_MODEL", "")
 
-	provider, model := ResolveLocalFirstRouting(RolePlanner)
+	provider, model := ResolveLocalFirstRouting("", RoleIntaker)
 	if provider != "" {
 		t.Fatalf("provider = %q, want empty", provider)
 	}

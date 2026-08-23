@@ -1,13 +1,17 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createWsHandlerSet } from './test-helpers.js';
 
 const wsClientMocks = vi.hoisted(() => {
-  const { handlers, mockDefinition, emitToAllHandlers } = createWsHandlerSet();
+  const handlers = new Set<(msg: any) => void>();
   return {
     send: vi.fn(),
-    onMessage: mockDefinition.onMessage,
-    _emit: emitToAllHandlers,
+    onMessage: vi.fn((handler: (msg: any) => void) => {
+      handlers.add(handler);
+      return () => handlers.delete(handler);
+    }),
+    _emit: (msg: any) => {
+      handlers.forEach((handler) => handler(msg));
+    },
     handlers,
   };
 });
@@ -296,6 +300,101 @@ describe('MachineConnectionsPanel workflows', () => {
     expect(wsClientMocks.send).toHaveBeenCalledWith({ type: 'remote.pair.code.generate' });
   });
 
+  it('Mount_RequestsMeshConfigAndHealthScan', () => {
+    render(<MachineConnectionsPanel />);
+
+    expect(wsClientMocks.send).toHaveBeenCalledWith({ type: 'mesh.config.get' });
+    expect(wsClientMocks.send).toHaveBeenCalledWith({ type: 'mesh.health.scan', timeoutMs: 4000 });
+    expect(wsClientMocks.send).toHaveBeenCalledWith({ type: 'mesh.activity.get', limit: 50 });
+  });
+
+  it('RefreshActivityButton_RequestsMeshActivityFeed', async () => {
+    render(<MachineConnectionsPanel />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /refresh activity/i }));
+    });
+
+    expect(wsClientMocks.send).toHaveBeenCalledWith({ type: 'mesh.activity.get', limit: 50 });
+  });
+
+  it('MeshConfigMessage_DisplaysPeerAndAllowsHealthScan', async () => {
+    render(<MachineConnectionsPanel />);
+
+    await act(async () => {
+      wsClientMocks._emit({
+        type: 'mesh.config',
+        config: {
+          selfName: 'macbook',
+          listenAddr: ':24445',
+          selfOllamaURL: 'http://127.0.0.1:11434',
+          configPath: '/tmp/mesh.json',
+          peers: [
+            {
+              name: 'windows',
+              address: '192.168.1.20:24445',
+              roles: ['tests'],
+              ollamaURL: 'http://127.0.0.1:11434',
+              hasSecret: true,
+            },
+          ],
+        },
+      });
+    });
+
+    expect(screen.getByText('Project network control')).toBeTruthy();
+    expect(screen.getByText('windows')).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /scan network health/i }));
+    });
+
+    expect(wsClientMocks.send).toHaveBeenCalledWith({ type: 'mesh.health.scan', timeoutMs: 4000 });
+  });
+
+  it('SaveNetworkSettingsButton_SendsMeshConfigSet', async () => {
+    render(<MachineConnectionsPanel />);
+
+    fireEvent.change(screen.getByPlaceholderText('mac-studio'), { target: { value: 'my-machine' } });
+    fireEvent.change(screen.getByPlaceholderText(':24445'), { target: { value: ':25555' } });
+    fireEvent.change(screen.getAllByPlaceholderText('http://127.0.0.1:11434')[0], { target: { value: 'http://127.0.0.1:11435' } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /save network settings/i }));
+    });
+
+    expect(wsClientMocks.send).toHaveBeenCalledWith({
+      type: 'mesh.config.set',
+      selfName: 'my-machine',
+      listenAddr: ':25555',
+      selfOllamaURL: 'http://127.0.0.1:11435',
+    });
+  });
+
+  it('SavePeerButton_SendsMeshPeerUpsert', async () => {
+    render(<MachineConnectionsPanel />);
+
+    fireEvent.change(screen.getByPlaceholderText('windows-rig'), { target: { value: 'worker-1' } });
+    fireEvent.change(screen.getByPlaceholderText('192.168.1.30:24445'), { target: { value: '10.0.0.2:24445' } });
+    fireEvent.change(screen.getByPlaceholderText('tests, inference'), { target: { value: 'tests, inference' } });
+    fireEvent.change(screen.getByPlaceholderText('required for new peers'), { target: { value: 'secret-1' } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /save peer/i }));
+    });
+
+    expect(wsClientMocks.send).toHaveBeenCalledWith({
+      type: 'mesh.peer.upsert',
+      peer: {
+        name: 'worker-1',
+        address: '10.0.0.2:24445',
+        secret: 'secret-1',
+        roles: ['tests', 'inference'],
+        ollamaURL: '',
+      },
+    });
+  });
+
   it('RemotePairCodeMessage_DisplaysGeneratedCode', async () => {
     render(<MachineConnectionsPanel />);
 
@@ -316,5 +415,32 @@ describe('MachineConnectionsPanel workflows', () => {
     });
 
     expect(screen.queryByTestId('generated-code')).toBeNull();
+  });
+
+  it('MeshActivityMessage_DisplaysRecentActivityRows', async () => {
+    render(<MachineConnectionsPanel />);
+
+    await act(async () => {
+      wsClientMocks._emit({
+        type: 'mesh.activity',
+        records: [
+          {
+            id: 'evt-1',
+            at: '2026-01-01T00:00:00Z',
+            action: 'mesh.peer.upsert',
+            target: 'worker-1',
+            status: 'error',
+            message: 'Node save rejected',
+            error: 'peer.secret is required',
+            resolved: false,
+          },
+        ],
+      });
+    });
+
+    expect(screen.getByText('Project agent activity')).toBeTruthy();
+    expect(screen.getByText('mesh.peer.upsert')).toBeTruthy();
+    expect(screen.getByText('Node save rejected')).toBeTruthy();
+    expect(screen.getByText(/peer.secret is required/i)).toBeTruthy();
   });
 });

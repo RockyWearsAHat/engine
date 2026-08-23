@@ -9,23 +9,46 @@
  */
 import { render, screen, act } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { sendWsMessage, createBridgeMock, clearBridgeMocks, setupStoreForUITests, createWsClientMockFactory } from './test-helpers.js';
+import { sendWsMessage, setupStoreForUITests } from './test-helpers.js';
 
 // ── WS mock with callback capture using vi.hoisted ──────────────────────────────
 
-const { mockDef: wsMockDef, wsCallbacks } = vi.hoisted(() => createWsClientMockFactory());
+const wsMocks = vi.hoisted(() => {
+  let capturedWsCallback: ((message: unknown) => void) | null = null;
+  let capturedOpenCallback: (() => void) | null = null;
 
-vi.mock('../ws/client.js', () => wsMockDef);
+  return {
+    send: vi.fn(),
+    onMessage: vi.fn((callback: (message: unknown) => void) => {
+      capturedWsCallback = callback;
+      return vi.fn();
+    }),
+    onOpen: vi.fn((callback: () => void) => {
+      capturedOpenCallback = callback;
+      return vi.fn();
+    }),
+    getCapturedWsCallback: () => capturedWsCallback,
+    getCapturedOpenCallback: () => capturedOpenCallback,
+  };
+});
 
-vi.mock('../bridge.js', () =>
-  createBridgeMock({
+vi.mock('../ws/client.js', () => ({
+  wsClient: {
+    send: wsMocks.send,
+    onMessage: wsMocks.onMessage,
+    onOpen: wsMocks.onOpen,
+  },
+}));
+
+vi.mock('../bridge.js', () => ({
+  bridge: {
     openExternal: vi.fn(),
     getLocalServerToken: vi.fn().mockResolvedValue(null),
     getGithubToken: vi.fn().mockResolvedValue(null),
     getActiveTeam: vi.fn().mockResolvedValue(null),
     setActiveTeam: vi.fn().mockResolvedValue(undefined),
-  })
-);
+  },
+}));
 
 // ── Lazy import after mocks ───────────────────────────────────────────────────
 
@@ -136,13 +159,13 @@ describe('TeamSelector — loading state', () => {
 describe('TeamSelector — error state', () => {
   it('EngineConfigErrorField_GenericMissingConfigGuidanceShown', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', error: 'config file not found' });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', error: 'config file not found' });
     expect(screen.getByText(/no team config found/i)).toBeTruthy();
   });
 
   it('NullYamlNoError_StaysInLoadingState', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: null });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: null });
     expect(screen.getByText(/loading team config/i)).toBeTruthy();
   });
 });
@@ -155,19 +178,19 @@ describe('TeamSelector — free team (teamCostTier, costLabel)', () => {
 
   it('FastTeamFromYaml_Rendered', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: FREE_YAML });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: FREE_YAML });
     expect(screen.getByText('fast')).toBeTruthy();
   });
 
   it('AllOllamaTeam_FreeCostLabelShown', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: FREE_YAML });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: FREE_YAML });
     expect(screen.getByText('Free')).toBeTruthy();
   });
 
   it('TeamDescription_Rendered', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: FREE_YAML });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: FREE_YAML });
     expect(screen.getByText(/fast free team/i)).toBeTruthy();
   });
 });
@@ -175,13 +198,13 @@ describe('TeamSelector — free team (teamCostTier, costLabel)', () => {
 describe('TeamSelector — premium team (high cost tier)', () => {
   it('PremiumTeamFromYaml_Rendered', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: PREMIUM_YAML });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: PREMIUM_YAML });
     expect(screen.getByText('premium')).toBeTruthy();
   });
 
   it('AllOpusTeam_HighCostLabelShown', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: PREMIUM_YAML });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: PREMIUM_YAML });
     expect(screen.queryByText('Free')).toBeNull();
   });
 });
@@ -189,14 +212,14 @@ describe('TeamSelector — premium team (high cost tier)', () => {
 describe('TeamSelector — mixed/multiple teams', () => {
   it('MultipleTeamsFromYaml_AllRendered', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: MIXED_YAML });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: MIXED_YAML });
     expect(screen.getByText('standard')).toBeTruthy();
     expect(screen.getByText('frontend')).toBeTruthy();
   });
 
   it('EachTeamCard_ModelDisplayNamesRendered', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: MIXED_YAML });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: MIXED_YAML });
     expect(screen.getAllByText(/GPT-4o/i).length).toBeGreaterThan(0);
   });
 });
@@ -204,7 +227,7 @@ describe('TeamSelector — mixed/multiple teams', () => {
 describe('TeamSelector — empty teams', () => {
   it('EmptyTeamsBlock_NoTeamsDefinedMessageRendered', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: EMPTY_TEAMS_YAML });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: EMPTY_TEAMS_YAML });
     expect(screen.getByText(/no teams defined/i)).toBeTruthy();
   });
 });
@@ -213,7 +236,7 @@ describe('TeamSelector — team selection (splitModelString)', () => {
   it('TeamClicked_BridgeSetActiveTeamCalled', async () => {
     vi.mocked(bridge.setActiveTeam).mockClear();
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: FREE_YAML });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: FREE_YAML });
     const teamCard = screen.getByText('fast').closest('button') as HTMLButtonElement
       ?? screen.getByText('fast').closest('[role="button"]') as HTMLElement
       ?? screen.getByText('fast').parentElement as HTMLElement;
@@ -233,12 +256,12 @@ describe('TeamSelector — team selection (splitModelString)', () => {
 
   it('TeamSelector_HandleEngineTeamUpdated_ActiveTeamButtonGetsAccentBackground', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: FREE_YAML });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: FREE_YAML });
 
     const fastButton = screen.getByText('fast').closest('button') as HTMLButtonElement;
     expect(fastButton.style.background).toContain('surface-2');
 
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.team.updated', team: 'fast' });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.team.updated', team: 'fast' });
     expect(fastButton.style.background).toContain('accent-dim');
   });
 });
@@ -247,7 +270,7 @@ describe('TeamSelector — bridge.getActiveTeam response', () => {
   it('Mount_ActiveTeamSetFromBridgeGetActiveTeam', async () => {
     vi.mocked(bridge.getActiveTeam).mockResolvedValue('fast');
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: FREE_YAML });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: FREE_YAML });
     await act(async () => {
       await new Promise(r => setTimeout(r, 10));
     });
@@ -290,7 +313,7 @@ teams:
 
   it('AllNamedTeamsAndIcons_RenderedWithoutCrashing', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: NAMED_TEAMS_YAML });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: NAMED_TEAMS_YAML });
     expect(screen.getByText('frontend')).toBeTruthy();
     expect(screen.getByText('backend')).toBeTruthy();
     expect(screen.getByText('security')).toBeTruthy();
@@ -301,7 +324,7 @@ teams:
 describe('TeamSelector — sendWsMessage ignored for other types', () => {
   it('DifferentTypeWsMessages_Ignored', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'file.save', path: '/a.ts' });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'file.save', path: '/a.ts' });
     expect(screen.getByText(/loading team config/i)).toBeTruthy();
   });
 });
@@ -330,7 +353,7 @@ teams:
 
   it('OpenaiTeamAndCpuIcon_RenderedWithoutCrashing', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: OPENAI_YAML });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: OPENAI_YAML });
     expect(screen.getByText('openai')).toBeTruthy();
   });
 });
@@ -339,7 +362,7 @@ describe('TeamSelector — splitModelString no-colon branch', () => {
   it('TeamModelNoColon_AnthropicProviderFallbackUsed', async () => {
     vi.mocked(bridge.setActiveTeam).mockClear();
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: FREE_YAML.replace(/ollama:codellama/g, 'codellama') });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: FREE_YAML.replace(/ollama:codellama/g, 'codellama') });
     await act(async () => {
       const btn = screen.getByText('fast').closest('button') as HTMLButtonElement;
       btn?.click();
@@ -375,7 +398,7 @@ teams:
 
   it('TeamSelector_parseEngineConfigYaml_unknownRoleKeySkipsGracefully', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: YAML_UNKNOWN_ROLE });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: YAML_UNKNOWN_ROLE });
     expect(screen.getByText('myteam')).toBeTruthy();
   });
 });
@@ -389,7 +412,7 @@ describe('TeamSelector — onOpen re-requests config', () => {
     render(<TeamSelector />);
     vi.mocked(wsClient.send).mockClear();
     act(() => {
-      wsCallbacks.getCapturedOnOpenCallback?.();
+      wsMocks.getCapturedOpenCallback()?.();
     });
     expect(vi.mocked(wsClient.send)).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'engine.config.get' }),
@@ -417,7 +440,7 @@ teams:
 
   it('TeamSelector_parseEngineConfigYaml_indentedLinesBeforeTeamsAreSkipped', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: YAML_BEFORE_TEAMS });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: YAML_BEFORE_TEAMS });
     expect(screen.getByText('edge1')).toBeTruthy();
   });
 
@@ -439,7 +462,7 @@ teams:
 
   it('TeamSelector_parseEngineConfigYaml_indent4BeforeTeamNameIsSkipped', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: YAML_INDENT4_BEFORE_TEAM });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: YAML_INDENT4_BEFORE_TEAM });
     expect(screen.getByText('edge2')).toBeTruthy();
   });
 
@@ -461,7 +484,7 @@ teams:
 
   it('TeamSelector_parseEngineConfigYaml_indent6WithoutRoleIsIgnored', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: YAML_INDENT6_NO_ROLE });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: YAML_INDENT6_NO_ROLE });
     expect(screen.getByText('edge3')).toBeTruthy();
   });
 
@@ -483,7 +506,7 @@ teams:
 
   it('TeamSelector_parseEngineConfigYaml_unknownFieldAtIndent6IsIgnored', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: YAML_UNKNOWN_FIELD_AT_6 });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: YAML_UNKNOWN_FIELD_AT_6 });
     expect(screen.getByText('edge4')).toBeTruthy();
   });
 
@@ -511,7 +534,7 @@ teams:
 
   it('TeamSelector_parseEngineConfigYaml_quotedValuesAreUnquoted', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: YAML_QUOTED_VALUE });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: YAML_QUOTED_VALUE });
     expect(screen.getByText('quoted-team')).toBeTruthy();
   });
 
@@ -533,13 +556,13 @@ teams:
       model: gpt-4o
 `;
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: YAML_SINGLE_QUOTED });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: YAML_SINGLE_QUOTED });
     expect(screen.getByText('single-quoted-team')).toBeTruthy();
   });
 
   it('TeamSelector_parseEngineConfigYaml_emptyYamlReturnsEmptyConfig', () => {
     render(<TeamSelector />);
-    sendWsMessage(wsCallbacks.getCapturedWsCallback, { type: 'engine.config', yaml: '   ' });
+    sendWsMessage(wsMocks.getCapturedWsCallback(), { type: 'engine.config', yaml: '   ' });
     expect(screen.getByText(/no teams defined/i)).toBeTruthy();
   });
 });

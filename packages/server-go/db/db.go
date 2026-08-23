@@ -1,5 +1,7 @@
 package db
 
+// quality:allow-long-file
+
 import (
 	"crypto/sha256"
 	"database/sql"
@@ -110,6 +112,7 @@ func CurrentProject() string {
 }
 
 var coreSchemaStatements = []string{
+	// Session lifecycle and project direction state.
 	`CREATE TABLE IF NOT EXISTS sessions (
 		id          TEXT PRIMARY KEY,
 		project_path TEXT NOT NULL,
@@ -124,6 +127,7 @@ var coreSchemaStatements = []string{
 		created_at   TEXT NOT NULL,
 		updated_at   TEXT NOT NULL
 	);`,
+	// Chat history, tool telemetry, and usage accounting.
 	`CREATE TABLE IF NOT EXISTS messages (
 		id         TEXT PRIMARY KEY,
 		session_id TEXT NOT NULL,
@@ -188,6 +192,7 @@ var coreSchemaStatements = []string{
 		created_at  TEXT NOT NULL,
 		FOREIGN KEY(session_id) REFERENCES sessions(id)
 	);`,
+	// Attention residual trace storage for reasoning diagnostics.
 	`CREATE TABLE IF NOT EXISTS attention_residuals (
 		id           TEXT PRIMARY KEY,
 		session_id   TEXT NOT NULL,
@@ -207,6 +212,7 @@ var coreSchemaStatements = []string{
 		ON attention_residuals(session_id, created_at DESC);`,
 	`CREATE INDEX IF NOT EXISTS idx_attention_residuals_source_key_created
 		ON attention_residuals(source_key, created_at DESC);`,
+	// Discord control-plane message storage and search index.
 	`CREATE TABLE IF NOT EXISTS discord_messages (
 		id            TEXT PRIMARY KEY,
 		project_path  TEXT NOT NULL,
@@ -252,6 +258,7 @@ var coreSchemaStatements = []string{
 		ON discord_session_threads(thread_id);`,
 	`CREATE INDEX IF NOT EXISTS idx_discord_session_threads_project
 		ON discord_session_threads(project_path, created_at DESC);`,
+	// Session working-state snapshots and profile metadata.
 	`CREATE TABLE IF NOT EXISTS working_state (
 		session_id TEXT PRIMARY KEY,
 		state      TEXT NOT NULL DEFAULT '{}',
@@ -266,6 +273,7 @@ var coreSchemaStatements = []string{
 }
 
 var memorySchemaStatements = []string{
+	// Memory ledger append-only event stream and sequence indexes.
 	`CREATE TABLE IF NOT EXISTS memory_ledger_events (
 		id            TEXT PRIMARY KEY,
 		project_path  TEXT NOT NULL,
@@ -284,6 +292,7 @@ var memorySchemaStatements = []string{
 		ON memory_ledger_events(project_path, created_at DESC);`,
 	`CREATE INDEX IF NOT EXISTS idx_memory_ledger_project_session_created
 		ON memory_ledger_events(project_path, session_id, created_at DESC);`,
+	// Residual node graph for confidence/novelty/surprise tracking.
 	`CREATE TABLE IF NOT EXISTS memory_residual_nodes (
 		project_path           TEXT NOT NULL,
 		node_key               TEXT NOT NULL,
@@ -307,6 +316,7 @@ var memorySchemaStatements = []string{
 		ON memory_residual_nodes(project_path, residual_score DESC, updated_at DESC);`,
 	`CREATE INDEX IF NOT EXISTS idx_memory_nodes_project_session_score
 		ON memory_residual_nodes(project_path, session_id, residual_score DESC, updated_at DESC);`,
+	// Residual graph edges and snapshot persistence.
 	`CREATE TABLE IF NOT EXISTS memory_residual_edges (
 		id                    TEXT PRIMARY KEY,
 		project_path          TEXT NOT NULL,

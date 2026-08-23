@@ -46,10 +46,16 @@ packages/
 - **AI streaming**: response chunks arrive as partial text events over WS; client renders them incrementally.
 - **Project direction**: Go persists a living project direction summary per-workspace in SQLite; always loaded when a new session starts.
 - **Agent communication pool**: Go maintains a project-scoped in-process pool where the lead agent and worker teams can list peers, send focused messages, read inboxes, and await replies without forcing every role into one context window.
+- **Runtime hierarchy (current intended architecture)**: Chatter surfaces (Discord, GitHub, editor chat) feed the Orchestrator. The Orchestrator is the durable project brain. A Scribe layer sits beneath it as the context/documentation fabric. Managers are persistent area owners. Workers are tiny-scope specialists created and retired as needed.
 - **Secret scanning**: Go intercepts every outgoing AI message and blocks if a secret pattern is matched.
 - **Custom tools**: `.engine/tools/<name>.json` defines project-specific agent tools; inputs passed as `INPUT_<NAME>` env vars to prevent injection.
 - **Test coverage**: 100% client (Vitest), 100% Go (go test), Rust (cargo llvm-cov) — all enforced by completion gate.
 - **Memory OS (always-on)**: append-only hash-chained ledger (`memory_ledger_events`), residual cognition graph (`memory_residual_nodes`, `memory_residual_edges`), deterministic snapshots (`memory_state_snapshots`), deterministic context compilation, and scribe snapshots under `.engine/memory/scribe/`.
+
+## Orchestration Status
+
+- The classic orchestrator loop in `packages/server-go/ai/orchestrator.go` is the only production project-control path.
+- The event-driven orchestrator remains in-tree as development code, but it is intentionally disabled from the top-level `RunAutonomousProject` entrypoint because its current "teams" are heuristic step buckets rather than true manager/specialist members.
 
 ## Client & Shared Type Interfaces
 

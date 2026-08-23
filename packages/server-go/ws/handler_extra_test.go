@@ -19,8 +19,10 @@ import (
 	"github.com/engine/server/db"
 	"github.com/engine/server/discord"
 	"github.com/engine/server/github"
+	"github.com/engine/server/mesh"
 	"github.com/engine/server/quality"
 	"github.com/engine/server/remote"
+	"github.com/engine/server/runtimecfg"
 	"github.com/engine/server/workspace"
 	"github.com/gorilla/websocket"
 )
@@ -1213,11 +1215,15 @@ func TestHandler_EngineTeamSet_Success(t *testing.T) {
 	})
 	readWSMessageOfType(t, conn, "engine.team.updated")
 
-	if got := os.Getenv("ENGINE_MODEL_PROVIDER"); got != "ollama" {
-		t.Fatalf("expected ENGINE_MODEL_PROVIDER ollama, got %q", got)
+	settings, err := runtimecfg.Load(projectDir)
+	if err != nil {
+		t.Fatalf("load runtime settings: %v", err)
 	}
-	if got := os.Getenv("ENGINE_MODEL"); got != "llama3" {
-		t.Fatalf("expected ENGINE_MODEL llama3, got %q", got)
+	if got := settings.ModelProvider; got != "ollama" {
+		t.Fatalf("expected modelProvider ollama, got %q", got)
+	}
+	if got := settings.Model; got != "llama3" {
+		t.Fatalf("expected model llama3, got %q", got)
 	}
 }
 
@@ -1268,11 +1274,15 @@ func TestHandler_EngineTeamSet_ResolveFromConfigWhenProviderAndModelMissing(t *t
 	})
 	readWSMessageOfType(t, conn, "engine.team.updated")
 
-	if got := os.Getenv("ENGINE_MODEL_PROVIDER"); got != "openai" {
-		t.Fatalf("expected ENGINE_MODEL_PROVIDER openai, got %q", got)
+	settings, err := runtimecfg.Load(projectDir)
+	if err != nil {
+		t.Fatalf("load runtime settings: %v", err)
 	}
-	if got := os.Getenv("ENGINE_MODEL"); got != "gpt-4o-mini" {
-		t.Fatalf("expected ENGINE_MODEL gpt-4o-mini, got %q", got)
+	if got := settings.ModelProvider; got != "openai" {
+		t.Fatalf("expected modelProvider openai, got %q", got)
+	}
+	if got := settings.Model; got != "gpt-4o-mini" {
+		t.Fatalf("expected model gpt-4o-mini, got %q", got)
 	}
 }
 
@@ -1453,19 +1463,50 @@ func TestShortIDAndTruncate_HandleEdgeCases(t *testing.T) {
 func TestPromptWithProjectStatusContext_AddsProjectContextWhenScaffoldExists(t *testing.T) {
 	prevListSessions := dbListSessions
 	defer func() { dbListSessions = prevListSessions }()
+	projectDir := t.TempDir()
+	if err := db.Init(projectDir); err != nil {
+		t.Fatalf("db init: %v", err)
+	}
+	if err := db.UpsertProjectDirection(projectDir, "Keep the orchestrator focused on the project goal."); err != nil {
+		t.Fatalf("upsert project direction: %v", err)
+	}
 
 	dbListSessions = func(string) ([]db.Session, error) {
 		return []db.Session{{ID: "scaffold-123456789", UpdatedAt: "2026-06-03T00:00:00Z", MessageCount: 2, Summary: "ready"}}, nil
 	}
 
-	got := promptWithProjectStatusContext("/tmp/my-project", "hello")
+	got := promptWithProjectStatusContext(projectDir, "hello")
 	if !strings.Contains(got, "Discord project context:") {
 		t.Fatalf("expected project context header, got %q", got)
 	}
-	if !strings.Contains(got, "Project: my-project") {
+	if !strings.Contains(got, "Project: "+filepath.Base(projectDir)) {
 		t.Fatalf("expected repo name in prompt, got %q", got)
 	}
+	if !strings.Contains(got, "Persistent project direction:") {
+		t.Fatalf("expected persistent project direction in prompt, got %q", got)
+	}
 	if !strings.Contains(got, "User message:\nhello") {
+		t.Fatalf("expected original prompt appended, got %q", got)
+	}
+}
+
+func TestPromptWithProjectStatusContext_AddsDirectionWithoutScaffold(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := db.Init(projectDir); err != nil {
+		t.Fatalf("db init: %v", err)
+	}
+	if err := db.UpsertProjectDirection(projectDir, "Keep the orchestrator focused on the project goal."); err != nil {
+		t.Fatalf("upsert project direction: %v", err)
+	}
+
+	got := promptWithProjectStatusContext(projectDir, "hello")
+	if got == "hello" {
+		t.Fatal("expected project direction context to be added")
+	}
+	if !strings.Contains(got, "Persistent project direction:") {
+		t.Fatalf("expected persistent project direction in prompt, got %q", got)
+	}
+	if !strings.Contains(got, "hello") {
 		t.Fatalf("expected original prompt appended, got %q", got)
 	}
 }
@@ -1793,6 +1834,156 @@ func TestHandler_RemotePairCodeGenerate_Success(t *testing.T) {
 	code, _ := msg["code"].(string)
 	if len(code) != 6 {
 		t.Fatalf("expected 6-digit code, got %+v", msg)
+	}
+}
+
+func TestHandler_MeshConfigGet_AndSetAndPeerWorkflow(t *testing.T) {
+	origLoad := meshLoadConfigFn
+	origSave := meshSaveConfigFn
+	origPath := meshDefaultPathFn
+	origHealth := meshClientHealthFn
+	defer func() {
+		meshLoadConfigFn = origLoad
+		meshSaveConfigFn = origSave
+		meshDefaultPathFn = origPath
+		meshClientHealthFn = origHealth
+	}()
+
+	cfg := &mesh.Config{SelfName: "mac", ListenAddr: ":24445", SelfOllamaURL: "http://127.0.0.1:11434", Peers: []mesh.Peer{}}
+	meshLoadConfigFn = func(_ string) (*mesh.Config, error) {
+		copyCfg := *cfg
+		copyCfg.Peers = append([]mesh.Peer(nil), cfg.Peers...)
+		return &copyCfg, nil
+	}
+	meshSaveConfigFn = func(_ string, next *mesh.Config) error {
+		cfg = next
+		return nil
+	}
+	meshDefaultPathFn = func() string { return "/tmp/mesh.json" }
+	meshClientHealthFn = func(selfName string, peer *mesh.Peer, timeout time.Duration) (*mesh.HealthResponse, error) {
+		return &mesh.HealthResponse{Name: selfName, OS: "darwin", Arch: "arm64", CPUs: 8, Roles: []string{"tests"}, UpAt: "now"}, nil
+	}
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{"type": "mesh.config.get"})
+	gotConfig := readWSMessageOfType(t, conn, "mesh.config")
+	if gotConfig["config"] == nil {
+		t.Fatalf("expected mesh config payload, got %+v", gotConfig)
+	}
+
+	writeWSMessage(t, conn, map[string]any{
+		"type":          "mesh.config.set",
+		"selfName":      "macbook",
+		"listenAddr":    ":25555",
+		"selfOllamaURL": "http://127.0.0.1:11435",
+	})
+	readWSMessageOfType(t, conn, "mesh.config.saved")
+
+	writeWSMessage(t, conn, map[string]any{
+		"type": "mesh.peer.upsert",
+		"peer": map[string]any{
+			"name":      "windows",
+			"address":   "192.168.1.30:24445",
+			"secret":    "shared-secret",
+			"roles":     []string{"tests", "tests", "inference"},
+			"ollamaURL": "http://127.0.0.1:11434",
+		},
+	})
+	peerSaved := readWSMessageOfType(t, conn, "mesh.config.saved")
+	configBody, _ := peerSaved["config"].(map[string]any)
+	peers, _ := configBody["peers"].([]any)
+	if len(peers) != 1 {
+		t.Fatalf("expected one mesh peer, got %+v", peerSaved)
+	}
+
+	writeWSMessage(t, conn, map[string]any{"type": "mesh.health.scan", "timeoutMs": 1000})
+	health := readWSMessageOfType(t, conn, "mesh.health.results")
+	results, _ := health["results"].([]any)
+	if len(results) != 1 {
+		t.Fatalf("expected one health result, got %+v", health)
+	}
+
+	writeWSMessage(t, conn, map[string]any{"type": "mesh.peer.remove", "name": "windows"})
+	removed := readWSMessageOfType(t, conn, "mesh.config.saved")
+	removedConfig, _ := removed["config"].(map[string]any)
+	removedPeers, _ := removedConfig["peers"].([]any)
+	if len(removedPeers) != 0 {
+		t.Fatalf("expected no mesh peers after removal, got %+v", removed)
+	}
+
+	writeWSMessage(t, conn, map[string]any{"type": "mesh.activity.get", "limit": 20})
+	activity := readWSMessageOfType(t, conn, "mesh.activity")
+	records, _ := activity["records"].([]any)
+	if len(records) == 0 {
+		t.Fatalf("expected mesh activity records after workflow, got %+v", activity)
+	}
+	first, _ := records[0].(map[string]any)
+	if strings.TrimSpace(fmt.Sprint(first["action"])) == "" {
+		t.Fatalf("expected mesh activity action in first record, got %+v", first)
+	}
+}
+
+func TestHandler_MeshPeerUpsert_RequiresSecretForNewPeer(t *testing.T) {
+	origLoad := meshLoadConfigFn
+	defer func() { meshLoadConfigFn = origLoad }()
+	meshLoadConfigFn = func(_ string) (*mesh.Config, error) {
+		return &mesh.Config{SelfName: "mac", ListenAddr: ":24445", Peers: []mesh.Peer{}}, nil
+	}
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{
+		"type": "mesh.peer.upsert",
+		"peer": map[string]any{
+			"name":    "peer-a",
+			"address": "10.0.0.2:24445",
+		},
+	})
+	msg := readWSMessageOfType(t, conn, "error")
+	if msg["code"] != "BAD_PAYLOAD" {
+		t.Fatalf("expected BAD_PAYLOAD for missing new peer secret, got %+v", msg)
+	}
+}
+
+func TestHandler_MeshHealthScan_ReportsPeerError(t *testing.T) {
+	origLoad := meshLoadConfigFn
+	origHealth := meshClientHealthFn
+	defer func() {
+		meshLoadConfigFn = origLoad
+		meshClientHealthFn = origHealth
+	}()
+
+	meshLoadConfigFn = func(_ string) (*mesh.Config, error) {
+		return &mesh.Config{
+			SelfName:   "mac",
+			ListenAddr: ":24445",
+			Peers: []mesh.Peer{
+				{Name: "bad-peer", Address: "10.0.0.9:24445", Secret: "s"},
+			},
+		}, nil
+	}
+	meshClientHealthFn = func(selfName string, peer *mesh.Peer, timeout time.Duration) (*mesh.HealthResponse, error) {
+		return nil, fmt.Errorf("dial timeout")
+	}
+
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{"type": "mesh.health.scan"})
+	msg := readWSMessageOfType(t, conn, "mesh.health.results")
+	results, _ := msg["results"].([]any)
+	if len(results) != 1 {
+		t.Fatalf("expected one result, got %+v", msg)
+	}
+	first, _ := results[0].(map[string]any)
+	if first["ok"] != false {
+		t.Fatalf("expected failed health result, got %+v", first)
 	}
 }
 
@@ -2361,8 +2552,7 @@ func TestHandler_GitHubAuthStart_WebhookSecretGenerationError(t *testing.T) {
 	}
 }
 
-func TestHandler_ConfigSync_ClonesDir_SetsEnv(t *testing.T) {
-	t.Setenv("ENGINE_CLONES_DIR", "")
+func TestHandler_ConfigSync_ClonesDir_PersistsRuntimeConfig(t *testing.T) {
 
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
@@ -2379,8 +2569,12 @@ func TestHandler_ConfigSync_ClonesDir_SetsEnv(t *testing.T) {
 	writeWSMessage(t, conn, map[string]any{"type": "session.list"})
 	readWSMessageOfType(t, conn, "session.list")
 
-	if got := os.Getenv("ENGINE_CLONES_DIR"); got != clones {
-		t.Fatalf("expected ENGINE_CLONES_DIR %q, got %q", clones, got)
+	settings, err := runtimecfg.Load(projectDir)
+	if err != nil {
+		t.Fatalf("load runtime settings: %v", err)
+	}
+	if got := settings.ClonesDir; got != clones {
+		t.Fatalf("expected clonesDir %q, got %q", clones, got)
 	}
 }
 func TestTriggerGitHubAuthSuccessHook_CallsRegisteredHook(t *testing.T) {

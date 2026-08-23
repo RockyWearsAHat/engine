@@ -61,7 +61,30 @@ func EnsureSessionWorktree(sessionID, repoPath string) (string, error) {
 		return repoPath, nil
 	}
 
+	// git worktree add only brings tracked files. .engine/runtime-config.json
+	// is gitignored (it can hold API keys), so without this every session
+	// worktree starts with empty runtime settings and every role-based chat
+	// call fails with "No model selected" regardless of what's configured on
+	// the origin project.
+	seedWorktreeRuntimeConfig(repoPath, wtPath)
+
 	return wtPath, nil
+}
+
+// seedWorktreeRuntimeConfig copies the origin repo's runtime settings (model
+// provider config, API keys) into a freshly created session worktree. Only
+// called once, right after worktree creation — an existing worktree's
+// settings are left alone so a session's own later changes aren't clobbered.
+func seedWorktreeRuntimeConfig(repoPath, wtPath string) {
+	data, err := os.ReadFile(filepath.Join(repoPath, ".engine", "runtime-config.json"))
+	if err != nil {
+		return
+	}
+	dstDir := filepath.Join(wtPath, ".engine")
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(dstDir, "runtime-config.json"), data, 0o600)
 }
 
 // CleanupSessionWorktree removes the worktree for the given session and optionally

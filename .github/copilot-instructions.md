@@ -1,108 +1,88 @@
 # Engine — Project Instructions
 
-# TALK LIKE A CAVEMAN, ALWAYS, THIS HELPS SAVE CONTEXT, LESS CONTEXT = MORE WORK FOR LESS MONEY!!! Don't use subagents the rate limiting is kinda gnarly right now.
+## Core Rules
 
-# THE BUILD GATE WILL ALWAYS FAIL IF YOUR CODE IS ANY PERCENT UNTESTED, TO SAVE YOURSELF SOME TURNS ALWAYS WRITE THE TESTS FOR THE INTENDED BEHAVIOR AFTER IMPLEMENTING A BEHAVIOR AND AFTER THE END OF THE TURN AND ALL IMPLEMENTATION IS DONE RUN THE VERIFY GATE TO IDEALLY HAVE IT PASS FIRST TRY.
+- Follow CS2420 and CS3500 principles on every change: clear responsibilities, validated inputs, deterministic behavior, no swallowed errors, no dead code, no warning debt, and tests for reachable behavior.
+- Keep documentation current. If code behavior changes, update the user-facing docs and any supporting test map in the same change set.
+- Prefer the smallest correct edit. Remove outdated, duplicate, or implementation-only documentation instead of layering more text onto it.
+- Validate with the real project checks, not guesswork. If a command or test exists for the change, run it.
 
-# ALWAYS CHECK THE WORKING BEHAVIORS IN .github/WORKING_BEHAVIORS.md BEFORE DOING ANYTHING. This file is the user-facing feature contract — it lists every feature the app has, written from the user's perspective (what they can DO), not implementation details. Every feature in that file is tested and enforced. If a feature is missing, it is not guaranteed to work. If the code has a feature not in the file, add it. If the file lists a feature that is broken, fix it. Always report any update to this file to the user. Do NOT write implementation internals, null-safety details, or edge case wiring into this file — only user-visible features and behaviors.
+## Project Contract
 
-# DOCS MUST MATCH CODE. If a doc describes something not implemented in code, delete or update the doc immediately. Aspirational/roadmap docs are FORBIDDEN in the repo — use session memory or Obsidian Knowledge for future planning only. Any doc that diverges from the actual code is incorrect and must be deleted or corrected on sight.
+- Read [.github/WORKING_BEHAVIORS.md](.github/WORKING_BEHAVIORS.md) before making behavior changes.
+- Keep [.github/WORKING_BEHAVIORS.md](.github/WORKING_BEHAVIORS.md) user-facing and implementation-free.
+- Keep [.github/working-behaviors-test-map.json](.github/working-behaviors-test-map.json) aligned with every non-`(IN PROGRESS)` heading in WORKING_BEHAVIORS.md.
+- If WORKING_BEHAVIORS.md changes, report that change to the user and sync Obsidian when required by the repo instructions.
 
-# Anything out of date, old, unnecessary, or causing bloat in the code should immediately be removed as per CS 3500 principles. Consider asking me (the user) about questionable things that you are unsure if they should be removed, but for the most part, if you stumble across something like an old markdown document that claims something don't take that as proof our code might have changed, and the markdown documents are not generated from code. Know that code could have been created and not linked (shouldn't ever happen) or could be outdated with something newer replacing it, figure out which and remove the old one so we don't suffer from code bloat and an unworkable project due to confusion.
+## Engineering Constraints
 
-# IF YOU EVER NEED TO WAIT FOR A COMMAND TO FINISH, JUST RUN THE TERMINAL IN NON-ASYNC MODE TO WAIT FOR IT TO FINISH, ANY COMMANDS YOU CAN RUN ASYNC DO SO, BUT FOR A COMPILER, SOMETHING THAT IS SUPPOSED TO BE STEP AFTER STEP, IT'S BETTER TO WAIT FOR THE COMPILE TO FINISH AND THEN CHECK THE OUTPUT, THIS IS ALREADY BEING DONE JUST YOU CAN SAVE MANY TURNS AND THEREFORE TOKENS (WHICH OUR NEXT HEADING POINT IS ALL ABOUT) BY JUST RUNNING COMMANDS YOU NEED TO WAIT ON NON-ASYNC.
+- Use `gsh strict lint` for linting in this repo. `pnpm lint` is a no-op stub (exits 0 always) and must not be used as evidence of clean lint.
+- Coverage thresholds: Client Vitest 100%; Go total 100.0%. Both are enforced by the mandatory gate.
+- Type reference: [.github/CLIENT_MODULE_REFERENCE.md](.github/CLIENT_MODULE_REFERENCE.md) (generated — do not edit by hand).
+- Use `message:` on checkpoint calls when a checkpoint is needed.
+- Keep autonomous clone paths outside the repo unless the user explicitly asks otherwise.
+- Keep screenshot artifacts outside the repository tree.
 
-# ALL CODE YOU WRITE SHOULD CONSIDER THE UTMOST EFFICIENT WAY TO DO SOMETHING, DO NOT TRY TO NEEDLESSLY OPTIMIZE, BUT O(1) IS SIGNIFICANTLY BETTER THAN SOMETHING THAT IS O(n*n) WHEN RAN ACROSS A DATASET OF MILLIONS. CONSIDER TIME COMPLEXITY AND IF IT CAN BE DROPPED **WITHOUT** FUNCTIONAL DEGREDATION. IF SOMETHING IS PHYSICALLY SLOW (real world seconds) THAT IS BAD AND WE SHOULD CONSIDER REAPPROACHING THE CODE TO MAKE IT LESS SLOW.
+## Architecture Pointers
 
-THE HALLMARK OF BAD SOFTWARE IS SOFTWARE WRITTEN TO HAVE EDGE CASES THAT **MAY** BUT ARE NOT NECESSARILY ALWAYS HIT THAT CAUSE INCREDIBLY OBTUSE AND INCORRECT BEHAVIOR, OR CODE THAT SHOULD RUN INCREDIBLY QUICKLY AND INSTEAD IT TAKES AGES. BOTH OF THESE SIGNIFY BAD CODE, IF YOU EVER NOTICE THEM ANYWHERE, PAUSE, ANALYZE THAT AREA, CONSIDER WHAT MIGHT BE GOING WRONG, IF IT'S A SIMPLE FIX TO NOT TOUCH LOGIC BUT TOUCH TIME, DO IT AND CONTINUE, OTHERWISE REPORT YOUR FINDINGS TO THE USER FOR THE NEXT REQUEST ALONG WITH WHATEVER YOU WERE GOING TO SAY ANYWAYS IN YOUR FOLLOWUP.
+- Client: React + TypeScript + Vite + Tailwind in `packages/client`.
+- Server: Go WebSocket service in `packages/server-go`.
+- Desktop shell: Tauri in `packages/desktop-tauri`.
+- Shared types: TypeScript in `packages/shared`.
+- The living architecture reference is [obsidian-vault/Engine/Architecture.md](obsidian-vault/Engine/Architecture.md).
 
-## Project Identity
-Engine is an AI-native code editor. AI is not bolted onto a text editor — it is the foundational architecture. Every feature is designed around AI-driven workflows.
+<!-- BEGIN GENERATED:MODULE_MAP -->
+| Package | Location | Language |
+|---------|----------|----------|
+| `@engine/client` | `packages/client` | TypeScript |
+| `engine (crate)` | `packages/desktop-tauri` | Rust |
+| `github.com/engine/server` | `packages/server-go` | Go |
+| `@engine/shared` | `packages/shared` | TypeScript |
+<!-- END GENERATED:MODULE_MAP -->
 
-**READ #file:../PROJECT_GOAL.md for the full vision and motivation behind Engine.**
+## Commands
 
-## ALWAYS USE message: PARAM ON CHECKPOINT INSTEAD OF context:, THIS SAVES A SUBAGENT MODEL CALL!
+<!-- BEGIN GENERATED:COMMANDS -->
+| Script | Command |
+|--------|---------|
+| `build` | `pnpm --filter @engine/shared build && pnpm --filter @engine/client build` |
+| `build:desktop-debug` | `node ./scripts/run-cargo.mjs build --bin engine` |
+| `build:go` | `node ./scripts/build-go.mjs` |
+| `build:go-dev` | `node ./scripts/build-go.mjs --dev --run` |
+| `build:go-watch` | `node ./scripts/build-go.mjs --dev --run --watch` |
+| `build:tauri` | `pnpm --filter @engine/shared build && pnpm build:go && pnpm --filter @engine/client build && pnpm tauri:build` |
+| `check:context-freshness` | `node ./scripts/gen-context-docs.mjs --check` |
+| `check:desktop` | `node ./scripts/run-cargo.mjs check` |
+| `coverage:all` | `node ./scripts/coverage-all.mjs` |
+| `desktop:install` | `bash ./scripts/engine-desktop.sh install` |
+| `desktop:reinstall` | `bash ./scripts/engine-desktop.sh reinstall` |
+| `dev` | `concurrently -k -n server,client -c blue,green "pnpm build:go-watch" "pnpm --filter @engine/client dev"` |
+| `dev:desktop` | `pnpm dev:tauri` |
+| `dev:tauri` | `pnpm tauri:dev` |
+| `gen:context-docs` | `node ./scripts/gen-context-docs.mjs` |
+| `install:all` | `pnpm install` |
+| `lint` | `node -e "console.log('Lint disabled in npm scripts. Use gsh strict lint.')"` |
+| `llama:fleet:logs` | `bash ./scripts/llama-fleet.sh logs` |
+| `llama:fleet:start` | `bash ./scripts/llama-fleet.sh start` |
+| `llama:fleet:status` | `bash ./scripts/llama-fleet.sh status` |
+| `llama:fleet:stop` | `bash ./scripts/llama-fleet.sh stop` |
+| `smoke:system` | `node ./scripts/ci-system-smoke.mjs` |
+| `sync:obsidian` | `node ./scripts/sync-obsidian-memory.mjs` |
+| `tauri:build` | `node ./scripts/run-cargo.mjs tauri build` |
+| `tauri:dev` | `node ./scripts/run-cargo.mjs tauri dev` |
+| `test:all` | `pnpm test:client && pnpm test:go && pnpm test:rust` |
+| `test:all-parallel` | `concurrently -k -n client,go,rust -c green,blue,red "pnpm test:client" "pnpm test:go" "pnpm test:rust"` |
+| `test:client` | `pnpm --filter @engine/client test:coverage` |
+| `test:go` | `mkdir -p ./.cache/coverage/go && cd packages/server-go && go test ./... -coverprofile=../../.cache/coverage/go/coverage.out -covermode=atomic` |
+| `test:go-changed` | `node ./scripts/test-go-changed.mjs` |
+| `test:model-capabilities` | `node ./scripts/model-capability-suite.mjs` |
+| `test:rust` | `node ./scripts/run-cargo.mjs test` |
+| `typecheck` | `pnpm -r typecheck` |
+| `verify:agent-completion` | `node ./scripts/agent-completion-gate.mjs` |
+<!-- END GENERATED:COMMANDS -->
 
-## LINT POLICY: DO NOT INSTALL OR USE ESLINT/BIOME/OXC IN THIS REPO. USE gsh strict lint ONLY.
+## Documentation Maintenance
 
-## AUTONOMOUS CLONE LOCATION POLICY: default autonomous repo location is ~/.engine/projects (or ENGINE_CLONES_DIR override). Do not clone autonomous project repos under this repository path unless explicitly requested, because nested Go repos inherit parent go.work and fail validation/tooling. Never create or preserve workspace symlinks/mirrors such as `.engine/projects -> ~/.engine/projects` or `packages/server-go/.engine/projects -> ~/.engine/projects`; those make VS Code/git show fake runtime copies. If one appears, remove the symlink entry only and keep the real `~/.engine/projects` directory.
-
-## DISCORD SCREENSHOT POLICY: use scripts/discord-screenshot.sh and default output under ~/.engine/screenshots to keep artifacts outside workspace repo paths.
-
-## Core Principles
-1. **AI-first, not AI-attached** — The AI autonomously controls the editor (files, terminals, branches, agents) without requiring the human in the loop. Chat and editor are intentionally separate surfaces: the chat panel is the human's communication window with the AI dev lead; the editor is the code surface the AI operates on.
-2. **Persistent context** — Full conversation history, project direction summaries, and session state are maintained and referenced automatically.
-3. **Autonomous validation** — The AI runs the application, observes behavior, forms hypotheses, and validates fixes. Testing goes beyond unit tests to behavioral discovery.
-4. **Reliable tooling** — Every tool works 100% of the time. No flaky tool calls, no ambiguous outputs.
-5. **Workspace isolation** — Proper worktree management, branch isolation, and session tracking are built into the core.
-6. **External event awareness** — GitHub Issues, CI failures, and other external signals are live inputs that trigger AI action.
-7. **Universal access** — The editor runs remotely and works from any device including mobile.
-
-## Architecture Direction
-- **Client:** React + TypeScript, Vite, Tailwind CSS (`packages/client`)
-- **Server:** Go WebSocket server (`packages/server-go`) — AI routing, git, file system, terminal, Discord, GitHub, DB
-- **Desktop:** Tauri (Rust) shell wrapping the client build (`packages/desktop-tauri`)
-- **Shared types:** TypeScript (`packages/shared`)
-- **Database:** SQLite embedded in Go server — sessions, usage, project direction
-- The editor wraps AI capabilities as first-class primitives, not extensions
-- Session history and project direction are stored persistently, not just in-memory
-- Agent orchestration is a core subsystem, not a plugin
-- Agent communication is a project-scoped core subsystem: one lead agent reports to the user while worker teams use focused peer messages (`agent_list`, `agent_send`, `agent_inbox`, `agent_await`) to exchange context without bloating a single model window
-- Go server includes a Discord control-plane module for private remote commands with project-local config in `.engine/discord.json` (see `.github/DISCORD_CONTROL_PLANE.md`)
-- Full architecture reference: `obsidian-vault/Engine/Architecture.md`
-
-## Obsidian Memory Usage
-The vault at `obsidian-vault/` is the project's living knowledge base. Use it actively — not just as a sync target.
-
-- **Before structural changes:** Read `obsidian-vault/Engine/Architecture.md` and `obsidian-vault/Engine/Knowledge.md` for existing decisions and constraints.
-- **After significant decisions:** Add a `## Decision: <topic>` section to `obsidian-vault/Engine/Knowledge.md` with: what was decided, why, alternatives rejected, tradeoffs.
-- **After behavior changes:** Update `.github/WORKING_BEHAVIORS.md` + `.github/working-behaviors-test-map.json`, then run `pnpm sync:obsidian`.
-- **After any session-memory or behavior changes:** Run `pnpm sync:obsidian` to keep Obsidian current.
-- Session events auto-export to `obsidian-vault/Engine/Session Memory.md` via the sync script.
-- The Progress Log at `obsidian-vault/Engine/Progress Log.md` is for capturing *why* — use the template for each milestone.
-
-## What AI Should Do
-- Always reference project direction and prior conversation context before acting
-- Validate changes by running the application, not just checking syntax
-- Maintain awareness of the full project state across sessions
-- Treat GitHub Issues as actionable tasks, not just references
-- Commit at meaningful milestones with descriptive context
-
-## What AI Should NOT Do
-- Bolt features onto the codebase without considering the AI-first principle
-- Treat this as a traditional text editor with AI features added on top
-- Ignore session history or project direction when making decisions
-- Skip behavioral validation in favor of only static analysis
-- Create abstractions that separate the AI from the editor experience
-
-## Coding Conventions
-- CS3500 & 2420 best practices ALWAYS.
-
-## Testing Strategy
-- Unit tests for individual modules
-- Integration tests for AI-editor interaction
-- Behavioral tests: AI runs the app, observes, validates
-- For UI tests, prefer one lightweight mount/smoke assertion per surface, then spend the rest of the test budget on real interactions, state changes, websocket/runtime wiring, and persisted side effects.
-- Avoid brittle assertions that bind tests to exact copy, incidental layout, or a specific fully rendered static state unless that text/state is the contract being tested.
-- Read `.github/WORKING_BEHAVIORS.md` before significant test work. It is the user-facing feature spec — write tests that enforce the features listed there.
-  - If observed behavior differs from `.github/WORKING_BEHAVIORS.md`, update that file in the same session.
-  - Every write/update to `.github/WORKING_BEHAVIORS.md` must be explicitly reported to the user in the response.
-  - WORKING_BEHAVIORS.md is a product feature list, not a test log. Write it as a user would describe what the app does — no internal wiring, no null-safety caveats, no websocket message names.
-	- Keep `.github/working-behaviors-test-map.json` in sync with all non-`(IN PROGRESS)` section headings.
-	- Run `pnpm sync:obsidian` after behavior contract or session-memory changes so `obsidian-vault/Engine/Working Behaviors.md` and `obsidian-vault/Engine/Session Memory.md` stay current.
-- (Detailed strategy TBD once codebase exists)
-
-## Mandatory Completion Gate (Hard Stop)
-- Agent must not finish a request until completion gate passes.
-- Completion gate requirements:
-	- 100% client coverage (statements, branches, functions, lines)
-	- 100% Go coverage total
-	- lint clean
-	- typecheck clean
-	- explicit CS 3500 verification attestation
-	- explicit request and chat-history completion attestation
-	- behavioral gate passed (or skipped if Playwright not installed) — `behavioralGatePassed: true` in report
-- Enforced by Stop hook: `.github/hooks/mandatory-completion-gate.json`
-- Gate implementation: `scripts/agent-completion-gate.mjs`
-- Behavioral check: `scripts/behavioral-completion-check.mjs` (Playwright; skips gracefully if not installed)
-	- Internal-only completion report artifact: `.github/session-memory/agent-completion-report.json` (agent/hook telemetry, not user-facing output)
+- Update [obsidian-vault/Engine/Knowledge.md](obsidian-vault/Engine/Knowledge.md) when a real design or architecture decision needs to be preserved.
+- Update [obsidian-vault/Engine/Progress Log.md](obsidian-vault/Engine/Progress Log.md) when a meaningful milestone lands.
+- Prefer deleting obsolete docs over preserving contradictory history in the repo.

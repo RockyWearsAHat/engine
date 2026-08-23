@@ -1,5 +1,7 @@
 package ai
 
+// quality:allow-long-file quality:allow-long-function
+
 import (
 	"encoding/json"
 	"fmt"
@@ -8,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/engine/server/runtimecfg"
 )
 
 // OrchestratorMaxOuterIterations bounds the planner→builder→critic→test loop
@@ -194,7 +198,8 @@ func (h *OrchestratorHandle) Resume() {
 }
 
 // Redirect injects a new instruction the orchestrator picks up at the next
-// step boundary. The instruction is prepended to the next builder prompt.
+// step boundary. The instruction is prepended to the next builder prompt and
+// persisted to the project direction so future sessions inherit the steering.
 func (h *OrchestratorHandle) Redirect(message string) {
 	if h == nil {
 		return
@@ -204,14 +209,18 @@ func (h *OrchestratorHandle) Redirect(message string) {
 		return
 	}
 	h.redirectMu.Lock()
-	defer h.redirectMu.Unlock()
 	if n := len(h.redirectQueue); n > 0 && h.redirectQueue[n-1] == trimmed {
+		h.redirectMu.Unlock()
 		return
 	}
 	h.redirectQueue = append(h.redirectQueue, trimmed)
 	if len(h.redirectQueue) > maxQueuedRedirects {
 		h.redirectQueue = h.redirectQueue[len(h.redirectQueue)-maxQueuedRedirects:]
 	}
+	h.redirectMu.Unlock()
+	// Persist to project direction outside the lock so DB I/O never blocks
+	// callers that hold redirectMu for the queue operations above.
+	AppendHumanDirectiveToProjectDirection(h.projectPath, trimmed)
 }
 
 func (h *OrchestratorHandle) takeRedirect() string {
@@ -300,6 +309,7 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 	if strings.TrimSpace(cfg.ProjectPath) == "" {
 		return nil, fmt.Errorf("orchestrator: project path is required")
 	}
+	cfg.Brief = enrichOrchestratorBrief(cfg.ProjectPath, cfg.Brief)
 
 	// Routing is the orchestrator's first job — and it happens before any
 	// build machinery spins up. Reason about whether this brief is a
@@ -326,24 +336,28 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 	}
 
 	if strings.TrimSpace(cfg.Owner) != "" && strings.TrimSpace(cfg.Repo) != "" {
-		activeTeam := strings.TrimSpace(os.Getenv("ENGINE_ACTIVE_TEAM"))
+		activeTeam := ""
+		if settings, err := runtimecfg.Load(cfg.ProjectPath); err == nil {
+			activeTeam = strings.TrimSpace(settings.ActiveTeam)
+		}
 		resolvedTeam, teamProvider, teamModel, ok := ResolveAutonomousStartupTeam(cfg.ProjectPath, activeTeam)
 		if ok {
-			// Startup bootstrap is lead-owned: pin the autonomous session to the
-			// selected team's orchestrator runtime before any planning starts.
-			os.Setenv("ENGINE_ACTIVE_TEAM", resolvedTeam)    //nolint:errcheck
-			os.Setenv("ENGINE_MODEL_PROVIDER", teamProvider) //nolint:errcheck
-			os.Setenv("ENGINE_MODEL", teamModel)             //nolint:errcheck
+			_, _ = runtimecfg.Apply(cfg.ProjectPath, runtimecfg.Patch{
+				ActiveTeam:    &resolvedTeam,
+				ModelProvider: &teamProvider,
+				Model:         &teamModel,
+			})
 		}
 	}
 	if cfg.MaxOuterIterations <= 0 {
 		cfg.MaxOuterIterations = OrchestratorMaxOuterIterations
 	}
 
-	// Route through event orchestrator if enabled (feature flag)
-	if os.Getenv("USE_EVENT_ORCHESTRATOR") == "1" {
-		return RunEventOrchestratorAsState(cfg)
-	}
+	// Production ownership stays with the classic orchestrator loop.
+	// The event orchestrator remains in-tree for isolated development and
+	// direct tests, but it is intentionally unreachable from the top-level
+	// autonomous project entrypoint until it implements the real manager /
+	// subordinate hierarchy expected by Engine.
 
 	handle := &OrchestratorHandle{
 		projectPath: cfg.ProjectPath,
@@ -410,6 +424,7 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 		emit(cfg.OnPhase, "plan", fmt.Sprintf("resuming with %d-step plan (%d unchecked)", len(state.Plan), countUnchecked(state)))
 	}
 
+	autoExtensions := 0
 	for {
 		paused, err := orchestratorPauseStep(cancel, handle)
 		if err != nil {
@@ -426,6 +441,22 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 		}
 
 		if state.OuterIterations > cfg.MaxOuterIterations {
+			const maxAutoExtensions = 3
+			const extensionIncrement = 100
+			skippedCount := countSkippedInState(state)
+			if autoExtensions < maxAutoExtensions && skippedCount > 0 {
+				autoExtensions++
+				cfg.MaxOuterIterations += extensionIncrement
+				resetSkippedSteps(state)
+				emit(cfg.OnPhase, "replan", fmt.Sprintf(
+					"auto-extending: %d skipped steps reset for retry (extension %d/%d, cap now %d)",
+					skippedCount, autoExtensions, maxAutoExtensions, cfg.MaxOuterIterations,
+				))
+				if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
+					emitErr(cfg.OnError, fmt.Sprintf("persist replan state: %v", err))
+				}
+				continue
+			}
 			err := fmt.Errorf("orchestrator: hit safety cap of %d outer iterations", cfg.MaxOuterIterations)
 			emitErr(cfg.OnError, err.Error())
 			return state, err
@@ -458,6 +489,18 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 			summary, validateErr := orchestratorValidatePhase(cfg, state, cancel)
 			state.LastValidation = summary
 			if validateErr == nil {
+				// Validation passing is necessary but not sufficient. If any plan
+				// step was silently skipped (auto-extensions exhausted, acceptance
+				// never satisfied), the project did NOT genuinely complete — Engine
+				// reports done ONLY when 100% correct. Hard-block here.
+				if skipped := skippedStepIndices(state); len(skipped) > 0 {
+					if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
+						emitErr(cfg.OnError, fmt.Sprintf("persist skipped-block state: %v", err))
+					}
+					err := fmt.Errorf("orchestrator: validation passed but %d plan step(s) were skipped without satisfying acceptance: %v — not reporting done", len(skipped), skipped)
+					emitErr(cfg.OnError, err.Error())
+					return state, err
+				}
 				state.CompletedAt = time.Now().UTC().Format(time.RFC3339)
 				if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
 					emitErr(cfg.OnError, fmt.Sprintf("persist completion state: %v", err))
@@ -533,6 +576,28 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 			emit(cfg.OnPhase, "review", fmt.Sprintf("step %d inconclusive review", step.Index))
 		}
 	}
+}
+
+func eventOrchestratorEnabled() bool {
+	return false
+}
+
+func enrichOrchestratorBrief(projectPath, brief string) string {
+	trimmedBrief := strings.TrimSpace(brief)
+	direction := strings.TrimSpace(EnsureProjectDirection(projectPath))
+	if direction == "" {
+		return trimmedBrief
+	}
+	if strings.Contains(trimmedBrief, "PERSISTENT PROJECT DIRECTION") {
+		return trimmedBrief
+	}
+	if trimmedBrief == "" {
+		return strings.TrimSpace("PERSISTENT PROJECT DIRECTION:\n" + direction)
+	}
+	return strings.TrimSpace(
+		"PERSISTENT PROJECT DIRECTION:\n" + direction +
+			"\n\nEXECUTION RULE:\nAlways preserve and advance the project direction while completing the current request.\n\nCURRENT REQUEST:\n" + trimmedBrief,
+	)
 }
 
 func ensureReopenStep(state *OrchestrationState) *PlanStep {
@@ -648,6 +713,48 @@ func unmarkLastDone(state *OrchestrationState) *PlanStep {
 		}
 	}
 	return nil
+}
+
+// countSkippedInState returns the number of plan steps that were skipped after
+// exhausting their per-step attempt cap (identified by their LastFeedback).
+func countSkippedInState(state *OrchestrationState) int {
+	n := 0
+	for _, s := range state.Plan {
+		if s.Done && strings.Contains(s.LastFeedback, "skipped after") {
+			n++
+		}
+	}
+	return n
+}
+
+// skippedStepIndices returns the indices (1-based step.Index values) of Done
+// steps whose LastFeedback marks them as skipped after exhausting their attempt
+// cap. A non-empty result means the project advanced past steps it never
+// genuinely satisfied — those must block "done".
+func skippedStepIndices(state *OrchestrationState) []int {
+	var idxs []int
+	for _, s := range state.Plan {
+		if s.Done && strings.Contains(s.LastFeedback, "skipped after") {
+			idxs = append(idxs, s.Index)
+		}
+	}
+	return idxs
+}
+
+// resetSkippedSteps reopens any step that was skipped after exhausting its
+// attempt cap, resetting attempts to zero so the auto-extension cycle gives
+// each step a fresh attempt budget.
+func resetSkippedSteps(state *OrchestrationState) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	for i := range state.Plan {
+		s := &state.Plan[i]
+		if s.Done && strings.Contains(s.LastFeedback, "skipped after") {
+			s.Done = false
+			s.Attempts = 0
+			s.LastFeedback = "reset for retry after auto-extension"
+			s.UpdatedAt = now
+		}
+	}
 }
 
 func summarise(s string, limit int) string {

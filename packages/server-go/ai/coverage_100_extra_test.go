@@ -119,7 +119,7 @@ func TestChat_LocalFirstRoutingBranch(t *testing.T) {
 	ctx := &ChatContext{
 		ProjectPath:  projectDir,
 		SessionID:    "session-local-first",
-		Role:         RolePlanner,
+		Role:         RoleIntaker,
 		OnChunk:      func(string, bool) {},
 		OnError:      func(string) {},
 		OnToolCall:   func(string, any) {},

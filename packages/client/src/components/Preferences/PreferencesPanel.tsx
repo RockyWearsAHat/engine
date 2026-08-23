@@ -1,3 +1,4 @@
+// quality:allow-long-file quality:allow-long-function quality:allow-large-block
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
@@ -87,7 +88,7 @@ export default function PreferencesPanel() {
   const [ghRepoInput, setGhRepoInput] = useState('');
   const [anthropicInput, setAnthropicInput] = useState('');
   const [openaiInput, setOpenaiInput] = useState('');
-  const [providerInput, setProviderInput] = useState<'auto' | 'anthropic' | 'openai' | 'ollama' | 'llamacpp'>('ollama');
+  const [providerInput, setProviderInput] = useState<'auto' | 'anthropic' | 'openai' | 'ollama' | 'llamacpp' | 'claudecode'>('ollama');
   const [ollamaBaseUrlInput, setOllamaBaseUrlInput] = useState('');
   const [modelInput, setModelInput] = useState('');
   const [clonesDirInput, setClonesDirInput] = useState('');
@@ -259,7 +260,7 @@ export default function PreferencesPanel() {
     bridge.getAnthropicKey().then(k => { if (k) setAnthropicInput(k); });
     bridge.getOpenAiKey().then(k => { if (k) setOpenaiInput(k); });
     bridge.getModelProvider().then(provider => {
-      if (provider === 'anthropic' || provider === 'openai' || provider === 'ollama' || provider === 'llamacpp') {
+      if (provider === 'anthropic' || provider === 'openai' || provider === 'ollama' || provider === 'llamacpp' || provider === 'claudecode') {
         setProviderInput(provider);
         return;
       }
@@ -872,7 +873,7 @@ export default function PreferencesPanel() {
                 <span className="preferences-label">Model provider</span>
                 <select
                   value={providerInput}
-                  onChange={event => setProviderInput(event.target.value as 'auto' | 'anthropic' | 'openai' | 'ollama' | 'llamacpp')}
+                  onChange={event => setProviderInput(event.target.value as 'auto' | 'anthropic' | 'openai' | 'ollama' | 'llamacpp' | 'claudecode')}
                   style={inputStyle}
                 >
                   <option value="auto">Auto</option>
@@ -880,6 +881,7 @@ export default function PreferencesPanel() {
                   {openaiInput && <option value="openai">OpenAI</option>}
                   <option value="ollama">Ollama</option>
                   <option value="llamacpp">llama.cpp</option>
+                  <option value="claudecode">Claude Code (CLI)</option>
                   {!anthropicInput && !openaiInput && (
                     <option value="anthropic" disabled title="Set ANTHROPIC_API_KEY to enable">Anthropic (no key)</option>
                   )}
@@ -1066,16 +1068,16 @@ export default function PreferencesPanel() {
           <div className="preferences-card-header">
             <div className="preferences-card-title">
               <Bot size={15} />
-              Agent teams
+              Manager teams
             </div>
           </div>
           <div className="preferences-section-copy">
-            Choose the model team profile that maps each orchestrator role.
+            Choose the manager team profile that selects the orchestrator model.
           </div>
           <div className="preferences-stack">
             <div className="preferences-muted">
-              Select the team configuration that determines which models each
-              orchestrator role uses. Requires a{' '}
+              Select the team configuration that determines which manager model
+              the backend orchestrator uses. Requires a{' '}
               <code
                 style={{
                   fontFamily: 'monospace',

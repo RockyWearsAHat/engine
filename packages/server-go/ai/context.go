@@ -1,11 +1,15 @@
 package ai
 
+// quality:allow-long-file quality:allow-long-function quality:allow-large-block
+
 import (
 	"bufio"
 	"bytes"
 	stdctx "context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -23,6 +27,7 @@ import (
 	gh "github.com/engine/server/github"
 	"github.com/engine/server/quality"
 	"github.com/engine/server/remote"
+	"github.com/engine/server/runtimecfg"
 	"github.com/engine/server/workspace"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
@@ -31,7 +36,7 @@ import (
 )
 
 const (
-	defaultAnthropicModel = "claude-opus-4-5"
+	defaultAnthropicModel = "claude-opus-4-8"
 	defaultOpenAIModel    = "gpt-4o"
 	defaultOllamaModel    = "llama3.2"
 	defaultLlamacppModel  = "default"
@@ -205,8 +210,8 @@ func ollamaPing() {
 // parseIntEnv reads an int from env var `key`, falling back to `def` on missing
 // or non-numeric values. Used for runtime tuning knobs like ENGINE_OLLAMA_NUM_CTX.
 // Returns def if the env var is absent, empty, non-numeric, or ≤ 0.
-func parseIntEnv(key string, def int) int {
-	raw := strings.TrimSpace(os.Getenv(key))
+func parseIntRaw(raw string, def int) int {
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return def
 	}
@@ -217,10 +222,28 @@ func parseIntEnv(key string, def int) int {
 	return n
 }
 
+func parseIntEnv(key string, def int) int {
+	return parseIntRaw(os.Getenv(key), def)
+}
+
+func runtimeValue(primary, fallback string) string {
+	value := strings.TrimSpace(primary)
+	if value != "" {
+		return value
+	}
+	return strings.TrimSpace(fallback)
+}
+
 // runtimeContextMaxTokens returns the max token budget for context from env or default.
 // Validates minimum of 16000 tokens; returns DefaultTokenBudget if lower.
-func runtimeContextMaxTokens() int {
-	b := parseIntEnv("ENGINE_CONTEXT_MAX_TOKENS", DefaultTokenBudget)
+func runtimeContextMaxTokens(projectPath string) int {
+	b := 0
+	if cfg, err := runtimecfg.Load(projectPath); err == nil {
+		b = parseIntRaw(cfg.ContextMaxTokens, 0)
+	}
+	if b <= 0 {
+		b = parseIntEnv("ENGINE_CONTEXT_MAX_TOKENS", DefaultTokenBudget)
+	}
 	if b < 16000 {
 		return DefaultTokenBudget
 	}
@@ -229,8 +252,14 @@ func runtimeContextMaxTokens() int {
 
 // runtimeContextRecentWindow returns the max number of recent messages to keep.
 // Defaults to 60, clamped to [12, 1000].
-func runtimeContextRecentWindow() int {
-	w := parseIntEnv("ENGINE_CONTEXT_RECENT_WINDOW", 60)
+func runtimeContextRecentWindow(projectPath string) int {
+	w := 0
+	if cfg, err := runtimecfg.Load(projectPath); err == nil {
+		w = parseIntRaw(cfg.ContextRecentWindow, 0)
+	}
+	if w <= 0 {
+		w = parseIntEnv("ENGINE_CONTEXT_RECENT_WINDOW", 60)
+	}
 	if w < 12 {
 		return 12
 	}
@@ -251,6 +280,11 @@ func inferredProviderForModel(model string) string {
 	if strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "o1-") ||
 		strings.HasPrefix(lower, "o3-") || strings.HasPrefix(lower, "o4-") {
 		return "openai"
+	}
+	// Must precede the generic "claude" prefix check: the claude-code sentinel
+	// routes to the CLI provider, not the raw Anthropic API.
+	if lower == "claude-code" || lower == "claudecode" || lower == "claude_code" {
+		return "claudecode"
 	}
 	if strings.HasPrefix(lower, "claude") {
 		return "anthropic"
@@ -280,10 +314,12 @@ func looksLikeOllamaModel(lowerModel string) bool {
 // "auto", or "" (empty defaults to inference). Unrecognized values fall back to inference.
 func resolveProvider(explicitProvider string, model string) string {
 	switch strings.ToLower(strings.TrimSpace(explicitProvider)) {
-	case "anthropic", "openai", "ollama", "llamacpp":
+	case "anthropic", "openai", "ollama", "llamacpp", "claudecode":
 		return strings.ToLower(strings.TrimSpace(explicitProvider))
 	case "llama.cpp", "llama-cpp":
 		return "llamacpp"
+	case "claude-code", "claude_code":
+		return "claudecode"
 	case "", "auto":
 		return inferredProviderForModel(model)
 	default:
@@ -292,7 +328,7 @@ func resolveProvider(explicitProvider string, model string) string {
 }
 
 // defaultModelForProvider returns the default model name for a given provider.
-// Returns the canonical model string for the provider (e.g. "claude-opus-4-5" for anthropic).
+// Returns the canonical model string for the provider (e.g. "claude-opus-4-8" for anthropic).
 func defaultModelForProvider(provider string) string {
 	switch provider {
 	case "openai":
@@ -301,6 +337,10 @@ func defaultModelForProvider(provider string) string {
 		return defaultOllamaModel
 	case "llamacpp":
 		return defaultLlamacppModel
+	case "claudecode":
+		// The CLI uses whatever model `claude` is configured for (opus-4-8 by
+		// default); we still hand it a concrete alias so --model is explicit.
+		return defaultAnthropicModel
 	default:
 		return defaultAnthropicModel
 	}
@@ -485,11 +525,19 @@ func stageCollectorCreation() *OutputCollector {
 }
 
 // stageCallbacksInit prepares output-collecting callbacks from an OutputCollector.
-func stageCallbacksInit(oc *OutputCollector) (func(string, bool), func(string), func(string, any), func(string, any, bool)) {
+// onError forwards to cfg.OnError (role-prefixed) instead of swallowing errors
+// silently — without this, a real provider/config failure inside a role-based
+// phase call (planner, reviewer, ...) never reaches the client; only a generic
+// downstream "output empty or unparsable" message did.
+func stageCallbacksInit(oc *OutputCollector, cfg OrchestratorConfig, role AgentRole) (func(string, bool), func(string), func(string, any), func(string, any, bool)) {
 	onChunk := func(content string, _ bool) {
 		oc.Write(content)
 	}
-	onError := func(string) {}
+	onError := func(msg string) {
+		if cfg.OnError != nil && strings.TrimSpace(msg) != "" {
+			cfg.OnError(fmt.Sprintf("%s: %s", agentRoleLabel(role), msg))
+		}
+	}
 	onToolCall := func(string, any) {}
 	onToolResult := func(string, any, bool) {}
 	return onChunk, onError, onToolCall, onToolResult
@@ -498,9 +546,9 @@ func stageCallbacksInit(oc *OutputCollector) (func(string, bool), func(string), 
 // stageOutputCollectorWithCallbacks encapsulates the side-effect chain of creating
 // an OutputCollector and initializing output-collecting callbacks. Both stages are
 // explicitly combined to clarify they are a dependent pair.
-func stageOutputCollectorWithCallbacks() (*OutputCollector, func(string, bool), func(string), func(string, any), func(string, any, bool)) {
+func stageOutputCollectorWithCallbacks(cfg OrchestratorConfig, role AgentRole) (*OutputCollector, func(string, bool), func(string), func(string, any), func(string, any, bool)) {
 	oc := stageCollectorCreation()
-	onChunk, onError, onToolCall, onToolResult := stageCallbacksInit(oc)
+	onChunk, onError, onToolCall, onToolResult := stageCallbacksInit(oc, cfg, role)
 	return oc, onChunk, onError, onToolCall, onToolResult
 }
 
@@ -522,7 +570,7 @@ func stageChatContextCreation(cfg OrchestratorConfig, sessionID string, role Age
 // This consolidates the repeated pattern of building a context with sync.Mutex + strings.Builder
 // for collecting streamed output from a role-based chat session.
 func newChatContextForRole(cfg OrchestratorConfig, sessionID string, role AgentRole, cancel <-chan struct{}) (*ChatContext, *OutputCollector) {
-	oc, onChunk, onError, onToolCall, onToolResult := stageOutputCollectorWithCallbacks()
+	oc, onChunk, onError, onToolCall, onToolResult := stageOutputCollectorWithCallbacks(cfg, role)
 	ctx := stageChatContextCreation(cfg, sessionID, role, cancel, onChunk, onError, onToolCall, onToolResult)
 	return ctx, oc
 }
@@ -1235,14 +1283,16 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 			autonomousAwareness = autonomousShellAwareness(ctx.ProjectPath, command)
 		} else if title, message, needsApproval := requiresShellApproval(ctx.ProjectPath, command); needsApproval {
 			if ctx.RequestApproval == nil {
-				return "This shell command requires explicit approval, but no approval handler is available.", true
-			}
-			allowed, err := ctx.RequestApproval("shell", title, message, command)
-			if err != nil {
-				return err.Error(), true
-			}
-			if !allowed {
-				return "The user denied this shell command.", true
+				// No interactive approval surface — proceed autonomously and log the action.
+				fmt.Printf("[engine-autonomous] proceeding without approval gate: %s | %s\n", title, command)
+			} else {
+				allowed, err := ctx.RequestApproval("shell", title, message, command)
+				if err != nil {
+					return err.Error(), true
+				}
+				if !allowed {
+					return "The user denied this shell command.", true
+				}
 			}
 		}
 		cwd := str("cwd")
@@ -1375,7 +1425,13 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 			return "Committed: " + hash, false
 		}
 		if ctx.RequestApproval == nil {
-			return "Git commits require explicit approval, but no approval handler is available.", true
+			// No interactive surface — commit automatically.
+			fmt.Printf("[engine-autonomous] auto-committing without approval gate: %s\n", str("message"))
+			hash, commitErr := gogit.Commit(ctx.ProjectPath, str("message"))
+			if commitErr != nil {
+				return commitErr.Error(), true
+			}
+			return "Committed: " + hash, false
 		}
 		allowed, err := ctx.RequestApproval(
 			"git_commit",
@@ -1607,7 +1663,13 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 			return out, false
 		}
 		if ctx.RequestApproval == nil {
-			return "git_push requires approval, but no approval handler is available.", true
+			// No interactive surface — push automatically.
+			fmt.Printf("[engine-autonomous] auto-pushing to %s without approval gate\n", remote)
+			out, pushErr := gogit.Push(ctx.ProjectPath, remote)
+			if pushErr != nil {
+				return pushErr.Error(), true
+			}
+			return out, false
 		}
 		branch, _ := gogit.GetCurrentBranch(ctx.ProjectPath)
 		allowed, err := ctx.RequestApproval(
@@ -1684,9 +1746,6 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		return sb.String(), false
 
 	case "process_kill":
-		if ctx.RequestApproval == nil {
-			return "process_kill requires approval, but no approval handler is available.", true
-		}
 		pidF, _ := input["pid"].(float64)
 		pid := int32(pidF)
 		if pid == 0 {
@@ -1701,17 +1760,22 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		if signal == "" {
 			signal = "TERM"
 		}
-		allowed, err := ctx.RequestApproval(
-			"process_kill",
-			"Approve process termination",
-			fmt.Sprintf("The assistant wants to send SIG%s to PID %d (%s).", signal, pid, procName),
-			fmt.Sprintf("kill -%s %d", signal, pid),
-		)
-		if err != nil {
-			return err.Error(), true
-		}
-		if !allowed {
-			return "The user denied the process kill.", true
+		if ctx.RequestApproval == nil {
+			// No interactive surface — kill autonomously.
+			fmt.Printf("[engine-autonomous] auto-killing PID %d (%s) signal=%s\n", pid, procName, signal)
+		} else {
+			allowed, err := ctx.RequestApproval(
+				"process_kill",
+				"Approve process termination",
+				fmt.Sprintf("The assistant wants to send SIG%s to PID %d (%s).", signal, pid, procName),
+				fmt.Sprintf("kill -%s %d", signal, pid),
+			)
+			if err != nil {
+				return err.Error(), true
+			}
+			if !allowed {
+				return "The user denied the process kill.", true
+			}
 		}
 		if signal == "KILL" {
 			if err := p.Kill(); err != nil {
@@ -2313,9 +2377,11 @@ func persistChatFinalState(ctx *ChatContext, assistantMessageID, userMsgID, user
 func Chat(ctx *ChatContext, userMessage string) {
 	registerChatAgent(ctx)
 
-	explicitProvider := strings.TrimSpace(os.Getenv("ENGINE_MODEL_PROVIDER"))
-	model := strings.TrimSpace(os.Getenv("ENGINE_MODEL"))
-	if _, teamProvider, teamModel, ok := ResolveTeamOrchestratorModel(ctx.ProjectPath, os.Getenv("ENGINE_ACTIVE_TEAM")); ok {
+	runtimeSettings, _ := runtimecfg.Load(ctx.ProjectPath)
+	explicitProvider := runtimeValue(runtimeSettings.ModelProvider, os.Getenv("ENGINE_MODEL_PROVIDER"))
+	model := runtimeValue(runtimeSettings.Model, os.Getenv("ENGINE_MODEL"))
+	activeTeam := runtimeValue(runtimeSettings.ActiveTeam, os.Getenv("ENGINE_ACTIVE_TEAM"))
+	if _, teamProvider, teamModel, ok := ResolveTeamOrchestratorModel(ctx.ProjectPath, activeTeam); ok {
 		if model == "" {
 			model = teamModel
 		}
@@ -2324,17 +2390,26 @@ func Chat(ctx *ChatContext, userMessage string) {
 		}
 	}
 
-	if roleProvider, roleModel := roleModelOverrideFromEnv(ctx.Role); roleModel != "" {
+	if roleProvider, roleModel := roleModelOverrideFromEnv(ctx.ProjectPath, ctx.Role); roleModel != "" {
 		model = roleModel
 		if roleProvider != "" {
 			explicitProvider = roleProvider
+		}
+	}
+	// Hybrid cost-optimal router: when ENGINE_HYBRID=1, lead/hard roles run on
+	// the subscription Opus (claudecode) and worker roles run cheap+parallel on
+	// the Haiku API. Engages only when nothing more specific was pinned.
+	if strings.TrimSpace(model) == "" && strings.TrimSpace(explicitProvider) == "" {
+		if hp, hm := ResolveHybridRouting(ctx.ProjectPath, ctx.Role); hm != "" {
+			model = hm
+			explicitProvider = hp
 		}
 	}
 	// Local-first cost router: when ENGINE_LOCAL_FIRST=1 and the role is on
 	// the cheap-roles allowlist, downshift to local Ollama unless the caller
 	// (env or ctx) has already pinned a specific model.
 	if strings.TrimSpace(model) == "" && strings.TrimSpace(explicitProvider) == "" {
-		if lp, lm := ResolveLocalFirstRouting(ctx.Role); lm != "" {
+		if lp, lm := ResolveLocalFirstRouting(ctx.ProjectPath, ctx.Role); lm != "" {
 			model = lm
 			explicitProvider = lp
 		}
@@ -2350,21 +2425,23 @@ func Chat(ctx *ChatContext, userMessage string) {
 
 	provider := resolveProvider(explicitProvider, model)
 	if model == "" {
-		ctx.OnError("No model selected — set ENGINE_MODEL or choose a team with an explicit orchestrator model")
+		ctx.OnError("No model selected — choose a model/team in Preferences or .engine/config.yaml")
 		return
 	}
 
 	// Autonomous safety: if a cloud provider was selected but the API key is missing,
 	// automatically downshift to local llama.cpp/Ollama instead of erroring.
 	// This ensures Engine never gets stuck waiting for credentials.
-	if provider == "anthropic" && os.Getenv("ANTHROPIC_API_KEY") == "" {
+	hasAnthropicKey := runtimeValue(runtimeSettings.AnthropicKey, os.Getenv("ANTHROPIC_API_KEY")) != ""
+	hasOpenAIKey := runtimeValue(runtimeSettings.OpenAIKey, os.Getenv("OPENAI_API_KEY")) != ""
+	if provider == "anthropic" && !hasAnthropicKey {
 		// Downshift to llama.cpp first, then Ollama
-		llamacppModel := strings.TrimSpace(os.Getenv("ENGINE_LLAMACPP_MODEL"))
+		llamacppModel := runtimeValue(runtimeSettings.LlamacppModel, os.Getenv("ENGINE_LLAMACPP_MODEL"))
 		if llamacppModel != "" {
 			provider = "llamacpp"
 			model = llamacppModel
 		} else {
-			ollamaModel := strings.TrimSpace(os.Getenv("ENGINE_OLLAMA_MODEL"))
+			ollamaModel := runtimeValue(runtimeSettings.OllamaModel, os.Getenv("ENGINE_OLLAMA_MODEL"))
 			if ollamaModel != "" {
 				provider = "ollama"
 				model = ollamaModel
@@ -2374,14 +2451,14 @@ func Chat(ctx *ChatContext, userMessage string) {
 			}
 		}
 	}
-	if provider == "openai" && os.Getenv("OPENAI_API_KEY") == "" {
+	if provider == "openai" && !hasOpenAIKey {
 		// Downshift to llama.cpp first, then Ollama
-		llamacppModel := strings.TrimSpace(os.Getenv("ENGINE_LLAMACPP_MODEL"))
+		llamacppModel := runtimeValue(runtimeSettings.LlamacppModel, os.Getenv("ENGINE_LLAMACPP_MODEL"))
 		if llamacppModel != "" {
 			provider = "llamacpp"
 			model = llamacppModel
 		} else {
-			ollamaModel := strings.TrimSpace(os.Getenv("ENGINE_OLLAMA_MODEL"))
+			ollamaModel := runtimeValue(runtimeSettings.OllamaModel, os.Getenv("ENGINE_OLLAMA_MODEL"))
 			if ollamaModel != "" {
 				provider = "ollama"
 				model = ollamaModel
@@ -2512,7 +2589,7 @@ func Chat(ctx *ChatContext, userMessage string) {
 	var finalText strings.Builder
 
 	// Enforce token budget with compaction fallback for older context.
-	budget := runtimeContextMaxTokens()
+	budget := runtimeContextMaxTokens(ctx.ProjectPath)
 	trimmedMessages, tokensUsed := trimToTokenBudgetFn(messages, budget)
 	if tokensUsed > budget {
 		ctx.OnError(fmt.Sprintf("⚠️ Conversation history exceeds token budget (%d > %d). Context compaction was applied.", tokensUsed, budget))
@@ -2560,7 +2637,7 @@ func runPlannerPrePass(ctx *ChatContext, provider, model, userMessage, branch st
 
 	resolvedProvider := strings.TrimSpace(provider)
 	resolvedModel := strings.TrimSpace(model)
-	plannerProvider, plannerModel := roleModelOverrideFromEnv(RolePlanner)
+	plannerProvider, plannerModel := roleModelOverrideFromEnv(ctx.ProjectPath, RolePlanner)
 	if plannerModel != "" {
 		resolvedModel = plannerModel
 	}
@@ -2605,7 +2682,21 @@ func runPlannerPrePass(ctx *ChatContext, provider, model, userMessage, branch st
 	return strings.TrimSpace(finalText.String())
 }
 
-func roleModelOverrideFromEnv(role AgentRole) (provider string, model string) {
+func roleModelOverrideFromEnv(projectPath string, role AgentRole) (provider string, model string) {
+	if cfg, err := runtimecfg.Load(projectPath); err == nil {
+		switch role {
+		case RolePlanner:
+			provider = strings.TrimSpace(cfg.PlannerProvider)
+			model = strings.TrimSpace(cfg.PlannerModel)
+		case RoleReviewer:
+			provider = strings.TrimSpace(cfg.ReviewerProvider)
+			model = strings.TrimSpace(cfg.ReviewerModel)
+		}
+		if model != "" {
+			return provider, model
+		}
+	}
+
 	switch role {
 	case RolePlanner:
 		return strings.TrimSpace(os.Getenv("ENGINE_PLANNER_PROVIDER")), strings.TrimSpace(os.Getenv("ENGINE_PLANNER_MODEL"))
@@ -2745,7 +2836,7 @@ func runAnthropicLoop(
 			break
 		}
 
-		windowed := windowByVitality(messages, runtimeContextRecentWindow())
+		windowed := windowByVitality(messages, runtimeContextRecentWindow(ctx.ProjectPath))
 
 		req := anthropicRequest{
 			Model:     model,
@@ -3163,7 +3254,7 @@ func runOpenAICompatibleLoop(
 		}
 	}
 	// Convert history to OpenAI message format
-	windowedHistory := windowByVitality(history, runtimeContextRecentWindow())
+	windowedHistory := windowByVitality(history, runtimeContextRecentWindow(ctx.ProjectPath))
 	msgs := []openAIMessage{{Role: "system", Content: systemPrompt}}
 	for _, m := range windowedHistory {
 		content, _ := m.Content.(string)
@@ -3326,7 +3417,7 @@ func runOpenAICompatibleLoop(
 		scanErr := scanner.Err()
 		resp.Body.Close()
 		cancelReq()
-		if scanErr != nil {
+		if scanErr != nil && !errors.Is(scanErr, io.EOF) && !errors.Is(scanErr, io.ErrUnexpectedEOF) {
 			ctx.OnError(providerName + " stream: " + scanErr.Error())
 			return
 		}

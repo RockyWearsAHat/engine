@@ -69,7 +69,31 @@ if (process.env.ENGINE_AGENT_GATE_BYPASS === '1') {
 }
 
 requireSuccess('obsidian memory sync', runCommand('node', ['./scripts/sync-obsidian-memory.mjs']));
-requireSuccess('lint', runCommand('pnpm', ['lint']));
+
+// pnpm lint is a no-op stub (exits 0 always, runs console.log only).
+// Real linting is via gsh strict lint (MCP tool) in agent context.
+// If a real CLI linter (biome, eslint) is added to the project, wire it here.
+// requireSuccess('lint', runCommand('pnpm', ['lint']));  ← intentionally disabled
+
+// ── Context docs freshness (non-fatal) ────────────────────────────────────────
+// Auto-regenerates generated blocks in .github/. If drift is found it is fixed
+// automatically; the agent should commit any resulting changes before finishing.
+{
+  const genResult = runCommand('node', ['./scripts/gen-context-docs.mjs']);
+  if (genResult.status !== 0) {
+    process.stderr.write(
+      `[context-docs] Warning: generator failed (non-fatal).\n${(genResult.stderr || genResult.stdout).trim()}\n`,
+    );
+  } else {
+    const checkResult = runCommand('node', ['./scripts/gen-context-docs.mjs', '--check']);
+    if (checkResult.status !== 0) {
+      process.stderr.write(
+        `[context-docs] Warning: freshness check failed after regeneration (non-fatal).\n${(checkResult.stderr || checkResult.stdout).trim()}\n`,
+      );
+    }
+  }
+}
+
 requireSuccess('typecheck', runCommand('pnpm', ['typecheck']));
 requireSuccess('desktop debug build for smoke test', runCommand('pnpm', ['build:desktop-debug']));
 

@@ -269,6 +269,29 @@ func stageUpsertProjectDirection(projectPath string, direction string) {
 	}
 }
 
+// projectDirectionMaxChars caps the stored direction so it stays within a
+// single LLM context window without overwhelming the builder prompt.
+const projectDirectionMaxChars = 2400
+
+// AppendHumanDirectiveToProjectDirection persists a human steering input
+// (redirect, issue comment, or explicit direction update) to the stored
+// project direction so it survives beyond the current session and is
+// visible to every future builder and planner turn.
+func AppendHumanDirectiveToProjectDirection(projectPath, directive string) {
+	directive = strings.TrimSpace(directive)
+	if projectPath == "" || directive == "" {
+		return
+	}
+	existing := strings.TrimSpace(stageLoadProjectDirection(projectPath))
+	var updated string
+	if existing == "" {
+		updated = "Human directive: " + directive
+	} else {
+		updated = existing + "\nHuman directive: " + directive
+	}
+	stageUpsertProjectDirection(projectPath, truncateSummary(updated, projectDirectionMaxChars))
+}
+
 // EnsureProjectDirection loads the project direction from the database or builds it fresh.
 // If a non-empty direction exists, returns it.
 // If missing or empty, builds the initial direction, persists it, and returns it.

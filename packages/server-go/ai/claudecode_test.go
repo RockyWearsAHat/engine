@@ -1,0 +1,207 @@
+package ai
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestNewProviderForName_ClaudeCode(t *testing.T) {
+	for _, name := range []string{"claudecode", "claude-code", "claude_code"} {
+		if _, ok := newProviderForName(name).(*claudecodeProvider); !ok {
+			t.Errorf("newProviderForName(%q) did not return *claudecodeProvider", name)
+		}
+	}
+	// Sanity: a real API name must NOT route to the CLI provider.
+	if _, ok := newProviderForName("anthropic").(*claudecodeProvider); ok {
+		t.Error("anthropic incorrectly routed to claudecodeProvider")
+	}
+}
+
+func TestInferredProviderForModel_ClaudeCodeSentinel(t *testing.T) {
+	// The sentinel must route to the CLI provider, NOT the raw Anthropic API,
+	// even though it starts with "claude".
+	for _, m := range []string{"claude-code", "claudecode", "CLAUDE-CODE"} {
+		if got := inferredProviderForModel(m); got != "claudecode" {
+			t.Errorf("inferredProviderForModel(%q) = %q, want claudecode", m, got)
+		}
+	}
+	// A real model id must still resolve to anthropic.
+	if got := inferredProviderForModel("claude-opus-4-8"); got != "anthropic" {
+		t.Errorf("inferredProviderForModel(claude-opus-4-8) = %q, want anthropic", got)
+	}
+}
+
+func TestResolveProvider_ClaudeCode(t *testing.T) {
+	if got := resolveProvider("claudecode", ""); got != "claudecode" {
+		t.Errorf("resolveProvider(claudecode) = %q, want claudecode", got)
+	}
+	if got := resolveProvider("claude-code", ""); got != "claudecode" {
+		t.Errorf("resolveProvider(claude-code) = %q, want claudecode", got)
+	}
+}
+
+func TestBuildClaudeArgs(t *testing.T) {
+	ctx := &ChatContext{ProjectPath: "/tmp/proj"}
+	args := buildClaudeArgs(ctx, "claude-opus-4-8", "be a builder")
+	joined := strings.Join(args, " ")
+
+	for _, want := range []string{
+		"-p", "--output-format stream-json", "--verbose",
+		"--permission-mode bypassPermissions",
+		"--model claude-opus-4-8",
+		"--append-system-prompt be a builder",
+		"--add-dir /tmp/proj",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("args %q missing %q", joined, want)
+		}
+	}
+}
+
+func TestBuildClaudeArgs_SentinelModelOmitted(t *testing.T) {
+	ctx := &ChatContext{}
+	args := buildClaudeArgs(ctx, "claude-code", "")
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "--model") {
+		t.Errorf("sentinel model should not produce --model flag; got %q", joined)
+	}
+	if strings.Contains(joined, "--append-system-prompt") {
+		t.Errorf("empty system prompt should not produce --append-system-prompt; got %q", joined)
+	}
+	if strings.Contains(joined, "--add-dir") {
+		t.Errorf("empty project path should not produce --add-dir; got %q", joined)
+	}
+}
+
+func TestFlattenHistoryForCLI(t *testing.T) {
+	// Single turn → verbatim.
+	single := []anthropicMessage{{Role: "user", Content: "build a thing"}}
+	if got := flattenHistoryForCLI(single); got != "build a thing" {
+		t.Errorf("single-turn = %q, want verbatim", got)
+	}
+
+	// Multi-turn → labelled transcript, empty turns dropped.
+	multi := []anthropicMessage{
+		{Role: "user", Content: "do step 1"},
+		{Role: "assistant", Content: "done step 1"},
+		{Role: "user", Content: ""}, // dropped
+		{Role: "user", Content: "now step 2"},
+	}
+	got := flattenHistoryForCLI(multi)
+	for _, want := range []string{"Human: do step 1", "Assistant: done step 1", "Human: now step 2"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("multi-turn missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Human: \n") || strings.HasSuffix(got, "Human: ") {
+		t.Errorf("empty turn was not dropped: %q", got)
+	}
+
+	if flattenHistoryForCLI(nil) != "" {
+		t.Error("nil history should flatten to empty string")
+	}
+}
+
+func TestCliMessageText_Blocks(t *testing.T) {
+	// []contentBlock with text + tool_result + tool_use.
+	blocks := []contentBlock{
+		{Type: "text", Text: "hello"},
+		{Type: "tool_result", Content: "exit 0"},
+		{Type: "tool_use", Name: "write_file"},
+	}
+	got := cliMessageText(blocks)
+	for _, want := range []string{"hello", "exit 0", "[called tool: write_file]"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("cliMessageText blocks missing %q in %q", want, got)
+		}
+	}
+
+	// []any (post-JSON shape).
+	anyBlocks := []any{
+		map[string]any{"type": "text", "text": "world"},
+		map[string]any{"type": "tool_use", "name": "shell"},
+	}
+	got = cliMessageText(anyBlocks)
+	if !strings.Contains(got, "world") || !strings.Contains(got, "[called tool: shell]") {
+		t.Errorf("cliMessageText []any = %q", got)
+	}
+
+	if cliMessageText("plain") != "plain" {
+		t.Error("string content should pass through")
+	}
+}
+
+// realStreamSample is captured verbatim from `claude -p --output-format stream-json --verbose`.
+const realStreamSample = `{"type":"system","subtype":"init","cwd":"/tmp","session_id":"abc","model":"claude-opus-4-8"}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}
+{"type":"assistant","message":{"model":"claude-opus-4-8","role":"assistant","content":[{"type":"text","text":"Creating the file."},{"type":"tool_use","id":"toolu_1","name":"Write","input":{"file_path":"hello.txt","content":"hi"}}]},"session_id":"abc"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" Done."}]},"session_id":"abc"}
+{"type":"result","subtype":"success","is_error":false,"num_turns":2,"result":"Creating the file. Done.","session_id":"abc"}`
+
+func TestParseClaudeStream_Success(t *testing.T) {
+	var chunks []string
+	var toolCalls []ToolCall
+	var final strings.Builder
+	ctx := &ChatContext{
+		OnChunk:    func(s string, _ bool) { chunks = append(chunks, s) },
+		OnToolCall: func(name string, _ any) {},
+		OnError:    func(string) { t.Error("unexpected OnError on success stream") },
+	}
+
+	parseClaudeStream(ctx, strings.NewReader(realStreamSample), &toolCalls, &final)
+
+	if got := final.String(); got != "Creating the file. Done." {
+		t.Errorf("final text = %q, want %q", got, "Creating the file. Done.")
+	}
+	if len(chunks) == 0 {
+		t.Error("expected streamed chunks via OnChunk")
+	}
+	if len(toolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(toolCalls))
+	}
+	if toolCalls[0].Name != "Write" || toolCalls[0].ID != "toolu_1" {
+		t.Errorf("tool call = %+v, want Write/toolu_1", toolCalls[0])
+	}
+	if toolCalls[0].Input == nil {
+		t.Error("expected tool call input to be parsed")
+	}
+}
+
+func TestParseClaudeStream_ErrorResult(t *testing.T) {
+	stream := `{"type":"result","subtype":"error_max_turns","is_error":true,"result":"hit the limit"}`
+	var errMsg string
+	var toolCalls []ToolCall
+	var final strings.Builder
+	ctx := &ChatContext{
+		OnChunk: func(string, bool) {},
+		OnError: func(s string) { errMsg = s },
+	}
+	parseClaudeStream(ctx, strings.NewReader(stream), &toolCalls, &final)
+	if !strings.Contains(errMsg, "hit the limit") {
+		t.Errorf("expected error surfaced via OnError, got %q", errMsg)
+	}
+}
+
+func TestParseClaudeStream_ResultFallbackText(t *testing.T) {
+	// Tool-only turn: no assistant text streamed; result string is the fallback.
+	stream := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"Bash","input":{}}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"All set."}`
+	var toolCalls []ToolCall
+	var final strings.Builder
+	ctx := &ChatContext{OnChunk: func(string, bool) {}, OnError: func(string) {}}
+	parseClaudeStream(ctx, strings.NewReader(stream), &toolCalls, &final)
+	if final.String() != "All set." {
+		t.Errorf("expected result fallback text, got %q", final.String())
+	}
+}
+
+func TestParseClaudeStream_ToleratesGarbageLines(t *testing.T) {
+	stream := "not json\n\n{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}\ngarbage{"
+	var toolCalls []ToolCall
+	var final strings.Builder
+	ctx := &ChatContext{OnChunk: func(string, bool) {}, OnError: func(string) {}}
+	parseClaudeStream(ctx, strings.NewReader(stream), &toolCalls, &final)
+	if final.String() != "ok" {
+		t.Errorf("expected to skip garbage and parse valid line, got %q", final.String())
+	}
+}

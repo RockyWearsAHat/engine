@@ -82,3 +82,15 @@ Add entries here when making non-obvious decisions so future sessions can reason
 **Tradeoffs:** This increases DB schema and ingestion complexity, and scoring heuristics will need iteration. The first pass focuses on deterministic state recovery and hook coverage rather than a fully autonomous contradiction repair loop.
 
 ---
+
+## Decision: Orchestrator Owns Project Control, Event Teams Disabled In Production
+
+**Decided:** The classic orchestrator remains the only production control loop. The event-driven team runtime is disabled from the top-level `RunAutonomousProject` path until it implements the intended hierarchy: Chatter -> Orchestrator -> Scribe -> Managers -> Workers.
+
+**Why:** Current event-mode "teams" are grouped plan buckets executed through the same autonomous-builder role, which is not the intended manager/member model. Leaving that path reachable causes architectural drift and teaches the wrong behavior.
+
+**Rejected alternatives:** Keeping event mode as an opt-in production path; treating heuristic step buckets as real subordinate managers; documenting the current event model as if it already matched the target hierarchy.
+
+**Tradeoffs:** This removes one experimental runtime path from normal use. The repo keeps the event orchestrator code for isolated iteration and tests, but all real project control now stays on the stronger classic loop until the layered hierarchy is implemented for real.
+
+---

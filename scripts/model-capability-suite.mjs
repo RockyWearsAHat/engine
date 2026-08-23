@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 
+import { spawnSync } from 'node:child_process';
 import process from 'node:process';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(scriptDir, '..');
 
 const DEFAULT_ENDPOINT = process.env.CAPABILITY_ENDPOINT || process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
 const DEFAULT_MODEL = process.env.CAPABILITY_MODEL || process.env.ENGINE_MODEL || 'qwen2.5:1.5b';
@@ -17,6 +23,8 @@ function parseArgs(argv) {
     workerModel: process.env.CAPABILITY_WORKER_MODEL || '',
     reviewerModel: process.env.CAPABILITY_REVIEWER_MODEL || '',
     strict: false,
+    autoStartOllama: process.env.CAP_AUTO_START_OLLAMA !== '0',
+    startupTimeoutMs: Number.parseInt(process.env.CAP_STARTUP_TIMEOUT_MS || '90000', 10),
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -60,9 +68,26 @@ function parseArgs(argv) {
       opts.strict = true;
       continue;
     }
+    if (arg === '--startup-timeout-ms' && argv[i + 1]) {
+      opts.startupTimeoutMs = Number.parseInt(argv[i + 1], 10);
+      i += 1;
+      continue;
+    }
+    if (arg === '--auto-start-ollama') {
+      opts.autoStartOllama = true;
+      continue;
+    }
+    if (arg === '--no-auto-start-ollama') {
+      opts.autoStartOllama = false;
+      continue;
+    }
   }
 
   return opts;
+}
+
+function printInfo(message) {
+  console.log(`[capability] ${message}`);
 }
 
 function chatCompletionsUrl(endpoint) {
@@ -133,6 +158,72 @@ async function invokeChat({ endpoint, model, apiKey, messages, tools, timeoutMs 
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function isOllamaReady(endpoint, timeoutMs = 3000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${endpoint.replace(/\/$/, '')}/api/tags`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function waitForOllama(endpoint, timeoutMs) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await isOllamaReady(endpoint, 2500)) {
+      return true;
+    }
+    await new Promise(resolveSleep => setTimeout(resolveSleep, 1000));
+  }
+  return false;
+}
+
+function startOllamaFleet() {
+  const result = spawnSync('pnpm', ['llama:fleet:start'], {
+    cwd: repoRoot,
+    env: process.env,
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024,
+  });
+
+  if (result.status !== 0) {
+    const errorOutput = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+    throw new Error(`failed to start Ollama backing service via pnpm llama:fleet:start${errorOutput ? `\n${errorOutput}` : ''}`);
+  }
+}
+
+async function ensureProviderReady(opts) {
+  if (opts.provider !== 'ollama') {
+    return;
+  }
+
+  const ready = await isOllamaReady(opts.endpoint, 3000);
+  if (ready) {
+    printInfo(`Ollama endpoint is ready at ${opts.endpoint}`);
+    return;
+  }
+
+  if (!opts.autoStartOllama) {
+    throw new Error(`Ollama endpoint is not reachable at ${opts.endpoint}. Start it first or rerun with --auto-start-ollama.`);
+  }
+
+  printInfo('Ollama endpoint is not ready; attempting to start backing service with pnpm llama:fleet:start');
+  startOllamaFleet();
+
+  const started = await waitForOllama(opts.endpoint, opts.startupTimeoutMs);
+  if (!started) {
+    throw new Error(`Ollama did not become ready at ${opts.endpoint} within ${opts.startupTimeoutMs}ms after auto-start.`);
+  }
+  printInfo(`Ollama endpoint is ready at ${opts.endpoint} after auto-start`);
 }
 
 function safeJsonParse(input) {
@@ -358,6 +449,10 @@ async function runSuite(opts) {
   console.log(`worker model: ${workerModel}`);
   console.log(`reviewer model: ${reviewerModel}`);
   console.log(`timeoutMs: ${opts.timeoutMs}`);
+  console.log(`autoStartOllama: ${opts.autoStartOllama}`);
+  console.log(`startupTimeoutMs: ${opts.startupTimeoutMs}`);
+
+  await ensureProviderReady(opts);
 
   const plannerOpts = { ...opts, model: plannerModel };
   const workerOpts = { ...opts, model: workerModel };

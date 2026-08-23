@@ -150,8 +150,11 @@ func TestRunAutonomousProject_SkipsExhaustedStep(t *testing.T) {
 	}
 
 	state, err := RunAutonomousProject(cfg)
-	if err != nil {
-		t.Fatalf("RunAutonomousProject: %v", err)
+	// The step exhausts its attempts and is skipped (marked Done with skip
+	// feedback). Because validation then passes over a skipped step, the run
+	// must surface a blocking error rather than report done.
+	if err == nil || !strings.Contains(err.Error(), "skipped without satisfying acceptance") {
+		t.Fatalf("expected skip-block error, got %v", err)
 	}
 	if state == nil {
 		t.Fatal("expected state")
@@ -164,6 +167,9 @@ func TestRunAutonomousProject_SkipsExhaustedStep(t *testing.T) {
 	}
 	if !strings.Contains(state.Plan[0].LastFeedback, "skipped after 1 failed attempts") {
 		t.Fatalf("expected skip feedback, got %q", state.Plan[0].LastFeedback)
+	}
+	if state.CompletedAt != "" {
+		t.Fatalf("expected no completion timestamp, got %q", state.CompletedAt)
 	}
 }
 

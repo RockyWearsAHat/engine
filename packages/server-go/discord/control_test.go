@@ -138,10 +138,11 @@ func newTestServiceForControl(projects map[string]ProjectBinding, sent *[]string
 		projects = map[string]ProjectBinding{}
 	}
 	svc := &Service{
-		cfg:             Config{CommandPrefix: "!"},
-		state:           persistedState{Projects: projects},
-		active:          map[string]bool{},
-		activeByChannel: map[string]bool{},
+		cfg:              Config{CommandPrefix: "!"},
+		state:            persistedState{Projects: projects},
+		active:           map[string]bool{},
+		activeByChannel:  map[string]bool{},
+		pendingApprovals: map[string]chan bool{},
 	}
 	// Override the channel-send path by intercepting via the tagged channel
 	// archive. Since send() short-circuits when dg is nil, just shadow send
@@ -152,3 +153,86 @@ func newTestServiceForControl(projects map[string]ProjectBinding, sent *[]string
 	}
 	return svc
 }
+
+// ── handleApproveCommand ──────────────────────────────────────────────────────
+
+func TestHandleApproveCommand_ResolvesApproval(t *testing.T) {
+	var sent []string
+	svc := newTestServiceForControl(map[string]ProjectBinding{
+		"/proj": {ProjectPath: "/proj", RepoName: "demo", ChannelID: "ch-1"},
+	}, &sent)
+
+	ch := make(chan bool, 1)
+	svc.pendingApprovalMu.Lock()
+	svc.pendingApprovals["abc123"] = ch
+	svc.pendingApprovalMu.Unlock()
+
+	svc.handleApproveCommand(&discordgo.MessageCreate{Message: &discordgo.Message{ChannelID: "ch-1"}}, []string{"abc123"}, true)
+
+	select {
+	case allow := <-ch:
+		if !allow {
+			t.Error("expected approved=true")
+		}
+	default:
+		t.Error("expected channel to have received allow=true")
+	}
+	if len(sent) == 0 || !strings.Contains(sent[len(sent)-1], "Approved") {
+		t.Errorf("expected Approved reply, got %v", sent)
+	}
+}
+
+func TestHandleApproveCommand_DenyResolvesApproval(t *testing.T) {
+	var sent []string
+	svc := newTestServiceForControl(nil, &sent)
+
+	ch := make(chan bool, 1)
+	svc.pendingApprovalMu.Lock()
+	svc.pendingApprovals["def456"] = ch
+	svc.pendingApprovalMu.Unlock()
+
+	svc.handleApproveCommand(&discordgo.MessageCreate{Message: &discordgo.Message{ChannelID: "ch-2"}}, []string{"def456"}, false)
+
+	select {
+	case allow := <-ch:
+		if allow {
+			t.Error("expected approved=false after deny")
+		}
+	default:
+		t.Error("expected channel to have received allow=false")
+	}
+	if len(sent) == 0 || !strings.Contains(sent[len(sent)-1], "Denied") {
+		t.Errorf("expected Denied reply, got %v", sent)
+	}
+}
+
+func TestHandleApproveCommand_UnknownID_ReportsError(t *testing.T) {
+	var sent []string
+	svc := newTestServiceForControl(nil, &sent)
+	svc.handleApproveCommand(&discordgo.MessageCreate{Message: &discordgo.Message{ChannelID: "ch-1"}}, []string{"unknown"}, true)
+	if len(sent) == 0 || !strings.Contains(sent[0], "No pending approval") {
+		t.Errorf("expected no-pending-approval reply, got %v", sent)
+	}
+}
+
+func TestHandleApproveCommand_NoArgs_ReportsUsage(t *testing.T) {
+	var sent []string
+	svc := newTestServiceForControl(nil, &sent)
+	svc.handleApproveCommand(&discordgo.MessageCreate{Message: &discordgo.Message{ChannelID: "ch-1"}}, nil, true)
+	if len(sent) == 0 || !strings.Contains(sent[0], "Usage") {
+		t.Errorf("expected usage reply, got %v", sent)
+	}
+}
+
+func TestRequestApprovalViaDM_NoUsers_ReturnsErrorImmediately(t *testing.T) {
+	svc := &Service{
+		cfg:              Config{AllowedUsers: map[string]bool{}},
+		state:            persistedState{Projects: make(map[string]ProjectBinding)},
+		pendingApprovals: make(map[string]chan bool),
+	}
+	_, err := svc.requestApprovalViaDM("/proj", "shell", "Run script", "execute", "ls -la")
+	if err == nil || !strings.Contains(err.Error(), "no Discord users configured") {
+		t.Errorf("expected no-users error, got %v", err)
+	}
+}
+

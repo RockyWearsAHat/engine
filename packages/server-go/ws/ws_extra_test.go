@@ -206,14 +206,14 @@ func TestHandleGitHubUser_NoToken(t *testing.T) {
 // TestGitHubToken_ReadsEnvVar tests the githubToken helper.
 func TestGitHubToken_ReadsEnvVar(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "mytoken123")
-	if got := githubToken(); got != "mytoken123" {
+	if got := githubToken(""); got != "mytoken123" {
 		t.Errorf("expected mytoken123, got %q", got)
 	}
 }
 
 func TestGitHubToken_Empty(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
-	if got := githubToken(); got != "" {
+	if got := githubToken(""); got != "" {
 		t.Errorf("expected empty, got %q", got)
 	}
 }
@@ -222,7 +222,7 @@ func TestGitHubToken_Empty(t *testing.T) {
 func TestGitHubRepoOverride_Unset(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_OWNER", "")
 	t.Setenv("ENGINE_GITHUB_REPO", "")
-	owner, repo, configured := githubRepoOverride()
+	owner, repo, configured := githubRepoOverride("")
 	if configured {
 		t.Error("expected not configured when both empty")
 	}
@@ -234,7 +234,7 @@ func TestGitHubRepoOverride_Unset(t *testing.T) {
 func TestGitHubRepoOverride_PartiallySet(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_OWNER", "myorg")
 	t.Setenv("ENGINE_GITHUB_REPO", "")
-	owner, repo, configured := githubRepoOverride()
+	owner, repo, configured := githubRepoOverride("")
 	if !configured {
 		t.Error("expected configured when owner set")
 	}
@@ -247,7 +247,7 @@ func TestGitHubRepoOverride_PartiallySet(t *testing.T) {
 func TestGitHubRepoOverride_BothSet(t *testing.T) {
 	t.Setenv("ENGINE_GITHUB_OWNER", "octocat")
 	t.Setenv("ENGINE_GITHUB_REPO", "hello-world")
-	owner, repo, configured := githubRepoOverride()
+	owner, repo, configured := githubRepoOverride("")
 	if !configured {
 		t.Error("expected configured")
 	}

@@ -3,6 +3,8 @@ package ai
 import (
 	"os"
 	"strings"
+
+	"github.com/engine/server/runtimecfg"
 )
 
 // Provider executes the full agentic chat loop for a specific AI backend.
@@ -27,13 +29,18 @@ type Provider interface {
 var newProvider = newProviderForName
 
 // newProviderForName returns the Provider for the given backend name.
-// Supported values: "ollama", "llamacpp", "openai", "anthropic".
+// Supported values: "ollama", "llamacpp", "openai", "anthropic", "claudecode".
 // Any unrecognised name falls back to "anthropic".
 //
 // "llamacpp" hits the llama.cpp server's /v1/chat/completions endpoint directly,
 // which gives lower-latency inference than Ollama's wrapper and supports grammar-
 // constrained tool calling. Use it when you control the runtime; use "ollama" when
 // you want Ollama's model management on top.
+//
+// "claudecode" shells out to the Claude Code CLI (`claude -p`), which runs its
+// own agentic loop against the project directory and authenticates via the
+// user's Claude subscription (Max/Pro) instead of an ANTHROPIC_API_KEY. See
+// claudecode.go for why it behaves differently from the API providers.
 func newProviderForName(name string) Provider {
 	switch name {
 	case "openai":
@@ -42,6 +49,8 @@ func newProviderForName(name string) Provider {
 		return &ollamaProvider{}
 	case "llamacpp", "llama.cpp", "llama-cpp":
 		return &llamacppProvider{}
+	case "claudecode", "claude-code", "claude_code":
+		return &claudecodeProvider{}
 	default: // "anthropic"
 		return &anthropicProvider{}
 	}
@@ -60,7 +69,13 @@ func (p *ollamaProvider) RunLoop(
 	allToolCalls *[]ToolCall,
 	finalText *strings.Builder,
 ) {
-	baseURL := os.Getenv("OLLAMA_BASE_URL")
+	baseURL := ""
+	if cfg, err := runtimecfg.Load(ctx.ProjectPath); err == nil {
+		baseURL = strings.TrimSpace(cfg.OllamaBaseURL)
+	}
+	if baseURL == "" {
+		baseURL = os.Getenv("OLLAMA_BASE_URL")
+	}
 	runOpenAICompatibleLoop(
 		ctx, "ollama", model,
 		ollamaChatCompletionsURL(baseURL),
@@ -89,7 +104,13 @@ func (p *llamacppProvider) RunLoop(
 	allToolCalls *[]ToolCall,
 	finalText *strings.Builder,
 ) {
-	baseURL := strings.TrimSpace(os.Getenv("LLAMACPP_BASE_URL"))
+	baseURL := ""
+	if cfg, err := runtimecfg.Load(ctx.ProjectPath); err == nil {
+		baseURL = strings.TrimSpace(cfg.LlamacppBaseURL)
+	}
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(os.Getenv("LLAMACPP_BASE_URL"))
+	}
 	if baseURL == "" {
 		baseURL = "http://127.0.0.1:8080"
 	}
@@ -114,7 +135,13 @@ func (p *openAIProvider) RunLoop(
 	allToolCalls *[]ToolCall,
 	finalText *strings.Builder,
 ) {
-	apiKey := os.Getenv("OPENAI_API_KEY")
+	apiKey := ""
+	if cfg, err := runtimecfg.Load(ctx.ProjectPath); err == nil {
+		apiKey = strings.TrimSpace(cfg.OpenAIKey)
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv("OPENAI_API_KEY")
+	}
 	runOpenAICompatibleLoop(
 		ctx, "openai", model,
 		"https://api.openai.com/v1/chat/completions",
@@ -135,6 +162,12 @@ func (p *anthropicProvider) RunLoop(
 	allToolCalls *[]ToolCall,
 	finalText *strings.Builder,
 ) {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	apiKey := ""
+	if cfg, err := runtimecfg.Load(ctx.ProjectPath); err == nil {
+		apiKey = strings.TrimSpace(cfg.AnthropicKey)
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv("ANTHROPIC_API_KEY")
+	}
 	runAnthropicLoop(ctx, model, apiKey, systemPrompt, history, allToolCalls, finalText)
 }

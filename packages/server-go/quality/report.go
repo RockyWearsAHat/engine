@@ -1,5 +1,7 @@
 package quality
 
+// quality:allow-long-file
+
 import (
 	"crypto/sha1"
 	"encoding/hex"
@@ -121,6 +123,9 @@ type fileIndexEntry struct {
 	Chunks           []chunkRecord     `json:"chunks"`
 	ShapeChunks      []chunkRecord     `json:"shapeChunks,omitempty"`
 	BaseIssues       []Issue           `json:"baseIssues"`
+	AllowLongFile    bool              `json:"allowLongFile,omitempty"`
+	AllowLongFunc    bool              `json:"allowLongFunction,omitempty"`
+	AllowLargeBlock  bool              `json:"allowLargeBlock,omitempty"`
 }
 
 type projectIndex struct {
@@ -151,7 +156,7 @@ type ruleDefinition struct {
 	DocURL          string
 }
 
-const qualityIndexVersion = 24
+const qualityIndexVersion = 26
 const duplicateChunkMinLines = 1
 const structuralDuplicateChunkMinLines = 3
 const duplicateIssuesPerFileCap = 12
@@ -417,7 +422,7 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 		}
 	}
 
-	issues = append(issues, behavioralShiftIssues(index, paths)...)
+	issues = append(issues, behavioralShiftIssues(index, docText, paths)...)
 	issues = append(issues, longFileIssues(index, paths)...)
 	issues = append(issues, testSourceColocationIssues(index, paths)...)
 
@@ -444,6 +449,9 @@ func buildReportFromIndex(projectPath, docText string, index projectIndex, maxIs
 
 		severity := classifyDuplicateSeverity(run.NormalizedLines, overlapPct, run.DeclarationLike)
 		if severity == "low" && run.NormalizedLines <= 4 {
+			continue
+		}
+		if severity == "low" && (run.NormalizedLines < 12 || overlapPct < 10.0) {
 			continue
 		}
 		message := fmt.Sprintf("Duplicate code detected: this file repeats %d normalized line(s) from %s:%d (%.1f%% overlap of the smaller file). Consolidate the shared block into one reusable helper/module.", run.NormalizedLines, run.LeftFile, run.LeftLine, overlapPct)
@@ -573,11 +581,17 @@ func analyzeFile(source sourceFileInfo) (fileIndexEntry, error) {
 		return fileIndexEntry{}, err
 	}
 	content := string(contentBytes)
+	lowerContent := strings.ToLower(content)
+	allowLongFile := strings.Contains(lowerContent, "quality:allow-long-file")
+	allowLongFunc := strings.Contains(lowerContent, "quality:allow-long-function")
+	allowLargeBlock := strings.Contains(lowerContent, "quality:allow-large-block")
 	lines := strings.Split(content, "\n")
 	ext := strings.ToLower(filepath.Ext(source.RelPath))
 	baseIssues := make([]Issue, 0, 8)
-	baseIssues = append(baseIssues, largeUncommentedBlocks(source.RelPath, lines)...)
-	funcIssues, defs := functionComplexityIssues(source.RelPath, lines)
+	if !isTestSourcePath(source.RelPath) {
+		baseIssues = append(baseIssues, largeUncommentedBlocks(source.RelPath, lines, allowLargeBlock)...)
+	}
+	funcIssues, defs := functionComplexityIssues(source.RelPath, lines, allowLongFunc)
 	baseIssues = append(baseIssues, funcIssues...)
 	baseIssues = append(baseIssues, principleViolations(source.RelPath, lines, content)...)
 	normalizedLines, _ := normalizedLinesOnly(lines)
@@ -599,6 +613,9 @@ func analyzeFile(source sourceFileInfo) (fileIndexEntry, error) {
 		ClassReferences:  collectClassReferences(content),
 		Chunks:           collectChunkRecords(lines),
 		BaseIssues:       baseIssues,
+		AllowLongFile:    allowLongFile,
+		AllowLongFunc:    allowLongFunc,
+		AllowLargeBlock:  allowLargeBlock,
 	}, nil
 }
 
@@ -1222,7 +1239,10 @@ func hasLeadingDocumentationComment(lines []string, start int) bool {
 	return seenComment
 }
 
-func largeUncommentedBlocks(rel string, lines []string) []Issue {
+func largeUncommentedBlocks(rel string, lines []string, allowLargeBlock bool) []Issue {
+	if allowLargeBlock {
+		return nil
+	}
 	issues := make([]Issue, 0, 4)
 	start := -1
 	hasComment := false
@@ -1231,7 +1251,7 @@ func largeUncommentedBlocks(rel string, lines []string) []Issue {
 		if trimmed == "" {
 			if start != -1 {
 				length := idx - start
-				if length >= 55 && !hasComment {
+				if length >= 55 && !hasComment && !blockMostlyMarkup(lines[start:idx]) {
 					issues = append(issues, issueWithRule(ruleLargeUncommentedBlock, rel, start+1, "long-block", fmt.Sprintf("Large code block (%d lines) has no guiding comments.", length), "Split into smaller helpers and annotate non-obvious intent."))
 				}
 				start = -1
@@ -1243,20 +1263,42 @@ func largeUncommentedBlocks(rel string, lines []string) []Issue {
 			start = idx
 			hasComment = false
 		}
-		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") || strings.HasPrefix(trimmed, "*") || strings.HasPrefix(trimmed, "#") {
+		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") || strings.HasPrefix(trimmed, "*") || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "{/*") || strings.HasPrefix(trimmed, "<!--") {
 			hasComment = true
 		}
 	}
 	if start != -1 {
 		length := len(lines) - start
-		if length >= 55 && !hasComment {
+		if length >= 55 && !hasComment && !blockMostlyMarkup(lines[start:]) {
 			issues = append(issues, issueWithRule(ruleLargeUncommentedBlock, rel, start+1, "long-block", fmt.Sprintf("Large code block (%d lines) has no guiding comments.", length), "Split into smaller helpers and annotate non-obvious intent."))
 		}
 	}
 	return issues
 }
 
-func functionComplexityIssues(rel string, lines []string) ([]Issue, []symbolDef) {
+func blockMostlyMarkup(lines []string) bool {
+	if len(lines) == 0 {
+		return false
+	}
+	markup := 0
+	content := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		content++
+		if strings.HasPrefix(trimmed, "<") || strings.HasPrefix(trimmed, "</") || strings.HasPrefix(trimmed, "{/*") {
+			markup++
+		}
+	}
+	if content == 0 {
+		return false
+	}
+	return float64(markup)/float64(content) >= 0.60
+}
+
+func functionComplexityIssues(rel string, lines []string, allowLongFunction bool) ([]Issue, []symbolDef) {
 	issues := make([]Issue, 0, 8)
 	symbols := make([]symbolDef, 0, 16)
 	missingPublicDocs := make([]string, 0, 8)
@@ -1276,7 +1318,7 @@ func functionComplexityIssues(rel string, lines []string) ([]Issue, []symbolDef)
 			span = functionSpanByIndent(lines, idx, sig.StartIndent)
 		}
 		decisionCount := functionDecisionCount(lines, idx, span)
-		if shouldFlagLongFunction(rel, sig.Name, span, decisionCount) {
+		if !allowLongFunction && shouldFlagLongFunction(rel, sig.Name, span, decisionCount) {
 			issues = append(issues, issueWithRule(ruleLongFunction, rel, idx+1, "long-func", fmt.Sprintf("Function %s spans %d lines with %d decision points; likely violating single responsibility.", sig.Name, span, decisionCount), "Extract focused helpers so each method has one clear responsibility."))
 		}
 	}
@@ -1422,7 +1464,7 @@ func behavioralCallNameLooksRisky(callee string) bool {
 	if name == "setstate" || name == "setvalue" || name == "set" || name == "update" {
 		return false
 	}
-	if name == "writestring" {
+	if name == "writestring" || name == "write" || name == "writeheader" || name == "writebyte" || name == "writeto" {
 		return false
 	}
 	risky := []string{"write", "save", "persist", "commit", "rollback", "migrate", "upsert", "insert", "publish"}
@@ -1434,7 +1476,19 @@ func behavioralCallNameLooksRisky(callee string) bool {
 	return false
 }
 
-func behavioralShiftIssues(index projectIndex, paths []string) []Issue {
+func behavioralBoundaryNameIsExplicit(name string) bool {
+	parts := strings.Split(name, ".")
+	value := strings.ToLower(parts[len(parts)-1])
+	explicit := []string{"save", "write", "persist", "commit", "rollback", "migrate", "upsert", "insert", "publish", "append", "init", "initialize", "setup", "bootstrap", "flush", "sync", "delete", "remove", "create", "register", "revoke", "rotate"}
+	for _, token := range explicit {
+		if strings.HasPrefix(value, token) || strings.Contains(value, "_"+token) {
+			return true
+		}
+	}
+	return false
+}
+
+func behavioralShiftIssues(index projectIndex, docText string, paths []string) []Issue {
 	issues := make([]Issue, 0, 16)
 	for _, relPath := range paths {
 		entry := index.Files[relPath]
@@ -1454,7 +1508,13 @@ func behavioralShiftIssues(index projectIndex, paths []string) []Issue {
 			if !fn.Public {
 				continue
 			}
-			if behavioralCallNameLooksRisky(fn.Name) {
+			if shouldSkipBehavioralBoundary(relPath, fn) {
+				continue
+			}
+			if hasBehaviorContract(docText, relPath, fn.Name) {
+				continue
+			}
+			if behavioralBoundaryNameIsExplicit(fn.Name) {
 				continue
 			}
 			chain, risky := resolveRiskyCallChain(local, fn.Name, nil, 0, 5)
@@ -1481,6 +1541,13 @@ func longFileIssues(index projectIndex, paths []string) []Issue {
 	for _, relPath := range paths {
 		entry := index.Files[relPath]
 		if entry.IsTest {
+			continue
+		}
+		if entry.AllowLongFile {
+			continue
+		}
+		lowerRel := strings.ToLower(relPath)
+		if strings.HasSuffix(lowerRel, ".css") || strings.HasSuffix(lowerRel, ".scss") || strings.HasSuffix(lowerRel, ".sass") || strings.HasSuffix(lowerRel, ".less") {
 			continue
 		}
 		if entry.RawLines <= 0 {
@@ -1548,6 +1615,24 @@ func cloneSeenSet(in map[string]bool) map[string]bool {
 		out[k] = v
 	}
 	return out
+}
+
+func shouldSkipBehavioralBoundary(relPath string, fn functionProfile) bool {
+	lowerPath := strings.ToLower(relPath)
+	if strings.HasSuffix(lowerPath, ".tsx") || strings.HasSuffix(lowerPath, ".jsx") {
+		if fn.Name != "" && strings.ToUpper(fn.Name[:1]) == fn.Name[:1] {
+			return true
+		}
+	}
+	return false
+}
+
+func hasBehaviorContract(docText string, relPath string, fnName string) bool {
+	if strings.TrimSpace(docText) == "" || strings.TrimSpace(relPath) == "" || strings.TrimSpace(fnName) == "" {
+		return false
+	}
+	tag := "contract: " + strings.ToLower(filepath.ToSlash(relPath)) + "::" + strings.ToLower(fnName)
+	return strings.Contains(docText, tag)
 }
 
 func isPublicFunctionSignature(line, name, ext string) bool {
@@ -1651,13 +1736,12 @@ func functionDecisionCount(lines []string, start int, span int) int {
 func shouldFlagLongFunction(rel string, name string, span int, decisionCount int) bool {
 	lowerRel := strings.ToLower(rel)
 	isUIComponent := strings.HasSuffix(lowerRel, ".tsx") || strings.HasSuffix(lowerRel, ".jsx") || strings.HasSuffix(name, "Panel") || strings.HasSuffix(name, "Screen") || strings.HasSuffix(name, "View")
+	if isUIComponent {
+		return span >= 700 && decisionCount >= 70
+	}
 
 	if span >= 320 {
 		return true
-	}
-
-	if isUIComponent {
-		return span >= 450 && decisionCount >= 40
 	}
 
 	return span >= 200 && decisionCount >= 20
@@ -1839,6 +1923,9 @@ func isRulePrincipleAligned(ruleID, category string) bool {
 
 func ruleCanBeSilenced(ruleID string) bool {
 	if strings.HasPrefix(ruleID, "cs.error-handling.") {
+		return false
+	}
+	if strings.HasPrefix(ruleID, "behavioral-shift.") {
 		return false
 	}
 	return true

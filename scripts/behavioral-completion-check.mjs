@@ -31,6 +31,7 @@ const startTimeMs = Date.now();
 let projectProfile = null;
 const profileCachePath = path.join(repoRoot, '.cache', 'project-profile.json');
 const engineWebPort = Number.parseInt(process.env.ENGINE_WEB_PORT ?? '24445', 10);
+const engineApiPort = Number.parseInt(process.env.ENGINE_API_PORT ?? '24444', 10);
 try {
   const raw = fs.readFileSync(profileCachePath, 'utf8');
   projectProfile = JSON.parse(raw);
@@ -53,6 +54,23 @@ function inferProfileFromWorkspace() {
   const hasCargoToml = fs.existsSync(path.join(repoRoot, 'Cargo.toml'));
   const hasClientDir = fs.existsSync(path.join(repoRoot, 'packages', 'client'));
   const hasGoServerDir = fs.existsSync(path.join(repoRoot, 'packages', 'server-go'));
+
+  // Engine mono-workspace fallback: start both backend and frontend so the
+  // behavioral check doesn't pass against a frontend-only shell.
+  if (hasClientDir && hasGoServerDir && rootPkg?.scripts?.dev) {
+    return {
+      type: 'web-app',
+      verification: {
+        usesPlaywright: true,
+        startCmd: 'pnpm dev',
+        checkURL: `http://localhost:${engineWebPort}`,
+        backendCheckURL: `http://localhost:${engineWebPort}/health`,
+        backendDirectCheckURL: `http://localhost:${engineApiPort}/health`,
+        port: engineWebPort,
+        checkCmds: [],
+      },
+    };
+  }
 
   if (hasClientDir || (rootPkg?.scripts && (rootPkg.scripts.dev || rootPkg.scripts.start))) {
     return {
@@ -112,8 +130,15 @@ if (!projectProfile) {
 // Derive client URL and whether Playwright should run from the profile.
 function resolveVerification() {
   if (!projectProfile) {
-    // Engine-own fallback: port 24445 Vite dev server, Playwright check.
-    return { usesPlaywright: true, clientUrl: `http://localhost:${engineWebPort}`, startFilter: '@engine/client' };
+    // Engine-own fallback: start full stack and verify frontend+backend.
+    return {
+      usesPlaywright: true,
+      clientUrl: `http://localhost:${engineWebPort}`,
+      startFilter: null,
+      startCmd: 'pnpm dev',
+      backendCheckURL: `http://localhost:${engineWebPort}/health`,
+      backendDirectCheckURL: `http://localhost:${engineApiPort}/health`,
+    };
   }
   const v = projectProfile.verification ?? {};
   const port = v.port || 3000;
@@ -123,6 +148,8 @@ function resolveVerification() {
     clientUrl,
     startFilter: null,
     startCmd: v.startCmd || null,
+    backendCheckURL: v.backendCheckURL || null,
+    backendDirectCheckURL: v.backendDirectCheckURL || null,
     checkCmds: v.checkCmds || [],
     projectType: projectProfile.type || 'unknown',
   };
@@ -200,6 +227,19 @@ if (clientUrl) {
     const started = await waitForServer(clientUrl, 15_000);
     if (!started) {
       skip('Could not reach project dev server — behavioral check requires the server to be running');
+    }
+  }
+
+  // For engine-like workspaces, verify backend is also live before behavioral checks.
+  if (verification.backendCheckURL) {
+    const backendReady = await waitForServer(verification.backendCheckURL, 20_000);
+    if (!backendReady && verification.backendDirectCheckURL) {
+      const backendDirectReady = await waitForServer(verification.backendDirectCheckURL, 20_000);
+      if (!backendDirectReady) {
+        skip('Frontend started but backend health endpoint is not reachable — start the backing API server before behavioral checks');
+      }
+    } else if (!backendReady) {
+      skip('Frontend started but backend health endpoint is not reachable — start the backing API server before behavioral checks');
     }
   }
 }

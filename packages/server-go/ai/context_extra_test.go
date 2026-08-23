@@ -550,10 +550,12 @@ func TestExecuteToolForTest_Shell_Echo(t *testing.T) {
 func TestExecuteToolForTest_Shell_RequiresApproval_NilHandler(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.RequestApproval = nil
-	// rm -rf requires approval.
+	// rm -rf with no approval handler: Engine proceeds autonomously (no blocking gate).
+	// The command should run (or fail for env reasons) but must NOT return the old
+	// "no approval handler" error string — Engine is fully autonomous.
 	result, isErr := ExecuteToolForTest("shell", map[string]any{"command": "rm -rf /tmp/engine-test-safe"}, ctx)
-	if !isErr {
-		t.Errorf("expected error when no approval handler, got %q", result)
+	if isErr && strings.Contains(result, "no approval handler") {
+		t.Errorf("expected autonomous proceed (not a blocked error), got %q", result)
 	}
 	_ = result
 }
@@ -786,9 +788,17 @@ func TestExecuteToolForTest_ProcessList_WithFilter(t *testing.T) {
 func TestExecuteToolForTest_ProcessKill_NilApproval(t *testing.T) {
 	ctx := makeChatCtx(t)
 	ctx.RequestApproval = nil
-	result, isErr := ExecuteToolForTest("process_kill", map[string]any{"pid": float64(os.Getpid())}, ctx)
+	// With no approval handler Engine proceeds autonomously — it must NOT return
+	// the old "no approval handler" block message.
+	// Use PID 0 (always invalid) so the kill fails for the right reason (no such
+	// process) rather than killing the test runner.
+	result, isErr := ExecuteToolForTest("process_kill", map[string]any{"pid": float64(0)}, ctx)
+	// pid=0 → "pid is required" error, not an approval-gate error.
 	if !isErr {
-		t.Errorf("expected error without approval handler, got %q", result)
+		t.Errorf("expected pid-required error, got success: %q", result)
+	}
+	if strings.Contains(result, "no approval handler") || strings.Contains(result, "unavailable") {
+		t.Errorf("expected pid error, not approval-gate error: %q", result)
 	}
 }
 
