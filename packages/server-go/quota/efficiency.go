@@ -70,10 +70,17 @@ type Outcome struct {
 	Role string `json:"role"`
 	// Config is what was dispatched.
 	Config Config `json:"config"`
-	// Success is whether the run produced usable work. The caller defines the
-	// bar; the ledger only needs it to be consistent, since it compares configs
-	// against each other rather than against an absolute standard.
+	// Success is whether the run completed mechanically — exited cleanly and
+	// produced output. This is the ENGINE's judgement of itself and it is a weak
+	// signal: it cannot tell work that landed from work that was quietly thrown
+	// away. It is kept because it is always available and it correctly catches
+	// hard failures, but it is not the objective. Satisfaction is, and that
+	// arrives later via Ledger.RateProject.
 	Success bool `json:"success"`
+	// ProjectID names the unit of delivered work this run contributed to, so a
+	// rating arriving later can be attributed back to the configuration that
+	// earned it. Empty means the run is untracked for scoring purposes.
+	ProjectID string `json:"projectId,omitempty"`
 	// Tokens is total tokens billed for the run (input + output + cache).
 	Tokens int64 `json:"tokens"`
 	// QuotaPct is the observed movement in the binding window, when one was
@@ -100,6 +107,40 @@ type Stat struct {
 	QuotaRuns int           `json:"quotaRuns"`
 	Duration  time.Duration `json:"durationNs"`
 	LastRun   time.Time     `json:"lastRun"`
+
+	// Value is accumulated user-judged worth, from ratings attributed back to
+	// this configuration by its share of each project's spend. It is the
+	// numerator of yield and it can go negative — a configuration that reliably
+	// produces rejected work is worse than one that produces nothing.
+	Value float64 `json:"value"`
+	// RatedShare is how much rated work this configuration is responsible for,
+	// in project-shares rather than whole projects. Fractional because a project
+	// is usually many runs across several configurations.
+	RatedShare float64 `json:"ratedShare"`
+	// Praised/Accepted/Rework/Rejected are the same shares split by rating.
+	Praised  float64 `json:"praised"`
+	Accepted float64 `json:"accepted"`
+	Rework   float64 `json:"rework"`
+	Rejected float64 `json:"rejected"`
+}
+
+// GoodRate is the share of this configuration's rated work that the user was
+// happy with. This is the quality gate — see Ledger.Recommend.
+//
+// Returns 0 when nothing has been rated, which callers must read as "no
+// evidence" rather than "bad". The distinction matters: treating unrated as bad
+// would condemn every configuration the moment feedback got sparse.
+func (s Stat) GoodRate() float64 {
+	if s.RatedShare <= 0 {
+		return 0
+	}
+	return (s.Praised + s.Accepted) / s.RatedShare
+}
+
+// Yield is value per quota percentage point for this configuration, given the
+// ledger's estimate of what it cost.
+func (s Stat) Yield(quotaCost float64) float64 {
+	return yieldOf(s.Value, quotaCost)
 }
 
 // SuccessRate is successes/runs, 0 when unsampled.
@@ -153,6 +194,25 @@ type Ledger struct {
 	lastSaved   time.Time
 	saveEvery   time.Duration
 	nowOverride func() time.Time
+
+	// Scoring state. projects holds the not-yet-rated backlog so late feedback
+	// can be attributed back; the rest is the running scoreboard.
+	projects      map[string]*project
+	projectOrder  []string
+	totalValue    float64
+	totalQuota    float64
+	ratedProjects int
+	praised       int
+	accepted      int
+	rework        int
+	rejected      int
+	history       []yieldPoint
+	notes         []Rating
+
+	// goodBar is the satisfaction gate: the share of rated work a configuration
+	// must have landed well before its cheapness is allowed to count in its
+	// favour at all.
+	goodBar float64
 }
 
 // LedgerOptions tunes the learner.
@@ -162,9 +222,14 @@ type LedgerOptions struct {
 	// MinSamples is how many runs a config needs before its success rate is
 	// trusted. Below this, the ledger explores rather than concludes.
 	MinSamples int
-	// SuccessBar is the success rate a cheaper config must clear to be
-	// preferred over a more expensive one.
+	// SuccessBar is the mechanical completion rate a cheaper config must clear to
+	// be preferred over a more expensive one. This is the floor, not the goal.
 	SuccessBar float64
+	// GoodBar is the share of RATED work a configuration must have landed well
+	// before yield is allowed to select it. Quality is a gate rather than a term
+	// in the ratio, because a cheap configuration that makes the user unhappy is
+	// not a bargain at any price.
+	GoodBar float64
 }
 
 // NewLedger builds a ledger, loading prior state from Path when present.
@@ -175,11 +240,19 @@ func NewLedger(opts LedgerOptions) *Ledger {
 	if opts.SuccessBar <= 0 {
 		opts.SuccessBar = 0.8
 	}
+	if opts.GoodBar <= 0 {
+		// Two thirds. Deliberately not higher: the bar has to be clearable by a
+		// cheap configuration often enough that frugality can actually win, or
+		// the gate silently becomes "always use the expensive one".
+		opts.GoodBar = 0.67
+	}
 	l := &Ledger{
 		stats:      map[string]*Stat{},
+		projects:   map[string]*project{},
 		path:       opts.Path,
 		minSamples: opts.MinSamples,
 		successBar: opts.SuccessBar,
+		goodBar:    opts.GoodBar,
 		saveEvery:  30 * time.Second,
 		pctPerMTok: 0,
 	}
@@ -233,6 +306,10 @@ func (l *Ledger) Record(o Outcome) {
 			l.pctPerMTok += (ratio - l.pctPerMTok) / float64(l.calibRuns)
 		}
 	}
+	// Track the run against its project so a rating arriving later can find the
+	// configuration that earned it.
+	l.recordProjectPart(o, o.QuotaPct)
+
 	l.dirty = true
 	shouldSave := l.path != "" && l.now().Sub(l.lastSaved) > l.saveEvery
 	l.mu.Unlock()
@@ -265,10 +342,16 @@ type Recommendation struct {
 	// Savings estimates the tokens saved per success versus the most expensive
 	// candidate, when both are sampled.
 	Savings float64 `json:"savings,omitempty"`
+	// Yield is the chosen configuration's results-per-percent, when it was
+	// selected on yield rather than on the mechanical fallback.
+	Yield float64 `json:"yield,omitempty"`
+	// GoodRate is the share of its rated work the user was happy with.
+	GoodRate float64 `json:"goodRate,omitempty"`
 }
 
-// Recommend picks the cheapest configuration for a role that the evidence says
-// still works.
+// Recommend picks the configuration for a role with the best YIELD — the most
+// user-approved result per percentage point of window — among those that clear
+// the quality gate.
 //
 // Candidates must be supplied in ascending cost order — cheapest first. The
 // ledger does not know the price list; the caller does.
@@ -279,10 +362,17 @@ type Recommendation struct {
 //     is biased to the CHEAP end deliberately: the cost of learning that a cheap
 //     config fails is one cheap run, while learning that an expensive config
 //     succeeds teaches nothing we wanted to know.
-//  2. Otherwise take the cheapest candidate clearing the success bar.
-//  3. If none clears it, take the best-performing candidate — the work still has
-//     to happen, and a low bar everywhere means the bar, not the config, is the
-//     problem.
+//  2. Among candidates whose RATED work clears the quality gate, take the
+//     highest yield. This is the step that implements the objective: between two
+//     configurations the user is equally happy with, the one that got there on a
+//     tenth of the quota is ten times better, and it wins by exactly that much.
+//  3. If ratings exist but nothing clears the gate, take the highest quality
+//     regardless of cost. When the user is not happy, cheapness is not the
+//     problem to solve.
+//  4. If no candidate has been rated at all, fall back to mechanical success:
+//     the cheapest configuration that completes. Feedback may be sparse or may
+//     never arrive, and an engine that stalls without it would be worse than the
+//     one that came before.
 func (l *Ledger) Recommend(role string, candidates []Config) Recommendation {
 	if len(candidates) == 0 {
 		return Recommendation{Reason: "no candidate configurations supplied"}
@@ -310,7 +400,77 @@ func (l *Ledger) Recommend(role string, candidates []Config) Recommendation {
 		}
 	}
 
-	// 2. Cheapest that clears the bar.
+	// 2. Best yield among candidates the user is actually happy with.
+	//
+	// minRatedShare guards against deciding on a single fluke: one praised
+	// project is not evidence that a configuration is good, and yield is a ratio,
+	// so a lucky cheap run can post a spectacular number from nothing.
+	const minRatedShare = 2.0
+	var bestC Config
+	var bestStat Stat
+	bestYield := math.Inf(-1)
+	anyRated := false
+	for _, c := range candidates {
+		s := get(c)
+		if s.RatedShare <= 0 {
+			continue
+		}
+		anyRated = true
+		if s.RatedShare < minRatedShare || s.GoodRate() < l.goodBar {
+			continue
+		}
+		cost, costKnown := l.statQuotaCostLocked(s)
+		if !costKnown {
+			// No measured spend means no denominator. Ranking it anyway would
+			// float it to the top on the floor value alone.
+			continue
+		}
+		y := s.Yield(cost)
+		if y > bestYield {
+			bestC, bestStat, bestYield = c, s, y
+		}
+	}
+	if isFinitePositive(bestYield) {
+		rec := Recommendation{
+			Config:    bestC,
+			Confident: true,
+			Yield:     bestYield,
+			GoodRate:  bestStat.GoodRate(),
+			Reason: fmt.Sprintf("%s yields %.1f results per %% of window on %q at %.0f%% good — best return on quota among configurations the user is happy with",
+				bestC, bestYield, role, bestStat.GoodRate()*100),
+		}
+		// Say what choosing it saves versus the most expensive candidate, since
+		// that comparison is the whole argument for the frugal choice.
+		if worst := get(candidates[len(candidates)-1]); worst.RatedShare > 0 && worst.Config.Key() != bestC.Key() {
+			if wc, ok := l.statQuotaCostLocked(worst); ok {
+				if wy := worst.Yield(wc); isFinitePositive(wy) && bestYield > wy {
+					rec.Reason += fmt.Sprintf(" (%.1fx the yield of %s)", bestYield/wy, worst.Config)
+				}
+			}
+		}
+		return rec
+	}
+
+	// 3. Rated, but nothing the user liked enough. Quality first.
+	if anyRated {
+		best := candidates[0]
+		bs := get(best)
+		for _, c := range candidates[1:] {
+			s := get(c)
+			if s.RatedShare > 0 && s.GoodRate() > bs.GoodRate() {
+				best, bs = c, s
+			}
+		}
+		return Recommendation{
+			Config:    best,
+			Confident: true,
+			GoodRate:  bs.GoodRate(),
+			Reason: fmt.Sprintf("no configuration clears the %.0f%% satisfaction gate on %q; %s is the best at %.0f%% — spending more is the right move when the results are not landing",
+				l.goodBar*100, role, best, bs.GoodRate()*100),
+		}
+	}
+
+	// 4. No ratings anywhere: fall back to mechanical completion, cheapest first.
 	worst := get(candidates[len(candidates)-1])
 	for _, c := range candidates {
 		s := get(c)
@@ -318,7 +478,7 @@ func (l *Ledger) Recommend(role string, candidates []Config) Recommendation {
 			rec := Recommendation{
 				Config:    c,
 				Confident: true,
-				Reason: fmt.Sprintf("%s succeeds %.0f%% of the time on %q at %s/success — cheapest configuration clearing the %.0f%% bar",
+				Reason: fmt.Sprintf("%s completes %.0f%% of the time on %q at %s/success — cheapest configuration clearing the %.0f%% bar (no user ratings yet)",
 					c, s.SuccessRate()*100, role, humanTokens(s.TokensPerSuccess()), l.successBar*100),
 			}
 			if worst.Successes > 0 && s.Successes > 0 {
@@ -331,20 +491,19 @@ func (l *Ledger) Recommend(role string, candidates []Config) Recommendation {
 		}
 	}
 
-	// 3. Nothing clears it: take the highest success rate, breaking ties by cost.
 	best := candidates[0]
-	bestStat := get(best)
+	bs := get(best)
 	for _, c := range candidates[1:] {
 		s := get(c)
-		if s.SuccessRate() > bestStat.SuccessRate() {
-			best, bestStat = c, s
+		if s.SuccessRate() > bs.SuccessRate() {
+			best, bs = c, s
 		}
 	}
 	return Recommendation{
 		Config:    best,
 		Confident: true,
-		Reason: fmt.Sprintf("no configuration clears the %.0f%% bar on %q; %s is the best available at %.0f%%",
-			l.successBar*100, role, best, bestStat.SuccessRate()*100),
+		Reason: fmt.Sprintf("no configuration clears the %.0f%% completion bar on %q; %s is the best available at %.0f%%",
+			l.successBar*100, role, best, bs.SuccessRate()*100),
 	}
 }
 
@@ -481,11 +640,32 @@ func humanTokens(v float64) string {
 }
 
 // persisted is the on-disk shape.
+//
+// The scoreboard totals are stored alongside the per-config stats rather than
+// recomputed from them, because they are not derivable: a project's cost is
+// shared across several configurations, so summing per-config value and cost
+// would double-count the denominators. The history is what makes the trend
+// survive a restart, and the trend is how anyone can tell the score is actually
+// improving rather than just being high.
 type persisted struct {
 	Version    int     `json:"version"`
 	PctPerMTok float64 `json:"pctPerMTok"`
 	CalibRuns  int     `json:"calibRuns"`
 	Stats      []Stat  `json:"stats"`
+
+	TotalValue    float64      `json:"totalValue,omitempty"`
+	TotalQuota    float64      `json:"totalQuota,omitempty"`
+	RatedProjects int          `json:"ratedProjects,omitempty"`
+	Praised       int          `json:"praised,omitempty"`
+	Accepted      int          `json:"accepted,omitempty"`
+	Rework        int          `json:"rework,omitempty"`
+	Rejected      int          `json:"rejected,omitempty"`
+	History       []yieldPoint `json:"history,omitempty"`
+	Notes         []Rating     `json:"notes,omitempty"`
+
+	// Pending carries the work that has been delivered but not yet rated, so a
+	// restart between shipping and hearing back does not throw the feedback away.
+	Pending []pendingProject `json:"pending,omitempty"`
 }
 
 // Save writes the ledger to disk atomically.
@@ -495,7 +675,14 @@ func (l *Ledger) Save() error {
 		l.mu.Unlock()
 		return nil
 	}
-	p := persisted{Version: 1, PctPerMTok: l.pctPerMTok, CalibRuns: l.calibRuns}
+	p := persisted{
+		Version: 1, PctPerMTok: l.pctPerMTok, CalibRuns: l.calibRuns,
+		TotalValue: l.totalValue, TotalQuota: l.totalQuota, RatedProjects: l.ratedProjects,
+		Praised: l.praised, Accepted: l.accepted, Rework: l.rework, Rejected: l.rejected,
+		History: append([]yieldPoint(nil), l.history...),
+		Notes:   append([]Rating(nil), l.notes...),
+		Pending: l.pendingLocked(),
+	}
 	for _, s := range l.stats {
 		p.Stats = append(p.Stats, *s)
 	}
@@ -541,9 +728,14 @@ func (l *Ledger) Load() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.pctPerMTok, l.calibRuns = p.PctPerMTok, p.CalibRuns
+	l.totalValue, l.totalQuota, l.ratedProjects = p.TotalValue, p.TotalQuota, p.RatedProjects
+	l.praised, l.accepted, l.rework, l.rejected = p.Praised, p.Accepted, p.Rework, p.Rejected
+	l.history = p.History
+	l.notes = p.Notes
 	for i := range p.Stats {
 		s := p.Stats[i]
 		l.stats[statKey(s.Role, s.Config)] = &s
 	}
+	l.restorePending(p.Pending)
 	return nil
 }

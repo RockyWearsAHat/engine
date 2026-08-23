@@ -104,7 +104,9 @@ func (p *claudecodeProvider) RunLoop(
 	// A blocked verdict is surfaced as an error rather than a silent skip: the
 	// orchestrator's retry path already knows how to back off and try again, and
 	// a step that vanishes without explanation is the harder failure to debug.
-	dispatch := quotaBefore(runCtx, ctx.Role, model, os.Environ())
+	// The project path is the rateable unit: it is what SARA ships and what the
+	// user forms an opinion about, so it is what a later rating is keyed on.
+	dispatch := quotaBefore(runCtx, ctx.Role, model, ctx.ProjectPath, os.Environ())
 	if !dispatch.Allow {
 		if ctx.OnError != nil {
 			ctx.OnError(fmt.Sprintf("claudecode: out of subscription quota — %s; retry in %s",

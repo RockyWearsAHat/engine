@@ -263,9 +263,66 @@ func run() error {
 		payload := struct {
 			Enabled bool `json:"enabled"`
 			quota.Status
+			// Score is the objective: results the user was happy with per percent
+			// of window. It leads the payload because it, not the percentages, is
+			// what SARA should be steering on.
+			Score *quota.Scoreboard `json:"score,omitempty"`
 		}{Enabled: true, Status: st}
+		if sb, ok := ai.QuotaScore(); ok {
+			payload.Score = &sb
+		}
 		if err := json.NewEncoder(w).Encode(payload); err != nil {
 			log.Printf("quota: encode status: %v", err)
+		}
+	})
+
+	// Feedback intake. This is how the score gets its numerator: the engine can
+	// see that a run completed, but only the supervisor speaking for the user
+	// knows whether the result was any good.
+	//
+	//	POST /quota/rate  {"project":"/path", "satisfaction":"praised", "note":"..."}
+	httpHandleFuncFn("/quota/rate", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Project      string `json:"project"`
+			Satisfaction string `json:"satisfaction"`
+			Note         string `json:"note"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+			http.Error(w, "bad JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(body.Project) == "" {
+			body.Project = projectPath
+		}
+		matched, err := ai.RateProject(body.Project, body.Satisfaction, body.Note)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// matched=false is not an error: the rating was well-formed, there was
+		// simply no run on file to attribute it to. Saying so lets a caller tell
+		// "you rated nothing" apart from "you sent nonsense".
+		resp := struct {
+			Matched bool              `json:"matched"`
+			Score   *quota.Scoreboard `json:"score,omitempty"`
+		}{Matched: matched}
+		if sb, ok := ai.QuotaScore(); ok {
+			resp.Score = &sb
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			log.Printf("quota: encode rating response: %v", err)
 		}
 	})
 

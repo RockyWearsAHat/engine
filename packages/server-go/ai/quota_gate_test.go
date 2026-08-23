@@ -13,7 +13,7 @@ func TestQuotaDisabledChangesNothing(t *testing.T) {
 	t.Setenv("ENGINE_QUOTA", "0")
 	resetQuotaGateForTest()
 
-	d := quotaBefore(t.Context(), RoleImplementer, "claude-opus-4-8", []string{"PATH=/bin"})
+	d := quotaBefore(t.Context(), RoleImplementer, "claude-opus-4-8", "/tmp/proj", []string{"PATH=/bin"})
 	if !d.Allow {
 		t.Fatal("a disabled gate must never block a dispatch")
 	}
