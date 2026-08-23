@@ -206,6 +206,9 @@ type QuotaDispatch struct {
 	// Config is the configuration the ledger chose, needed to record the outcome
 	// against the right key afterwards.
 	Config quota.Config
+	// ProjectID is the unit of delivered work this run counts toward, so that a
+	// rating arriving later can be attributed back to this configuration.
+	ProjectID string
 	// Reason is the human explanation of the whole decision.
 	Reason string
 	// Governed is false when quota governance is off or unavailable, in which
@@ -220,9 +223,9 @@ type QuotaDispatch struct {
 // requestedModel is what routing already chose. The gate NEVER upgrades it —
 // asking for Sonnet and getting Opus back would be a nasty surprise and the
 // opposite of the objective — it only ever holds it or moves it cheaper.
-func quotaBefore(ctx context.Context, role AgentRole, requestedModel string, parentEnv []string) QuotaDispatch {
+func quotaBefore(ctx context.Context, role AgentRole, requestedModel, projectID string, parentEnv []string) QuotaDispatch {
 	g := quotaGateInstance()
-	out := QuotaDispatch{Allow: true, Model: requestedModel, Role: role, startedAt: time.Now()}
+	out := QuotaDispatch{Allow: true, Model: requestedModel, Role: role, ProjectID: projectID, startedAt: time.Now()}
 	if !g.enabled || g.governor == nil {
 		out.Reason = "quota governance disabled"
 		return out
@@ -307,12 +310,13 @@ func quotaAfter(d QuotaDispatch, stats claudeRunStats, success bool) {
 		return
 	}
 	g.ledger.Record(quota.Outcome{
-		Role:     quotaRoleKey(d.Role),
-		Config:   d.Config,
-		Success:  success,
-		Tokens:   stats.TotalTokens(),
-		Duration: time.Since(d.startedAt),
-		At:       time.Now(),
+		Role:      quotaRoleKey(d.Role),
+		Config:    d.Config,
+		Success:   success,
+		Tokens:    stats.TotalTokens(),
+		ProjectID: d.ProjectID,
+		Duration:  time.Since(d.startedAt),
+		At:        time.Now(),
 	})
 }
 
@@ -330,6 +334,10 @@ func QuotaReport(ctx context.Context) string {
 	var b strings.Builder
 	b.WriteString(g.governor.Report(ctx))
 	if g.ledger != nil {
+		// Score first: it is the objective, and the per-config detail below only
+		// matters as an explanation of it.
+		b.WriteString("\n\n")
+		b.WriteString(g.ledger.ScoreReport())
 		b.WriteString("\n\n")
 		b.WriteString(g.ledger.Report())
 	}
@@ -352,6 +360,43 @@ func QuotaStatus(ctx context.Context) (quota.Status, bool) {
 		return quota.Status{}, false
 	}
 	return g.governor.Status(ctx), true
+}
+
+// RateProject records how delivered work was received, which is the signal the
+// whole efficiency score is built on.
+//
+// This has to come from outside the engine. The engine can see that a run exited
+// cleanly and produced text; it cannot see that the result was thrown away, or
+// that the user was delighted. Only the supervisor speaking for the user knows
+// that, so it tells us, and the rating is attributed back across the runs that
+// produced the project in proportion to what each one spent.
+//
+// projectID is the project path the work was done under. Returns false when
+// nothing is on file for it — feedback that arrived after the backlog rolled
+// over, or for work this engine did not do.
+func RateProject(projectID, satisfaction, note string) (bool, error) {
+	s, ok := quota.ParseSatisfaction(satisfaction)
+	if !ok {
+		return false, fmt.Errorf("unknown satisfaction %q: want praised, accepted, rework or rejected", satisfaction)
+	}
+	if s == quota.SatisfactionUnknown {
+		return false, fmt.Errorf("satisfaction is required")
+	}
+	g := quotaGateInstance()
+	if !g.enabled || g.ledger == nil {
+		return false, fmt.Errorf("quota governance is disabled (ENGINE_QUOTA=0); ratings are not being collected")
+	}
+	return g.ledger.RateProject(projectID, s, note), nil
+}
+
+// QuotaScore returns the headline efficiency score — results the user was happy
+// with, per percentage point of window — and whether it is known at all.
+func QuotaScore() (quota.Scoreboard, bool) {
+	g := quotaGateInstance()
+	if !g.enabled || g.ledger == nil {
+		return quota.Scoreboard{}, false
+	}
+	return g.ledger.Scoreboard(), true
 }
 
 // QuotaSnapshotLine is a one-line summary for progress messages.

@@ -20,14 +20,36 @@ import (
 // a cheaper configuration that still ships the feature is strictly better than
 // an expensive one that also ships it.
 //
-// The limit still matters, for two reasons that pull in opposite directions and
-// have to be balanced rather than picked between:
+// The score that expresses this is yield — see yield.go — and it is the thing
+// the engine is trying to raise: results the user is happy with, per percentage
+// point of window. Three percent spent on hundreds of good projects beats a
+// hundred percent spent on two by three orders of magnitude, and that is not a
+// tuning preference, it is just what the ratio says.
 //
-//   - Running out is catastrophic: every agent stops at once, mid-task, and the
-//     window may not refill for days. So the governor paces.
-//   - Unspent quota expires. The 5-hour and 7-day windows do not roll over, so
-//     capacity left idle while real work was queued is capacity destroyed. So
-//     the governor does not hoard either.
+// IDLE CAPACITY IS NOT A REASON TO SPEND
+//
+// An earlier version of this file argued that because the 5-hour and 7-day
+// windows do not roll over, capacity left idle is capacity destroyed, and
+// therefore the governor should open up when it is running under pace. That
+// reasoning is seductive and it is wrong, because it treats the window as a
+// budget to be consumed rather than a constraint to be respected. Spending quota
+// that the work did not need does not create value; it just lowers yield and
+// brings the wall closer for the work that comes next.
+//
+// So TierExpand is PERMISSION, not instruction. Being under pace means a richer
+// configuration is affordable — it never means one is warranted. The only thing
+// that warrants spending more is evidence that spending more produces results
+// the user is happier with, and that evidence lives in the ledger, not in a
+// percentage. When the ledger has no such evidence, running under pace simply
+// means the engine is doing well and should keep doing what it is doing.
+//
+// The one thing that does still matter about resets is WHICH account to draw
+// from when we are going to spend anyway — see Score. Preferring the pool that
+// is about to refill does not increase total spend, so it is not in tension with
+// any of the above.
+//
+// Running out remains catastrophic: every agent stops at once, mid-task, and the
+// window may not refill for days. So the governor still paces.
 //
 // PACE IS THE WHOLE TRICK
 //
@@ -61,8 +83,11 @@ const (
 	// tier chosen when limit state is UNKNOWN — an unmeasurable balance must
 	// never read as an empty one.
 	TierSteady
-	// TierExpand: well under pace with capacity that will expire unused. Permit
-	// the wider, more thorough configuration.
+	// TierExpand: well under pace. PERMITS the wider configuration; it does not
+	// call for one. The ledger decides whether to actually use the extra room,
+	// and it only does so when the evidence says richer runs land better. Under
+	// pace with no such evidence, the engine keeps spending little — that is the
+	// score going up, not capacity going to waste.
 	TierExpand
 )
 
@@ -194,7 +219,7 @@ func Assess(s Snapshot, now time.Time) Assessment {
 		}
 	case paceKnown && worstPace < 0.85 && tight.Percent < 60:
 		a.Tier = TierExpand
-		a.Reason = fmt.Sprintf("projected to use only %.0f%% of the %s window — capacity would expire unused", worstPace*100, a.Binding)
+		a.Reason = fmt.Sprintf("projected to use only %.0f%% of the %s window — room for a richer configuration if the work needs one", worstPace*100, a.Binding)
 	default:
 		a.Tier = TierSteady
 		if paceKnown {
@@ -458,11 +483,15 @@ func (g *Governor) Decide(ctx context.Context) Plan {
 
 // Score ranks an account for selection. Higher is better.
 //
-// The ranking encodes the use-it-or-lose-it asymmetry. Between two accounts with
-// equal headroom, the better one to spend is the one whose window resets SOONER,
-// because its unspent capacity is the capacity about to expire. Hoarding the
-// soon-to-reset account and draining the one with days left is the intuitive
-// move and it is backwards.
+// This chooses WHERE to spend, never WHETHER or HOW MUCH — those are the tier's
+// and the ledger's jobs. The distinction is what keeps the use-it-or-lose-it
+// reasoning below legitimate: shifting a run from one pool to another does not
+// spend an extra token, so it cannot lower yield.
+//
+// Given that, between two accounts with equal headroom the better one to draw
+// from is the one whose window resets SOONER, because its unspent capacity is
+// the capacity about to expire. Hoarding the soon-to-reset account and draining
+// the one with days left is the intuitive move and it is backwards.
 func Score(a Assessment) float64 {
 	if a.Tier == TierBlocked {
 		return -1
