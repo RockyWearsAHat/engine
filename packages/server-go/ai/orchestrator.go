@@ -42,14 +42,17 @@ const orchestrationFile = "orchestration.json"
 
 // PlanStep is one numbered, acceptance-criteria-bearing step in the plan.
 type PlanStep struct {
-	Index       int    `json:"index"`
-	Title       string `json:"title"`
-	Body        string `json:"body"`
-	Acceptance  string `json:"acceptance,omitempty"`
-	Done        bool   `json:"done"`
-	Attempts    int    `json:"attempts"`
-	LastFeedback string `json:"lastFeedback,omitempty"`
-	UpdatedAt   string `json:"updatedAt,omitempty"`
+	Index      int    `json:"index"`
+	Title      string `json:"title"`
+	Body       string `json:"body"`
+	Acceptance string `json:"acceptance,omitempty"`
+	Done       bool   `json:"done"`
+	Attempts   int    `json:"attempts"`
+	// CriticRejects counts consecutive diff-critic rejections of this step, so
+	// a critic that keeps objecting cannot stall the step forever.
+	CriticRejects int    `json:"criticRejects,omitempty"`
+	LastFeedback  string `json:"lastFeedback,omitempty"`
+	UpdatedAt     string `json:"updatedAt,omitempty"`
 }
 
 // OrchestrationState is the persistent project-level orchestration record.
@@ -129,13 +132,13 @@ var (
 )
 
 type OrchestratorHandle struct {
-	projectPath  string
-	cancel       chan struct{}
-	cancelOnce   sync.Once
-	paused       bool
-	redirectMu   sync.Mutex
+	projectPath   string
+	cancel        chan struct{}
+	cancelOnce    sync.Once
+	paused        bool
+	redirectMu    sync.Mutex
 	redirectQueue []string
-	approveCh    chan bool
+	approveCh     chan bool
 }
 
 const maxQueuedRedirects = 24
@@ -508,6 +511,18 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 				emit(cfg.OnPhase, "done", "behavioral validation passed")
 				return state, nil
 			}
+			// Validation failed. Try a bounded repair loop first: diagnose from
+			// the failure evidence, apply a targeted fix, re-validate, give up
+			// after maxRepairAttempts. Reopening the step and re-running the
+			// whole builder is the fallback, not the first move — that was the
+			// old behaviour and it is why a failed run needed a human.
+			if orchestratorRepairStep(cfg, state, validateErr, cancel) {
+				emit(cfg.OnPhase, "repair", "repair loop resolved the validation failure — re-validating")
+				// Re-enter the loop rather than completing inline, so the
+				// skipped-step block and every other completion guard still run.
+				continue
+			}
+
 			// Validation failed → unmark the most recent step so the loop tries
 			// again with the validation feedback in scope.
 			unchecked := ensureReopenStep(state)
@@ -540,6 +555,26 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 			// Continue the outer loop — the next iteration retries with feedback.
 			continue
 		}
+
+		// Cheap diff-only critic before the expensive agentic reviewer. It stops
+		// blocking after maxCriticRejectLoops consecutive rejections of the same
+		// step, at which point the full reviewer is the decider — otherwise a
+		// critic that keeps objecting would stall the step indefinitely.
+		if step.CriticRejects < maxCriticRejectLoops {
+			if verdict, findings := orchestratorCriticStep(cfg, step, cancel); verdict == CriticReject {
+				step.CriticRejects++
+				step.LastFeedback = "Critic rejected the diff:\n" + findings
+				if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
+					emitErr(cfg.OnError, fmt.Sprintf("persist critic rejection: %v", err))
+				}
+				emit(cfg.OnPhase, "critic", fmt.Sprintf("step %d rejected by critic: %s", step.Index, summarise(findings, 200)))
+				// Outer loop retries with the critic's findings as feedback.
+				continue
+			}
+		}
+		// Survived the critic — reset the budget so a later regression on this
+		// step gets a fresh set of attempts.
+		step.CriticRejects = 0
 
 		emit(cfg.OnPhase, "review", fmt.Sprintf("reviewing step %d", step.Index))
 		reviewVerdict, reviewMsg := orchestratorReviewStep(cfg, state, step, cancel)
