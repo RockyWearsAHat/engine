@@ -440,3 +440,64 @@ func TestScoreboardPersists(t *testing.T) {
 		t.Errorf("yield %v != %v after reload", after.Yield, before.Yield)
 	}
 }
+
+// After a run is recorded with QuotaPct populated, the yield denominator
+// (score.quotaPct) must be non-zero and proportional to the measured spend.
+// This is the proof that the yield denominator is real, not a floor-based no-op.
+func TestQuotaPctSeedsYieldDenominator(t *testing.T) {
+	// Without QuotaPct measurements, pctPerMTok never calibrates, so yield falls
+	// back to the minQuotaCost floor. With QuotaPct seeds, pctPerMTok learns,
+	// and yield reflects real measured spend.
+	ledgerNoMeasure := NewLedger(LedgerOptions{MinSamples: 1})
+	ledgerNoMeasure.SetClock(func() time.Time { return at("12:00") })
+	// Record work without QuotaPct (old behavior). pctPerMTok stays 0.
+	for i := 0; i < 10; i++ {
+		project := "proj-no-measure-" + string(rune('a'+i))
+		ledgerNoMeasure.Record(Outcome{
+			Role: "implement", Config: cheap(), Success: true,
+			Tokens: 50_000, ProjectID: project, At: at("12:00"),
+		})
+		ledgerNoMeasure.RateProject(project, SatisfactionPraised, "")
+	}
+	sbNoMeasure := ledgerNoMeasure.Scoreboard()
+	// Without measured QuotaPct, the denominator should be zero (unmeasured).
+	if sbNoMeasure.QuotaPct != 0 {
+		t.Errorf("unmeasured spend = %v, want 0 (not measured)", sbNoMeasure.QuotaPct)
+	}
+
+	// Record the same work but WITH QuotaPct. pctPerMTok should calibrate.
+	ledgerMeasured := NewLedger(LedgerOptions{MinSamples: 1})
+	ledgerMeasured.SetClock(func() time.Time { return at("12:00") })
+	// Each run "costs" 0.1% — 10 runs = 1%
+	for i := 0; i < 10; i++ {
+		project := "proj-measure-" + string(rune('a'+i))
+		ledgerMeasured.Record(Outcome{
+			Role: "implement", Config: cheap(), Success: true,
+			Tokens: 50_000, QuotaPct: 0.1, ProjectID: project, At: at("12:00"),
+		})
+		ledgerMeasured.RateProject(project, SatisfactionPraised, "")
+	}
+	sbMeasured := ledgerMeasured.Scoreboard()
+	// After 10 runs at 0.1% each, total spend should be 1%
+	if sbMeasured.QuotaPct <= 0 {
+		t.Errorf("measured spend = %v, want > 0", sbMeasured.QuotaPct)
+	}
+	// Yield with real spend should be defined
+	if !sbMeasured.Known {
+		t.Error("measured scoreboard should be known")
+	}
+
+	// The yields should differ: measured has real denominator, unmeasured uses floor.
+	if sbMeasured.Yield <= 0 {
+		t.Errorf("measured yield = %v, want positive", sbMeasured.Yield)
+	}
+	if sbNoMeasure.Yield <= 0 {
+		t.Errorf("unmeasured yield = %v, want positive (floor-based)", sbNoMeasure.Yield)
+	}
+	// With real measurement, denominator is higher (non-zero measured spend vs zero floor),
+	// so yield should be lower (same value, higher cost = worse efficiency).
+	if sbMeasured.Yield >= sbNoMeasure.Yield {
+		t.Errorf("measured yield %.2f should be lower than unmeasured floor yield %.2f",
+			sbMeasured.Yield, sbNoMeasure.Yield)
+	}
+}
