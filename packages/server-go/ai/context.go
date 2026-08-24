@@ -267,7 +267,21 @@ func runtimeContextMaxTokens(projectPath string) int {
 // quota window is not a reason to exceed it, and quietly raising someone's
 // configured ceiling because there happens to be room is not governance.
 func governedContextBudget(ctx *ChatContext) int {
-	budget := runtimeContextMaxTokens(ctx.ProjectPath)
+	budget, configured, tier := governedBudgetFor(ctx.ProjectPath)
+	if budget < configured {
+		log.Printf("quota tier %s: context budget %d → %d tokens (%s)",
+			tier, configured, budget, ctx.ProjectPath)
+	}
+	return budget
+}
+
+// governedBudgetFor is governedContextBudget without the log line, for callers
+// that need the same number to size something other than the message window —
+// the documentation prefix, for one. It returns the governed budget, the
+// project's own configured budget, and the tier that decided between them, so
+// the caller can report the narrowing in its own terms.
+func governedBudgetFor(projectPath string) (budget, configured int, tier string) {
+	configured = runtimeContextMaxTokens(projectPath)
 
 	// Bounded: this is on the hot path of every model call, and a governor that
 	// hangs must not be able to hang the run. CurrentQuotaLevers reads through
@@ -276,12 +290,10 @@ func governedContextBudget(ctx *ChatContext) int {
 	defer cancel()
 	levers := CurrentQuotaLevers(qctx)
 
-	if levers.MaxContextTokens > 0 && levers.MaxContextTokens < budget {
-		log.Printf("quota tier %s: context budget %d → %d tokens (%s)",
-			levers.TierName, budget, levers.MaxContextTokens, ctx.ProjectPath)
-		return levers.MaxContextTokens
+	if levers.MaxContextTokens > 0 && levers.MaxContextTokens < configured {
+		return levers.MaxContextTokens, configured, levers.TierName
 	}
-	return budget
+	return configured, configured, levers.TierName
 }
 
 // runtimeContextRecentWindow returns the max number of recent messages to keep.
@@ -774,9 +786,11 @@ var toolRegistry = []anthropicTool{
 	// ── Core navigation (always available) ──────────────────────────────────
 	{
 		Name:        "read_file",
-		Description: "Read the contents of a file at the given path.",
+		Description: "Read a file. Large files come back as a window with a note saying how to continue; pass startLine to page through one, or use search_files to jump straight to what you need.",
 		InputSchema: objSchema([]string{"path"}, map[string]any{
-			"path": strProp("Absolute path to the file"),
+			"path":      strProp("Absolute path to the file"),
+			"startLine": numProp("Optional 1-based line to start from. Default 1."),
+			"maxLines":  numProp("Optional maximum number of lines to return. Default: as many as the context budget allows."),
 		}),
 	},
 	{
@@ -830,6 +844,19 @@ var toolRegistry = []anthropicTool{
 			"pattern":      strProp("Regex pattern to search for"),
 			"directory":    strProp("Directory to search in (optional, defaults to project root)"),
 			"file_pattern": strProp("Glob pattern to filter files (e.g. \"*.go\")"),
+		}),
+	},
+	{
+		Name: "dx_search",
+		// Deliberately not pre-granted to any role: it is reached through
+		// search_tools, so a project without dx documents never pays for its
+		// schema. Described as the first thing to try because it is — a hit
+		// returns the block that answers, so a landed search needs no
+		// follow-up read at all.
+		Description: "Search this project's dx documents — its design notes, decisions and worklist — and get back the block that answers, not the whole document. Try this before read_file or search_files when the question is about how the project works or why it is the way it is.",
+		InputSchema: objSchema([]string{"query"}, map[string]any{
+			"query": strProp("A whole question in your own words, e.g. 'how does a model get chosen'"),
+			"limit": numProp("Maximum number of answering blocks to return. Default 4."),
 		}),
 	},
 	{
@@ -1310,7 +1337,12 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		if err != nil {
 			return err.Error(), true
 		}
-		return fc.Content, false
+		// Windowed. This used to return the file verbatim at any size, which
+		// is the one path from disk into a prompt with no budget on it at all
+		// — and it lands after the context trim, so the quota governor's
+		// ceiling never saw it. See ai/file_window.go.
+		return windowFile(path, fc.Content, int(numVal("startLine")), int(numVal("maxLines")),
+			readFileCharBudget(ctx.ProjectPath)), false
 
 	case "write_file":
 		path, err := resolveWorkspacePath(ctx.ProjectPath, str("path"))
@@ -1436,6 +1468,13 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		}
 		result, _ := gofs.SearchFiles(str("pattern"), dir, str("file_pattern"))
 		return result, false
+
+	case "dx_search":
+		limit := int(numVal("limit"))
+		if limit <= 0 {
+			limit = 4
+		}
+		return executeDxSearchTool(ctx.ProjectPath, str("query"), limit)
 
 	case "git_status":
 		status, _ := gogit.GetStatus(ctx.ProjectPath)
