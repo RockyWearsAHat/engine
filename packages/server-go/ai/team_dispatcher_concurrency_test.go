@@ -189,3 +189,84 @@ func TestTeamDispatcher_QuotaCeilingSerialisesWork(t *testing.T) {
 	}
 	t.Logf("ceiling 1: peak concurrency %d, %d dispatch(es) held back by the cap", probe.peakSeen(), rejected)
 }
+
+// A parallel run has to report progress, not just produce it.
+//
+// OnPlanUpdate is the only channel the outside world has: the task API turns it
+// into stepsDone, and SARA and the console read that. The event bus the
+// dispatcher emits on has no subscribers outside this package.
+//
+// The parallel path used to fire OnPlanUpdate exactly once, when the plan was
+// created. A live eleven-step run therefore reported "0 of 11" from start to
+// finish while steadily building the project — and a supervisor watching a
+// number that never moves cannot tell progress from a hang, which is precisely
+// the judgement it exists to make.
+func TestTeamDispatcher_ReportsProgressPerStep(t *testing.T) {
+	projectDir := t.TempDir()
+	brain, err := NewOrchestrationBrain(projectDir, "owner", "repo", "brief", "prog")
+	if err != nil {
+		t.Fatalf("brain: %v", err)
+	}
+	const steps = 3
+	plan := make([]PlanStep, steps)
+	for i := range plan {
+		plan[i] = PlanStep{Index: i + 1, Title: "Step", Body: "Do the thing", Acceptance: "it works"}
+	}
+	if err := brain.UpdatePlan(plan); err != nil {
+		t.Fatalf("update plan: %v", err)
+	}
+	ids := make([]string, steps)
+	for i := range plan {
+		ids[i] = "team-" + string(rune('a'+i))
+		if err := brain.AddTeam(ids[i], "api", []int{i}, nil); err != nil {
+			t.Fatalf("add team: %v", err)
+		}
+	}
+
+	// Written from the team worker goroutines, so guarded.
+	var mu sync.Mutex
+	var updates, highest int
+
+	cfg := OrchestratorConfig{
+		ProjectPath:     projectDir,
+		SessionIDPrefix: "prog",
+		ChatFn:          func(ctx *ChatContext, _ string) { ctx.OnChunk("signal_done", false) },
+		OnPlanUpdate: func(st *OrchestrationState) {
+			done := 0
+			for _, s := range st.Plan {
+				if s.Done {
+					done++
+				}
+			}
+			mu.Lock()
+			updates++
+			if done > highest {
+				highest = done
+			}
+			mu.Unlock()
+		},
+	}
+
+	dispatcher := NewTeamDispatcherWithCap(brain, NewEventBus(), cfg, func() int { return steps }, NewAgentCommsHub())
+	defer dispatcher.Stop()
+	for _, id := range ids {
+		if err := dispatcher.DispatchTeam(id); err != nil {
+			t.Fatalf("dispatch %s: %v", id, err)
+		}
+	}
+	dispatcher.Wait()
+
+	mu.Lock()
+	gotUpdates, gotHighest := updates, highest
+	mu.Unlock()
+
+	if gotUpdates < steps {
+		t.Errorf("OnPlanUpdate fired %d time(s) for %d completed steps — progress is not being reported per step", gotUpdates, steps)
+	}
+	// The final update must see the whole plan done. Reporting a rising number
+	// that stops short of the truth is its own kind of lie.
+	if gotHighest != steps {
+		t.Errorf("highest reported done-count = %d, want %d", gotHighest, steps)
+	}
+	t.Logf("%d progress updates for %d steps, peaking at %d/%d done", gotUpdates, steps, gotHighest, steps)
+}

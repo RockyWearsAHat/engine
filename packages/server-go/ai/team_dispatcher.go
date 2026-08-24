@@ -257,6 +257,21 @@ func (w *TeamWorker) run() {
 				"status", "completed",
 			),
 		})
+
+		// Tell the caller a step landed.
+		//
+		// The event bus above only reaches subscribers inside this package, and
+		// nothing outside subscribes. OnPlanUpdate is the callback the outside
+		// world actually watches — the task API turns it into stepsDone, and
+		// SARA and the console read that. The serial orchestrator fires it after
+		// every step; the parallel path fired it exactly once, when the plan was
+		// created, so a parallel run reported "0 of 11" for its entire life no
+		// matter how much of the project it had finished. An autonomous
+		// supervisor watching a number that never moves cannot tell progress
+		// from a hang.
+		if w.cfg.OnPlanUpdate != nil {
+			w.cfg.OnPlanUpdate(extractOrchestrationState(w.brain))
+		}
 	}
 
 	// Mark team as done
