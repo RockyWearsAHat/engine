@@ -42,7 +42,7 @@ func TestResolveProvider_ClaudeCode(t *testing.T) {
 
 func TestBuildClaudeArgs(t *testing.T) {
 	ctx := &ChatContext{ProjectPath: "/tmp/proj"}
-	args := buildClaudeArgs(ctx, "claude-opus-4-8", "be a builder")
+	args := buildClaudeArgs(ctx, "claude-opus-4-8", "be a builder", -1)
 	joined := strings.Join(args, " ")
 
 	for _, want := range []string{
@@ -60,7 +60,7 @@ func TestBuildClaudeArgs(t *testing.T) {
 
 func TestBuildClaudeArgs_SentinelModelOmitted(t *testing.T) {
 	ctx := &ChatContext{}
-	args := buildClaudeArgs(ctx, "claude-code", "")
+	args := buildClaudeArgs(ctx, "claude-code", "", -1)
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "--model") {
 		t.Errorf("sentinel model should not produce --model flag; got %q", joined)
@@ -70,6 +70,35 @@ func TestBuildClaudeArgs_SentinelModelOmitted(t *testing.T) {
 	}
 	if strings.Contains(joined, "--add-dir") {
 		t.Errorf("empty project path should not produce --add-dir; got %q", joined)
+	}
+}
+
+// The subagent ceiling has to reach the process, not just the /quota response.
+func TestBuildClaudeArgs_SubagentFanout(t *testing.T) {
+	ctx := &ChatContext{ProjectPath: "/tmp/proj"}
+
+	// Zero is the tier where it matters most, and it is the one case the CLI
+	// lets us make binding: no Task tool, no subagents, full stop.
+	zero := strings.Join(buildClaudeArgs(ctx, "claude-sonnet-4-5", "sys", 0), " ")
+	if !strings.Contains(zero, "--disallowedTools Task") {
+		t.Errorf("fanout 0 must disallow the Task tool; got %q", zero)
+	}
+
+	// Above zero the CLI has no numeric control, so the budget is stated to the
+	// model. Assert it is stated — and that the Task tool is NOT disallowed,
+	// since the whole point is that some fanout is permitted.
+	two := strings.Join(buildClaudeArgs(ctx, "claude-sonnet-4-5", "sys", 2), " ")
+	if !strings.Contains(two, "at most 2 subagent") {
+		t.Errorf("fanout 2 should state the budget in the system prompt; got %q", two)
+	}
+	if strings.Contains(two, "--disallowedTools") {
+		t.Errorf("a positive fanout must not disallow Task; got %q", two)
+	}
+
+	// Ungoverned adds nothing either way.
+	none := strings.Join(buildClaudeArgs(ctx, "claude-sonnet-4-5", "sys", -1), " ")
+	if strings.Contains(none, "--disallowedTools") || strings.Contains(none, "at most") {
+		t.Errorf("negative fanout should add no subagent controls; got %q", none)
 	}
 }
 

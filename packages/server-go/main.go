@@ -326,6 +326,10 @@ func run() error {
 		}
 	})
 
+	// The task surface: how SARA hands this orchestrator one worklist item and
+	// finds out what became of it. See task_api.go for why it is REST.
+	registerTaskRoutes(projectPath)
+
 	// GitHub webhook receiver for repo monitoring.
 	webhookSecret := os.Getenv("GITHUB_WEBHOOK_SECRET")
 	webhookReceiver := newWebhookReceiverFn(webhookSecret)
@@ -808,8 +812,16 @@ func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
 }
 
 // runOrchestratorFn is the injectable orchestrator runner used by main.go.
-// Tests replace it; production binds it to ai.RunAutonomousProject.
-var runOrchestratorFn = ai.RunAutonomousProject
+// Tests replace it; production binds it to ai.RunProject.
+//
+// It used to bind straight to ai.RunAutonomousProject, the serial loop, which
+// meant the event-driven parallel orchestrator was unreachable from the running
+// server no matter what anyone configured. RunProject is the routing layer: it
+// asks ShouldRunEventOrchestrator whether this particular run has anything to
+// gain from parallel teams, and picks. A single unit of work goes serial; a
+// multi-step project on a healthy quota window runs teams up to the ceiling the
+// governor sets.
+var runOrchestratorFn = ai.RunProject
 
 // postOrchestratorGitHubStatusFn is the injectable hook used to post commit
 // status / PR comments back to GitHub at phase boundaries. Bound to github
@@ -1151,7 +1163,21 @@ func triggerIssueSession(projectPath string, payload json.RawMessage) {
 			Repo:            repo,
 			Brief:           brief,
 			SessionIDPrefix: fmt.Sprintf("issue-comment-%d", parsed.Issue.Number),
-			ChatFn:          aiChatFn,
+			// One issue is one already-specified unit of work, not a project to
+			// be conceived. Somebody wrote down what is wrong; re-running the
+			// design grill and PRD distillation to rediscover it costs three
+			// agentic sessions per comment AND overwrites the repository's real
+			// design.md with a transcript about one bug. TaskMode keeps every
+			// execution gate and drops only the rediscovery.
+			//
+			// TaskID namespaces the run's state by issue number. Without it two
+			// issues worked in the same repository write the same
+			// orchestration.json and silently clobber each other's plan — true
+			// before this change too, just unreachable while every run was
+			// serial and one-at-a-time.
+			TaskMode: true,
+			TaskID:   fmt.Sprintf("issue-%d", parsed.Issue.Number),
+			ChatFn:   aiChatFn,
 			OnPhase: func(phase, detail string) {
 				log.Printf("[issue-session orchestrator %s/%s #%d] phase=%s %s", owner, repo, parsed.Issue.Number, phase, detail)
 				notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("%s **%s/%s issue #%d**: %s — %s", phaseIcon(phase), owner, repo, parsed.Issue.Number, phase, detail))
@@ -1271,7 +1297,12 @@ func triggerIssueOpenedSession(projectPath string, payload json.RawMessage) {
 			Repo:            repo,
 			Brief:           brief,
 			SessionIDPrefix: fmt.Sprintf("issue-opened-%d", parsed.Issue.Number),
-			ChatFn:          aiChatFn,
+			// A newly opened issue is one unit of specified work, same as a
+			// comment on one — see the issue-comment path above for why this is
+			// task mode and the README scaffold is not.
+			TaskMode: true,
+			TaskID:   fmt.Sprintf("issue-%d", parsed.Issue.Number),
+			ChatFn:   aiChatFn,
 			OnPhase: func(phase, detail string) {
 				log.Printf("[issue-opened orchestrator %s/%s #%d] phase=%s %s", owner, repo, parsed.Issue.Number, phase, detail)
 				notifyDiscordProjectProgress(targetProjectPath, fmt.Sprintf("%s **%s/%s issue #%d**: %s — %s", phaseIcon(phase), owner, repo, parsed.Issue.Number, phase, detail))

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,19 @@ import (
 )
 
 var globalDB *sql.DB
+
+// Ready reports whether a database is open.
+//
+// Every query path in this package dereferences globalDB without checking it,
+// so calling one before Init is not an error return — it is a nil pointer
+// panic. That is fine for code that runs only after the server has started and
+// wrong for code that can also run in a unit test or a tool: the caller needs a
+// way to ask. Callers that can sensibly proceed without persistence check this
+// first; callers that cannot should let the panic stand, because a server with
+// no database is not a server.
+func Ready() bool {
+	return globalDB != nil
+}
 
 // globalDBMu serializes Init / WithProject swaps. Read paths use globalDB
 // directly without locking; the mutex only guards swap operations.
@@ -395,7 +409,19 @@ func InsertSessionWithTimestamps(id, projectPath, branchName, createdAt, updated
 	return err
 }
 
+// ErrNoDB is returned when a query runs before Init has opened a database.
+//
+// It replaces a nil-pointer dereference. CreateSession is called from
+// orchestrator worker goroutines, and a segfault in one of those does not fail
+// a step — it takes the whole server process down mid-build. An error the
+// caller can log and continue past is the only sane behaviour for a bookkeeping
+// write that is not on the critical path of getting the work done.
+var ErrNoDB = errors.New("db: no database open")
+
 func CreateSession(id, projectPath, branchName string) error {
+	if globalDB == nil {
+		return ErrNoDB
+	}
 	t := now()
 	_, err := globalDB.Exec(
 		`INSERT INTO sessions (id, project_path, branch_name, summary, created_at, updated_at) VALUES (?,?,?,'',?,?)`,

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -3040,9 +3041,14 @@ func TestRunAnthropicLoop_Windowed50_Proceeds(t *testing.T) {
 
 func TestRunAnthropicLoop_CancelDuringRetryBackoff(t *testing.T) {
 	cancel := make(chan struct{})
-	attempts := 0
+	// attempts is written by the httptest handler goroutine and read by the
+	// waiter goroutine below, so it has to be atomic. It was a plain int, which
+	// the race detector flagged on every run of this package under -race — a
+	// real race in the test's own scaffolding, not in the code under test, but
+	// one that failed the whole suite and so hid any genuine race behind it.
+	var attempts atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
+		attempts.Add(1)
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
@@ -3053,7 +3059,7 @@ func TestRunAnthropicLoop_CancelDuringRetryBackoff(t *testing.T) {
 
 	// Close cancel after server receives first request.
 	go func() {
-		for attempts == 0 {
+		for attempts.Load() == 0 {
 			runtime.Gosched()
 		}
 		close(cancel)
