@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -26,32 +27,72 @@ type TeamWorker struct {
 	maxTurns int
 }
 
+// ErrTeamCapReached is returned by DispatchTeam when the concurrency ceiling is
+// already full.
+//
+// It is deliberately a distinct sentinel rather than a generic error: the
+// orchestrator must treat "no room right now" as a reason to stop handing out
+// work this round, and treat every other dispatch error as a failed run. Fold
+// them together and hitting the cap aborts the whole project.
+var ErrTeamCapReached = errors.New("team dispatcher: concurrency cap reached")
+
 // TeamDispatcher manages the concurrent execution of multiple teams.
 type TeamDispatcher struct {
-	mu       sync.RWMutex
-	brain    *OrchestrationBrain
-	bus      *EventBus
-	comms    *AgentCommsHub
-	cfg      OrchestratorConfig
-	workers  map[string]*TeamWorker
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	maxTeams int // limit concurrent teams to avoid overload
+	mu      sync.RWMutex
+	brain   *OrchestrationBrain
+	bus     *EventBus
+	comms   *AgentCommsHub
+	cfg     OrchestratorConfig
+	workers map[string]*TeamWorker
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	// capFn reports how many teams may run at once, asked afresh on every
+	// dispatch. A function rather than an int because the answer changes while
+	// the project runs: the governor narrows the ceiling as the rolling window
+	// fills, and a cap captured at construction would spend the opening
+	// allowance right up to the wall.
+	capFn func() int
 }
 
+// NewTeamDispatcher builds a dispatcher with a fixed concurrency ceiling.
+// maxTeams <= 0 means "one at a time" rather than "unlimited": an unbounded
+// default here is how a plan with thirty steps becomes thirty simultaneous
+// Claude sessions.
 func NewTeamDispatcher(brain *OrchestrationBrain, bus *EventBus, cfg OrchestratorConfig, maxTeams int, comms *AgentCommsHub) *TeamDispatcher {
-	ctx, cancel := context.WithCancel(context.Background())
-	return &TeamDispatcher{
-		brain:    brain,
-		bus:      bus,
-		comms:    comms,
-		cfg:      cfg,
-		workers:  make(map[string]*TeamWorker),
-		ctx:      ctx,
-		cancel:   cancel,
-		maxTeams: maxTeams,
+	if maxTeams <= 0 {
+		maxTeams = 1
 	}
+	return NewTeamDispatcherWithCap(brain, bus, cfg, func() int { return maxTeams }, comms)
+}
+
+// NewTeamDispatcherWithCap builds a dispatcher whose ceiling is re-read on
+// every dispatch. This is the production constructor: capFn asks the quota
+// governor.
+func NewTeamDispatcherWithCap(brain *OrchestrationBrain, bus *EventBus, cfg OrchestratorConfig, capFn func() int, comms *AgentCommsHub) *TeamDispatcher {
+	ctx, cancel := context.WithCancel(context.Background())
+	if capFn == nil {
+		capFn = func() int { return 1 }
+	}
+	return &TeamDispatcher{
+		brain:   brain,
+		bus:     bus,
+		comms:   comms,
+		cfg:     cfg,
+		workers: make(map[string]*TeamWorker),
+		ctx:     ctx,
+		cancel:  cancel,
+		capFn:   capFn,
+	}
+}
+
+// MaxTeams reports the ceiling currently in force.
+func (d *TeamDispatcher) MaxTeams() int {
+	n := d.capFn()
+	if n < 0 {
+		return 0
+	}
+	return n
 }
 
 // DispatchTeam starts a team's worker goroutine.
@@ -62,6 +103,13 @@ func (d *TeamDispatcher) DispatchTeam(teamID string) error {
 	_, ok := d.workers[teamID]
 	if ok {
 		return fmt.Errorf("team %s already dispatched", teamID)
+	}
+
+	// The ceiling was never actually applied before this: maxTeams was stored
+	// and read by nothing, so "max 4 parallel teams" dispatched every ready
+	// team at once. It never showed up because this path had no callers.
+	if live := d.activeLocked(); live >= d.MaxTeams() {
+		return ErrTeamCapReached
 	}
 
 	t, err := d.brain.GetTeam(teamID)
@@ -97,6 +145,11 @@ func (d *TeamDispatcher) DispatchTeam(teamID string) error {
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
+		// Cancelling on the way out is what makes the cap self-releasing.
+		// activeLocked counts a worker as live until its context is done, and
+		// nothing else ever cancelled it — so without this the ceiling fills up
+		// once and never lets another team through for the rest of the run.
+		defer worker.cancel()
 		worker.run()
 	}()
 
@@ -178,21 +231,20 @@ func (w *TeamWorker) run() {
 
 		step := plan[stepIdx]
 
-		// Run the step (simplified: just invoke builder role)
-		err := w.runStep(&step, stepIdx)
+		// Run the step behind the same gates the classic orchestrator uses.
+		err := w.runGatedStep(&step, stepIdx)
 		if err != nil {
 			// Mark as failed and stop this team
 			w.markTeamFailed(err, stepIdx)
 			return
 		}
 
-		// Mark step as done
-		if stepIdx < len(plan) {
-			plan[stepIdx].Done = true
-			plan[stepIdx].UpdatedAt = time.Now().Format(time.RFC3339)
-			if err := w.brain.UpdatePlan(plan); err != nil {
-				log.Printf("team dispatcher: failed to persist updated plan for team %s step %d: %v", w.teamID, stepIdx, err)
-			}
+		// Mark step as done in place, rather than writing the whole snapshot
+		// back. With teams running in parallel, a full-plan write-back reverts
+		// whatever the other teams marked done since this worker took its
+		// snapshot at the top of the loop.
+		if !w.brain.MarkStepDone(stepIdx) {
+			log.Printf("team dispatcher: team %s step %d out of plan range; not marked done", w.teamID, stepIdx)
 		}
 
 		w.bus.Emit(Event{
@@ -211,6 +263,74 @@ func (w *TeamWorker) run() {
 	w.markTeamDone()
 }
 
+// runGatedStep builds one step and then holds it to the same bar the classic
+// orchestrator holds its steps to: a cheap diff-only critic first, then the
+// agentic reviewer, retrying with the feedback until the per-step attempt cap
+// is spent.
+//
+// This is what makes the parallel path safe to switch on. Before it, a team
+// worker built a step and marked it done the moment the builder said
+// signal_done — no critic, no reviewer, nothing that could say "that is not
+// actually what the step asked for". The classic loop has always gated every
+// step, and turning on a faster path that quietly drops the quality gates would
+// be trading correctness for wall-clock, which is the opposite of the point.
+//
+// The gates are per-step and stateless with respect to other teams, so they
+// parallelise without coordination.
+func (w *TeamWorker) runGatedStep(step *PlanStep, stepIdx int) error {
+	cancel := w.ctx.Done()
+	var lastReason string
+
+	for attempt := 1; attempt <= OrchestratorMaxStepAttempts; attempt++ {
+		select {
+		case <-cancel:
+			return w.ctx.Err()
+		default:
+		}
+
+		step.Attempts = attempt
+		if err := w.runStep(step, stepIdx); err != nil {
+			return err
+		}
+
+		// Cheap diff-only critic before the expensive agentic reviewer. It stops
+		// blocking after maxCriticRejectLoops consecutive rejections so a critic
+		// that keeps objecting cannot stall the step forever — the reviewer is
+		// then the decider, exactly as in the classic loop.
+		if step.CriticRejects < maxCriticRejectLoops {
+			if verdict, findings := orchestratorCriticStep(w.cfg, step, cancel); verdict == CriticReject {
+				step.CriticRejects++
+				step.LastFeedback = "Critic rejected the diff:\n" + findings
+				lastReason = step.LastFeedback
+				w.cfg.OnProgress(fmt.Sprintf("team %s step %d rejected by critic (attempt %d)", w.teamID, stepIdx, attempt))
+				continue
+			}
+		}
+		step.CriticRejects = 0
+
+		state := &OrchestrationState{Owner: w.cfg.Owner, Repo: w.cfg.Repo, Plan: []PlanStep{*step}}
+		verdict, msg := orchestratorReviewStep(w.cfg, state, step, cancel)
+		switch verdict {
+		case ReviewApprove:
+			step.LastFeedback = ""
+			return nil
+		case ReviewReject:
+			step.LastFeedback = msg
+			lastReason = msg
+			w.cfg.OnProgress(fmt.Sprintf("team %s step %d rejected by reviewer (attempt %d)", w.teamID, stepIdx, attempt))
+		default:
+			// Inconclusive review is a soft pass in the classic loop, and it has
+			// to be one here too: failing the team on "the reviewer could not
+			// tell" would make an unreadable review fatal.
+			step.LastFeedback = "Review inconclusive, advancing: " + msg
+			return nil
+		}
+	}
+
+	return fmt.Errorf("step %d never satisfied its acceptance in %d attempts: %s",
+		stepIdx, OrchestratorMaxStepAttempts, summarise(lastReason, 300))
+}
+
 // runStep executes one plan step with the team's role (builder → reviewer pipeline).
 func (w *TeamWorker) runStep(step *PlanStep, stepIdx int) error {
 	// Create a session for this step
@@ -219,7 +339,7 @@ func (w *TeamWorker) runStep(step *PlanStep, stepIdx int) error {
 	// Build the step using the same shared builder contract as the main
 	// orchestrator path, so team workers inherit the full autonomous loop
 	// instead of a separate hardcoded prompt variant.
-	cc := newChatContextForPhase(w.cfg.ProjectPath, sessionID)
+	cc := newPhaseChat(w.cfg, sessionID)
 	cc.Ctx.Role = RoleAutonomousBuilder
 	cc.Ctx.MaxTurns = 0
 	cc.Ctx.AgentName = w.teamID
@@ -289,9 +409,22 @@ func (d *TeamDispatcher) Wait() {
 func (d *TeamDispatcher) ActiveTeams() int {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
+	return d.activeLocked()
+}
 
+// activeLocked counts live workers. The caller must already hold d.mu — the cap
+// check in DispatchTeam runs inside the same critical section as the insert, so
+// two callers cannot both see room and both take the last slot.
+func (d *TeamDispatcher) activeLocked() int {
 	count := 0
 	for _, w := range d.workers {
+		// A worker with no context is registered but not yet running. It still
+		// holds its slot — the team is spoken for, and releasing it would let a
+		// second worker start on the same team.
+		if w == nil || w.ctx == nil {
+			count++
+			continue
+		}
 		select {
 		case <-w.ctx.Done():
 		default:

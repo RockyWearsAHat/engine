@@ -3,6 +3,7 @@ package ai
 // quality:allow-long-file quality:allow-long-function
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -74,6 +75,52 @@ type OrchestrationState struct {
 	// interactive chat turn instead of the build pipeline. It is transient —
 	// never persisted — and tells the caller to suppress the build summary.
 	Conversational bool `json:"-"`
+
+	// slug namespaces this run's files inside .engine. Empty means the
+	// project-wide default pair (orchestration.json + plan.md).
+	//
+	// The state carries its own filenames rather than every persist call site
+	// being handed them, because persistOrchestration is called from twenty
+	// places across four files and threading a path through all of them to
+	// serve one caller would be a worse trade than one unexported field. It is
+	// deliberately not serialised: where a file lives is a property of the run
+	// that opened it, not of the content.
+	slug string `json:"-"`
+}
+
+// stateFileName is the orchestration record this run reads and writes.
+func (s *OrchestrationState) stateFileName() string {
+	if s == nil || s.slug == "" {
+		return orchestrationFile
+	}
+	return "task-" + s.slug + ".json"
+}
+
+// planFileName is the human-readable plan this run renders.
+func (s *OrchestrationState) planFileName() string {
+	if s == nil || s.slug == "" {
+		return "plan.md"
+	}
+	return "task-" + s.slug + "-plan.md"
+}
+
+// taskSlug reduces a task id to something safe to put in a filename.
+func taskSlug(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r + ('a' - 'A'))
+		default:
+			b.WriteRune('-')
+		}
+		if b.Len() >= 48 {
+			break
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 // OrchestratorConfig is the per-run knobs and callbacks.
@@ -87,6 +134,31 @@ type OrchestratorConfig struct {
 
 	// MaxOuterIterations overrides the package default when > 0.
 	MaxOuterIterations int
+
+	// TaskMode says this run is ONE already-specified unit of work — a dx
+	// worklist item — rather than a whole project to be conceived.
+	//
+	// It exists because the two are not the same job and the difference is
+	// most of the token bill. A project needs the design grill, the PRD
+	// distillation and a fresh module index: three full agentic sessions that
+	// decide WHAT to build. A worklist item has already been decided — someone
+	// wrote it down — so re-running intake for it spends those three sessions
+	// to rediscover a sentence the caller handed us, every single item, and
+	// then overwrites the project's real design.md with a grill transcript
+	// about a one-line fix.
+	//
+	// In task mode the orchestrator skips triage (a worklist item is a build
+	// directive by construction, so asking a model whether it is one is a call
+	// with a known answer), skips intake and PRD, plans directly from the item
+	// text against the existing docs, and keeps every execution gate: builder,
+	// critic, reviewer, repair, validation. What is dropped is rediscovery, not
+	// rigour.
+	//
+	// TaskID namespaces the run's persisted state so two items being worked in
+	// the same project at once do not overwrite each other's plan.
+	TaskMode bool
+	// TaskID namespaces task-mode orchestration state. Ignored unless TaskMode.
+	TaskID string
 
 	// Cancel, when closed, stops the orchestrator at the next safe checkpoint.
 	Cancel <-chan struct{}
@@ -155,10 +227,42 @@ func NewHandle(projectPath string) *OrchestratorHandle {
 
 // GetOrchestratorHandle returns the live handle for a project, or nil.
 // Discord commands use this to cancel/pause/redirect.
+//
+// Task-mode runs register under "<projectPath>#<taskSlug>" so several worklist
+// items can be in flight in one project without clobbering each other's handle.
+// A lookup by bare project path still finds one of them, because "stop what is
+// running on this project" has to keep working from Discord — it just cannot
+// promise which one when several are running. GetTaskHandle is the exact
+// lookup, and it is what the task API uses.
 func GetOrchestratorHandle(projectPath string) *OrchestratorHandle {
 	orchSessionsMu.Lock()
 	defer orchSessionsMu.Unlock()
-	return orchSessions[strings.TrimSpace(projectPath)]
+	key := strings.TrimSpace(projectPath)
+	if h, ok := orchSessions[key]; ok {
+		return h
+	}
+	prefix := key + "#"
+	for k, h := range orchSessions {
+		if strings.HasPrefix(k, prefix) {
+			return h
+		}
+	}
+	return nil
+}
+
+// GetTaskHandle returns the handle for one task-mode run, or nil.
+func GetTaskHandle(projectPath, taskID string) *OrchestratorHandle {
+	orchSessionsMu.Lock()
+	defer orchSessionsMu.Unlock()
+	return orchSessions[orchestratorSessionKey(strings.TrimSpace(projectPath), taskSlug(taskID))]
+}
+
+// orchestratorSessionKey is the registry key for a run.
+func orchestratorSessionKey(projectPath, slug string) string {
+	if slug == "" {
+		return projectPath
+	}
+	return projectPath + "#" + slug
 }
 
 // ListOrchestratorProjects returns the project paths with active orchestrators.
@@ -308,6 +412,27 @@ var runChatFn = Chat
 // The function blocks until the project is complete, the cancel channel fires,
 // or MaxOuterIterations is hit. Resumability: when called against a project
 // with an existing orchestration.json, it picks up at the first unchecked step.
+// RunProject is the single entry point that decides WHICH orchestrator runs.
+//
+// It exists so that choosing between the serial loop and the parallel team path
+// is one decision in one place, made from the shape of the work and the state of
+// the quota window — rather than a constant, which is what it was. Both paths
+// have the same signature, so this is a pure routing function; everything it can
+// return is something RunAutonomousProject or RunEventOrchestratorAsState would
+// have returned on its own.
+func RunProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	parallel, why := ShouldRunEventOrchestrator(ctx, cfg)
+	cancel()
+
+	if parallel {
+		emit(cfg.OnPhase, "orchestrator", "parallel teams — "+why)
+		return RunEventOrchestratorAsState(cfg)
+	}
+	emit(cfg.OnPhase, "orchestrator", "serial loop — "+why)
+	return RunAutonomousProject(cfg)
+}
+
 func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 	if strings.TrimSpace(cfg.ProjectPath) == "" {
 		return nil, fmt.Errorf("orchestrator: project path is required")
@@ -321,7 +446,12 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 	// orchestration state, or writes to .engine — so a plain "hi" leaves no
 	// build artifacts behind. Empty briefs fall through to the build pipeline
 	// (the historical default), preserving callers that drive state only.
-	if strings.TrimSpace(cfg.Brief) != "" {
+	//
+	// Task mode skips triage outright. A dx worklist item is a build directive
+	// by construction — a human or a scout wrote it into a "now" list for
+	// something to go and do — so spending a model call to ask whether it might
+	// be small talk is paying for an answer we already have.
+	if strings.TrimSpace(cfg.Brief) != "" && !cfg.TaskMode {
 		if orchestratorTriageFn(cfg, cfg.Brief, cfg.Cancel) == RouteConversational {
 			emit(cfg.OnPhase, "chat", "answering conversationally — skipping build pipeline")
 			if cfg.InteractiveChat != nil {
@@ -367,37 +497,55 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 		cancel:      make(chan struct{}),
 		approveCh:   make(chan bool, 1),
 	}
-	registerOrchestratorHandle(cfg.ProjectPath, handle)
-	defer deregisterOrchestratorHandle(cfg.ProjectPath)
+	sessionKey := cfg.ProjectPath
+	if cfg.TaskMode {
+		sessionKey = orchestratorSessionKey(cfg.ProjectPath, taskSlug(cfg.TaskID))
+	}
+	registerOrchestratorHandle(sessionKey, handle)
+	defer deregisterOrchestratorHandle(sessionKey)
 
 	// Combine the caller's cancel with the handle's internal cancel into one
 	// channel the inner loop watches.
 	cancel := orchestratorMergedCancel(cfg.Cancel, handle.cancel)
 
-	state, err := loadOrCreateOrchestrationState(cfg.ProjectPath, cfg.Owner, cfg.Repo, cfg.Brief)
+	slug := ""
+	if cfg.TaskMode {
+		slug = taskSlug(cfg.TaskID)
+	}
+	state, err := loadOrCreateOrchestrationStateSlug(cfg.ProjectPath, cfg.Owner, cfg.Repo, cfg.Brief, slug)
 	if err != nil {
 		return nil, fmt.Errorf("orchestrator: load state: %w", err)
 	}
 
-	// Intake / grill — walks the design tree, persists .engine/design.md.
-	// PRD distillation — splits design.md into vocabulary.md + prd.md.
-	// Both run once per project; resumed sessions reuse the existing files.
-	// Failures are non-fatal — the orchestrator continues with whatever
-	// layers exist, just less precisely.
-	emit(cfg.OnPhase, "intake", "walking the design tree")
-	designDoc, intakeErr := orchestratorIntakePhase(cfg, state, cancel)
-	if intakeErr != nil {
-		emitErr(cfg.OnError, fmt.Sprintf("intake phase: %v", intakeErr))
-	}
-	if strings.TrimSpace(designDoc) != "" {
-		emit(cfg.OnPhase, "intake", fmt.Sprintf("design.md ready (%d chars)", len(designDoc)))
-	}
-
-	emit(cfg.OnPhase, "prd", "distilling vocabulary and module-aware PRD")
-	if prdErr := orchestratorPRDPhase(cfg, cancel); prdErr != nil {
-		emitErr(cfg.OnError, fmt.Sprintf("PRD phase: %v", prdErr))
+	if cfg.TaskMode {
+		// Intake and PRD are how a project decides what it is. This run has been
+		// told what it is. Skipping them saves two full agentic sessions per
+		// item — and, just as importantly, stops each item rewriting the
+		// project's design.md and prd.md with a grill transcript about a
+		// one-line change. The existing docs are read as context by the planner
+		// and builder below; they are simply not regenerated.
+		emit(cfg.OnPhase, "task", "single worklist item — skipping intake and PRD, planning from the item")
 	} else {
-		emit(cfg.OnPhase, "prd", "vocabulary.md + prd.md ready")
+		// Intake / grill — walks the design tree, persists .engine/design.md.
+		// PRD distillation — splits design.md into vocabulary.md + prd.md.
+		// Both run once per project; resumed sessions reuse the existing files.
+		// Failures are non-fatal — the orchestrator continues with whatever
+		// layers exist, just less precisely.
+		emit(cfg.OnPhase, "intake", "walking the design tree")
+		designDoc, intakeErr := orchestratorIntakePhase(cfg, state, cancel)
+		if intakeErr != nil {
+			emitErr(cfg.OnError, fmt.Sprintf("intake phase: %v", intakeErr))
+		}
+		if strings.TrimSpace(designDoc) != "" {
+			emit(cfg.OnPhase, "intake", fmt.Sprintf("design.md ready (%d chars)", len(designDoc)))
+		}
+
+		emit(cfg.OnPhase, "prd", "distilling vocabulary and module-aware PRD")
+		if prdErr := orchestratorPRDPhase(cfg, cancel); prdErr != nil {
+			emitErr(cfg.OnError, fmt.Sprintf("PRD phase: %v", prdErr))
+		} else {
+			emit(cfg.OnPhase, "prd", "vocabulary.md + prd.md ready")
+		}
 	}
 
 	// If a plan was loaded from disk, validate its quality before resuming.
@@ -613,8 +761,78 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 	}
 }
 
-func eventOrchestratorEnabled() bool {
-	return false
+// EventOrchestratorEnabled reports whether the parallel multi-team orchestrator
+// should own a run.
+//
+// It was `return false` with no callers, which is what stranded ~1850 lines of
+// tested parallel machinery. Two things had to be true before it could be
+// anything else, and now are: the brain's state is actually behind its mutex
+// (it was not — extractOrchestrationState raced the event loop), and a team
+// step is held to the same critic-then-reviewer bar as a classic step (it was
+// not — a team marked its step done on the builder's word alone).
+//
+// The default is DERIVED, not hardcoded: parallel teams only pay for
+// themselves when there is genuinely concurrent work and quota headroom to run
+// it in. One team is strictly worse than the classic loop — same work, an extra
+// event bus, and a weaker outer validation story — so a single-team plan runs
+// classic. See ShouldRunEventOrchestrator for the run-scoped decision;
+// ENGINE_EVENT_ORCHESTRATOR=1/0 forces it either way.
+func EventOrchestratorEnabled() bool {
+	switch strings.TrimSpace(strings.ToLower(os.Getenv(envEventOrchestrator))) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	return eventOrchestratorDefault
+}
+
+// envEventOrchestrator forces the parallel path on or off.
+const envEventOrchestrator = "ENGINE_EVENT_ORCHESTRATOR"
+
+// eventOrchestratorDefault is what an unset ENGINE_EVENT_ORCHESTRATOR means.
+//
+// On. The parallel path is now race-free, cap-enforced and quality-gated, and
+// the concurrency ceiling comes from the quota governor rather than a literal —
+// so on a tight window it narrows to one team and behaves like the serial loop,
+// and on a roomy one it uses the room. There is no longer a configuration in
+// which "off" is the safer answer, only slower ones.
+const eventOrchestratorDefault = true
+
+// eventOrchestratorEnabled is the internal spelling kept for existing callers.
+func eventOrchestratorEnabled() bool { return EventOrchestratorEnabled() }
+
+// ShouldRunEventOrchestrator decides, for one concrete run, whether the
+// parallel path is the right one.
+//
+// An explicit ENGINE_EVENT_ORCHESTRATOR setting always wins — if someone has
+// said which orchestrator they want, inferring something else from the shape of
+// the work is second-guessing them. Absent that, parallelism has to be earned:
+// it needs work that can genuinely proceed at once, and room in the window to
+// run it. Otherwise the classic loop, whose per-run validation and repair loop
+// are more developed, keeps the run.
+func ShouldRunEventOrchestrator(ctx context.Context, cfg OrchestratorConfig) (bool, string) {
+	switch strings.TrimSpace(strings.ToLower(os.Getenv(envEventOrchestrator))) {
+	case "1", "true", "yes", "on":
+		return true, "ENGINE_EVENT_ORCHESTRATOR=1"
+	case "0", "false", "no", "off":
+		return false, "ENGINE_EVENT_ORCHESTRATOR=0"
+	}
+	if !eventOrchestratorDefault {
+		return false, "parallel orchestrator off by default"
+	}
+	// A single-unit-of-work run has nothing to parallelise. Task mode is the
+	// SARA bridge's shape — one dx worklist item — and paying for an event bus,
+	// a dispatcher and a team table to run one team is pure overhead.
+	if cfg.TaskMode {
+		return false, "task mode: one unit of work, nothing to run in parallel"
+	}
+	levers := CurrentQuotaLevers(ctx)
+	if levers.MaxConcurrency < 2 {
+		return false, fmt.Sprintf("quota tier %s allows %d concurrent session(s) — no room for parallel teams",
+			levers.TierName, levers.MaxConcurrency)
+	}
+	return true, fmt.Sprintf("quota tier %s allows %d concurrent teams", levers.TierName, levers.MaxConcurrency)
 }
 
 func enrichOrchestratorBrief(projectPath, brief string) string {
@@ -803,11 +1021,19 @@ func summarise(s string, limit int) string {
 // loadOrCreateOrchestrationState reads <project>/.engine/orchestration.json,
 // returning a fresh state if missing.
 func loadOrCreateOrchestrationState(projectPath, owner, repo, brief string) (*OrchestrationState, error) {
+	return loadOrCreateOrchestrationStateSlug(projectPath, owner, repo, brief, "")
+}
+
+// loadOrCreateOrchestrationStateSlug is the same, for a namespaced run. A
+// non-empty slug gives the run its own state and plan files so two units of
+// work in one project do not overwrite each other's plan.
+func loadOrCreateOrchestrationStateSlug(projectPath, owner, repo, brief, slug string) (*OrchestrationState, error) {
 	dir := filepath.Join(projectPath, ".engine")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir .engine: %w", err)
 	}
-	path := filepath.Join(dir, orchestrationFile)
+	probe := &OrchestrationState{slug: slug}
+	path := filepath.Join(dir, probe.stateFileName())
 	data, err := os.ReadFile(path)
 	if err == nil {
 		var st OrchestrationState
@@ -818,6 +1044,7 @@ func loadOrCreateOrchestrationState(projectPath, owner, repo, brief string) (*Or
 				st.Brief = brief
 			}
 			st.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+			st.slug = slug
 			return &st, nil
 		}
 	}
@@ -827,6 +1054,7 @@ func loadOrCreateOrchestrationState(projectPath, owner, repo, brief string) (*Or
 		Brief:     brief,
 		StartedAt: time.Now().UTC().Format(time.RFC3339),
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+		slug:      slug,
 	}, nil
 }
 
@@ -836,7 +1064,7 @@ func persistOrchestration(projectPath string, state *OrchestrationState) error {
 		return err
 	}
 	data, _ := json.MarshalIndent(state, "", "  ")
-	if err := os.WriteFile(filepath.Join(dir, orchestrationFile), data, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, state.stateFileName()), data, 0o644); err != nil {
 		return err
 	}
 	return writePlanMarkdown(projectPath, state)
@@ -875,7 +1103,7 @@ func writePlanMarkdown(projectPath string, state *OrchestrationState) error {
 	if strings.TrimSpace(state.LastValidation) != "" {
 		fmt.Fprintf(&b, "## Last validation\n\n%s\n", state.LastValidation)
 	}
-	return os.WriteFile(filepath.Join(projectPath, ".engine", "plan.md"), []byte(b.String()), 0o644)
+	return os.WriteFile(filepath.Join(projectPath, ".engine", state.planFileName()), []byte(b.String()), 0o644)
 }
 
 // readLiveURL returns the trimmed contents of <project>/.engine/live-url.txt

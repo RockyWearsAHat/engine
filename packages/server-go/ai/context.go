@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -248,6 +249,39 @@ func runtimeContextMaxTokens(projectPath string) int {
 		return DefaultTokenBudget
 	}
 	return b
+}
+
+// governedContextBudget is the token budget for one Chat call after the quota
+// governor has had its say.
+//
+// MaxContextTokens was a number the governor computed and nothing read. It is
+// derived per tier — 60k when the rolling window is nearly spent, 150k when it
+// is not — and it travelled as far as the /quota response and stopped there. So
+// a "conserve" tier assembled exactly the same prompt as a "flush" tier, and the
+// tier meant nothing to what a run actually cost. Context is the largest single
+// input to that cost, which makes this the lever with the most leverage and the
+// one it was least excusable to leave disconnected.
+//
+// The governor may only tighten, never loosen. A project's configured budget is
+// a statement about how much context this project needs to be correct; a roomy
+// quota window is not a reason to exceed it, and quietly raising someone's
+// configured ceiling because there happens to be room is not governance.
+func governedContextBudget(ctx *ChatContext) int {
+	budget := runtimeContextMaxTokens(ctx.ProjectPath)
+
+	// Bounded: this is on the hot path of every model call, and a governor that
+	// hangs must not be able to hang the run. CurrentQuotaLevers reads through
+	// the prober's cache, so the timeout is a backstop rather than the norm.
+	qctx, cancel := stdctx.WithTimeout(stdctx.Background(), 5*time.Second)
+	defer cancel()
+	levers := CurrentQuotaLevers(qctx)
+
+	if levers.MaxContextTokens > 0 && levers.MaxContextTokens < budget {
+		log.Printf("quota tier %s: context budget %d → %d tokens (%s)",
+			levers.TierName, budget, levers.MaxContextTokens, ctx.ProjectPath)
+		return levers.MaxContextTokens
+	}
+	return budget
 }
 
 // runtimeContextRecentWindow returns the max number of recent messages to keep.
@@ -2620,7 +2654,7 @@ func Chat(ctx *ChatContext, userMessage string) {
 	var finalText strings.Builder
 
 	// Enforce token budget with compaction fallback for older context.
-	budget := runtimeContextMaxTokens(ctx.ProjectPath)
+	budget := governedContextBudget(ctx)
 	trimmedMessages, tokensUsed := trimToTokenBudgetFn(messages, budget)
 	if tokensUsed > budget {
 		ctx.OnError(fmt.Sprintf("⚠️ Conversation history exceeds token budget (%d > %d). Context compaction was applied.", tokensUsed, budget))

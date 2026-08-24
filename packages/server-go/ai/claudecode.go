@@ -118,7 +118,12 @@ func (p *claudecodeProvider) RunLoop(
 		model = dispatch.Model
 	}
 
-	args := buildClaudeArgs(ctx, model, systemPrompt)
+	// The dispatch verdict carries three ceilings and this call site read
+	// exactly one of them. Model was applied above; SubagentFanout is applied
+	// here. (MaxContextTokens binds earlier, where the prompt is assembled —
+	// see governedContextBudget; by the time we are here the history has
+	// already been trimmed to it.)
+	args := buildClaudeArgs(ctx, model, systemPrompt, dispatch.SubagentFanout)
 
 	cmd := exec.CommandContext(runCtx, claudeBinary, args...)
 	if strings.TrimSpace(ctx.ProjectPath) != "" {
@@ -216,7 +221,28 @@ func (p *claudecodeProvider) RunLoop(
 // --append-system-prompt <role prompt>  : inject Engine's role instructions on
 //
 //	top of Claude Code's own system prompt rather than replacing it.
-func buildClaudeArgs(ctx *ChatContext, model, systemPrompt string) []string {
+//
+// buildClaudeArgs assembles the CLI invocation for one run.
+//
+// subagentFanout is the governor's ceiling on how many subagents this session
+// may spawn. It is enforced honestly rather than uniformly, because the CLI
+// gives us exactly one hard control and no numeric one:
+//
+//   - fanout 0 is ENFORCED. The Task tool is the only way a Claude Code session
+//     spawns a subagent, so disallowing it makes "no fanout" a fact about the
+//     process rather than a request. This is the tier that matters: fanout drops
+//     to 0 precisely when the quota window is nearly spent, and that is exactly
+//     when a session quietly forking four more of itself does the most damage.
+//   - fanout > 0 is ADVISORY. There is no --max-subagents flag, so the number is
+//     stated in the system prompt and the model is asked to respect it. Said
+//     plainly because it matters: above zero this is guidance, not a guarantee.
+//     What makes it more than a wish is that claudeRunStats already harvests
+//     subagent_stats.spawned from the result event, so overruns are observable
+//     rather than invisible.
+//   - A NEGATIVE fanout means "no opinion" and adds nothing to the invocation.
+//     That is the ungoverned case, and it must stay distinguishable from 0,
+//     which is a deliberate instruction to spawn nothing.
+func buildClaudeArgs(ctx *ChatContext, model, systemPrompt string, subagentFanout int) []string {
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
@@ -225,6 +251,14 @@ func buildClaudeArgs(ctx *ChatContext, model, systemPrompt string) []string {
 	}
 	if m := strings.TrimSpace(model); m != "" && m != "claude-code" && m != "claudecode" {
 		args = append(args, "--model", m)
+	}
+	if subagentFanout == 0 {
+		args = append(args, "--disallowedTools", "Task")
+	} else if subagentFanout > 0 {
+		systemPrompt = strings.TrimSpace(systemPrompt + fmt.Sprintf(
+			"\n\nSUBAGENT BUDGET: spawn at most %d subagent(s) for this task. "+
+				"The quota window is being actively managed; going over the budget "+
+				"takes spend away from the rest of the work.", subagentFanout))
 	}
 	if sp := strings.TrimSpace(systemPrompt); sp != "" {
 		args = append(args, "--append-system-prompt", sp)

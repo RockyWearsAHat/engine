@@ -225,7 +225,15 @@ type QuotaDispatch struct {
 // opposite of the objective — it only ever holds it or moves it cheaper.
 func quotaBefore(ctx context.Context, role AgentRole, requestedModel, projectID string, parentEnv []string) QuotaDispatch {
 	g := quotaGateInstance()
-	out := QuotaDispatch{Allow: true, Model: requestedModel, Role: role, ProjectID: projectID, startedAt: time.Now()}
+	// SubagentFanout starts at -1, meaning "no ceiling stated", NOT 0.
+	//
+	// This matters because 0 is a real instruction — spawn no subagents at all —
+	// and the consumer (buildClaudeArgs) enforces it by removing the Task tool
+	// from the session. Leaving the field at Go's zero value on the ungoverned
+	// path would silently disable subagents for every run on every machine with
+	// quota governance switched off, which is the opposite of what "ungoverned"
+	// should mean.
+	out := QuotaDispatch{Allow: true, Model: requestedModel, Role: role, ProjectID: projectID, SubagentFanout: -1, startedAt: time.Now()}
 	if !g.enabled || g.governor == nil {
 		out.Reason = "quota governance disabled"
 		return out
@@ -397,6 +405,60 @@ func QuotaScore() (quota.Scoreboard, bool) {
 		return quota.Scoreboard{}, false
 	}
 	return g.ledger.Scoreboard(), true
+}
+
+// QuotaLevers are the execution ceilings the governor's current plan implies.
+//
+// quotaBefore already computes these per dispatch, but a dispatch is the wrong
+// granularity for two of them: how many teams may run at once, and how much
+// context a prompt may carry, are decided BEFORE the process that would be
+// gated is started. So this is the same plan read at the point the decision is
+// actually made.
+type QuotaLevers struct {
+	// MaxConcurrency caps simultaneous agent sessions — used as the parallel
+	// team cap.
+	MaxConcurrency int
+	// SubagentFanout caps how many subagents one session may spawn.
+	SubagentFanout int
+	// MaxContextTokens is the soft ceiling on assembled prompt context.
+	MaxContextTokens int
+	// TierName is the governor's current operating mode, for logs.
+	TierName string
+	// Governed is false when quota governance is off or unreadable; the
+	// ceilings above are then the built-in policy defaults, not a live read.
+	Governed bool
+}
+
+// CurrentQuotaLevers reports the ceilings in force right now.
+//
+// Deliberately re-read on every call rather than captured once at start-up: the
+// whole point of a governor is that a run which begins with room and later hits
+// the wall narrows itself instead of carrying its opening allowance to the end.
+// Reads through the prober's cache, so calling it in a loop is cheap.
+func CurrentQuotaLevers(ctx context.Context) QuotaLevers {
+	g := quotaGateInstance()
+	policy := g.policy
+	out := QuotaLevers{
+		MaxConcurrency:   policy.MaxConcurrency,
+		SubagentFanout:   policy.MaxSubagents,
+		MaxContextTokens: policy.MaxContextTokens,
+		TierName:         "ungoverned",
+	}
+	if !g.enabled || g.governor == nil {
+		return out
+	}
+	plan := g.governor.Decide(ctx)
+	out.Governed = true
+	out.TierName = plan.TierName
+	// A blocked plan means "run nothing", but the ceilings still have to be
+	// usable numbers — a caller that asks for the cap while blocked should get
+	// 0 concurrency and be told so, not divide by a zero context budget.
+	out.MaxConcurrency = plan.MaxConcurrency
+	out.SubagentFanout = plan.SubagentFanout
+	if plan.MaxContextTokens > 0 {
+		out.MaxContextTokens = plan.MaxContextTokens
+	}
+	return out
 }
 
 // QuotaSnapshotLine is a one-line summary for progress messages.

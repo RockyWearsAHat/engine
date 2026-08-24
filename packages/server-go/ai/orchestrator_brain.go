@@ -24,17 +24,17 @@ type ProjectRequirements struct {
 
 // TeamState tracks a single team's progress.
 type TeamState struct {
-	ID             string                 `json:"id"`
-	Role           string                 `json:"role"`
-	AssignedSteps  []int                  `json:"assigned_steps"` // indices into Plan
-	Status         string                 `json:"status"`         // queued, running, blocked, done, failed
-	DependsOn      []string               `json:"depends_on"`     // team IDs this blocks on
-	Feedback       string                 `json:"feedback,omitempty"`
-	LastError      string                 `json:"last_error,omitempty"`
-	StartedAt      time.Time              `json:"started_at,omitempty"`
-	CompletedAt    time.Time              `json:"completed_at,omitempty"`
-	Progress       map[string]interface{} `json:"progress,omitempty"`
-	Metadata       map[string]interface{} `json:"metadata,omitempty"`
+	ID            string                 `json:"id"`
+	Role          string                 `json:"role"`
+	AssignedSteps []int                  `json:"assigned_steps"` // indices into Plan
+	Status        string                 `json:"status"`         // queued, running, blocked, done, failed
+	DependsOn     []string               `json:"depends_on"`     // team IDs this blocks on
+	Feedback      string                 `json:"feedback,omitempty"`
+	LastError     string                 `json:"last_error,omitempty"`
+	StartedAt     time.Time              `json:"started_at,omitempty"`
+	CompletedAt   time.Time              `json:"completed_at,omitempty"`
+	Progress      map[string]interface{} `json:"progress,omitempty"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // OrchestrationBrain is the persistent brain: requirements, plan, team state, and validation.
@@ -48,8 +48,8 @@ type OrchestrationBrain struct {
 	Brief       string
 
 	// Mutable state
-	Requirements ProjectRequirements `json:"requirements"`
-	Plan         []PlanStep          `json:"plan"`
+	Requirements ProjectRequirements  `json:"requirements"`
+	Plan         []PlanStep           `json:"plan"`
 	Teams        map[string]TeamState `json:"teams"`
 
 	// Lifecycle
@@ -304,6 +304,96 @@ func (b *OrchestrationBrain) GetPlan() []PlanStep {
 	return plan
 }
 
+// MarkStepDone marks one plan step complete in place.
+//
+// This exists instead of the GetPlan → mutate → UpdatePlan sequence team
+// workers used to run. That sequence is a lost update the moment two teams
+// work in parallel: each snapshots the whole plan, marks its own step, and
+// writes the whole plan back, so the second write silently reverts the first
+// team's step to not-done. It never mattered while the event orchestrator was
+// unreachable; it is a correctness bug the instant parallel teams are enabled.
+// Returns false when idx is out of range.
+func (b *OrchestrationBrain) MarkStepDone(idx int) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if idx < 0 || idx >= len(b.Plan) {
+		return false
+	}
+	b.Plan[idx].Done = true
+	b.Plan[idx].UpdatedAt = time.Now().Format(time.RFC3339)
+	b.UpdatedAt = time.Now()
+	_ = b.persist()
+	return true
+}
+
+// GetRequirements returns a snapshot of the requirements.
+//
+// The map is copied rather than shared: handing out the live Vocabulary map
+// would let a reader iterate it while the intake phase replaces it.
+func (b *OrchestrationBrain) GetRequirements() ProjectRequirements {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	req := b.Requirements
+	if b.Requirements.Vocabulary != nil {
+		vocab := make(map[string]string, len(b.Requirements.Vocabulary))
+		for k, v := range b.Requirements.Vocabulary {
+			vocab[k] = v
+		}
+		req.Vocabulary = vocab
+	}
+	return req
+}
+
+// NextOuterIteration increments the outer-iteration counter and returns the
+// new value, so the caller never has to read the field back unlocked.
+func (b *OrchestrationBrain) NextOuterIteration() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.OuterIterations++
+	b.UpdatedAt = time.Now()
+	return b.OuterIterations
+}
+
+// OuterIterationCount reports the current outer-iteration count.
+func (b *OrchestrationBrain) OuterIterationCount() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.OuterIterations
+}
+
+// SetLastValidation records the latest validation feedback.
+func (b *OrchestrationBrain) SetLastValidation(feedback string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.LastValidation = feedback
+	b.UpdatedAt = time.Now()
+}
+
+// GetLastValidation returns the latest validation feedback.
+func (b *OrchestrationBrain) GetLastValidation() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.LastValidation
+}
+
+// ResetTeams clears the team table ahead of a re-plan.
+func (b *OrchestrationBrain) ResetTeams() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.Teams = make(map[string]TeamState)
+	b.UpdatedAt = time.Now()
+}
+
+// TeamCount reports how many teams are registered.
+func (b *OrchestrationBrain) TeamCount() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return len(b.Teams)
+}
+
 // GetTeam returns a snapshot of a team.
 func (b *OrchestrationBrain) GetTeam(teamID string) (TeamState, error) {
 	b.mu.RLock()
@@ -333,6 +423,20 @@ func (b *OrchestrationBrain) AllTeamsDone() bool {
 	return true
 }
 
+// UnfinishedTeams counts teams that are neither done nor failed.
+func (b *OrchestrationBrain) UnfinishedTeams() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	n := 0
+	for _, t := range b.Teams {
+		if t.Status != "done" && t.Status != "failed" {
+			n++
+		}
+	}
+	return n
+}
+
 // AnyTeamFailed returns true if any team is in failed state.
 func (b *OrchestrationBrain) AnyTeamFailed() bool {
 	b.mu.RLock()
@@ -354,6 +458,32 @@ func (b *OrchestrationBrain) MarkCompleted() error {
 	b.CompletedAt = time.Now()
 	b.UpdatedAt = time.Now()
 	return b.persist()
+}
+
+// StateSnapshot renders the brain as an OrchestrationState under the read lock.
+//
+// Every field here is written by the event loop goroutine while the caller that
+// wants a snapshot runs on another one — RunEventOrchestratorAsState returns to
+// its caller the instant the loop starts, so "read the brain" and "the loop is
+// mutating the brain" are simultaneous by construction, not by accident. Taking
+// the lock here is what makes the wrapper safe to call at any moment.
+func (b *OrchestrationBrain) StateSnapshot() *OrchestrationState {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	plan := make([]PlanStep, len(b.Plan))
+	copy(plan, b.Plan)
+	return &OrchestrationState{
+		Repo:            b.Repo,
+		Owner:           b.Owner,
+		Brief:           b.Brief,
+		Plan:            plan,
+		OuterIterations: b.OuterIterations,
+		StartedAt:       b.StartedAt.Format(time.RFC3339),
+		UpdatedAt:       b.UpdatedAt.Format(time.RFC3339),
+		CompletedAt:     b.CompletedAt.Format(time.RFC3339),
+		LastValidation:  b.LastValidation,
+	}
 }
 
 // stagePersistBrain persists the brain to disk by creating the .engine directory,

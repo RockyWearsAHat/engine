@@ -820,7 +820,15 @@ func TestEventLoop_NonCanceledWaitErrorBranch(t *testing.T) {
 		OnPhase:         func(string, string) {},
 		OnProgress:      func(string) {},
 		OnError:         func(msg string) { gotErr = msg },
-		ChatFn:          func(*ChatContext, string) {},
+		// The planner has to produce a real plan for the loop to reach the wait
+		// at all. This was a no-op ChatFn, which is now a planning failure and
+		// terminates the run before the branch under test — the branch was only
+		// reachable before because an empty plan was silently survivable.
+		ChatFn: func(c *ChatContext, prompt string) {
+			if strings.Contains(prompt, plannerPromptMarker) {
+				c.OnChunk(onePlanStep, false)
+			}
+		},
 	}
 	dispatcher := NewTeamDispatcher(brain, bus, cfg, 4, comms)
 	ctx, cancel := stdctx.WithTimeout(stdctx.Background(), 1*time.Millisecond)

@@ -388,8 +388,8 @@ func TestPhaseWaitTeams_TeamFailed(t *testing.T) {
 	userRedirect := make(chan Event, 1)
 	cancelEv := make(chan Event, 1)
 	teamFailed <- Event{
-		Type:   EventTeamFailed,
-		TeamID: "t1",
+		Type:    EventTeamFailed,
+		TeamID:  "t1",
 		Payload: EventPayload("error", "build failed"),
 	}
 	// Context times out after team-failed is processed
@@ -439,10 +439,17 @@ func TestPhaseWaitTeams_UserRedirect(t *testing.T) {
 		Type:    EventUserRedirect,
 		Payload: EventPayload("message", "focus on auth"),
 	}
-	// Context times out after redirect is processed
-	err := eo.phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv)
-	if err == nil {
-		t.Error("expected error from context timeout after redirect")
+	// The property under test is that the redirect lands in the brain, below.
+	//
+	// This used to also assert a non-nil error, on the reasoning that the wait
+	// would run until the 200ms context expired. That was never the behaviour
+	// being tested, only a side effect of the stall check being slower than the
+	// context: this orchestrator has no teams, so once the redirect is applied
+	// there is nothing left to wait for and returning nil is the correct answer.
+	// It reads as an error only because the wait used to take five seconds to
+	// notice. Asserting the error back would be asserting the slowness.
+	if err := eo.phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv); err != nil && err != context.DeadlineExceeded {
+		t.Errorf("unexpected error from wait: %v", err)
 	}
 	if brain.LastValidation != "focus on auth" {
 		t.Errorf("expected LastValidation=%q, got %q", "focus on auth", brain.LastValidation)
@@ -475,24 +482,53 @@ func TestRunEventOrchestrator_ReturnsNonNilBrain(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 }
 
-// TestRunEventOrchestratorAsState_ReturnsState verifies the wrapper returns non-nil state.
+// TestRunEventOrchestratorAsState_ReturnsState verifies the wrapper returns
+// non-nil state AND an honest error.
+//
+// The error half is the point. This wrapper used to return nil unconditionally,
+// so a run that produced nothing was indistinguishable from a run that built the
+// project — and the task API decides "done" vs "failed" on exactly this value.
+// A parallel run whose planner returned junk was reported to SARA as done, which
+// is the one answer that stops an autonomous supervisor from retrying.
 func TestRunEventOrchestratorAsState_ReturnsState(t *testing.T) {
-	dir := t.TempDir()
-	cfg := OrchestratorConfig{
-		ProjectPath:        dir,
-		Owner:              "o",
-		Repo:               "r",
-		Brief:              "brief",
-		SessionIDPrefix:    "test",
-		MaxOuterIterations: 1,
-		ChatFn:             func(c *ChatContext, _ string) { c.OnChunk("output", false) },
-		OnProgress:         func(string) {},
-		OnPhase:            func(string, string) {},
-		OnError:            func(string) {},
+	base := func(dir string, chat func(*ChatContext, string)) OrchestratorConfig {
+		return OrchestratorConfig{
+			ProjectPath:        dir,
+			Owner:              "o",
+			Repo:               "r",
+			Brief:              "brief",
+			SessionIDPrefix:    "test",
+			MaxOuterIterations: 1,
+			ChatFn:             chat,
+			OnProgress:         func(string) {},
+			OnPhase:            func(string, string) {},
+			OnError:            func(string) {},
+		}
 	}
-	state, err := RunEventOrchestratorAsState(cfg)
+
+	// A model that answers every phase with the word "output" cannot produce a
+	// plan, and the run therefore delivered nothing.
+	state, err := RunEventOrchestratorAsState(base(t.TempDir(), func(c *ChatContext, _ string) {
+		c.OnChunk("output", false)
+	}))
+	if err == nil {
+		t.Error("a run that produced no plan must report an error, not nil")
+	}
+	if state == nil {
+		t.Error("expected non-nil state even for a failed run — the caller still needs the step counts")
+	}
+
+	// The same wrapper must stay quiet when the run is fine: a planner that
+	// returns a real step, and a validator that passes, is a completed project.
+	state, err = RunEventOrchestratorAsState(base(t.TempDir(), func(c *ChatContext, prompt string) {
+		if strings.Contains(prompt, plannerPromptMarker) {
+			c.OnChunk(onePlanStep, false)
+			return
+		}
+		c.OnChunk("VALIDATION_PASSED", false)
+	}))
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Errorf("a completed run must report nil, got %v", err)
 	}
 	if state == nil {
 		t.Error("expected non-nil state")
@@ -623,7 +659,15 @@ func TestEventLoop_CancelEvent_EmitsProjectCanceled(t *testing.T) {
 				c.OnChunk("design", false)
 				return
 			}
-			// planner/validator can be empty for this cancel-path test
+			if strings.Contains(prompt, plannerPromptMarker) {
+				// A real plan, because an empty one is now terminal. This test
+				// used to return nothing here and still reach the cancel path,
+				// which only worked because phasePlan's failure was discarded —
+				// it was exercising the cancel path of a run that had already
+				// failed to plan.
+				c.OnChunk(onePlanStep, false)
+				return
+			}
 			c.OnChunk("", false)
 		},
 		OnPhase:    func(string, string) {},
@@ -674,7 +718,6 @@ func TestEventLoop_Success_CompletesProject(t *testing.T) {
 	bus := NewEventBus()
 	comms := AgentCommsForProject(dir)
 
-	var added bool
 	cfg := OrchestratorConfig{
 		ProjectPath:        dir,
 		Owner:              "o",
@@ -687,18 +730,17 @@ func TestEventLoop_Success_CompletesProject(t *testing.T) {
 				c.OnChunk("VALIDATION_PASSED", false)
 				return
 			}
-			if strings.Contains(prompt, "project planner") {
-				c.OnChunk("[]", false)
+			if strings.Contains(prompt, plannerPromptMarker) {
+				c.OnChunk(onePlanStep, false)
 				return
 			}
 			c.OnChunk("design", false)
 		},
-		OnPhase: func(phase, _ string) {
-			if phase == "execute" && !added {
-				added = true
-				_ = brain.AddTeam("t-success", "general", []int{0}, nil)
-			}
-		},
+		// The team comes from the plan now, the way it does in a real run. This
+		// used to be an empty plan plus a team injected from the "execute" phase
+		// callback — a shape no production path produces, and one that only made
+		// sense while an empty plan was survivable.
+		OnPhase:    func(string, string) {},
 		OnProgress: func(string) {},
 		OnError:    func(string) {},
 	}
@@ -738,7 +780,6 @@ func TestEventLoop_ValidationFail_ReachesMaxIterations(t *testing.T) {
 	bus := NewEventBus()
 	comms := AgentCommsForProject(dir)
 
-	var added bool
 	var errs []string
 	cfg := OrchestratorConfig{
 		ProjectPath:        dir,
@@ -752,18 +793,13 @@ func TestEventLoop_ValidationFail_ReachesMaxIterations(t *testing.T) {
 				c.OnChunk("tests failed: missing build artifact", false)
 				return
 			}
-			if strings.Contains(prompt, "project planner") {
-				c.OnChunk("[]", false)
+			if strings.Contains(prompt, plannerPromptMarker) {
+				c.OnChunk(onePlanStep, false)
 				return
 			}
 			c.OnChunk("design", false)
 		},
-		OnPhase: func(phase, _ string) {
-			if phase == "execute" && !added {
-				added = true
-				_ = brain.AddTeam("t-fail", "general", []int{0}, nil)
-			}
-		},
+		OnPhase:    func(string, string) {},
 		OnProgress: func(string) {},
 		OnError:    func(msg string) { errs = append(errs, msg) },
 	}
@@ -863,14 +899,14 @@ func TestPhaseValidate_FailsWithoutKeyword(t *testing.T) {
 func TestPhaseDispatchTeams_NoTeamsReady(t *testing.T) {
 	dir := t.TempDir()
 	brain, _ := NewOrchestrationBrain(dir, "owner", "repo", "brief", "t")
-	
+
 	eo := &EventOrchestrator{
 		cfg: OrchestratorConfig{
 			ProjectPath: dir,
 		},
-		brain:   brain,
-		bus:     NewEventBus(),
-		comms:   AgentCommsForProject(dir),
+		brain: brain,
+		bus:   NewEventBus(),
+		comms: AgentCommsForProject(dir),
 	}
 
 	// No teams created, phaseDispatchTeams should handle it
@@ -885,7 +921,7 @@ func TestPhaseDispatchTeams_NoTeamsReady(t *testing.T) {
 func TestCreateTeamsFromPlan_EmptyBrain(t *testing.T) {
 	dir := t.TempDir()
 	brain, _ := NewOrchestrationBrain(dir, "owner", "repo", "brief", "t")
-	
+
 	eo := &EventOrchestrator{
 		brain: brain,
 	}
@@ -929,7 +965,7 @@ func TestRunAutonomousProject_Success(t *testing.T) {
 // TestPersistOrchestrationState tests persist with valid state.
 func TestPersistOrchestrationState(t *testing.T) {
 	dir := t.TempDir()
-	
+
 	state := &OrchestrationState{
 		Repo:            "test-repo",
 		Owner:           "test-owner",
@@ -938,7 +974,7 @@ func TestPersistOrchestrationState(t *testing.T) {
 		StartedAt:       "2024-01-01T00:00:00Z",
 		UpdatedAt:       "2024-01-01T00:00:00Z",
 	}
-	
+
 	// Should persist state file successfully
 	err := persistOrchestration(dir, state)
 	if err != nil {
@@ -950,7 +986,7 @@ func TestPersistOrchestrationState(t *testing.T) {
 func TestReadyTeamsEmptyBrain(t *testing.T) {
 	dir := t.TempDir()
 	brain, _ := NewOrchestrationBrain(dir, "owner", "repo", "brief", "t")
-	
+
 	ready := brain.ReadyTeams()
 	if len(ready) != 0 {
 		t.Errorf("expected no ready teams from empty brain, got %d", len(ready))
@@ -960,7 +996,7 @@ func TestReadyTeamsEmptyBrain(t *testing.T) {
 // TestLoadOrCreateOrchestrationState_CreateNew tests loading from nonexistent path.
 func TestLoadOrCreateOrchestrationState_CreateNew(t *testing.T) {
 	dir := t.TempDir()
-	
+
 	state, err := loadOrCreateOrchestrationState(dir, "owner", "repo", "brief")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -973,25 +1009,25 @@ func TestLoadOrCreateOrchestrationState_CreateNew(t *testing.T) {
 // TestLoadOrCreateOrchestrationState_LoadExisting tests loading existing state file.
 func TestLoadOrCreateOrchestrationState_LoadExisting(t *testing.T) {
 	dir := t.TempDir()
-	
+
 	// Create initial state
 	state1, err := loadOrCreateOrchestrationState(dir, "owner", "repo", "initial")
 	if err != nil {
 		t.Fatalf("first load failed: %v", err)
 	}
-	
+
 	// Persist it
 	err = persistOrchestration(dir, state1)
 	if err != nil {
 		t.Fatalf("persist failed: %v", err)
 	}
-	
+
 	// Load again with updated brief
 	state2, err := loadOrCreateOrchestrationState(dir, "owner2", "repo2", "updated")
 	if err != nil {
 		t.Fatalf("second load failed: %v", err)
 	}
-	
+
 	// Should have loaded state1 but with updated brief
 	if state2.Brief != "updated" {
 		t.Errorf("expected brief to be updated to 'updated', got %s", state2.Brief)
@@ -1005,17 +1041,16 @@ func TestLoadOrCreateOrchestrationState_LoadExisting(t *testing.T) {
 func TestPersistBrainState(t *testing.T) {
 	dir := t.TempDir()
 	brain, _ := NewOrchestrationBrain(dir, "owner", "repo", "brief", "t")
-	
+
 	// Add some plan steps
 	brain.Plan = []PlanStep{
 		{Index: 1, Title: "Step1", Done: false},
 		{Index: 2, Title: "Step2", Done: true},
 	}
-	
+
 	// Persist the state
 	err := brain.persist()
 	if err != nil {
 		t.Logf("persist failed: %v", err)
 	}
 }
-
