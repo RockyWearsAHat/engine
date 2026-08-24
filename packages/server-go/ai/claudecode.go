@@ -114,6 +114,9 @@ func (p *claudecodeProvider) RunLoop(
 		}
 		return
 	}
+	// quotaAfter below closes the quota measurement bracket and owns the reading;
+	// this only covers the error returns between here and there.
+	defer releaseQuotaObservation(dispatch)
 	if dispatch.Model != "" {
 		model = dispatch.Model
 	}

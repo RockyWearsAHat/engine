@@ -42,6 +42,13 @@ type quotaGate struct {
 	ledger   *quota.Ledger
 	policy   quota.Policy
 	enabled  bool
+
+	// Bookkeeping for quota observations. obsActive maps a dispatch id to
+	// whether another governed run overlapped it; an overlapped run can never
+	// be measured, because the window moved for both of them.
+	obsMu     sync.Mutex
+	obsNextID uint64
+	obsActive map[uint64]bool
 }
 
 var (
@@ -216,6 +223,86 @@ type QuotaDispatch struct {
 	Governed bool
 	// startedAt is used to compute the run duration when recording.
 	startedAt time.Time
+	// obsID identifies this run in the gate's overlap bookkeeping; zero when the
+	// run is not a measurement candidate.
+	obsID uint64
+	// pctBefore and fetchedBefore bracket the run for quota measurement: the
+	// binding window's reading when it started, and the identity of the probe
+	// that reading came from.
+	pctBefore     float64
+	fetchedBefore string
+}
+
+// beginQuotaObservation opens an observation window for a dispatch, and taints
+// any observation already open.
+//
+// Two runs in flight at once cannot both be measured, and neither can either of
+// them: the binding window moves for both, so the delta each one sees is the sum
+// of the pair. The plan allows a maxConcurrency of 3, so this is the common case,
+// not an edge case.
+func (g *quotaGate) beginQuotaObservation() uint64 {
+	g.obsMu.Lock()
+	defer g.obsMu.Unlock()
+	if g.obsActive == nil {
+		g.obsActive = map[uint64]bool{}
+	}
+	overlapped := len(g.obsActive) > 0
+	for id := range g.obsActive {
+		g.obsActive[id] = true
+	}
+	g.obsNextID++
+	g.obsActive[g.obsNextID] = overlapped
+	return g.obsNextID
+}
+
+// releaseQuotaObservation frees a dispatch's observation if it is still open.
+//
+// quotaAfter normally closes it, but the dispatch path has error returns that
+// never reach quotaAfter — a failed stdout pipe, a `claude` binary that will not
+// start. An observation left open taints every later one for the life of the
+// process, so calibration would stop for good after one bad spawn. Closing twice
+// is a no-op, so the recording path keeps ownership of the reading.
+func releaseQuotaObservation(d QuotaDispatch) {
+	if d.obsID == 0 {
+		return
+	}
+	quotaGateInstance().endQuotaObservation(d.obsID)
+}
+
+// endQuotaObservation closes an observation and reports whether the run had the
+// binding window to itself for its whole duration.
+func (g *quotaGate) endQuotaObservation(id uint64) bool {
+	g.obsMu.Lock()
+	defer g.obsMu.Unlock()
+	overlapped, tracked := g.obsActive[id]
+	delete(g.obsActive, id)
+	return tracked && !overlapped
+}
+
+// bindingWindow reads the window the governor itself calls binding, rather than
+// guessing which of session/week is tighter — Assessment.Binding already names
+// it, and it can be a per-model sub-limit that neither of those two covers.
+//
+// The second return is the identity of the probe behind the reading. Status
+// shares the prober's 90s cache, so two calls inside that window return the same
+// snapshot; comparing FetchedAt is what tells a real second reading apart from
+// the first one handed back twice.
+func bindingWindow(st quota.Status, account string) (pct float64, fetchedAt string, known bool) {
+	for _, a := range st.Accounts {
+		if a.Name != account {
+			continue
+		}
+		if !a.Ok {
+			return 0, "", false
+		}
+		windows := append([]quota.WindowStatus{a.Session, a.Week}, a.PerModel...)
+		for _, w := range windows {
+			if w.Name == a.Assessment.Binding {
+				return w.Percent, a.FetchedAt, w.Known
+			}
+		}
+	}
+	return 0, "", false
 }
 
 // quotaBefore consults the gate ahead of a claudecode dispatch.
@@ -248,6 +335,13 @@ func quotaBefore(ctx context.Context, role AgentRole, requestedModel, projectID 
 		out.Allow = false
 		out.RetryAfter = plan.RetryAfter
 		return out
+	}
+
+	// Open the measurement bracket. Reading Status here is free: Decide just
+	// probed, so this hits the same cache entry.
+	if pct, fetched, known := bindingWindow(g.governor.Status(ctx), plan.Account); known {
+		out.pctBefore, out.fetchedBefore = pct, fetched
+		out.obsID = g.beginQuotaObservation()
 	}
 
 	// The ledger picks the cheapest configuration that has worked for this role,
@@ -314,7 +408,13 @@ func modelRank(model string) int {
 // the ledger compares configurations against each other, not against truth.
 func quotaAfter(d QuotaDispatch, stats claudeRunStats, success bool) {
 	g := quotaGateInstance()
-	if !g.enabled || g.ledger == nil || !d.Governed || d.Config.Model == "" {
+	// Close the measurement bracket before deciding whether to record. An
+	// observation left open taints every later one for the life of the process,
+	// so a run that is not worth recording must still release it — and a run
+	// with no ledger key still overlapped whatever ran beside it.
+	recording := g.enabled && g.ledger != nil && d.Governed && d.Config.Model != ""
+	quotaPct := g.closeQuota(d, recording)
+	if !recording {
 		return
 	}
 	g.ledger.Record(quota.Outcome{
@@ -325,7 +425,44 @@ func quotaAfter(d QuotaDispatch, stats claudeRunStats, success bool) {
 		ProjectID: d.ProjectID,
 		Duration:  time.Since(d.startedAt),
 		At:        time.Now(),
+		QuotaPct:  quotaPct,
 	})
+}
+
+// measureQuota returns how far the binding window moved over this run, but only
+// when that movement is honestly attributable to it — otherwise zero, meaning
+// "not measured".
+//
+// Zero is a deliberate answer here, not a failure. The ledger uses these
+// readings to learn pctPerMTok, a running mean with no outlier rejection, and
+// once that is non-zero it becomes the denominator for EVERY configuration's
+// yield — including ones that never ran concurrently. A wrong reading therefore
+// does not stay local to the run that produced it, so a rare clean measurement
+// is worth far more than a frequent approximate one. Both guards below reject
+// far more runs than they accept, and that is the intended ratio.
+func (g *quotaGate) closeQuota(d QuotaDispatch, recording bool) float64 {
+	if d.obsID == 0 {
+		return 0
+	}
+	// Always close the bracket, whatever we decide about the reading.
+	solo := g.endQuotaObservation(d.obsID)
+	if !solo || !recording || g.governor == nil {
+		return 0
+	}
+	pct, fetched, known := bindingWindow(g.governor.Status(context.Background()), d.Account)
+	// A reading from the same probe as the "before" one is that probe handed
+	// back twice, not a measurement: its delta is always exactly 0. Runs shorter
+	// than the prober's TTL are simply not measurable, and silently recording
+	// their 0 would look like a run that cost nothing.
+	if !known || fetched == "" || fetched == d.fetchedBefore {
+		return 0
+	}
+	// A window that reset mid-run reads lower than it started. There is no delta
+	// to recover from that, only a negative number to discard.
+	if pct <= d.pctBefore {
+		return 0
+	}
+	return pct - d.pctBefore
 }
 
 // QuotaReport renders current limit state across accounts plus what the ledger
