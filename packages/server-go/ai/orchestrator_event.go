@@ -522,11 +522,30 @@ func (eo *EventOrchestrator) createTeamsFromPlan(plan []PlanStep) {
 		return
 	}
 
-	// Grouping heuristic: consecutive steps with similar titles stay in same team
-	// For now: simple approach — assign steps to teams based on their index
-	// DB steps (0, 1, 2) → DB team
-	// Frontend steps (3, 4, 5) → Frontend team
-	// etc.
+	// Grouping heuristic: a run of consecutive steps with the same inferred role
+	// becomes one team. Teams run concurrently; steps inside a team run in order.
+	//
+	// KNOWN LIMIT, measured rather than guessed. Parallelism here is bounded by
+	// role DIVERSITY, not by the quota plan. A live run of an eleven-step plan
+	// to build three independent Go packages produced exactly one team —
+	// inferRoleFromStep only distinguishes db / frontend / api / general, and
+	// every step in that plan was "general", so the whole project built
+	// serially inside team-general-0 while the governor's ceiling of three sat
+	// unused. The dispatcher itself is genuinely concurrent and genuinely
+	// capped by the governor (see TestTeamDispatcher_RunsStepsConcurrently and
+	// TestTeamDispatcher_QuotaCeilingSerialisesWork); it is the team formation
+	// above it that hands it only one thing to run.
+	//
+	// The obvious fix — chop a long same-role run into several teams — is NOT
+	// safe as things stand, and that is why it has not been done here. Steps in
+	// different teams run at the same time, so splitting assumes the steps are
+	// independent, and nothing in the plan says whether they are. PlanStep
+	// carries no dependency information and the planner is never asked for any,
+	// so "1. create the module" and "2. add a feature to the module" would be
+	// dispatched concurrently into the same files. Doing this properly means
+	// teaching the planner to declare dependencies and populating AddTeam's
+	// dependsOn (which every caller currently passes as nil) — a plan-format
+	// change, not a grouping tweak.
 
 	var currentTeamSteps []int
 	var currentRole string
