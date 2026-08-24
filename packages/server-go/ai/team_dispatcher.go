@@ -365,7 +365,10 @@ func (w *TeamWorker) runStep(step *PlanStep, stepIdx int) error {
 		Repo:  w.cfg.Repo,
 		Plan:  []PlanStep{*step},
 	}
-	contextDoc := ComposeDocContext(w.cfg.ProjectPath, DocVocabulary, DocPRD, DocModules)
+	// Narrowed to this step, exactly as the serial builder's is. It matters
+	// more here: teams run concurrently, so the same whole-document prefix
+	// would be paid by every team in flight at the same moment.
+	contextDoc := ComposeDocContextFocused(w.cfg.ProjectPath, stepQuery(step), DocVocabulary, DocPRD, DocModules)
 	if contextDoc == "" {
 		contextDoc = readContextDoc(w.cfg.ProjectPath)
 	}

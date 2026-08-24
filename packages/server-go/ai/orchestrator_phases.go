@@ -33,6 +33,13 @@ func orchestratorPlanPhase(cfg OrchestratorConfig, state *OrchestrationState, ca
 
 	// Planner reads the design-concept + vocabulary + PRD layers — every
 	// piece of documentation the orchestrator built before this phase.
+	//
+	// Deliberately NOT narrowed, unlike the build and review steps. Retrieval
+	// pays when a prompt needs one part of a document and is charged for all
+	// of it; the planner needs all of it, because the one thing a plan must
+	// not do is omit a requirement nobody thought to ask about. It also runs
+	// once per project rather than twice per step, so the whole-document read
+	// costs a rounding error against the run.
 	contextDoc := ComposeDocContext(cfg.ProjectPath, DocDesign, DocVocabulary, DocPRD)
 	if contextDoc == "" {
 		contextDoc = readContextDoc(cfg.ProjectPath) // legacy fallback
@@ -415,7 +422,11 @@ func orchestratorBuildStep(cfg OrchestratorConfig, state *OrchestrationState, st
 	// Builder reads vocabulary + PRD + the current module map so it knows
 	// where new code belongs and which terms to use. Design concept omitted
 	// here — the builder is tactical, the strategic framing is the PRD.
-	contextDoc := ComposeDocContext(cfg.ProjectPath, DocVocabulary, DocPRD, DocModules)
+	//
+	// Narrowed to this step. The step is the query: on a plan of any size most
+	// of the PRD and most of the module index describe work this step is not
+	// doing, and that text is paid for on every attempt of every step.
+	contextDoc := ComposeDocContextFocused(cfg.ProjectPath, stepQuery(step), DocVocabulary, DocPRD, DocModules)
 	if contextDoc == "" {
 		contextDoc = readContextDoc(cfg.ProjectPath) // legacy fallback
 	}
@@ -492,8 +503,9 @@ func orchestratorReviewStep(cfg OrchestratorConfig, state *OrchestrationState, s
 
 	// Reviewer reads vocabulary + PRD + module map. Design concept is omitted
 	// — by review time the concept is implemented; what matters is whether
-	// the implementation respects the contract.
-	contextDoc := ComposeDocContext(cfg.ProjectPath, DocVocabulary, DocPRD, DocModules)
+	// the implementation respects the contract. Narrowed to the step under
+	// review, for the same reason the builder's is.
+	contextDoc := ComposeDocContextFocused(cfg.ProjectPath, stepQuery(step), DocVocabulary, DocPRD, DocModules)
 	if contextDoc == "" {
 		contextDoc = readContextDoc(cfg.ProjectPath) // legacy fallback
 	}
