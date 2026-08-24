@@ -192,6 +192,80 @@ func TestPlanForCutsCheapLeversFirst(t *testing.T) {
 	}
 }
 
+// The three levers that reach execution must actually move with the tier.
+//
+// This is the top half of a two-part claim. Here: a different tier produces
+// different numbers, and they move monotonically in the direction the tier
+// names. The bottom half — that each number then constrains a real run — is
+// pinned in the ai package, one test per lever, because that is where the
+// numbers are consumed:
+//
+//	MaxConcurrency   → TestTeamDispatcher_QuotaCeilingSerialisesWork
+//	SubagentFanout   → TestBuildClaudeArgs_SubagentFanout
+//	MaxContextTokens → governedContextBudget, exercised through the context
+//	                   builder's budget
+//
+// Before that wiring existed all three were computed, published on /quota, and
+// then ignored, which is a worse failure than not having them: the dashboard
+// showed a governor steering while nothing downstream was being steered.
+func TestTierMovesEveryExecutionLever(t *testing.T) {
+	p := DefaultPolicy()
+
+	// Descending order of permission. Blocked is excluded: it is not a tighter
+	// tier, it is "do not run", and its levers are not meant to be compared on
+	// the same scale.
+	tiers := []Tier{TierExpand, TierSteady, TierConserve, TierCritical}
+
+	var prev Plan
+	for i, tier := range tiers {
+		pl := planFor(tier, p)
+		t.Logf("%-8s concurrency=%d fanout=%d context=%d model=%s effort=%s",
+			pl.TierName, pl.MaxConcurrency, pl.SubagentFanout, pl.MaxContextTokens, pl.Model, pl.Effort)
+
+		if pl.MaxConcurrency < 1 {
+			t.Errorf("%s: concurrency %d — a runnable tier must let at least one session through",
+				pl.TierName, pl.MaxConcurrency)
+		}
+		if pl.MaxContextTokens < 1 {
+			t.Errorf("%s: context budget %d — a zero budget is not a tighter budget, it is a broken one",
+				pl.TierName, pl.MaxContextTokens)
+		}
+
+		if i > 0 {
+			if pl.MaxConcurrency > prev.MaxConcurrency {
+				t.Errorf("%s allows more concurrency (%d) than %s (%d)",
+					pl.TierName, pl.MaxConcurrency, prev.TierName, prev.MaxConcurrency)
+			}
+			if pl.SubagentFanout > prev.SubagentFanout {
+				t.Errorf("%s allows more fanout (%d) than %s (%d)",
+					pl.TierName, pl.SubagentFanout, prev.TierName, prev.SubagentFanout)
+			}
+			if pl.MaxContextTokens > prev.MaxContextTokens {
+				t.Errorf("%s allows more context (%d) than %s (%d)",
+					pl.TierName, pl.MaxContextTokens, prev.TierName, prev.MaxContextTokens)
+			}
+		}
+		prev = pl
+	}
+
+	// The endpoints have to be genuinely different, not merely non-increasing.
+	// A policy where every tier resolved to the same numbers would satisfy every
+	// assertion above and steer nothing.
+	expand, critical := planFor(TierExpand, p), planFor(TierCritical, p)
+	if expand.MaxConcurrency == critical.MaxConcurrency &&
+		expand.SubagentFanout == critical.SubagentFanout &&
+		expand.MaxContextTokens == critical.MaxContextTokens {
+		t.Error("expand and critical produce identical levers — the tier is not steering anything")
+	}
+
+	// Critical is the tier where fanout matters most, and 0 is the one fanout
+	// value the CLI can be made to honour exactly (the Task tool is removed).
+	if critical.SubagentFanout != 0 {
+		t.Errorf("critical fanout = %d, want 0 — the only fanout that is enforced rather than requested",
+			critical.SubagentFanout)
+	}
+}
+
 // fakeRunner scripts CLI output per (account, subcommand). It is mutex-guarded
 // because ProbeAll and Registry.Resolve call Run for several accounts at once,
 // which is part of the Runner contract.
