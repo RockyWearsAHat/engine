@@ -1,4 +1,4 @@
-Now let me check a few more purposeful files (workspace, remote, mesh, github, discord, vpn, quality, runtimecfg, terminal, ws) and the client store/ws/index.ts and .doc/.engine dirs for context docs already present.Now check client store/ws/shared exports, and the ai/orchestrator.go split modules, plus enginedemo cmd and llama-fleet script area.I have enough to compile the module index now.# Module Index — updated 2026-08-25
+# Module Index — updated 2026-08-25
 
 | Path | Purpose | Public Interface | Critical | Notes |
 |---|---|---|---|---|

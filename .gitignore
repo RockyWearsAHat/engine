@@ -42,8 +42,10 @@ lcov.info
 coverage.out
 .nyc_output/
 .doc/coverage.jsonl
+.doc/index.db
 .doc/index.db-shm
 .doc/index.db-wal
+.doc/repo.dxcp
 
 # Electron
 *.dmg
