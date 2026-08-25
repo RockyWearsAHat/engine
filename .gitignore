@@ -41,6 +41,9 @@ lcov.info
 *.profraw
 coverage.out
 .nyc_output/
+.doc/coverage.jsonl
+.doc/index.db-shm
+.doc/index.db-wal
 
 # Electron
 *.dmg
@@ -58,12 +61,21 @@ coverage.out
 .engine/state.db
 .engine/state.db-shm
 .engine/state.db-wal
+.engine/memory/
+.engine/task-*.json
+.engine/task-*-plan.md
 .engine/projects
 .engine/projects/
 .engine/projects.migrated-*
 packages/server-go/.engine/projects
 packages/server-go/.engine/projects/
 packages/server-go/.engine/projects.migrated-*
+**/.engine/state.db
+**/.engine/state.db-shm
+**/.engine/state.db-wal
+**/.engine/memory/
+**/.engine/task-*.json
+**/.engine/task-*-plan.md
 .myeditor/state.db
 .myeditor/state.db-shm
 .myeditor/state.db-wal
