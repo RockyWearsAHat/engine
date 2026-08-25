@@ -73,6 +73,9 @@ jobs:
       - name: Build Go sidecar binary
         run: pnpm build:go
 
+      - name: Verify builds in isolation
+        run: bash scripts/verify-build.sh
+
       - name: Check desktop crate
         run: pnpm check:desktop
 
