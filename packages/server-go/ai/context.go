@@ -601,14 +601,15 @@ func stageOutputCollectorWithCallbacks(cfg OrchestratorConfig, role AgentRole) (
 // stageChatContextCreation constructs a ChatContext from config, sessionID, role, cancel, and callbacks.
 func stageChatContextCreation(cfg OrchestratorConfig, sessionID string, role AgentRole, cancel <-chan struct{}, onChunk func(string, bool), onError func(string), onToolCall func(string, any), onToolResult func(string, any, bool)) *ChatContext {
 	return &ChatContext{
-		ProjectPath:  cfg.ProjectPath,
-		SessionID:    sessionID,
-		Role:         role,
-		Cancel:       cancel,
-		OnChunk:      onChunk,
-		OnError:      onError,
-		OnToolCall:   onToolCall,
-		OnToolResult: onToolResult,
+		ProjectPath:   cfg.ProjectPath,
+		SessionID:     sessionID,
+		Role:          role,
+		Cancel:        cancel,
+		OnChunk:       onChunk,
+		OnError:       onError,
+		OnToolCall:    onToolCall,
+		OnToolResult:  onToolResult,
+		ModelOverride: cfg.RequestedModel,
 	}
 }
 

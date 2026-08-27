@@ -160,6 +160,18 @@ type OrchestratorConfig struct {
 	// TaskID namespaces task-mode orchestration state. Ignored unless TaskMode.
 	TaskID string
 
+	// RequestedModel is the caller's chosen model tier for this whole task
+	// (SARA's chooseModel — haiku/sonnet/opus, picked from an item's @tag,
+	// learned project history, or retry escalation). It reaches every phase
+	// through ChatContext.ModelOverride, the same seam a role/team override
+	// already uses, so a role or team resolution can still win over it —
+	// this is a floor for the run, not a hardcoded per-phase assignment.
+	//
+	// Before this field existed, dispatchTask had no way to carry the tier at
+	// all: every MyEditor-routed item ran at whatever Chat() resolved from
+	// env/runtime config, silently dropping the signal the caller computed.
+	RequestedModel string
+
 	// Cancel, when closed, stops the orchestrator at the next safe checkpoint.
 	Cancel <-chan struct{}
 

@@ -230,7 +230,7 @@ var runOrchestratorForTaskFn = func(cfg ai.OrchestratorConfig) (*ai.Orchestratio
 }
 
 // startTask dispatches one unit of work and returns immediately.
-func startTask(projectPath, brief, owner, repo, dedupeKey string) *engineTask {
+func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel string) *engineTask {
 	id := fmt.Sprintf("task-%d-%s", time.Now().UnixNano()/1e6, shortToken())
 	t := &engineTask{
 		ID:          id,
@@ -263,6 +263,7 @@ func startTask(projectPath, brief, owner, repo, dedupeKey string) *engineTask {
 			SessionIDPrefix: id,
 			TaskMode:        true,
 			TaskID:          id,
+			RequestedModel:  requestedModel,
 			Cancel:          t.cancel,
 			ChatFn:          aiChatFn,
 			OnPhase: func(phase, detail string) {
@@ -349,6 +350,10 @@ func registerTaskRoutes(defaultProjectPath string) {
 				// Key deduplicates a re-sent dispatch. SARA passes the worklist
 				// item's identity here.
 				Key string `json:"key"`
+				// Model is the caller's chosen model tier for this task (SARA's
+				// chooseModel). Optional — an empty value leaves model
+				// resolution exactly as it was before this field existed.
+				Model string `json:"model"`
 			}
 			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 				http.Error(w, "bad JSON: "+err.Error(), http.StatusBadRequest)
@@ -369,7 +374,7 @@ func registerTaskRoutes(defaultProjectPath string) {
 				writeJSON(w, http.StatusOK, snap)
 				return
 			}
-			t := startTask(body.Project, body.Brief, body.Owner, body.Repo, body.Key)
+			t := startTask(body.Project, body.Brief, body.Owner, body.Repo, body.Key, body.Model)
 			writeJSON(w, http.StatusAccepted, t.snapshot())
 
 		default:
