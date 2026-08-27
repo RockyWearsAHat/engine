@@ -47,6 +47,28 @@ func TestTokensPerSuccessChargesFailures(t *testing.T) {
 	}
 }
 
+// SubagentsSpawned is the observable signal for whether a run actually
+// delegated to subagents (dynamic team self-assembly) instead of one agent
+// doing everything itself. It must survive Record into the aggregated Stat,
+// or there is no way to see whether that delegation is happening at all.
+func TestLedgerRecordsSubagentsSpawned(t *testing.T) {
+	l := NewLedger(LedgerOptions{})
+	l.Record(Outcome{Role: "implement", Config: mid(), Success: true, Tokens: 10_000, SubagentsSpawned: 3, At: at("12:00")})
+	l.Record(Outcome{Role: "implement", Config: mid(), Success: true, Tokens: 10_000, SubagentsSpawned: 2, At: at("12:05")})
+	l.Record(Outcome{Role: "implement", Config: mid(), Success: true, Tokens: 10_000, At: at("12:10")}) // no delegation this run
+
+	s, ok := l.Stat("implement", mid())
+	if !ok {
+		t.Fatal("stat missing")
+	}
+	if s.SubagentsSpawned != 5 {
+		t.Errorf("SubagentsSpawned = %d, want 5 (cumulative across runs)", s.SubagentsSpawned)
+	}
+	if s.Runs != 3 {
+		t.Errorf("Runs = %d, want 3", s.Runs)
+	}
+}
+
 func TestRecommendExploresCheapFirst(t *testing.T) {
 	l := NewLedger(LedgerOptions{MinSamples: 3})
 	cands := []Config{cheap(), mid(), heavy()}
