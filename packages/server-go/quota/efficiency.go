@@ -83,6 +83,12 @@ type Outcome struct {
 	ProjectID string `json:"projectId,omitempty"`
 	// Tokens is total tokens billed for the run (input + output + cache).
 	Tokens int64 `json:"tokens"`
+	// SubagentsSpawned is how many subagents the worker itself delegated to via
+	// the Task tool during this run, when a fanout budget was advisory (not
+	// enforced at 0). This is the observable signal for whether dynamic,
+	// self-assembling team delegation actually happened on this task, as
+	// opposed to a single agent doing everything itself.
+	SubagentsSpawned int `json:"subagentsSpawned,omitempty"`
 	// QuotaPct is the observed movement in the binding window, when one was
 	// measurable. Zero means "not measured", not "free".
 	QuotaPct float64 `json:"quotaPct,omitempty"`
@@ -100,6 +106,10 @@ type Stat struct {
 	Runs      int   `json:"runs"`
 	Successes int   `json:"successes"`
 	Tokens    int64 `json:"tokens"`
+	// SubagentsSpawned is the running total of Outcome.SubagentsSpawned across
+	// all runs of this configuration — how much real dynamic team delegation
+	// this configuration has actually produced, cumulative.
+	SubagentsSpawned int `json:"subagentsSpawned,omitempty"`
 	// QuotaPct and QuotaRuns track only the runs where quota movement was
 	// actually observed, kept separate so an unmeasured run does not dilute the
 	// average toward zero.
@@ -294,6 +304,7 @@ func (l *Ledger) Record(o Outcome) {
 		s.Successes++
 	}
 	s.Tokens += o.Tokens
+	s.SubagentsSpawned += o.SubagentsSpawned
 	s.Duration += o.Duration
 	s.LastRun = o.At
 	if o.QuotaPct > 0 {
@@ -619,6 +630,9 @@ func (l *Ledger) Report() string {
 		line := fmt.Sprintf("  %-34s %3d runs  %3.0f%% ok  %s/success", s.Config.String(), s.Runs, s.SuccessRate()*100, cost)
 		if pct > 0 && s.Successes > 0 {
 			line += fmt.Sprintf("  (~%.2f%% of a window)", s.TokensPerSuccess()/1e6*pct)
+		}
+		if s.SubagentsSpawned > 0 {
+			line += fmt.Sprintf("  %d subagents delegated", s.SubagentsSpawned)
 		}
 		b.WriteString(line + "\n")
 	}

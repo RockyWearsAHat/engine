@@ -418,14 +418,15 @@ func quotaAfter(d QuotaDispatch, stats claudeRunStats, success bool) {
 		return
 	}
 	g.ledger.Record(quota.Outcome{
-		Role:      quotaRoleKey(d.Role),
-		Config:    d.Config,
-		Success:   success,
-		Tokens:    stats.TotalTokens(),
-		ProjectID: d.ProjectID,
-		Duration:  time.Since(d.startedAt),
-		At:        time.Now(),
-		QuotaPct:  quotaPct,
+		Role:             quotaRoleKey(d.Role),
+		Config:           d.Config,
+		Success:          success,
+		Tokens:           stats.TotalTokens(),
+		SubagentsSpawned: stats.SubagentsSpawned,
+		ProjectID:        d.ProjectID,
+		Duration:         time.Since(d.startedAt),
+		At:               time.Now(),
+		QuotaPct:         quotaPct,
 	})
 }
 
