@@ -297,6 +297,42 @@ func DefaultPolicy() Policy {
 	}
 }
 
+// concurrencyForHeadroom is the TierExpand concurrency, derived from real
+// headroom (the unspent share of the binding window, 0-1) instead of echoing
+// the policy constant. It scales linearly with headroom and is clamped to
+// [Steady's own ceiling, max]: Expand is the tier above Steady, so it may
+// never hand out less parallelism than Steady would, and it may only narrow
+// the static ceiling, never widen it. Only Expand calls this — the lower
+// tiers already cut concurrency on their own terms in planFor, and Blocked
+// must stay at zero.
+func concurrencyForHeadroom(max int, headroom float64) int {
+	if max < 1 {
+		return max
+	}
+	if headroom < 0 {
+		headroom = 0
+	}
+	if headroom > 1 {
+		headroom = 1
+	}
+	floor := max_(1, max*3/4) // TierSteady's ceiling, see planFor
+	scaled := int(float64(max)*headroom + 0.5)
+	if scaled < floor {
+		return floor
+	}
+	if scaled > max {
+		return max
+	}
+	return scaled
+}
+
+func max_(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 // planFor maps a tier onto concrete levers.
 //
 // The ordering of what gets cut is the interesting part, and it follows from the
@@ -477,6 +513,11 @@ func (g *Governor) Decide(ctx context.Context) Plan {
 	pl := planFor(best.as.Tier, g.policy)
 	pl.Account, pl.ConfigDir = best.acc.Name, best.acc.ConfigDir
 	pl.Assessment = best.as
+	// Expand is permission, not instruction: size its concurrency from the
+	// headroom actually left rather than the policy constant.
+	if best.as.Tier == TierExpand {
+		pl.MaxConcurrency = concurrencyForHeadroom(pl.MaxConcurrency, best.as.Headroom)
+	}
 	pl.Reason = fmt.Sprintf("%s on %q: %s", best.as.Tier, best.acc.Name, best.as.Reason)
 	return pl
 }

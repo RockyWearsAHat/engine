@@ -74,6 +74,13 @@ type engineTask struct {
 	StepsTotal  int        `json:"stepsTotal"`
 	Progress    []string   `json:"progress"`
 
+	// CallbackURL, if the caller supplied one, is POSTed to (empty body) when
+	// this task reaches a terminal state. It is a wake signal only, not a
+	// delivery guarantee: fire-and-forget, short timeout, errors ignored. The
+	// caller's GET-by-id (above) stays the mandatory source of truth -- this
+	// just lets it stop waiting on BUSY_POLL_MS and ask sooner.
+	CallbackURL string `json:"-"`
+
 	cancel chan struct{}
 	once   sync.Once
 }
@@ -134,11 +141,29 @@ func (t *engineTask) setPlan(done, total int) {
 
 func (t *engineTask) finish(status taskStatus, errMsg string) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	now := time.Now()
 	t.Status = status
 	t.FinishedAt = &now
 	t.Err = errMsg
+	callbackURL := t.CallbackURL
+	t.mu.Unlock()
+	notifyCallback(callbackURL)
+}
+
+// notifyCallback fires a fire-and-forget wake POST at task completion. Not a
+// delivery guarantee -- see the CallbackURL doc comment on engineTask. Runs
+// synchronously with a short timeout rather than in its own goroutine because
+// finish() is already called from the task's own background goroutine.
+func notifyCallback(url string) {
+	if url == "" {
+		return
+	}
+	client := http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Post(url, "application/json", nil)
+	if err != nil {
+		return
+	}
+	resp.Body.Close()
 }
 
 func (t *engineTask) stop() {
@@ -230,7 +255,7 @@ var runOrchestratorForTaskFn = func(cfg ai.OrchestratorConfig) (*ai.Orchestratio
 }
 
 // startTask dispatches one unit of work and returns immediately.
-func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel string) *engineTask {
+func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, callbackURL string) *engineTask {
 	id := fmt.Sprintf("task-%d-%s", time.Now().UnixNano()/1e6, shortToken())
 	t := &engineTask{
 		ID:          id,
@@ -239,6 +264,7 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel string
 		Status:      taskRunning,
 		Phase:       "queued",
 		StartedAt:   time.Now(),
+		CallbackURL: callbackURL,
 		cancel:      make(chan struct{}),
 	}
 	tasks.put(dedupeKey, t)
@@ -277,6 +303,24 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel string
 			OnError: func(msg string) { t.note("error", msg) },
 		}
 
+		// One orchestrator per working tree at a time. Task-mode runs edit
+		// the project's checkout directly (no worktree), so two of them on
+		// the same repo would review each other's half-written diffs. The
+		// task stays in phase "queued" while it waits — its poller reads that
+		// as "not started", not "stalled" — and different projects do not
+		// wait on each other.
+		release := projectGate.acquire(projectPath, t.cancel)
+		if release == nil {
+			t.finish(taskCanceled, "canceled while queued")
+			return
+		}
+		defer release()
+		if cancelClosed(t.cancel) {
+			t.finish(taskCanceled, "canceled while queued")
+			return
+		}
+		t.note("orchestrator", "started — working tree free")
+
 		var state *ai.OrchestrationState
 		var runErr error
 		// db.WithProject scopes the per-project database for the run, the same
@@ -302,6 +346,33 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel string
 	}()
 
 	return t
+}
+
+// projectGates serializes task-mode orchestrators per project path.
+type projectGates struct {
+	mu    sync.Mutex
+	slots map[string]chan struct{}
+}
+
+var projectGate = &projectGates{slots: map[string]chan struct{}{}}
+
+// acquire blocks until the project's slot is free or cancel fires. It
+// returns the release func, or nil if cancelled while waiting.
+func (g *projectGates) acquire(projectPath string, cancel <-chan struct{}) func() {
+	key := strings.TrimSpace(projectPath)
+	g.mu.Lock()
+	slot, ok := g.slots[key]
+	if !ok {
+		slot = make(chan struct{}, 1)
+		g.slots[key] = slot
+	}
+	g.mu.Unlock()
+	select {
+	case slot <- struct{}{}:
+		return func() { <-slot }
+	case <-cancel:
+		return nil
+	}
 }
 
 // cancelClosed reports whether a cancel channel has fired.
@@ -354,6 +425,11 @@ func registerTaskRoutes(defaultProjectPath string) {
 				// chooseModel). Optional — an empty value leaves model
 				// resolution exactly as it was before this field existed.
 				Model string `json:"model"`
+				// CallbackURL, if set, is POSTed to (fire-and-forget, empty
+				// body) when this task reaches a terminal state. Optional --
+				// an empty value leaves the caller polling GET-by-id exactly
+				// as it always has.
+				CallbackURL string `json:"callbackUrl"`
 			}
 			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 				http.Error(w, "bad JSON: "+err.Error(), http.StatusBadRequest)
@@ -374,7 +450,7 @@ func registerTaskRoutes(defaultProjectPath string) {
 				writeJSON(w, http.StatusOK, snap)
 				return
 			}
-			t := startTask(body.Project, body.Brief, body.Owner, body.Repo, body.Key, body.Model)
+			t := startTask(body.Project, body.Brief, body.Owner, body.Repo, body.Key, body.Model, body.CallbackURL)
 			writeJSON(w, http.StatusAccepted, t.snapshot())
 
 		default:

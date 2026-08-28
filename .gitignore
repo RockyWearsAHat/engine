@@ -124,3 +124,5 @@ packages/server-go/discord/discord-state.json
 
 # compiled demo binary (16MB build artifact)
 packages/server-go/enginedemo
+# dx: the local index is rebuildable from .doc/repo.dxcp
+.doc/local.dxcp
