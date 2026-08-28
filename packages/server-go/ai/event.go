@@ -21,6 +21,9 @@ const (
 	EventTeamBlocked  EventType = "team_blocked"
 	EventTeamFailed   EventType = "team_failed"
 
+	// Agent communication events
+	EventAgentMessage EventType = "agent_message"
+
 	// Validation events
 	EventValidationStarted EventType = "validation_started"
 	EventValidationPassed  EventType = "validation_passed"

@@ -87,6 +87,9 @@ type AgentCommsHub struct {
 	// no disk mirror (bare NewAgentCommsHub in tests).
 	projectPath string
 	slug        string
+	// bus: optional event bus for emitting message-arrival events.
+	// Set via SetBus if the hub is part of an orchestrator run.
+	bus         *EventBus
 }
 
 var projectAgentComms sync.Map
@@ -107,6 +110,14 @@ func NewAgentCommsHubAt(projectPath, slug string) *AgentCommsHub {
 	h.projectPath = strings.TrimSpace(projectPath)
 	h.slug = strings.TrimSpace(slug)
 	return h
+}
+
+// SetBus attaches an event bus for emitting message-arrival events.
+// Called once when the hub is created for an orchestrator run.
+func (h *AgentCommsHub) SetBus(bus *EventBus) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.bus = bus
 }
 
 // AgentCommsForProject returns the shared communication pool for a project path.
@@ -246,8 +257,23 @@ func (h *AgentCommsHub) Send(from, to, subject, body, replyTo string) (AgentMess
 	}
 	h.messages[message.ID] = message
 	h.inbox[to] = append(h.inbox[to], message.ID)
+	bus := h.bus
 	h.mu.Unlock()
 	h.snapshotToDisk()
+
+	// Emit event if bus is attached
+	if bus != nil {
+		bus.Emit(Event{
+			Type:      EventAgentMessage,
+			Timestamp: time.Now(),
+			Payload: EventPayload(
+				"from", from,
+				"to", to,
+				"subject", subject,
+			),
+		})
+	}
+
 	return message, nil
 }
 

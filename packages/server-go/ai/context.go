@@ -530,6 +530,8 @@ type ChatContext struct {
 	AgentName string
 	// AgentComms is the project-scoped peer message hub used by lead/worker agents.
 	AgentComms *AgentCommsHub
+	// Brain is the orchestration brain for this project (optional, used by team workers).
+	Brain *OrchestrationBrain
 }
 
 // isCancelled returns true if the context's cancel channel has been closed.
@@ -922,6 +924,21 @@ var toolRegistry = []anthropicTool{
 		Description: "Signal that the autonomous build session is complete. Call this ONLY after committing all code with git_commit. Passing a summary is optional.",
 		InputSchema: objSchema(nil, map[string]any{
 			"summary": strProp("Brief summary of what was built and committed"),
+		}),
+	},
+	{
+		Name:        "agent_request_member",
+		Description: "Request the lead agent spawn a new team member with the specified role. Lead grants if headroom allows. Call this to ask for a specialist mid-run.",
+		InputSchema: objSchema([]string{"role", "brief"}, map[string]any{
+			"role":  strProp("Role name (e.g., 'tester', 'reviewer', 'documenter')"),
+			"brief": strProp("Concise task definition for the new member"),
+		}),
+	},
+	{
+		Name:        "agent_retire",
+		Description: "Signal to the lead that this member is done and should be released from the team. Use when your assigned work is complete.",
+		InputSchema: objSchema(nil, map[string]any{
+			"reason": strProp("Optional reason for retiring (e.g., 'assigned work complete', 'blocked on external input')"),
 		}),
 	},
 	// ── Editor UI ────────────────────────────────────────────────────────────
@@ -1577,7 +1594,17 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		if summary == "" {
 			summary = "done"
 		}
+		// Mark lead as signaled done if this is the lead agent
+		if ctx.Brain != nil && strings.Contains(ctx.AgentName, "lead") {
+			ctx.Brain.MarkLeadSignaledDone()
+		}
 		return summary, false
+
+	case "agent_request_member":
+		return executeAgentRequestMember(input, ctx)
+
+	case "agent_retire":
+		return executeAgentRetire(input, ctx)
 
 	case "mesh_exec":
 		return executeMeshExec(input, ctx)

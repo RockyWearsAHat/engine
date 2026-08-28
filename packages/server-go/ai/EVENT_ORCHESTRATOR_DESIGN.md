@@ -55,8 +55,16 @@ The planner phase now enforces task decomposition before dispatch:
 - MCP bridge (`ai/mcp_bridge.go`): `claude -p` workers get `--mcp-config <tmp.json> --allowedTools mcp__engine__*`. The config spawns `<server binary> mcp-bridge` (override `ENGINE_MCP_BRIDGE_CMD`) with env `ENGINE_MCP_PROJECT`, `ENGINE_MCP_AGENT`, `ENGINE_MCP_ROLE`, `ENGINE_MCP_ADDR`. Bridge = stdio JSON-RPC 2.0 (`initialize`, `tools/list`, `tools/call`, `ping`); each `tools/call` POSTs to the running Engine at `/mcp/tool`, which runs the tool in-process against the project hub. Empty addr = in-process. The POST client has **no timeout** — `agent_await` blocks as long as the worker asks; the bridge process dies with the CLI.
 - Bridged tools: `agent_list agent_send agent_inbox agent_receive agent_await signal_done discord_post_progress discord_dm mesh_exec search_tools`. File/shell tools are not bridged — Claude Code has its own. Temp config removed after the run.
 - `--disallowedTools Task` only when governor fanout == 0. Positive fanout = advisory budget in the system prompt.
-- Teams are still step buckets: `createTeamsFromPlan` groups by title keyword (`db`, `frontend`, `api`, `general`); every member runs `RoleAutonomousBuilder`; `lead_planner.go` composition not wired (slice H).
-- No mid-run member spawn / retire yet (slice H).
+- **Slice H (Self-Shaping Teams)**: `createTeamsFromPlan` now:
+  - Creates mandatory teams: `lead-<iter>`, `documenter-<iter>`, `verifier-<iter>` on every iteration (no steps assigned; provide coordination/review).
+  - Groups remaining plan steps by mapped role (`tester`, `reviewer`, `architect`, `documenter`, `scaffolder`, `implementer`, `builder`).
+  - Each team within an iteration gets a unique ID including the iteration counter to avoid replan collisions.
+  - Teams are reset on replanning: `Dispatcher.Reset()` clears the workers map when `brain.ResetTeams()` is called.
+- **Workflow End Condition**: Project completes when BOTH true: (a) lead member signaled done (via `signal_done` tool), (b) verifier/reviewer result is PASS. Outer loop remains capped at max iterations (3); if either condition fails, loop replans and retries.
+- **Member Lifecycle**: Lead and other members run steps assigned by the plan. Mandatory teams (lead, documenter, verifier) have no steps and complete immediately; they exist to provide coordination and review. 
+  - **Dynamic Member Spawn**: `agent_request_member(role, brief)` sends a message to `lead` inbox. `phaseWaitTeams` subscribes to `EventAgentMessage` and calls `eo.handleMemberRequest(msg)` when a message with subject "Request new member:" arrives. This parses role and brief, calls `eo.brain.AddTeam(teamID, role, [], nil)` to create the ad hoc team, and calls `eo.dispatcher.DispatchTeam(teamID)` to start it running immediately.
+  - **Dynamic Member Retire**: `agent_retire(reason)` sends a message to `lead` inbox with subject "Agent retiring". `phaseWaitTeams` routes this to `eo.handleMemberRetire(msg)`, which calls `eo.dispatcher.ReleaseTeam(teamID)` to stop the worker and update brain/comms status to "retired".
+- **Event-Driven Team Coordination**: `phaseWaitTeams` is purely event-driven (no wall-clock polling). It subscribes to `EventTeamDone`, `EventTeamFailed`, `EventUserRedirect`, `EventCancel`, and `EventAgentMessage`. When a team completes or fails, it checks if all teams are done (return), then dispatches newly-ready teams. One-shot initial check for the zero-teams case (no event can arrive if nothing was ever created), then the loop is 100% event-driven. Message-arrival events (`EventAgentMessage`) from the comms hub enable immediate reaction to agent requests without polling delay.
 
 ## Task API Surface (`task_api.go`)
 

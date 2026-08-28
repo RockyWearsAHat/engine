@@ -53,11 +53,12 @@ type OrchestrationBrain struct {
 	Teams        map[string]TeamState `json:"teams"`
 
 	// Lifecycle
-	OuterIterations int       `json:"outer_iterations"`
-	StartedAt       time.Time `json:"started_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	CompletedAt     time.Time `json:"completed_at,omitempty"`
-	LastValidation  string    `json:"last_validation,omitempty"`
+	OuterIterations  int       `json:"outer_iterations"`
+	StartedAt        time.Time `json:"started_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	CompletedAt      time.Time `json:"completed_at,omitempty"`
+	LastValidation   string    `json:"last_validation,omitempty"`
+	LeadSignaledDone bool      `json:"lead_signaled_done,omitempty"`
 
 	// Session tracking
 	SessionIDPrefix string `json:"session_id_prefix"`
@@ -409,6 +410,15 @@ func (b *OrchestrationBrain) ResetTeams() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.Teams = make(map[string]TeamState)
+	b.LeadSignaledDone = false
+	b.UpdatedAt = time.Now()
+}
+
+// MarkLeadSignaledDone records that the lead member called signal_done.
+func (b *OrchestrationBrain) MarkLeadSignaledDone() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.LeadSignaledDone = true
 	b.UpdatedAt = time.Now()
 }
 

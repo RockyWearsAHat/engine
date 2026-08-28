@@ -12,6 +12,42 @@ import (
 
 var teamDispatcherStopTimeout = 30 * time.Second
 
+// roleFromString maps a role string to an AgentRole constant.
+func roleFromString(role string) AgentRole {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "lead":
+		return RoleInteractive
+	case "planner":
+		return RolePlanner
+	case "scaffolder":
+		return RoleScaffolder
+	case "implementer":
+		return RoleImplementer
+	case "tester":
+		return RoleTester
+	case "reviewer":
+		return RoleReviewer
+	case "documenter":
+		return RoleDocumenter
+	case "intaker":
+		return RoleIntaker
+	case "griller":
+		return RoleGriller
+	case "prdwriter":
+		return RolePRDWriter
+	case "moduleindexer":
+		return RoleModuleIndexer
+	case "architect":
+		return RoleArchitect
+	case "verifier":
+		return RoleReviewer // Verifier is a skeptic reviewer
+	case "builder":
+		return RoleAutonomousBuilder
+	default:
+		return RoleAutonomousBuilder
+	}
+}
+
 // TeamWorker represents a single execution context for a team.
 type TeamWorker struct {
 	teamID   string
@@ -138,8 +174,13 @@ func (d *TeamDispatcher) DispatchTeam(teamID string) error {
 	}
 
 	d.workers[teamID] = worker
+
+	// Update team status to running immediately to prevent re-dispatch during phaseWaitTeams
+	if err := d.brain.UpdateTeamStatus(teamID, "running"); err != nil {
+		log.Printf("team dispatcher: failed to mark team %s running: %v", teamID, err)
+	}
 	if d.comms != nil {
-		d.comms.Register(teamID, t.Role, "queued")
+		d.comms.Register(teamID, t.Role, "running")
 	}
 
 	d.wg.Add(1)
@@ -220,7 +261,8 @@ func (w *TeamWorker) markTeamDone() {
 
 // run executes the team's work on assigned steps.
 func (w *TeamWorker) run() {
-	// Mark team as running
+	// Team status should already be "running" from DispatchTeam, but update it again
+	// to ensure comms are in sync (markTeamRunning is idempotent)
 	w.markTeamRunning()
 
 	for _, stepIdx := range w.steps {
@@ -272,6 +314,11 @@ func (w *TeamWorker) run() {
 		if w.cfg.OnPlanUpdate != nil {
 			w.cfg.OnPlanUpdate(extractOrchestrationState(w.brain))
 		}
+	}
+
+	// Lead team signals done when it completes (no assigned steps for coordination)
+	if strings.Contains(w.teamID, "lead") && w.brain != nil {
+		w.brain.MarkLeadSignaledDone()
 	}
 
 	// Mark team as done
@@ -373,19 +420,19 @@ func (w *TeamWorker) runGatedStep(step *PlanStep, stepIdx int) error {
 		stepIdx, OrchestratorMaxStepAttempts, summarise(lastReason, 300))
 }
 
-// runStep executes one plan step with the team's role (builder → reviewer pipeline).
+// runStep executes one plan step with the team's assigned role.
 func (w *TeamWorker) runStep(step *PlanStep, stepIdx int) error {
 	// Create a session for this step
 	sessionID := fmt.Sprintf("%s-team-%s-step-%d", w.cfg.SessionIDPrefix, w.teamID, stepIdx)
 
-	// Build the step using the same shared builder contract as the main
-	// orchestrator path, so team workers inherit the full autonomous loop
-	// instead of a separate hardcoded prompt variant.
+	// Build the step using the team's assigned role. Each specialist runs its own workflow
+	// instead of all running RoleAutonomousBuilder.
 	cc := newPhaseChat(w.cfg, sessionID)
-	cc.Ctx.Role = RoleAutonomousBuilder
+	cc.Ctx.Role = roleFromString(w.role)
 	cc.Ctx.MaxTurns = 0
 	cc.Ctx.AgentName = w.teamID
 	cc.Ctx.AgentComms = w.comms
+	cc.Ctx.Brain = w.brain
 
 	state := &OrchestrationState{
 		Owner: w.cfg.Owner,
@@ -423,6 +470,14 @@ func (w *TeamWorker) runStep(step *PlanStep, stepIdx int) error {
 	}
 
 	return fmt.Errorf("step timed out after %d turns", w.maxTurns)
+}
+
+// Reset clears all dispatched workers ahead of replanning.
+// Called when transitioning to a new outer iteration to reset dispatcher state.
+func (d *TeamDispatcher) Reset() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.workers = make(map[string]*TeamWorker)
 }
 
 // Stop gracefully stops all workers.
@@ -477,4 +532,38 @@ func (d *TeamDispatcher) activeLocked() int {
 		}
 	}
 	return count
+}
+
+// ReleaseTeam removes a team from active workers and marks it done in the brain.
+// Called when an agent retires and should be released.
+func (d *TeamDispatcher) ReleaseTeam(teamID string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	w, ok := d.workers[teamID]
+	if !ok {
+		return fmt.Errorf("team %s not found in dispatcher", teamID)
+	}
+
+	// Cancel the worker's context to stop it
+	if w.cancel != nil {
+		w.cancel()
+	}
+
+	// Remove from workers map
+	delete(d.workers, teamID)
+
+	// Update team status in brain
+	if d.brain != nil {
+		if err := d.brain.UpdateTeamStatus(teamID, "retired"); err != nil {
+			log.Printf("failed to mark team %s retired: %v", teamID, err)
+		}
+	}
+
+	// Update comms status
+	if d.comms != nil {
+		d.comms.Register(teamID, w.role, "retired")
+	}
+
+	return nil
 }
