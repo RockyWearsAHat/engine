@@ -33,6 +33,20 @@ This file is intentionally limited to what exists in source today. If code and t
 5. `orchestrator_intake.go`
 - Implements intake artifacts and role handoff (`RoleGriller`, `RolePRDWriter`) used by event orchestration.
 
+## Plan Decomposition Gate (Slice J)
+
+The planner phase now enforces task decomposition before dispatch:
+- Each step must be ≤1 file cluster (detected by >3 verbs → rejected).
+- Each step must have ≤1 acceptance check.
+- Each step must be ≤30 min for haiku (single concern).
+- Steps cannot use "and then" or "also" (compound steps rejected).
+- `validatePlanDecomposition` (orchestrator_phases.go) inspects steps and counts action verbs.
+- If a step violates decomposition: planner gets asked to split (max 2 passes).
+- Log line: `plan: <n> steps, split <m>`. On second rejection, gate fails.
+- Planner prompt (caveman style) explicitly constrains output and warns against compound steps.
+- `buildPlanSplitPrompt` gives feedback on why a step was split, helps planner break it into smaller concerns.
+- Test spec: plan with step "add migration and then wire UI and write docs" rejected, split into 3 clean steps; each step has acceptance non-empty.
+
 ## Current Structural Reality
 
 - Comms hub: `AgentCommsForProject` per project (keyed by project path, no task slug). Orchestrator registers `lead`; `TeamDispatcher` registers every team id as `queued`; `claudecodeProvider.RunLoop` registers the worker (`registerChatAgent`) **before** the CLI starts, so `agent_list` on a peer already shows it. `registerChatAgent` always writes status `active` — it overwrites the dispatcher's `queued` on the same id. Intended: CLI start *is* the queued→active edge. Bridge tool calls self-register an *unknown* worker as `active`; a peer already in the hub keeps its status (`IsRegistered` guard in `ExecuteBridgeTool`).
