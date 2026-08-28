@@ -129,8 +129,9 @@ func TestParseClaudeStreamHarvestsUsage(t *testing.T) {
 	}
 }
 
-// An "allowed" event fires on every single run. Reporting it would bury the two
-// states that actually require the operator to do something.
+// An "allowed" event fires on every single run, and "allowed_warning" is the
+// normal state of a fleet that targets 100% of its window — neither is an error.
+// Only rejection and paid overage reach OnError.
 func TestOnlyActionableLimitStatesAreSurfaced(t *testing.T) {
 	t.Setenv("ENGINE_QUOTA", "0")
 	resetQuotaGateForTest()
@@ -141,7 +142,7 @@ func TestOnlyActionableLimitStatesAreSurfaced(t *testing.T) {
 		wantErrIn string
 	}{
 		{"allowed is silent", `{"status":"allowed","rateLimitType":"five_hour"}`, ""},
-		{"warning is reported", `{"status":"allowed_warning","rateLimitType":"five_hour"}`, "approaching"},
+		{"warning is not an error", `{"status":"allowed_warning","rateLimitType":"five_hour"}`, ""},
 		{"rejection is reported", `{"status":"rejected","rateLimitType":"five_hour"}`, "rate limited"},
 		{"overage is reported", `{"status":"allowed","rateLimitType":"five_hour","isUsingOverage":true}`, "OVERAGE"},
 	}

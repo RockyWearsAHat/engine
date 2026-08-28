@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"strconv"
@@ -410,15 +411,21 @@ func parseClaudeStreamWithStats(ctx *ChatContext, r io.Reader, allToolCalls *[]T
 			// Surface only the states that change what the operator should do. An
 			// "allowed" event arrives on every single run; reporting it would bury
 			// the two that matter in noise.
-			if ctx.OnError != nil {
-				switch {
-				case lev.Status == "rejected":
+			switch {
+			case lev.Status == "rejected":
+				if ctx.OnError != nil {
 					ctx.OnError("claudecode: rate limited on " + lev.Type + describeReset(lev))
-				case lev.UsingOverage:
-					ctx.OnError("claudecode: this account is now spending PAID OVERAGE — the subscription is no longer flat-cost")
-				case lev.Status == "allowed_warning":
-					ctx.OnError("claudecode: approaching the " + lev.Type + " limit" + describeReset(lev))
 				}
+			case lev.UsingOverage:
+				if ctx.OnError != nil {
+					ctx.OnError("claudecode: this account is now spending PAID OVERAGE — the subscription is no longer flat-cost")
+				}
+			case lev.Status == "allowed_warning":
+				// Not an error. The run is still allowed; the window is merely
+				// high (the fleet targets 100% at reset, so this is the normal
+				// state for most of the week). Routing it to OnError made every
+				// step of a task look failed and got the task cancelled.
+				log.Printf("claudecode: %s window high%s (run still allowed)", lev.Type, describeReset(lev))
 			}
 		case "assistant":
 			for _, blk := range ev.Message.Content {
