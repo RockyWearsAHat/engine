@@ -253,7 +253,10 @@ func run() error {
 		}
 		// The gauge is read from a cache, but a cold read shells out to the CLI.
 		// Bound it so a hung probe cannot hold the connection open indefinitely.
-		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+		// Detached from the request: a caller that gives up early (engine polls
+		// with a short timeout) must not cancel the probe — its result is cached
+		// and answers the next poll.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 90*time.Second)
 		defer cancel()
 
 		if r.URL.Query().Get("format") == "text" {
@@ -298,7 +301,10 @@ func run() error {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+		// Detached from the request: a caller that gives up early (engine polls
+		// with a short timeout) must not cancel the probe — its result is cached
+		// and answers the next poll.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 90*time.Second)
 		defer cancel()
 		w.Header().Set("Content-Type", "application/json")
 		snap, ok := ai.QuotaSnapshot(ctx)
