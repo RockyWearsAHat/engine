@@ -374,3 +374,38 @@ func TestFakeClaudeStub_AgentSendLandsInHub(t *testing.T) {
 		t.Errorf("team-api missing from hub: %+v", hub.List())
 	}
 }
+
+// ── status ownership ────────────────────────────────────────────────────────
+
+// Bridge self-registers an unknown worker, but never stomps a known peer's
+// status — the dispatcher owns that.
+func TestExecuteBridgeTool_DoesNotClobberKnownStatus(t *testing.T) {
+	project := t.TempDir()
+	hub := AgentCommsForProject(project)
+	hub.Register("lead", "orchestrator", "running")
+	hub.Register("w1", "builder", "done")
+
+	resp := ExecuteBridgeTool(BridgeToolRequest{Project: project, Agent: "w1", Role: "builder", Name: "agent_list"})
+	if resp.IsError {
+		t.Fatalf("agent_list errored: %s", resp.Result)
+	}
+	for _, p := range hub.List() {
+		if p.ID == "w1" && p.Status != "done" {
+			t.Fatalf("w1 status clobbered to %q", p.Status)
+		}
+	}
+
+	// Unknown worker: self-heal registers it active.
+	resp = ExecuteBridgeTool(BridgeToolRequest{Project: project, Agent: "w2", Name: "agent_list"})
+	if resp.IsError {
+		t.Fatalf("agent_list errored: %s", resp.Result)
+	}
+	if !hub.IsRegistered("w2") {
+		t.Fatal("w2 must self-register")
+	}
+	for _, p := range hub.List() {
+		if p.ID == "w2" && (p.Status != "active" || p.Role != "worker") {
+			t.Fatalf("w2 = %+v", p)
+		}
+	}
+}

@@ -2,6 +2,8 @@ package ai
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -213,4 +215,53 @@ func TestAgentCommsTools(t *testing.T) {
 			t.Fatalf("expected unavailable %s error, got err=%v result=%s", toolName, isErr, unavailable)
 		}
 	}
+}
+
+// Comms must be visible on disk: 2 peers + 1 msg-N in .engine/comms-<slug>.json.
+func TestAgentCommsHub_SnapshotToDisk(t *testing.T) {
+	project := t.TempDir()
+	hub := NewAgentCommsHubAt(project, "rui-1")
+	hub.Register("lead", "orchestrator", "running")
+	hub.Register("w1", "builder", "active")
+	sent, err := hub.Send("lead", "w1", "do thing", "build it", "")
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	path := CommsSnapshotPath(project, "rui-1")
+	if !strings.HasSuffix(path, filepath.Join(".engine", "comms-rui-1.json")) {
+		t.Fatalf("snapshot path = %q", path)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("snapshot not on disk: %v", err)
+	}
+	var snap struct {
+		Agents   []AgentPeer    `json:"agents"`
+		Messages []AgentMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		t.Fatalf("bad snapshot json: %v\n%s", err, raw)
+	}
+	if len(snap.Agents) != 2 || snap.Agents[0].ID != "lead" || snap.Agents[1].ID != "w1" {
+		t.Fatalf("agents = %+v", snap.Agents)
+	}
+	if len(snap.Messages) != 1 {
+		t.Fatalf("messages = %+v", snap.Messages)
+	}
+	m := snap.Messages[0]
+	if m.ID != sent.ID || m.ID != "msg-1" || m.From != "lead" || m.To != "w1" || m.Subject != "do thing" {
+		t.Fatalf("message = %+v", m)
+	}
+
+	// No slug → comms.json. No project → no file, no panic.
+	bare := NewAgentCommsHubAt(project, "")
+	bare.Register("x", "r", "s")
+	if _, err := os.Stat(filepath.Join(project, ".engine", "comms.json")); err != nil {
+		t.Fatalf("slugless snapshot missing: %v", err)
+	}
+	if CommsSnapshotPath("", "z") != "" {
+		t.Fatal("empty project must give empty path")
+	}
+	NewAgentCommsHub().Register("y", "r", "s")
 }

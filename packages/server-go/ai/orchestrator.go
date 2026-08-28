@@ -847,8 +847,14 @@ func ShouldRunEventOrchestrator(ctx context.Context, cfg OrchestratorConfig) (bo
 	if cfg.TaskMode {
 		mode = "task " + taskSlug(cfg.TaskID)
 	}
-	return true, fmt.Sprintf("%s: %d plan step(s) known, quota tier %s allows %d concurrent teams — comms on",
-		mode, cfg.PlanSteps, levers.TierName, levers.MaxConcurrency)
+	// Task-mode dispatch never sets PlanSteps today (task_api.go passes 0).
+	// Say "unknown", not "0 known" — the log must not claim a count nobody has.
+	steps := "plan step count unknown"
+	if cfg.PlanSteps > 0 {
+		steps = fmt.Sprintf("%d plan step(s) known", cfg.PlanSteps)
+	}
+	return true, fmt.Sprintf("%s: %s, quota tier %s allows %d concurrent teams — comms on",
+		mode, steps, levers.TierName, levers.MaxConcurrency)
 }
 
 func enrichOrchestratorBrief(projectPath, brief string) string {
