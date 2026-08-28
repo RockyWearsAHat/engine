@@ -382,7 +382,9 @@ func (w *TeamWorker) runStep(step *PlanStep, stepIdx int) error {
 	// orchestrator path, so team workers inherit the full autonomous loop
 	// instead of a separate hardcoded prompt variant.
 	cc := newPhaseChat(w.cfg, sessionID)
-	cc.Ctx.Role = RoleAutonomousBuilder
+	if strings.TrimSpace(w.cfg.RequestedRole) == "" {
+		cc.Ctx.Role = RoleAutonomousBuilder
+	}
 	cc.Ctx.MaxTurns = 0
 	cc.Ctx.AgentName = w.teamID
 	cc.Ctx.AgentComms = w.comms
