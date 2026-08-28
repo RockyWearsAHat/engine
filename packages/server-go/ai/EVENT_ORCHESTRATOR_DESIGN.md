@@ -60,10 +60,16 @@ The planner phase now enforces task decomposition before dispatch:
   - Groups remaining plan steps by mapped role (`tester`, `reviewer`, `architect`, `documenter`, `scaffolder`, `implementer`, `builder`).
   - Each team within an iteration gets a unique ID including the iteration counter to avoid replan collisions.
   - Teams are reset on replanning: `Dispatcher.Reset()` clears the workers map when `brain.ResetTeams()` is called.
+- **Team Execution**: Each team runs in a goroutine (started in `DispatchTeam`). Teams with no assigned steps (lead, documenter, verifier) complete immediately. Teams with steps run `runGatedStep` for each step, applying critic + reviewer gates, retrying on REJECT with coaching on slice I (first REJECT → coach rewrite brief, second REJECT → coach with reviewer feedback, third+ REJECT → escalate model).
+- **Terminal State Events**: Every terminal path emits an event so `phaseWaitTeams` can respond:
+  - Team completes all steps → `markTeamDone()` emits `EventTeamDone`.
+  - Team fails on a step (after retry exhausted) → `markTeamFailed()` emits `EventTeamFailed`.
+  - Team is retired via `agent_retire` → `ReleaseTeam()` marks status "done" and emits `EventTeamDone`.
+  - Dispatch fails → error returned immediately (non-event path).
 - **Workflow End Condition**: Project completes when BOTH true: (a) lead member signaled done (via `signal_done` tool), (b) verifier/reviewer result is PASS. Outer loop remains capped at max iterations (3); if either condition fails, loop replans and retries.
 - **Member Lifecycle**: Lead and other members run steps assigned by the plan. Mandatory teams (lead, documenter, verifier) have no steps and complete immediately; they exist to provide coordination and review. 
   - **Dynamic Member Spawn**: `agent_request_member(role, brief)` sends a message to `lead` inbox. `phaseWaitTeams` subscribes to `EventAgentMessage` and calls `eo.handleMemberRequest(msg)` when a message with subject "Request new member:" arrives. This parses role and brief, calls `eo.brain.AddTeam(teamID, role, [], nil)` to create the ad hoc team, and calls `eo.dispatcher.DispatchTeam(teamID)` to start it running immediately.
-  - **Dynamic Member Retire**: `agent_retire(reason)` sends a message to `lead` inbox with subject "Agent retiring". `phaseWaitTeams` routes this to `eo.handleMemberRetire(msg)`, which calls `eo.dispatcher.ReleaseTeam(teamID)` to stop the worker and update brain/comms status to "retired".
+  - **Dynamic Member Retire**: `agent_retire(reason)` sends a message to `lead` inbox with subject "Agent retiring". `phaseWaitTeams` routes this to `eo.handleMemberRetire(msg)`, which calls `eo.dispatcher.ReleaseTeam(teamID)` to mark the team as done and emit `EventTeamDone` so the wait loop can continue.
 - **Event-Driven Team Coordination**: `phaseWaitTeams` is purely event-driven (no wall-clock polling). It subscribes to `EventTeamDone`, `EventTeamFailed`, `EventUserRedirect`, `EventCancel`, and `EventAgentMessage`. When a team completes or fails, it checks if all teams are done (return), then dispatches newly-ready teams. One-shot initial check for the zero-teams case (no event can arrive if nothing was ever created), then the loop is 100% event-driven. Message-arrival events (`EventAgentMessage`) from the comms hub enable immediate reaction to agent requests without polling delay.
 
 ## Task API Surface (`task_api.go`)
