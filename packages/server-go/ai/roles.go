@@ -75,6 +75,11 @@ const (
 	// orchestrator can reason about routing before committing to any work.
 	// It writes nothing, runs no tools, and answers with a single word.
 	RoleRouter
+
+	// RoleCoach rewrites a rejected step brief for retry on the same model.
+	// On REJECT (attempt 1), coaches decompose, state acceptance, name files.
+	// Coach tier is one above the worker (sonnet when worker is haiku).
+	RoleCoach
 )
 
 // roleConfig holds the lean system prompt template and tool names pre-granted
@@ -396,6 +401,17 @@ var roleConfigs = map[AgentRole]roleConfig{
 			"Project: {{project}}  Branch: {{branch}}",
 		}, "\n"),
 		tools: []string{}, // empty (non-nil): no bootstrap discovery
+	},
+
+	RoleCoach: {
+		// Rewrites rejected step briefs. One-turn: reads rejection + original brief → returns decomposed brief.
+		prompt: strings.Join([]string{
+			"You coach a builder who failed review. Rewrite the brief for retry on the same model.",
+			"Input: original brief + reviewer findings + acceptance criteria.",
+			"Output: decomposed brief (1 file-cluster, ≤30 min of haiku work), clearer acceptance, specific reviewer notes addressed.",
+			"Caveman style: short, exact, no filler. One output only — the new brief text.",
+		}, "\n"),
+		tools: []string{}, // no tools; pure rewrite pass
 	},
 }
 

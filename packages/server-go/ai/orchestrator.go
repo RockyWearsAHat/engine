@@ -53,6 +53,11 @@ type PlanStep struct {
 	// CriticRejects counts consecutive diff-critic rejections of this step, so
 	// a critic that keeps objecting cannot stall the step forever.
 	CriticRejects int    `json:"criticRejects,omitempty"`
+	// ReviewRejects counts reviewer REJECT verdicts on this step, driving coaching.
+	ReviewRejects int `json:"reviewRejects,omitempty"`
+	// CoachingBrief is the re-written brief after coaching (REJECT attempt 1).
+	// On retry, builder gets it instead of the original Body.
+	CoachingBrief string `json:"coachingBrief,omitempty"`
 	LastFeedback  string `json:"lastFeedback,omitempty"`
 	UpdatedAt     string `json:"updatedAt,omitempty"`
 }
@@ -781,11 +786,48 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 			}
 			emit(cfg.OnPhase, "review", fmt.Sprintf("step %d approved", step.Index))
 		case ReviewReject:
+			step.ReviewRejects++
 			step.LastFeedback = reviewMsg
 			if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
 				emitErr(cfg.OnError, fmt.Sprintf("persist rejected step feedback: %v", err))
 			}
-			emit(cfg.OnPhase, "review", fmt.Sprintf("step %d rejected: %s", step.Index, summarise(reviewMsg, 200)))
+			emit(cfg.OnPhase, "review", fmt.Sprintf("step %d rejected (attempt %d): %s", step.Index, step.ReviewRejects, summarise(reviewMsg, 200)))
+
+			// Coaching: 1st REJECT → coach + retry; 2nd REJECT → coach + inject feedback; 3rd REJECT → escalate.
+			if step.ReviewRejects == 1 {
+				emit(cfg.OnPhase, "coaching", fmt.Sprintf("step %d: spawning coach to rewrite brief", step.Index))
+				newBrief := orchestratorCoachStep(cfg, step, cancel)
+				if newBrief != "" {
+					step.CoachingBrief = newBrief
+					if cfg.OnCoach != nil {
+						cfg.OnCoach(1, false)
+					}
+					emit(cfg.OnPhase, "coaching", fmt.Sprintf("step %d: brief rewritten, retrying", step.Index))
+				} else {
+					if cfg.OnProgress != nil {
+						cfg.OnProgress(fmt.Sprintf("step %d: coach failed, retrying with original brief", step.Index))
+					}
+				}
+			} else if step.ReviewRejects == 2 {
+				emit(cfg.OnPhase, "coaching", fmt.Sprintf("step %d: second REJECT, coaching again with feedback injected", step.Index))
+				newBrief := orchestratorCoachStep(cfg, step, cancel)
+				if newBrief != "" {
+					step.CoachingBrief = newBrief
+					if cfg.OnCoach != nil {
+						cfg.OnCoach(2, false)
+					}
+				}
+				emit(cfg.OnPhase, "coaching", fmt.Sprintf("step %d: escalation on next REJECT", step.Index))
+			} else if step.ReviewRejects >= 3 {
+				// Escalate: bump model tier, log escalation, allow one more attempt.
+				escalated := true
+				if cfg.OnCoach != nil {
+					cfg.OnCoach(step.ReviewRejects, escalated)
+				}
+				emit(cfg.OnPhase, "coaching", fmt.Sprintf("step %d: escalating model tier after %d REJECTs", step.Index, step.ReviewRejects))
+				// ModelOverride will be bumped by the next builder call via escalateModelTier.
+				// Outer loop retries with escalated model.
+			}
 			// Outer loop retries with reviewer feedback embedded in the next prompt.
 		default:
 			// Inconclusive review — treat as soft pass but flag.
