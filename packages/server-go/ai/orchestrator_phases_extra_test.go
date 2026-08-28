@@ -427,3 +427,175 @@ func TestOrchestratorValidatePhase_Reject(t *testing.T) {
 		t.Error("expected error for rejected validation")
 	}
 }
+
+// ── Plan decomposition gate ───────────────────────────────────────────────────
+
+// TestValidatePlanDecomposition_CleanPlan verifies a well-decomposed plan passes.
+func TestValidatePlanDecomposition_CleanPlan(t *testing.T) {
+	steps := []PlanStep{
+		{Index: 1, Title: "Scaffold project", Body: "Create go.mod and initial structure."},
+		{Index: 2, Title: "Add test", Body: "Write first failing test."},
+		{Index: 3, Title: "Implement feature", Body: "Minimal code to pass test."},
+	}
+	if err := validatePlanDecomposition(steps); err != nil {
+		t.Fatalf("expected clean plan to pass, got %v", err)
+	}
+}
+
+// TestValidatePlanDecomposition_RejectsAndThen verifies "and then" is rejected.
+func TestValidatePlanDecomposition_RejectsAndThen(t *testing.T) {
+	steps := []PlanStep{
+		{Index: 1, Title: "Add migration and then wire UI", Body: "Create migration, then wire UI."},
+	}
+	err := validatePlanDecomposition(steps)
+	if err == nil {
+		t.Fatal("expected error for 'and then'")
+	}
+	if !strings.Contains(err.Error(), "and then") {
+		t.Fatalf("expected 'and then' in error, got %v", err)
+	}
+}
+
+// TestValidatePlanDecomposition_RejectsAlso verifies "also" is rejected.
+func TestValidatePlanDecomposition_RejectsAlso(t *testing.T) {
+	steps := []PlanStep{
+		{Index: 1, Title: "Add feature", Body: "Implement feature and also write docs."},
+	}
+	err := validatePlanDecomposition(steps)
+	if err == nil {
+		t.Fatal("expected error for 'also'")
+	}
+	if !strings.Contains(err.Error(), "also") {
+		t.Fatalf("expected 'also' in error, got %v", err)
+	}
+}
+
+// TestValidatePlanDecomposition_RejectsTooManyVerbs verifies >3 verbs are rejected.
+func TestValidatePlanDecomposition_RejectsTooManyVerbs(t *testing.T) {
+	steps := []PlanStep{
+		{Index: 1, Title: "Add migration and write UI and create tests and deploy", Body: "Multiple actions."},
+	}
+	err := validatePlanDecomposition(steps)
+	if err == nil {
+		t.Fatal("expected error for too many verbs")
+	}
+	if !strings.Contains(err.Error(), "verbs") {
+		t.Fatalf("expected 'verbs' in error, got %v", err)
+	}
+}
+
+// TestValidatePlanDecomposition_SplitConcerns rejects compound steps.
+// The prompt says this plan should be split into 3 steps.
+func TestValidatePlanDecomposition_SplitConcerns(t *testing.T) {
+	steps := []PlanStep{
+		{Index: 1, Title: "Add migration and then wire UI and write docs", Body: "Combine three tasks."},
+	}
+	err := validatePlanDecomposition(steps)
+	if err == nil {
+		t.Fatal("expected error for compound step")
+	}
+	if !strings.Contains(err.Error(), "and then") {
+		t.Fatalf("expected decomposition error, got %v", err)
+	}
+}
+
+// TestCountActionVerbs verifies verb counting heuristic.
+func TestCountActionVerbs(t *testing.T) {
+	tests := []struct {
+		text string
+		want int
+	}{
+		{"add migration", 1},
+		{"add migration and wire UI", 2},
+		{"add migration and wire UI and write docs", 3},
+		{"add test write implementation refactor", 4}, // add + test + write + refactor
+		{"add test write impl refactor update", 5},   // add + test + write + refactor + update
+	}
+	for _, tt := range tests {
+		got := countActionVerbs(tt.text)
+		if got != tt.want {
+			t.Errorf("countActionVerbs(%q) = %d, want %d", tt.text, got, tt.want)
+		}
+	}
+}
+
+// TestOrchestratorPlanPhase_SplitsOversizedPlan verifies gate splits multi-concern steps.
+func TestOrchestratorPlanPhase_SplitsOversizedPlan(t *testing.T) {
+	dir := setupPhasesDB(t)
+	callCount := 0
+	cfg := OrchestratorConfig{
+		ProjectPath:     dir,
+		SessionIDPrefix: "t",
+		OnPhase: func(kind, msg string) {
+			if kind == "plan" && strings.Contains(msg, "split") {
+				// Capture split logging.
+			}
+		},
+		OnProgress: func(string) {},
+		OnError:    func(string) {},
+		ChatFn: func(c *ChatContext, input string) {
+			callCount++
+			if callCount == 1 {
+				// First plan: oversized step with "and then".
+				c.OnChunk("1. Add migration and then wire UI and write docs\n   Body\n   Acceptance: `go test ./...` passes\n", false)
+				return
+			}
+			if callCount == 2 {
+				// Split pass: 3 clean steps.
+				c.OnChunk("1. Add migration\n   Create migration.\n   Acceptance: `go test ./...` passes\n2. Wire UI\n   Connect frontend.\n   Acceptance: `go test ./...` passes\n3. Write docs\n   Document.\n   Acceptance: `go test ./...` passes\n", false)
+				return
+			}
+			// Critique phase: approve the split plan.
+			c.OnChunk("COMPLETE", false)
+		},
+	}
+	state := &OrchestrationState{Brief: "build a feature", Owner: "o", Repo: "r"}
+	cancel := make(chan struct{})
+	if err := orchestratorPlanPhase(cfg, state, cancel); err != nil {
+		t.Fatalf("orchestratorPlanPhase: %v", err)
+	}
+	if callCount < 2 {
+		t.Fatalf("expected at least planner + split pass, got %d calls", callCount)
+	}
+	if len(state.Plan) != 3 {
+		t.Fatalf("expected 3 split steps, got %d", len(state.Plan))
+	}
+	// Verify each step has acceptance.
+	for i, step := range state.Plan {
+		if step.Acceptance == "" {
+			t.Fatalf("step %d missing acceptance", i+1)
+		}
+	}
+}
+
+// TestOrchestratorPlanPhase_RejectsAfterTwoSplitAttempts verifies max 2 passes.
+func TestOrchestratorPlanPhase_RejectsAfterTwoSplitAttempts(t *testing.T) {
+	dir := setupPhasesDB(t)
+	callCount := 0
+	cfg := OrchestratorConfig{
+		ProjectPath:     dir,
+		SessionIDPrefix: "t",
+		OnPhase:         func(string, string) {},
+		OnProgress:      func(string) {},
+		OnError:         func(string) {},
+		ChatFn: func(c *ChatContext, _ string) {
+			callCount++
+			if callCount == 1 {
+				// First plan: oversized.
+				c.OnChunk("1. Add migration and then wire UI\n   Body\n   Acceptance: `go test ./...` passes\n", false)
+				return
+			}
+			// Split pass: still oversized (still has "and then").
+			c.OnChunk("1. Add migration and then wire UI\n   Still combined.\n   Acceptance: `go test ./...` passes\n", false)
+		},
+	}
+	state := &OrchestrationState{Brief: "brief", Owner: "o", Repo: "r"}
+	cancel := make(chan struct{})
+	err := orchestratorPlanPhase(cfg, state, cancel)
+	if err == nil {
+		t.Fatal("expected error after second split rejection")
+	}
+	if !strings.Contains(err.Error(), "plan gate rejected") {
+		t.Fatalf("expected 'plan gate rejected' in error, got %v", err)
+	}
+}
