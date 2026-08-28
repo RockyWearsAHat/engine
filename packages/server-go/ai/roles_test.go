@@ -18,6 +18,16 @@ func TestAgentRoleConstants_Distinct(t *testing.T) {
 		RoleReviewer,
 		RoleDocumenter,
 		RoleAutonomousBuilder,
+		RoleGriller,
+		RolePRDWriter,
+		RoleModuleIndexer,
+		RoleArchitect,
+		RoleRouter,
+		RoleCoach,
+		RoleDesignReviewer,
+	}
+	if len(roles) != 15 {
+		t.Fatalf("expected 15 roles, got %d", len(roles))
 	}
 	seen := map[AgentRole]bool{}
 	for _, r := range roles {
@@ -290,6 +300,39 @@ func TestBuildRoleSystemPrompt_AutonomousBuilder_BansWorkspaceProjectMirrors(t *
 	} {
 		if !strings.Contains(p, required) {
 			t.Errorf("expected autonomous builder prompt to contain %q, got %q", required, p)
+		}
+	}
+}
+
+func TestBuildRoleSystemPrompt_DesignReviewer_ContainsJSONSchema(t *testing.T) {
+	p := buildRoleSystemPrompt(RoleDesignReviewer, "/proj", "", "")
+	if !strings.Contains(p, "JSON") {
+		t.Errorf("expected JSON reference in design reviewer prompt, got %q", p)
+	}
+	if !strings.Contains(p, "violations") {
+		t.Errorf("expected violations field in design reviewer prompt, got %q", p)
+	}
+	if !strings.Contains(p, "\"pass\"") {
+		t.Errorf("expected pass field schema in design reviewer prompt, got %q", p)
+	}
+}
+
+func TestRoleBootstrapTools_DesignReviewer_ReadOnly(t *testing.T) {
+	tools := roleBootstrapTools(RoleDesignReviewer)
+	if tools == nil {
+		t.Fatal("expected non-nil tool list for RoleDesignReviewer")
+	}
+	if len(tools) > 0 {
+		t.Errorf("expected no tools for design reviewer (read-only), got %v", tools)
+	}
+}
+
+func TestRoleBootstrapTools_DesignReviewer_NoWriteOrShell(t *testing.T) {
+	tools := roleBootstrapTools(RoleDesignReviewer)
+	disallowed := []string{"write_file", "shell", "git_commit", "create_directory"}
+	for _, disallow := range disallowed {
+		if slices.Contains(tools, disallow) {
+			t.Errorf("design reviewer must not have %q tool, got %v", disallow, tools)
 		}
 	}
 }

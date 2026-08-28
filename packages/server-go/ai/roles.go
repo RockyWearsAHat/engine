@@ -80,6 +80,12 @@ const (
 	// On REJECT (attempt 1), coaches decompose, state acceptance, name files.
 	// Coach tier is one above the worker (sonnet when worker is haiku).
 	RoleCoach
+
+	// RoleDesignReviewer reviews design consistency across surfaces.
+	// Input: 2 images (baseline, current) + design.dx rules text.
+	// Output: strict JSON {pass, violations:[{rule, where, severity}]}.
+	// Haiku, no code tools, read-only. Reachable from /task with role "design-reviewer".
+	RoleDesignReviewer
 )
 
 // roleConfig holds the lean system prompt template and tool names pre-granted
@@ -412,6 +418,29 @@ var roleConfigs = map[AgentRole]roleConfig{
 			"Caveman style: short, exact, no filler. One output only — the new brief text.",
 		}, "\n"),
 		tools: []string{}, // no tools; pure rewrite pass
+	},
+
+	RoleDesignReviewer: {
+		// Reviews design consistency across surfaces. Compares baseline vs current.
+		// Input: 2 images + design.dx rules. Output: strict JSON verdicts only.
+		prompt: strings.Join([]string{
+			"You review design consistency. Compare baseline image vs current image.",
+			"Given: baseline.png, current.png, design.dx rules text.",
+			"Respond ONLY with this JSON schema (no prose):",
+			"{",
+			"  \"pass\": boolean,",
+			"  \"violations\": [",
+			"    {",
+			"      \"rule\": \"rule name\",",
+			"      \"where\": \"location/description\",",
+			"      \"severity\": \"error|warning|info\"",
+			"    }",
+			"  ]",
+			"}",
+			"Rules: compare color palette, spacing, typography, alignment, proportion, visual hierarchy.",
+			"Violations only when current differs from baseline AND violates stated rules.",
+		}, "\n"),
+		tools: []string{}, // read-only: no write, shell, or code tools
 	},
 }
 
