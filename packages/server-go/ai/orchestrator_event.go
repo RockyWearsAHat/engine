@@ -230,10 +230,20 @@ func (eo *EventOrchestrator) eventLoop() {
 			return
 		}
 
+		// Check for cancel event that might have arrived after teams finished
+		select {
+		case <-cancelEv:
+			eo.setFailure(context.Canceled)
+			eo.bus.Emit(Event{Type: EventProjectCanceled, Timestamp: time.Now()})
+			return
+		default:
+			// No pending cancel, continue with validation
+		}
+
 		// Validate the build
 		eo.cfg.OnPhase("validate", "")
 		valid, feedback := eo.phaseValidate()
-		if valid {
+		if valid && eo.brain.LeadSignaledDone {
 			eo.cfg.OnProgress("✓ Validation passed! Project ready.")
 			eo.brain.MarkCompleted()
 			eo.bus.Emit(Event{Type: EventProjectDone, Timestamp: time.Now()})

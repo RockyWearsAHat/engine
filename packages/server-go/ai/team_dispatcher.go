@@ -310,6 +310,11 @@ func (w *TeamWorker) run() {
 		}
 	}
 
+	// Lead team signals done when it completes (no assigned steps for coordination)
+	if strings.Contains(w.teamID, "lead") && w.brain != nil {
+		w.brain.MarkLeadSignaledDone()
+	}
+
 	// Mark team as done
 	w.markTeamDone()
 }
@@ -394,6 +399,7 @@ func (w *TeamWorker) runStep(step *PlanStep, stepIdx int) error {
 	cc.Ctx.MaxTurns = 0
 	cc.Ctx.AgentName = w.teamID
 	cc.Ctx.AgentComms = w.comms
+	cc.Ctx.Brain = w.brain
 
 	state := &OrchestrationState{
 		Owner: w.cfg.Owner,

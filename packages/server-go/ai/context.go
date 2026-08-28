@@ -530,6 +530,8 @@ type ChatContext struct {
 	AgentName string
 	// AgentComms is the project-scoped peer message hub used by lead/worker agents.
 	AgentComms *AgentCommsHub
+	// Brain is the orchestration brain for this project (optional, used by team workers).
+	Brain *OrchestrationBrain
 }
 
 // isCancelled returns true if the context's cancel channel has been closed.
@@ -1591,6 +1593,10 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		summary := strings.TrimSpace(str("summary"))
 		if summary == "" {
 			summary = "done"
+		}
+		// Mark lead as signaled done if this is the lead agent
+		if ctx.Brain != nil && strings.Contains(ctx.AgentName, "lead") {
+			ctx.Brain.MarkLeadSignaledDone()
 		}
 		return summary, false
 
