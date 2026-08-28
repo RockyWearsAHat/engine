@@ -49,9 +49,6 @@ const (
 	taskDone     taskStatus = "done"
 	taskFailed   taskStatus = "failed"
 	taskCanceled taskStatus = "canceled"
-	// taskLostOnRestart: registry reloaded from tasks.json, task was running,
-	// process that ran it is gone. Terminal. SARA re-dispatches.
-	taskLostOnRestart taskStatus = "lost-on-restart"
 )
 
 // taskProgressLines is how much of the phase narration is kept per task.
@@ -466,7 +463,7 @@ func (r *taskRegistry) load(path string) int {
 			t.Lost = true
 			t.FinishedAt = &now
 			t.Err = "engine restarted while task was running"
-			t.Progress = append(t.Progress, now.UTC().Format("15:04:05")+" lost-on-restart: engine restarted")
+			t.Progress = append(t.Progress, now.UTC().Format("15:04:05")+" failed (lost): engine restarted while running")
 			lost++
 		}
 		r.tasks[t.ID] = t
@@ -698,7 +695,7 @@ func shortToken() string {
 func registerTaskRoutes(defaultProjectPath string) {
 	tasksFilePath = taskRegistryPath(defaultProjectPath)
 	if lost := tasks.load(tasksFilePath); lost > 0 {
-		log.Printf("task api: reloaded %s — %d task(s) lost-on-restart", tasksFilePath, lost)
+		log.Printf("task api: reloaded %s — %d task(s) marked failed+lost (was running when engine restarted)", tasksFilePath, lost)
 	}
 	tasks.persist()
 

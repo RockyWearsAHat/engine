@@ -217,16 +217,20 @@ func TestTaskAPI_WakeFiresOnCancelWithPayload(t *testing.T) {
 	t.Setenv(wakePortEnv, "25555")
 	project := t.TempDir()
 	registerTaskRoutes(project)
+	// ready closes once stats + coach recorded. Cancel only after — sleep
+	// guessed and flaked (payload tokens 0).
+	ready := make(chan struct{}, 1)
 	runOrchestratorForTaskFn = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
 		cfg.OnRunStats(ai.RunStats{Model: "haiku", InputTokens: 10, OutputTokens: 5, SubagentsSpawned: 1, Seen: true})
 		cfg.OnRunStats(ai.RunStats{Model: "haiku", InputTokens: 10, OutputTokens: 5, Seen: true})
 		cfg.OnCoach(1, false)
+		close(ready)
 		<-cfg.Cancel
 		return nil, nil
 	}
 	_, out := postTask(t, mux, map[string]any{"project": project, "brief": "cancel me"})
 	id := out["id"].(string)
-	time.Sleep(50 * time.Millisecond)
+	<-ready
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/task/cancel?id="+id, nil))
 	if rec.Code != http.StatusOK {
