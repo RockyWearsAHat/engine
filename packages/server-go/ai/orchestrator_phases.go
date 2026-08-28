@@ -61,7 +61,32 @@ func orchestratorPlanPhase(cfg OrchestratorConfig, state *OrchestrationState, ca
 		state.Plan = repaired
 		return nil
 	}
+
+	// Plan gate: decomposition into single-concern steps. Max 2 passes.
+	splitCount := 0
+	for splitCount < 2 {
+		decompositionErr := validatePlanDecomposition(steps)
+		if decompositionErr == nil {
+			break
+		}
+		if splitCount > 0 {
+			// Second rejection — fail the gate.
+			emit(cfg.OnPhase, "plan", fmt.Sprintf("plan: %d steps, split %d (rejected twice)", len(steps), splitCount))
+			return fmt.Errorf("plan gate rejected (step decomposition): %w", decompositionErr)
+		}
+		// First rejection — ask planner to split.
+		emit(cfg.OnPhase, "plan", fmt.Sprintf("plan: %d steps, split %d (replan)", len(steps), splitCount+1))
+		improved, repairErr := orchestratorSplitPlanPhase(cfg, state, oc.String(), decompositionErr.Error(), cancel)
+		if repairErr != nil {
+			emit(cfg.OnPhase, "plan", fmt.Sprintf("plan split failed: %v", repairErr))
+			return fmt.Errorf("plan split pass failed: %w", repairErr)
+		}
+		steps = improved
+		splitCount++
+	}
+
 	state.Plan = steps
+	emit(cfg.OnPhase, "plan", fmt.Sprintf("plan: %d steps, split %d", len(steps), splitCount))
 
 	// Structure is sound — now run ONE adversarial completeness critique. A
 	// well-formatted but weak plan passes validatePlanQuality; this gate asks
@@ -209,6 +234,80 @@ func validatePlanQuality(steps []PlanStep) error {
 	return nil
 }
 
+// validatePlanDecomposition enforces the task decomposition contract:
+// each step is ≤1 file cluster, ≤1 acceptance check, doable by haiku in 30 min.
+// Rejects steps that combine multiple concerns with "and then"/"also" or >3 verbs.
+func validatePlanDecomposition(steps []PlanStep) error {
+	var issues []string
+
+	for _, s := range steps {
+		combined := s.Title + " " + s.Body
+
+		// Check for "and then" or "also" — signals of combined concerns.
+		if strings.Contains(strings.ToLower(combined), " and then ") || strings.Contains(strings.ToLower(combined), " also ") {
+			issues = append(issues, fmt.Sprintf("step %d: contains 'and then' or 'also' (split into separate steps)", s.Index))
+		}
+
+		// Count action verbs (heuristic: simple words likely verbs + common action starters).
+		verbCount := countActionVerbs(combined)
+		if verbCount > 3 {
+			issues = append(issues, fmt.Sprintf("step %d: %d verbs (max 3 per step; split into smaller steps)", s.Index, verbCount))
+		}
+	}
+
+	if len(issues) > 0 {
+		return fmt.Errorf("plan decomposition violations:\n  %s", strings.Join(issues, "\n  "))
+	}
+	return nil
+}
+
+// countActionVerbs estimates action verbs in text. Counts common TDD-shaped verbs
+// and known verb starters to detect oversized steps. Not exhaustive — aims to catch
+// multi-concern steps like "add migration and then wire UI and write docs".
+func countActionVerbs(text string) int {
+	lower := strings.ToLower(text)
+	verbs := []string{
+		"add", "write", "create", "build", "implement", "scaffold", "wire",
+		"modify", "update", "fix", "patch", "refactor", "optimize",
+		"test", "verify", "validate", "review", "check", "assert",
+		"run", "execute", "deploy", "publish", "ship",
+		"read", "fetch", "load", "parse", "extract",
+		"handle", "process", "transform", "convert", "map",
+	}
+
+	count := 0
+	for _, verb := range verbs {
+		// Count each occurrence of " verb " (word boundaries).
+		pattern := " " + verb + " "
+		count += strings.Count(" "+lower+" ", pattern)
+	}
+	return count
+}
+
+// orchestratorSplitPlanPhase asks the planner to split a plan that failed decomposition.
+// The planner receives the original plan, the decomposition error, and the brief;
+// it must produce a new plan where each step is ≤1 concern.
+func orchestratorSplitPlanPhase(cfg OrchestratorConfig, state *OrchestrationState, badPlanText, decompositionError string, cancel <-chan struct{}) ([]PlanStep, error) {
+	sessionID := fmt.Sprintf("%s-plan-split-%d", chooseSessionPrefix(cfg), time.Now().UnixNano())
+	if err := db.CreateSession(sessionID, cfg.ProjectPath, ""); err != nil {
+		return nil, fmt.Errorf("create plan split session: %w", err)
+	}
+
+	ctx, oc := newChatContextForRole(cfg, sessionID, RolePlanner, cancel)
+
+	prompt := buildPlanSplitPrompt(state.Brief, badPlanText, decompositionError)
+	cfg.chatFnFor()(ctx, prompt)
+
+	steps := parsePlanFromText(oc.String())
+	if len(steps) == 0 {
+		return nil, fmt.Errorf("split output empty or unparsable; got %d chars", len(oc.String()))
+	}
+	if err := validatePlanQuality(steps); err != nil {
+		return nil, fmt.Errorf("split plan lacks acceptance commands: %w", err)
+	}
+	return steps, nil
+}
+
 // hasRunnableAcceptance returns true if the acceptance criterion contains a
 // recognizable shell command. A plan step without a verifiable command isn't
 // actionable — the reviewer has no way to confirm completion.
@@ -276,22 +375,38 @@ func buildPlannerPromptWithContext(brief, contextDoc string) string {
 		b.WriteString(strings.TrimSpace(contextDoc))
 		b.WriteString("\n\n")
 	}
-	b.WriteString("Produce a concrete, TDD-shaped numbered build plan.\n\n")
+	b.WriteString("Produce a numbered build plan. TDD shape. Caveman style.\n\n")
 	b.WriteString("BRIEF:\n")
 	b.WriteString(brief)
-	b.WriteString("\n\nOutput exactly this format, no preamble, no closing remarks:\n")
+	b.WriteString("\n\nFormat (no preamble, no remarks):\n")
 	b.WriteString("1. <Title>\n")
-	b.WriteString("   <One paragraph: which module/file gets a failing test, what behaviour the test pins down, and the minimal implementation that satisfies it. Then one sentence on the refactor pass that follows green.>\n")
-	b.WriteString("   Acceptance: <Observable success criterion testable from the command line — e.g. `go test ./pkg/foo/...` passes, `curl /health` returns 200 with {\"ok\":true}, `cli --help` prints expected usage.>\n\n")
+	b.WriteString("   <One paragraph: module/file, failing test, minimal impl, refactor.>\n")
+	b.WriteString("   Acceptance: <Shell command + expected outcome.>\n\n")
 	b.WriteString("Rules:\n")
 	b.WriteString("- 5–12 steps. Each is one vertical slice: failing test → minimal implementation → refactor for depth.\n")
-	b.WriteString("- Step 1 must scaffold the project (go.mod / package.json / Cargo.toml / etc.) AND include the very first failing test.\n")
-	b.WriteString("- Steps must use the vocabulary above — never invent a new name for an existing entity.\n")
-	b.WriteString("- Each Acceptance line is an exact command + expected outcome.\n")
-	b.WriteString("- Second-to-last step exercises the application end-to-end LOCALLY (boot + interact + assert).\n")
-	b.WriteString("- FINAL step ships the project to wherever the brief implies it belongs — a publicly reachable URL, a tagged release with built artifacts, a package on a free registry, or any other natural delivery target. You decide what 'shipped' means for this project. Prefer free, no-card-required hosting; never assume paid tiers. If shipping requires credentials the runner does not have, use credential_set or discord_dm to obtain them before attempting — never invent tokens, never skip shipping.\n")
-	b.WriteString("- Acceptance for the final step must be a runnable command that proves the public artifact works (e.g. `curl -sf <URL>` returns expected content, `gh release view v0.1.0` shows attached binaries). Localhost-only acceptance is NOT sufficient for the final step.\n")
-	b.WriteString("- After shipping succeeds, the final step must write the public URL (live site, release page, registry page — whichever applies) to `.engine/live-url.txt` so downstream behavioral validation hits the public artifact, not localhost.\n")
+	b.WriteString("- Each step ≤ 30 min for haiku, ≤ 1 file cluster, ≤ 1 acceptance check. NO 'and then', NO 'also'. Max 3 action verbs per step.\n")
+	b.WriteString("- Step 1 scaffolds the project (go.mod / package.json / Cargo.toml / etc.) AND the very first failing test.\n")
+	b.WriteString("- Use vocabulary above — never invent new names.\n")
+	b.WriteString("- Each Acceptance is an exact shell command + outcome.\n")
+	b.WriteString("- Second-to-last step: full end-to-end locally (boot + interact + assert).\n")
+	b.WriteString("- FINAL step ships public (URL, release, registry, etc.). Acceptance must prove public artifact works (e.g. `curl -sf <URL>` or `gh release view v0.1.0`). NOT localhost-only. After success: write URL to `.engine/live-url.txt`.\n")
+	return b.String()
+}
+
+func buildPlanSplitPrompt(brief, badPlanText, decompositionError string) string {
+	var b strings.Builder
+	b.WriteString("Split this plan. Each step must be ≤ 1 concern, ≤ 30 min haiku, ≤ 1 acceptance check. NO 'and then', NO 'also', max 3 action verbs per step.\n\n")
+	b.WriteString("BRIEF:\n")
+	b.WriteString(strings.TrimSpace(brief))
+	b.WriteString("\n\nPLAN TO SPLIT:\n")
+	b.WriteString(strings.TrimSpace(badPlanText))
+	b.WriteString("\n\nREASONS TO SPLIT:\n")
+	b.WriteString(strings.TrimSpace(decompositionError))
+	b.WriteString("\n\nOutput only numbered steps in required format. No preamble.\n")
+	b.WriteString("1. <Title>\n")
+	b.WriteString("   <One paragraph.>\n")
+	b.WriteString("   Acceptance: <Shell command + outcome.>\n\n")
+	b.WriteString("Keep 5-12 steps; split oversized steps into smaller ones. Preserve original intent/order. Every step must pass decomposition (single concern, no 'and then'/'also', ≤3 verbs).\n")
 	return b.String()
 }
 
