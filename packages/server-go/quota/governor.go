@@ -461,7 +461,9 @@ func (g *Governor) Decide(ctx context.Context) Plan {
 	var toProbe []Account
 	if p, fresh := g.Pooled(); fresh {
 		for _, a := range accounts {
-			if _, ok := p.Find(accountKey(a)); !ok {
+			// Row missing OR row with no reading (primary's probe failed) → probe here.
+			sa, ok := p.Find(accountKey(a))
+			if !ok || (sa.SessionPct < 0 && sa.WeekPct < 0) {
 				toProbe = append(toProbe, a)
 			}
 		}

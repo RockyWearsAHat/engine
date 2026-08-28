@@ -98,6 +98,40 @@ func TestGovernorPrefersFreshPooled(t *testing.T) {
 	}
 }
 
+// Fresh pooled row with no reading (-1/-1: primary's own probe failed) must
+// not block local probe. Governor probes locally, source = local.
+func TestGovernorProbesLocallyWhenPooledRowHasNoReading(t *testing.T) {
+	now := at("12:00")
+	r := &fakeRunner{
+		auth:  map[string]string{"work": authJSON("a@example.com", "org-1")},
+		usage: map[string]string{"work": usageJSON(10, 10, "2:30pm", "Aug 26 at 12:00pm")},
+	}
+	reg := NewRegistry(r, Account{Name: "work", ConfigDir: "/w"})
+	reg.Resolve(context.Background())
+	prober := NewProber(r, time.Minute)
+	prober.SetClock(func() time.Time { return now })
+	g := NewGovernor(reg, prober, DefaultPolicy())
+	g.SetClock(func() time.Time { return now })
+
+	g.SetPooled(PooledSnapshot{Machine: "primary", GeneratedAt: now.Add(-30 * time.Second), Accounts: []SnapshotAccount{
+		{Key: "org:org-1", Name: "work", SessionPct: -1, WeekPct: -1, PacePct: -1},
+	}})
+	pl := g.Decide(context.Background())
+	if r.calls["work:usage"] != 1 {
+		t.Fatalf("local probe ran %d times, want 1 (pooled row had no reading)", r.calls["work:usage"])
+	}
+	st := g.Status(context.Background())
+	if st.Accounts[0].Source != "local" {
+		t.Fatalf("source = %q, want local when pooled row has no reading", st.Accounts[0].Source)
+	}
+	if !st.Accounts[0].Ok {
+		t.Fatalf("account not ok after local probe: %s", st.Accounts[0].Error)
+	}
+	if pl.Tier == TierBlocked {
+		t.Errorf("blocked despite healthy local probe: %s", pl.Reason)
+	}
+}
+
 func TestSnapshotExportsKeyAndPace(t *testing.T) {
 	now := at("12:00")
 	r := &fakeRunner{
