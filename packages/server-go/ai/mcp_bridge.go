@@ -142,12 +142,15 @@ func ExecuteBridgeTool(req BridgeToolRequest) BridgeToolResponse {
 		return BridgeToolResponse{Result: "mcp bridge: agent identity missing", IsError: true}
 	}
 	ctx := bridgeChatContext(req.Project, req.Agent)
-	// Worker may call before its launcher registered it (race) — self-heal.
-	role := strings.TrimSpace(req.Role)
-	if role == "" {
-		role = "worker"
+	// Worker may call before its launcher registered it (race) — self-heal,
+	// but only when unknown. Known peer: dispatcher owns its status, leave it.
+	if !ctx.AgentComms.IsRegistered(ctx.AgentName) {
+		role := strings.TrimSpace(req.Role)
+		if role == "" {
+			role = "worker"
+		}
+		ctx.AgentComms.Register(ctx.AgentName, role, "active")
 	}
-	ctx.AgentComms.Register(ctx.AgentName, role, "active")
 	if req.Input == nil {
 		req.Input = map[string]any{}
 	}
@@ -171,8 +174,10 @@ func MCPBridgeHTTPHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(ExecuteBridgeTool(req))
 }
 
-// bridgeHTTPClient: long timeout. agent_await blocks on purpose.
-var bridgeHTTPClient = &http.Client{Timeout: 10 * time.Minute}
+// bridgeHTTPClient has no Timeout on purpose: agent_await blocks as long as the worker wants. A
+// wall-clock cap here turned a long wait into a fake "engine unreachable".
+// Bridge process dies with the CLI, so nothing leaks.
+var bridgeHTTPClient = &http.Client{}
 
 // callBridgeTool: HTTP hop when addr set, in-process otherwise.
 func callBridgeTool(addr string, req BridgeToolRequest) BridgeToolResponse {

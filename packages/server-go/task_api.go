@@ -289,6 +289,7 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, callb
 			SessionIDPrefix: id,
 			TaskMode:        true,
 			TaskID:          id,
+			PlanSteps:       0, // unknown at dispatch time — see ShouldRunEventOrchestrator comment
 			RequestedModel:  requestedModel,
 			Cancel:          t.cancel,
 			ChatFn:          aiChatFn,

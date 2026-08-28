@@ -3,6 +3,8 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -81,6 +83,10 @@ type AgentCommsHub struct {
 	messages map[string]AgentMessage
 	inbox    map[string][]string
 	nextID   int
+	// projectPath + slug: where snapshotToDisk writes. Empty projectPath =
+	// no disk mirror (bare NewAgentCommsHub in tests).
+	projectPath string
+	slug        string
 }
 
 var projectAgentComms sync.Map
@@ -94,7 +100,17 @@ func NewAgentCommsHub() *AgentCommsHub {
 	}
 }
 
+// NewAgentCommsHubAt creates a pool that mirrors itself to
+// <projectPath>/.engine/comms[-slug].json on every Register/Send.
+func NewAgentCommsHubAt(projectPath, slug string) *AgentCommsHub {
+	h := NewAgentCommsHub()
+	h.projectPath = strings.TrimSpace(projectPath)
+	h.slug = strings.TrimSpace(slug)
+	return h
+}
+
 // AgentCommsForProject returns the shared communication pool for a project path.
+// Hub keyed by project only (no slug) — mirror lands in .engine/comms.json.
 func AgentCommsForProject(projectPath string) *AgentCommsHub {
 	key := strings.TrimSpace(projectPath)
 	if key == "" {
@@ -103,26 +119,85 @@ func AgentCommsForProject(projectPath string) *AgentCommsHub {
 	if existing, ok := projectAgentComms.Load(key); ok {
 		return existing.(*AgentCommsHub)
 	}
-	created := NewAgentCommsHub()
+	created := NewAgentCommsHubAt(strings.TrimSpace(projectPath), "")
 	actual, _ := projectAgentComms.LoadOrStore(key, created)
 	return actual.(*AgentCommsHub)
 }
 
+// CommsSnapshotPath is where a hub's disk mirror lives; "" when no project.
+func CommsSnapshotPath(projectPath, slug string) string {
+	projectPath = strings.TrimSpace(projectPath)
+	if projectPath == "" {
+		return ""
+	}
+	name := "comms.json"
+	if s := strings.TrimSpace(slug); s != "" {
+		name = "comms-" + s + ".json"
+	}
+	return filepath.Join(projectPath, ".engine", name)
+}
+
+// commsSnapshot is the on-disk shape of a hub.
+type commsSnapshot struct {
+	UpdatedAt time.Time      `json:"updatedAt"`
+	Agents    []AgentPeer    `json:"agents"`
+	Messages  []AgentMessage `json:"messages"`
+}
+
+// snapshotToDisk mirrors peers + messages to .engine/comms[-slug].json so
+// operators/tests see live comms, not just memory. Caller must NOT hold h.mu.
+// Best effort: disk trouble never breaks comms.
+func (h *AgentCommsHub) snapshotToDisk() {
+	path := CommsSnapshotPath(h.projectPath, h.slug)
+	if path == "" {
+		return
+	}
+	h.mu.Lock()
+	snap := commsSnapshot{UpdatedAt: time.Now().UTC()}
+	for _, a := range h.agents {
+		snap.Agents = append(snap.Agents, a)
+	}
+	for _, m := range h.messages {
+		snap.Messages = append(snap.Messages, m)
+	}
+	h.mu.Unlock()
+	sort.Slice(snap.Agents, func(i, j int) bool { return snap.Agents[i].ID < snap.Agents[j].ID })
+	sort.Slice(snap.Messages, func(i, j int) bool {
+		return snap.Messages[i].CreatedAt.Before(snap.Messages[j].CreatedAt) ||
+			(snap.Messages[i].CreatedAt.Equal(snap.Messages[j].CreatedAt) && snap.Messages[i].ID < snap.Messages[j].ID)
+	})
+	data, err := json.MarshalIndent(snap, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	_ = os.WriteFile(path, data, 0o644)
+}
+
 // Register adds or updates a live peer in the pool.
 func (h *AgentCommsHub) Register(id, role, status string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return
 	}
+	h.mu.Lock()
 	h.agents[id] = AgentPeer{
 		ID:        id,
 		Role:      strings.TrimSpace(role),
 		Status:    strings.TrimSpace(status),
 		UpdatedAt: time.Now().UTC(),
 	}
+	h.mu.Unlock()
+	h.snapshotToDisk()
+}
+
+// IsRegistered reports whether id is a known peer. Bridge uses it so a
+// worker's tool call does not stomp a status the dispatcher already set.
+func (h *AgentCommsHub) IsRegistered(id string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, ok := h.agents[strings.TrimSpace(id)]
+	return ok
 }
 
 // List returns all registered peers sorted by ID for deterministic prompts.
@@ -140,9 +215,6 @@ func (h *AgentCommsHub) List() []AgentPeer {
 
 // Send records a message and places it in the recipient inbox.
 func (h *AgentCommsHub) Send(from, to, subject, body, replyTo string) (AgentMessage, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	from = strings.TrimSpace(from)
 	to = strings.TrimSpace(to)
 	body = strings.TrimSpace(body)
@@ -155,7 +227,10 @@ func (h *AgentCommsHub) Send(from, to, subject, body, replyTo string) (AgentMess
 	if body == "" {
 		return AgentMessage{}, fmt.Errorf("agent_send: body is required")
 	}
+
+	h.mu.Lock()
 	if _, ok := h.agents[to]; !ok {
+		h.mu.Unlock()
 		return AgentMessage{}, fmt.Errorf("agent_send: recipient %q is not registered", to)
 	}
 
@@ -171,6 +246,8 @@ func (h *AgentCommsHub) Send(from, to, subject, body, replyTo string) (AgentMess
 	}
 	h.messages[message.ID] = message
 	h.inbox[to] = append(h.inbox[to], message.ID)
+	h.mu.Unlock()
+	h.snapshotToDisk()
 	return message, nil
 }
 
