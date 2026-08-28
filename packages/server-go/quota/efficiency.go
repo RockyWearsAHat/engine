@@ -83,6 +83,9 @@ type Outcome struct {
 	ProjectID string `json:"projectId,omitempty"`
 	// Tokens is total tokens billed for the run (input + output + cache).
 	Tokens int64 `json:"tokens"`
+	// USD is list-price cost of the run (CostUSD from usage counters). Not
+	// what the subscription bills — what the same tokens would cost on API.
+	USD float64 `json:"usd,omitempty"`
 	// SubagentsSpawned is how many subagents the worker itself delegated to via
 	// the Task tool during this run, when a fanout budget was advisory (not
 	// enforced at 0). This is the observable signal for whether dynamic,
@@ -106,6 +109,8 @@ type Stat struct {
 	Runs      int   `json:"runs"`
 	Successes int   `json:"successes"`
 	Tokens    int64 `json:"tokens"`
+	// USD is cumulative list-price cost across runs.
+	USD float64 `json:"usd"`
 	// SubagentsSpawned is the running total of Outcome.SubagentsSpawned across
 	// all runs of this configuration — how much real dynamic team delegation
 	// this configuration has actually produced, cumulative.
@@ -304,6 +309,7 @@ func (l *Ledger) Record(o Outcome) {
 		s.Successes++
 	}
 	s.Tokens += o.Tokens
+	s.USD += o.USD
 	s.SubagentsSpawned += o.SubagentsSpawned
 	s.Duration += o.Duration
 	s.LastRun = o.At

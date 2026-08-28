@@ -1,0 +1,170 @@
+package quota
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// Same account key on two boxes = one account. Merge keeps worst percent,
+// lowest concurrency grant, and one row.
+func TestMergeSnapshotsDedupesSameKey(t *testing.T) {
+	t0 := at("12:00")
+	mac := PooledSnapshot{Machine: "mac", GeneratedAt: t0, Accounts: []SnapshotAccount{
+		{Key: "org:1", Name: "work", SessionPct: 40, WeekPct: 20, PacePct: 80, MaxConcurrency: 4},
+		{Key: "org:2", Name: "side", SessionPct: 5, WeekPct: 5, PacePct: 10, MaxConcurrency: 8},
+	}}
+	pc := PooledSnapshot{Machine: "pc", GeneratedAt: t0.Add(time.Minute), Accounts: []SnapshotAccount{
+		{Key: "org:1", Name: "work-pc", SessionPct: 55, WeekPct: 18, PacePct: 110, MaxConcurrency: 3},
+	}}
+	m := MergeSnapshots("mac", mac, pc)
+	if len(m.Accounts) != 2 {
+		t.Fatalf("accounts = %d, want 2 (org:1 deduped): %+v", len(m.Accounts), m.Accounts)
+	}
+	w, ok := m.Find("org:1")
+	if !ok {
+		t.Fatal("org:1 missing")
+	}
+	if w.SessionPct != 55 || w.WeekPct != 20 || w.PacePct != 110 {
+		t.Errorf("merged pct = s%.0f w%.0f p%.0f, want worst of each (55/20/110)", w.SessionPct, w.WeekPct, w.PacePct)
+	}
+	if w.MaxConcurrency != 3 {
+		t.Errorf("maxConcurrency = %d, want 3 (lowest grant)", w.MaxConcurrency)
+	}
+	if w.Name != "work" {
+		t.Errorf("name = %q, want first seen", w.Name)
+	}
+	if !m.GeneratedAt.Equal(t0.Add(time.Minute)) {
+		t.Errorf("generatedAt = %v, want newest", m.GeneratedAt)
+	}
+	if m.MaxConcurrency != 8 {
+		t.Errorf("fleet maxConcurrency = %d, want 8", m.MaxConcurrency)
+	}
+}
+
+func TestPooledFreshness(t *testing.T) {
+	now := at("12:00")
+	if !(PooledSnapshot{GeneratedAt: now.Add(-time.Minute)}).Fresh(now) {
+		t.Error("1 min old should be fresh")
+	}
+	if (PooledSnapshot{GeneratedAt: now.Add(-3 * time.Minute)}).Fresh(now) {
+		t.Error("3 min old should be stale")
+	}
+	if (PooledSnapshot{}).Fresh(now) {
+		t.Error("zero time never fresh")
+	}
+}
+
+// Fresh pooled reading beats the local probe; stale one falls back to it.
+func TestGovernorPrefersFreshPooled(t *testing.T) {
+	now := at("12:00")
+	r := &fakeRunner{
+		auth:  map[string]string{"work": authJSON("a@example.com", "org-1")},
+		usage: map[string]string{"work": usageJSON(10, 10, "2:30pm", "Aug 26 at 12:00pm")},
+	}
+	reg := NewRegistry(r, Account{Name: "work", ConfigDir: "/w"})
+	reg.Resolve(context.Background())
+	prober := NewProber(r, time.Minute)
+	prober.SetClock(func() time.Time { return now })
+	g := NewGovernor(reg, prober, DefaultPolicy())
+	g.SetClock(func() time.Time { return now })
+
+	g.SetPooled(PooledSnapshot{Machine: "primary", GeneratedAt: now.Add(-30 * time.Second), Accounts: []SnapshotAccount{
+		{Key: "org:org-1", Name: "work", SessionPct: 97, WeekPct: 50, PacePct: 190,
+			SessionResetAt: now.Add(150 * time.Minute).Format(time.RFC3339)},
+	}})
+	st := g.Status(context.Background())
+	if st.Accounts[0].Source != "pooled" {
+		t.Fatalf("source = %q, want pooled", st.Accounts[0].Source)
+	}
+	if st.Plan.Tier != TierCritical {
+		t.Errorf("tier = %s, want critical from pooled 97%%", st.Plan.Tier)
+	}
+	if r.calls["work:usage"] != 0 {
+		t.Errorf("local probe ran %d times while pooled was fresh", r.calls["work:usage"])
+	}
+
+	g.SetPooled(PooledSnapshot{Machine: "primary", GeneratedAt: now.Add(-10 * time.Minute), Accounts: []SnapshotAccount{
+		{Key: "org:org-1", Name: "work", SessionPct: 97, WeekPct: 50},
+	}})
+	st = g.Status(context.Background())
+	if st.Accounts[0].Source != "local" {
+		t.Fatalf("source = %q, want local after pooled went stale", st.Accounts[0].Source)
+	}
+	if st.Plan.Tier == TierCritical {
+		t.Errorf("stale pooled still governing: %s", st.Plan.Reason)
+	}
+}
+
+func TestSnapshotExportsKeyAndPace(t *testing.T) {
+	now := at("12:00")
+	r := &fakeRunner{
+		auth:  map[string]string{"work": authJSON("a@example.com", "org-1")},
+		usage: map[string]string{"work": usageJSON(10, 10, "2:30pm", "Aug 26 at 12:00pm")},
+	}
+	reg := NewRegistry(r, Account{Name: "work", ConfigDir: "/w"})
+	reg.Resolve(context.Background())
+	prober := NewProber(r, time.Minute)
+	prober.SetClock(func() time.Time { return now })
+	g := NewGovernor(reg, prober, DefaultPolicy())
+	g.SetClock(func() time.Time { return now })
+	s := g.Snapshot(context.Background(), "mac")
+	if s.Machine != "mac" || len(s.Accounts) != 1 {
+		t.Fatalf("snapshot = %+v", s)
+	}
+	a := s.Accounts[0]
+	if a.Key != "org:org-1" || a.SessionPct != 10 || a.WeekPct != 10 || a.PacePct < 0 {
+		t.Errorf("account = %+v", a)
+	}
+	if a.MaxConcurrency < 1 || s.MaxConcurrency != a.MaxConcurrency {
+		t.Errorf("concurrency = %d / %d", a.MaxConcurrency, s.MaxConcurrency)
+	}
+}
+
+func TestCostUSDPositiveForUsage(t *testing.T) {
+	usd := CostUSD("haiku", 10_000, 2_000, 1_000, 50_000)
+	// 10k*1 + 1k*1.25 + 50k*0.1 + 2k*5 = 0.01+0.00125+0.005+0.01 = 0.02625
+	if usd < 0.026 || usd > 0.027 {
+		t.Fatalf("usd = %v, want ~0.02625", usd)
+	}
+	if CostUSD("claude-opus-5", 1000, 0, 0, 0) != 0.005 {
+		t.Errorf("opus id substring should price")
+	}
+	if CostUSD("llama3", 1000, 1000, 0, 0) != 0 {
+		t.Errorf("unknown model must price 0")
+	}
+	l := NewLedger(LedgerOptions{})
+	l.Record(Outcome{Role: "implement", Config: Config{Model: "haiku", Effort: "low"}, Success: true, Tokens: 63_000, USD: usd, At: at("12:00")})
+	st, ok := l.Stat("implement", Config{Model: "haiku", Effort: "low"})
+	if !ok || st.USD <= 0 {
+		t.Fatalf("stat usd = %v ok=%v, want > 0", st.USD, ok)
+	}
+}
+
+func TestAccountsFromFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "accounts.json")
+	if _, err := AccountsFromFile(path); err != nil {
+		t.Fatalf("missing file must be nil, got %v", err)
+	}
+	os.WriteFile(path, []byte(`[{"name":"work","configDir":"/w"},{"name":"work","configDir":"/w2"},{"name":"dup","configDir":"/w"},{"configDir":"/side"}]`), 0o600)
+	accs, err := AccountsFromFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(accs) != 2 || accs[0].Name != "work" || accs[1].Name != "side" || accs[1].ConfigDir != "/side" {
+		t.Fatalf("accounts = %+v", accs)
+	}
+	t.Setenv(AccountsFileEnv, path)
+	got, note := LoadAccounts("env=/e")
+	if len(got) != 2 || note == "" {
+		t.Fatalf("LoadAccounts = %+v (%s)", got, note)
+	}
+	t.Setenv(AccountsFileEnv, filepath.Join(dir, "nope.json"))
+	got, _ = LoadAccounts("env=/e")
+	if len(got) != 1 || got[0].Name != "env" {
+		t.Fatalf("env fallback = %+v", got)
+	}
+}

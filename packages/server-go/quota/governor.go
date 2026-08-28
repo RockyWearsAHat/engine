@@ -8,63 +8,38 @@ import (
 	"time"
 )
 
-// The governor turns a Snapshot into a decision about how hard to run.
+// Governor: Snapshot in, "how hard to run" out.
 //
-// THE OBJECTIVE, STATED PRECISELY
+// OBJECTIVE
 //
-// It is tempting to read "use the whole limit" as the goal and write a scheduler
-// that pushes utilization to 100%. That is the wrong objective and it produces a
-// worse engine. The goal is to MINIMISE QUOTA SPENT PER UNIT OF FINISHED WORK,
-// subject to never being stopped by a wall we could have seen coming. Quota
-// saved is not quota wasted — it is capacity available for the next thing, and
-// a cheaper configuration that still ships the feature is strictly better than
-// an expensive one that also ships it.
+// Target = 100% of the window used exactly at reset. Not the current burn
+// line — the reset line. Windows do not roll over; quota unspent at reset is
+// gone. So under target → raise parallelism and fan-out in proportion to
+// how far under (paceBoost, capped at PaceBoostCap × policy). Over target →
+// tiers cut, cheapest levers first (planFor).
 //
-// The score that expresses this is yield — see yield.go — and it is the thing
-// the engine is trying to raise: results the user is happy with, per percentage
-// point of window. Three percent spent on hundreds of good projects beats a
-// hundred percent spent on two by three orders of magnitude, and that is not a
-// tuning preference, it is just what the ratio says.
+// What the boost does NOT do: raise worker model tier. Model choice stays
+// with the ledger (cheapest config that works, per role). Planner alone may
+// step CheapModel → MidModel, only past PlannerSonnetAhead under target.
+// Fable/opus stay rare; ≥90% haiku turns is a locked rule.
 //
-// IDLE CAPACITY IS NOT A REASON TO SPEND
+// Running out is catastrophic: every agent stops at once, window may not
+// refill for days. So the governor still paces, and Blocked/Critical win
+// over any boost.
 //
-// An earlier version of this file argued that because the 5-hour and 7-day
-// windows do not roll over, capacity left idle is capacity destroyed, and
-// therefore the governor should open up when it is running under pace. That
-// reasoning is seductive and it is wrong, because it treats the window as a
-// budget to be consumed rather than a constraint to be respected. Spending quota
-// that the work did not need does not create value; it just lowers yield and
-// brings the wall closer for the work that comes next.
+// POOLED
 //
-// So TierExpand is PERMISSION, not instruction. Being under pace means a richer
-// configuration is affordable — it never means one is warranted. The only thing
-// that warrants spending more is evidence that spending more produces results
-// the user is happier with, and that evidence lives in the ledger, not in a
-// percentage. When the ledger has no such evidence, running under pace simply
-// means the engine is doing well and should keep doing what it is doing.
+// Quota is per Anthropic account, not per box. Mac and PC share the same
+// window. See pooled.go: primary merges every box's /quota/snapshot, pushes
+// it back via /quota/pooled, governor prefers it over local while fresh.
 //
-// The one thing that does still matter about resets is WHICH account to draw
-// from when we are going to spend anyway — see Score. Preferring the pool that
-// is about to refill does not increase total spend, so it is not in tension with
-// any of the above.
-//
-// Running out remains catastrophic: every agent stops at once, mid-task, and the
-// window may not refill for days. So the governor still paces.
-//
-// PACE IS THE WHOLE TRICK
-//
-// Utilization alone cannot tell you whether you are in trouble: 50% of the week
-// is fine on day six and alarming on day one. What matters is utilization
-// measured against how much of the window has ELAPSED. Divide one by the other
-// and you get a number that is both a pace and a forecast:
+// PACE
 //
 //	pace = used_fraction / elapsed_fraction
 //
-// At a steady burn, pace is exactly the utilization the window will reach by the
-// time it resets. pace = 1.0 means "finishes the window exactly as it refills" —
-// perfect use. pace = 2.0 means "will hit the wall halfway through". pace = 0.4
-// means "will waste 60% of this window". So one number answers both questions
-// the engine actually has, and the tiers below are just thresholds on it.
+// pace 1.0 = lands on 100% at reset (target). 2.0 = wall at half-time.
+// 0.4 = wastes 60%. Ahead = 1 - pace/PaceTarget. Tiers are thresholds on
+// pace; boost is proportional to Ahead.
 
 // Tier is the coarse operating mode the governor selects.
 type Tier int
@@ -83,11 +58,9 @@ const (
 	// tier chosen when limit state is UNKNOWN — an unmeasurable balance must
 	// never read as an empty one.
 	TierSteady
-	// TierExpand: well under pace. PERMITS the wider configuration; it does not
-	// call for one. The ledger decides whether to actually use the extra room,
-	// and it only does so when the evidence says richer runs land better. Under
-	// pace with no such evidence, the engine keeps spending little — that is the
-	// score going up, not capacity going to waste.
+	// TierExpand: well under pace. Widest lever set; paceConcurrency then
+	// boosts parallelism/fan-out further by Ahead. Worker model still comes
+	// from the ledger, never from the tier.
 	TierExpand
 )
 
@@ -162,6 +135,15 @@ type Assessment struct {
 	WeekPace         float64 `json:"weekPace"`
 	WeekPaceKnown    bool    `json:"weekPaceKnown"`
 
+	// Pace is the worse of the two paces — the forecast we act on. PaceTarget
+	// is the line it is steered to: 1.0 = land on 100% exactly at reset.
+	// Ahead = 1 - Pace/PaceTarget: +0.3 means "30% under the target line",
+	// negative means overspending. Valid only when PaceKnown.
+	Pace       float64 `json:"pace"`
+	PaceKnown  bool    `json:"paceKnown"`
+	PaceTarget float64 `json:"paceTarget"`
+	Ahead      float64 `json:"ahead"`
+
 	// Headroom is the unspent share of the tightest window, 0-1.
 	Headroom float64 `json:"headroom"`
 	// Binding names the window that constrains us.
@@ -172,9 +154,17 @@ type Assessment struct {
 	Reason string `json:"reason"`
 }
 
+// PaceTarget: governor steers to 100% used exactly at window reset. Not the
+// current burn line — the reset line. Under it → open up. Over it → cut.
+const PaceTarget = 1.0
+
+// PlannerSonnetAhead: planner may run MidModel only when this far under
+// target. Below it planner stays on CheapModel.
+const PlannerSonnetAhead = 0.30
+
 // Assess reduces a snapshot to a tier.
 func Assess(s Snapshot, now time.Time) Assessment {
-	a := Assessment{Account: s.Account, Tier: TierSteady, Known: s.Ok, Headroom: 1}
+	a := Assessment{Account: s.Account, Tier: TierSteady, Known: s.Ok, Headroom: 1, PaceTarget: PaceTarget}
 	if !s.Ok {
 		a.Reason = "limit state unknown (" + s.Err + "); holding the conservative default"
 		a.TierName = a.Tier.String()
@@ -201,6 +191,10 @@ func Assess(s Snapshot, now time.Time) Assessment {
 	}
 	if a.WeekPaceKnown && (!paceKnown || a.WeekPace > worstPace) {
 		worstPace, paceKnown = a.WeekPace, true
+	}
+	a.Pace, a.PaceKnown = worstPace, paceKnown
+	if paceKnown {
+		a.Ahead = 1 - worstPace/PaceTarget
 	}
 
 	switch {
@@ -260,6 +254,10 @@ type Plan struct {
 	MaxContextTokens int `json:"maxContextTokens"`
 	// SubagentFanout caps how many subagents a role may spawn.
 	SubagentFanout int `json:"subagentFanout"`
+	// PlannerModel is the ceiling for the planner role: CheapModel unless
+	// more than PlannerSonnetAhead under target, then MidModel. Cap only —
+	// never raises a caller's cheaper choice.
+	PlannerModel string `json:"plannerModel,omitempty"`
 
 	// RetryAfter is how long to wait before asking again, when !Allow.
 	RetryAfter time.Duration `json:"-"`
@@ -297,33 +295,46 @@ func DefaultPolicy() Policy {
 	}
 }
 
-// concurrencyForHeadroom is the TierExpand concurrency, derived from real
-// headroom (the unspent share of the binding window, 0-1) instead of echoing
-// the policy constant. It scales linearly with headroom and is clamped to
-// [Steady's own ceiling, max]: Expand is the tier above Steady, so it may
-// never hand out less parallelism than Steady would, and it may only narrow
-// the static ceiling, never widen it. Only Expand calls this — the lower
-// tiers already cut concurrency on their own terms in planFor, and Blocked
-// must stay at zero.
-func concurrencyForHeadroom(max int, headroom float64) int {
-	if max < 1 {
-		return max
+// PaceBoostCap: under-target boost never exceeds this multiple of policy.
+const PaceBoostCap = 2.0
+
+// paceBoost is the multiplier for a lever when under target. ahead 0 → 1x,
+// ahead 0.5 → 1.5x, ahead ≥1 → 2x. Never below 1x: over target is the
+// tier's job (Conserve/Critical already cut), not this function's.
+func paceBoost(as Assessment) float64 {
+	if !as.PaceKnown || as.Ahead <= 0 || as.Tier < TierSteady {
+		return 1
 	}
-	if headroom < 0 {
-		headroom = 0
+	b := 1 + as.Ahead
+	if b > PaceBoostCap {
+		b = PaceBoostCap
 	}
-	if headroom > 1 {
-		headroom = 1
+	return b
+}
+
+// paceConcurrency: base lever from the tier, raised by paceBoost, capped at
+// PaceBoostCap × policy ceiling. Blocked (0) stays 0.
+func paceConcurrency(base, policyMax int, as Assessment) int {
+	if base < 1 || policyMax < 1 {
+		return base
 	}
-	floor := max_(1, max*3/4) // TierSteady's ceiling, see planFor
-	scaled := int(float64(max)*headroom + 0.5)
-	if scaled < floor {
-		return floor
+	boosted := int(float64(base)*paceBoost(as) + 0.5)
+	lim := int(float64(policyMax)*PaceBoostCap + 0.5)
+	if boosted > lim {
+		boosted = lim
 	}
-	if scaled > max {
-		return max
+	if boosted < base {
+		boosted = base
 	}
-	return scaled
+	return boosted
+}
+
+// plannerModelFor: MidModel only when far enough under target.
+func plannerModelFor(as Assessment, p Policy) string {
+	if as.PaceKnown && as.Ahead > PlannerSonnetAhead && as.Tier >= TierSteady {
+		return p.MidModel
+	}
+	return p.CheapModel
 }
 
 func max_(a, b int) int {
@@ -352,7 +363,7 @@ func max_(a, b int) int {
 // bloated one, and swapping the model first is the intuitive move that makes
 // results worse while saving less.
 func planFor(t Tier, p Policy) Plan {
-	pl := Plan{Allow: true, Tier: t, TierName: t.String()}
+	pl := Plan{Allow: true, Tier: t, TierName: t.String(), PlannerModel: p.CheapModel}
 	switch t {
 	case TierBlocked:
 		pl.Allow = false
@@ -395,6 +406,8 @@ type Governor struct {
 
 	// observer carries the free rate_limit_event signal; see observer.go.
 	observer *Observer
+	// pooled is the last merged fleet snapshot; see pooled.go.
+	pooled pooledStore
 }
 
 // NewGovernor wires a governor over a registry and prober.
@@ -444,7 +457,18 @@ func (g *Governor) Decide(ctx context.Context) Plan {
 		return pl
 	}
 
-	snaps := g.prober.ProbeAll(ctx, accounts)
+	// Probe locally only for accounts the pooled snapshot cannot answer.
+	var toProbe []Account
+	if p, fresh := g.Pooled(); fresh {
+		for _, a := range accounts {
+			if _, ok := p.Find(accountKey(a)); !ok {
+				toProbe = append(toProbe, a)
+			}
+		}
+	} else {
+		toProbe = accounts
+	}
+	snaps := g.prober.ProbeAll(ctx, toProbe)
 
 	type cand struct {
 		acc  Account
@@ -453,8 +477,7 @@ func (g *Governor) Decide(ctx context.Context) Plan {
 	}
 	var cands []cand
 	for _, a := range accounts {
-		s := snaps[a.Name]
-		s.Account = a.Name
+		s, _ := g.readAccount(ctx, a, snaps)
 		as := Assess(s, now)
 		// A hard "rejected" seen on the wire outranks any cached percentage: the
 		// server just told us no, and the /usage number may be a minute stale.
@@ -513,12 +536,16 @@ func (g *Governor) Decide(ctx context.Context) Plan {
 	pl := planFor(best.as.Tier, g.policy)
 	pl.Account, pl.ConfigDir = best.acc.Name, best.acc.ConfigDir
 	pl.Assessment = best.as
-	// Expand is permission, not instruction: size its concurrency from the
-	// headroom actually left rather than the policy constant.
-	if best.as.Tier == TierExpand {
-		pl.MaxConcurrency = concurrencyForHeadroom(pl.MaxConcurrency, best.as.Headroom)
-	}
+	// Target is 100% at reset. Under it → raise parallelism and fan-out in
+	// proportion to how far under. Model tier is NOT raised here: planner
+	// gets MidModel only past PlannerSonnetAhead, workers stay on the ledger.
+	pl.MaxConcurrency = paceConcurrency(pl.MaxConcurrency, g.policy.MaxConcurrency, best.as)
+	pl.SubagentFanout = paceConcurrency(pl.SubagentFanout, g.policy.MaxSubagents, best.as)
+	pl.PlannerModel = plannerModelFor(best.as, g.policy)
 	pl.Reason = fmt.Sprintf("%s on %q: %s", best.as.Tier, best.acc.Name, best.as.Reason)
+	if best.as.PaceKnown && best.as.Ahead > 0 {
+		pl.Reason += fmt.Sprintf("; %.0f%% under target, boost x%.2f", best.as.Ahead*100, paceBoost(best.as))
+	}
 	return pl
 }
 
@@ -572,9 +599,9 @@ func (g *Governor) Report(ctx context.Context) string {
 			fmt.Fprintf(&b, "%-12s disabled — %s\n", a.Name, a.DisabledReason)
 			continue
 		}
-		s := g.prober.Probe(ctx, a)
+		s, src := g.readAccount(ctx, a, nil)
 		as := Assess(s, now)
-		fmt.Fprintf(&b, "%-12s %-9s %s\n", a.Name, as.Tier, s.Detail())
+		fmt.Fprintf(&b, "%-12s %-9s %s [%s]\n", a.Name, as.Tier, s.Detail(), src)
 		if as.SessionPaceKnown || as.WeekPaceKnown {
 			fmt.Fprintf(&b, "%-12s %-9s pace: session %s, week %s\n", "", "", pct(as.SessionPace, as.SessionPaceKnown), pct(as.WeekPace, as.WeekPaceKnown))
 		}
@@ -616,21 +643,23 @@ func windowStatus(w Window, ok bool, now time.Time) WindowStatus {
 
 // AccountStatus is the full readable state of one account.
 type AccountStatus struct {
-	Name           string         `json:"name"`
-	Disabled       bool           `json:"disabled,omitempty"`
-	DisabledReason string         `json:"disabledReason,omitempty"`
-	Ok             bool           `json:"ok"`
-	Error          string         `json:"error,omitempty"`
-	FetchedAt      string         `json:"fetchedAt,omitempty"`
-	PlanNote       string         `json:"planNote,omitempty"`
-	Session        WindowStatus   `json:"session"`
-	Week           WindowStatus   `json:"week"`
-	PerModel       []WindowStatus `json:"perModel,omitempty"`
-	Assessment     Assessment     `json:"assessment"`
-	ResetsIn       string         `json:"resetsIn,omitempty"`
-	UsingOverage   bool           `json:"usingOverage,omitempty"`
-	LimitStatus    string         `json:"limitStatus,omitempty"`
-	Score          float64        `json:"score"`
+	Name           string `json:"name"`
+	Disabled       bool   `json:"disabled,omitempty"`
+	DisabledReason string `json:"disabledReason,omitempty"`
+	Ok             bool   `json:"ok"`
+	Error          string `json:"error,omitempty"`
+	FetchedAt      string `json:"fetchedAt,omitempty"`
+	PlanNote       string `json:"planNote,omitempty"`
+	// Source is "local" (own probe) or "pooled" (fleet snapshot from primary).
+	Source       string         `json:"source,omitempty"`
+	Session      WindowStatus   `json:"session"`
+	Week         WindowStatus   `json:"week"`
+	PerModel     []WindowStatus `json:"perModel,omitempty"`
+	Assessment   Assessment     `json:"assessment"`
+	ResetsIn     string         `json:"resetsIn,omitempty"`
+	UsingOverage bool           `json:"usingOverage,omitempty"`
+	LimitStatus  string         `json:"limitStatus,omitempty"`
+	Score        float64        `json:"score"`
 }
 
 // Status is the whole fuel gauge: every account, plus the plan currently in
@@ -660,8 +689,8 @@ func (g *Governor) Status(ctx context.Context) Status {
 			st.Accounts = append(st.Accounts, as)
 			continue
 		}
-		s := g.prober.Probe(ctx, a)
-		s.Account = a.Name
+		s, src := g.readAccount(ctx, a, nil)
+		as.Source = src
 		as.Ok, as.PlanNote = s.Ok, s.PlanNote
 		as.Error = s.Err
 		if !s.FetchedAt.IsZero() {

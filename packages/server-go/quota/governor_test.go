@@ -192,40 +192,66 @@ func TestPlanForCutsCheapLeversFirst(t *testing.T) {
 	}
 }
 
-// TierExpand concurrency follows real headroom, clamped to [Steady, max]:
-// Expand may never hand out less than the tier below it, and never more than
-// the static ceiling.
-func TestConcurrencyForHeadroomScalesAndClamps(t *testing.T) {
+// Target is 100% at reset. Under target → lever boosted by Ahead, capped at
+// PaceBoostCap × policy. Over target / unknown pace → base untouched.
+// Blocked (0) stays 0. Rewritten from the old headroom-narrowing test: the
+// old rule "Expand may only narrow, never widen" is gone on purpose.
+func TestPaceConcurrencyBoostsUnderTarget(t *testing.T) {
+	as := func(pace float64, known bool, tier Tier) Assessment {
+		a := Assessment{Tier: tier, PaceKnown: known, Pace: pace, PaceTarget: PaceTarget}
+		if known {
+			a.Ahead = 1 - pace/PaceTarget
+		}
+		return a
+	}
 	tests := []struct {
-		name     string
-		max      int
-		headroom float64
-		want     int
+		name      string
+		base, max int
+		as        Assessment
+		want      int
 	}{
-		{"full headroom uses max", 4, 1.0, 4},
-		{"full headroom, max 1", 1, 1.0, 1},
-		{"full headroom, max 12", 12, 1.0, 12},
-		{"0.9 of 12 rounds to 11", 12, 0.9, 11},
-		{"half headroom of 12 floors at Steady (9)", 12, 0.5, 9},
-		{"half headroom of 4 floors at Steady (3)", 4, 0.5, 3},
-		{"zero headroom still floors at Steady", 4, 0.0, 3},
-		{"negative headroom clamps like zero", 4, -0.5, 3},
-		{"headroom above 1 clamps to max", 4, 1.5, 4},
-		{"max 0 (blocked) stays 0", 0, 1.0, 0},
+		{"on target keeps base", 4, 4, as(1.0, true, TierSteady), 4},
+		{"half pace → 1.5x", 4, 4, as(0.5, true, TierExpand), 6},
+		{"zero pace → 2x cap", 4, 4, as(0.0, true, TierExpand), 8},
+		{"never above 2x policy", 8, 4, as(0.0, true, TierExpand), 8},
+		{"over target keeps base", 3, 4, as(1.5, true, TierSteady), 3},
+		{"unknown pace keeps base", 3, 4, as(0, false, TierSteady), 3},
+		{"conserve never boosts", 2, 4, as(0.2, true, TierConserve), 2},
+		{"blocked stays 0", 0, 4, as(0.0, true, TierExpand), 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := concurrencyForHeadroom(tt.max, tt.headroom)
-			if got != tt.want {
-				t.Errorf("concurrencyForHeadroom(%d, %.2f) = %d, want %d", tt.max, tt.headroom, got, tt.want)
-			}
-			if got > tt.max {
-				t.Errorf("result %d exceeds max %d — concurrency must not widen", got, tt.max)
-			}
-			if tt.max > 0 && got < max_(1, tt.max*3/4) {
-				t.Errorf("result %d is below Steady's %d — Expand must not undercut the tier below it", got, tt.max*3/4)
+			if got := paceConcurrency(tt.base, tt.max, tt.as); got != tt.want {
+				t.Errorf("paceConcurrency(%d,%d,ahead=%.2f) = %d, want %d", tt.base, tt.max, tt.as.Ahead, got, tt.want)
 			}
 		})
+	}
+}
+
+// Target line is 100%: Assess reports PaceTarget=1 and Ahead relative to it.
+func TestAssessTargetLineIs100Percent(t *testing.T) {
+	now := at("12:00")
+	s := Snapshot{Ok: true,
+		Session: Window{Name: "session", Percent: 25, ResetsAt: now.Add(150 * time.Minute), HasReset: true},
+		Week:    Window{Name: "week", Percent: 10, ResetsAt: now.Add(84 * time.Hour), HasReset: true},
+	}
+	a := Assess(s, now)
+	if a.PaceTarget != 1.0 {
+		t.Fatalf("PaceTarget = %v, want 1.0", a.PaceTarget)
+	}
+	if !a.PaceKnown || a.Pace < 0.49 || a.Pace > 0.51 {
+		t.Fatalf("pace = %v known=%v, want 0.5 (25%% at half window)", a.Pace, a.PaceKnown)
+	}
+	if a.Ahead < 0.49 || a.Ahead > 0.51 {
+		t.Fatalf("ahead = %v, want 0.5", a.Ahead)
+	}
+	p := DefaultPolicy()
+	if got := plannerModelFor(a, p); got != p.MidModel {
+		t.Errorf("planner at 50%% ahead = %q, want %q", got, p.MidModel)
+	}
+	a.Ahead = 0.2
+	if got := plannerModelFor(a, p); got != p.CheapModel {
+		t.Errorf("planner at 20%% ahead = %q, want %q", got, p.CheapModel)
 	}
 }
 
