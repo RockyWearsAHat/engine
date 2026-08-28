@@ -136,3 +136,23 @@ func TestBuildStepPrompt_ReviewerNotesOnRetry(t *testing.T) {
 		t.Fatalf("prompt lacks reviewer notes:\n%s", p)
 	}
 }
+
+// Provider fault keeps reviewer's REJECT notes; real builder error replaces them.
+func TestNoteBuilderError_KeepsReviewerNotesOnProviderFault(t *testing.T) {
+	const notes = "REVIEWER NOTES: fix the null check"
+	step := &PlanStep{Attempts: 2, LastFeedback: notes}
+	if !noteBuilderError(step, ErrProviderZeroOutput) || step.Attempts != 1 {
+		t.Fatalf("provider fault not refunded: attempts=%d", step.Attempts)
+	}
+	if step.LastFeedback != notes {
+		t.Fatalf("reviewer notes clobbered: %q", step.LastFeedback)
+	}
+
+	step = &PlanStep{Attempts: 2, LastFeedback: notes}
+	if noteBuilderError(step, errors.New("builder produced no output")) || step.Attempts != 2 {
+		t.Fatalf("real error refunded: attempts=%d", step.Attempts)
+	}
+	if step.LastFeedback != "Builder error: builder produced no output" {
+		t.Fatalf("real error not recorded: %q", step.LastFeedback)
+	}
+}

@@ -95,6 +95,10 @@ type engineTask struct {
 	Coached          int    `json:"coached"`
 	Escalated        bool   `json:"escalated"`
 
+	// Lost: was running when engine restarted. Status is failed (SARA's
+	// gateway knows that word); Lost tells it apart from a real failure.
+	Lost bool `json:"lost"`
+
 	// restored: loaded from tasks.json, no goroutine owns it. Never alive.
 	restored bool
 
@@ -138,6 +142,7 @@ func (t *engineTask) snapshot() map[string]any {
 		"subagentsSpawned": t.SubagentsSpawned,
 		"coached":          t.Coached,
 		"escalated":        t.Escalated,
+		"lost":             t.Lost,
 	}
 	if t.FirstProgressAt != nil {
 		out["firstProgressAt"] = t.FirstProgressAt.UTC().Format(time.RFC3339)
@@ -355,7 +360,9 @@ type taskRecord struct {
 	Coached          int        `json:"coached"`
 	Escalated        bool       `json:"escalated"`
 	CallbackURL      string     `json:"callbackUrl,omitempty"`
-	// PID of the process that ran it. Reload compares to os.Getpid().
+	Lost             bool       `json:"lost,omitempty"`
+	// PID of the process that ran it. Not compared on reload — every
+	// running row found on reload is marked failed/lost regardless of PID.
 	PID int `json:"pid"`
 }
 
@@ -376,7 +383,7 @@ func (t *engineTask) record(key string) taskRecord {
 		FirstProgressAt: t.FirstProgressAt, LastTokenAt: t.LastTokenAt, LastToolAt: t.LastToolAt,
 		Model: t.Model, TokensIn: t.TokensIn, TokensOut: t.TokensOut,
 		SubagentsSpawned: t.SubagentsSpawned, Coached: t.Coached, Escalated: t.Escalated,
-		CallbackURL: t.CallbackURL, PID: os.Getpid(),
+		CallbackURL: t.CallbackURL, Lost: t.Lost, PID: os.Getpid(),
 	}
 }
 
@@ -423,9 +430,9 @@ func (r *taskRegistry) persist() {
 	}
 }
 
-// load reads tasks.json. Tasks that were running under a process that is not
-// this one become lost-on-restart (terminal, alive=false) — SARA sees the id,
-// sees the status, re-dispatches. Nothing forgotten. Returns count lost.
+// load reads tasks.json. Every row still running becomes failed + lost:true
+// (terminal, alive=false). Status stays "failed" — a word SARA's gateway
+// knows; an unknown status reads as running forever. Returns count lost.
 func (r *taskRegistry) load(path string) int {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -450,12 +457,13 @@ func (r *taskRegistry) load(path string) int {
 			FirstProgressAt: rec.FirstProgressAt, LastTokenAt: rec.LastTokenAt, LastToolAt: rec.LastToolAt,
 			Model: rec.Model, TokensIn: rec.TokensIn, TokensOut: rec.TokensOut,
 			SubagentsSpawned: rec.SubagentsSpawned, Coached: rec.Coached, Escalated: rec.Escalated,
-			CallbackURL: rec.CallbackURL, restored: true,
+			CallbackURL: rec.CallbackURL, Lost: rec.Lost, restored: true,
 			cancel: make(chan struct{}),
 		}
 		if t.Status == taskRunning {
 			now := time.Now()
-			t.Status = taskLostOnRestart
+			t.Status = taskFailed
+			t.Lost = true
 			t.FinishedAt = &now
 			t.Err = "engine restarted while task was running"
 			t.Progress = append(t.Progress, now.UTC().Format("15:04:05")+" lost-on-restart: engine restarted")

@@ -728,10 +728,9 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 		emit(cfg.OnPhase, "execute", fmt.Sprintf("step %d/%d (attempt %d): %s", step.Index, len(state.Plan), step.Attempts, step.Title))
 		buildErr := orchestratorBuildStep(cfg, state, step, redirect, cancel)
 		if buildErr != nil {
-			if refundProviderAttempt(step, buildErr) {
+			if noteBuilderError(step, buildErr) {
 				emit(cfg.OnPhase, "provider", fmt.Sprintf("step %d: provider fault, attempt refunded (attempts=%d)", step.Index, step.Attempts))
 			}
-			step.LastFeedback = "Builder error: " + buildErr.Error()
 			if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
 				emitErr(cfg.OnError, fmt.Sprintf("persist builder error feedback: %v", err))
 			}
@@ -806,6 +805,18 @@ func refundProviderAttempt(step *PlanStep, err error) bool {
 	}
 	step.Attempts--
 	return true
+}
+
+// noteBuilderError records a builder failure on the step. Provider fault:
+// attempt refunded, LastFeedback left alone — reviewer's REJECT notes from
+// last round must reach the retry prompt, not "zero output tokens". Real
+// builder error: LastFeedback becomes the error. Returns true when refunded.
+func noteBuilderError(step *PlanStep, buildErr error) bool {
+	if refundProviderAttempt(step, buildErr) {
+		return true
+	}
+	step.LastFeedback = "Builder error: " + buildErr.Error()
+	return false
 }
 
 // EventOrchestratorEnabled reports whether the parallel multi-team orchestrator
