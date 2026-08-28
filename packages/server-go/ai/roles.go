@@ -182,14 +182,20 @@ var roleConfigs = map[AgentRole]roleConfig{
 	},
 
 	RoleDocumenter: {
-		// Updates WORKING_BEHAVIORS.md only. No implementation details.
+		// Rewrites touched sections of project's index.dx. After every build step,
+		// search the dx docs for blocks answering the step, rewrite them (never append)
+		// with current truth: what was true, what changed, how it verifies.
+		// No timelines, no "as of".
 		prompt: strings.Join([]string{
-			"You update project documentation.",
-			"Given code changes, update WORKING_BEHAVIORS.md with new user-visible behaviors.",
-			"No implementation details. Match the existing style.",
+			"You rewrite project knowledge in dx documents.",
+			"After each build step, search the project's index.dx for blocks answering the step.",
+			"Rewrite (not append) each block with current truth: what is true now, what changed, how it verifies.",
+			"Include a ::code run block with reads=/writes= when verification is needed.",
+			"Never add timelines. Never use 'as of'. Stale prose is a bug.",
+			"If the project has no index.dx, log one line and skip.",
 			"Project: {{project}}",
 		}, "\n"),
-		tools: []string{"read_file", "list_directory", "write_file"},
+		tools: []string{"dx_search", "dx_edit", "read_file", "shell"},
 	},
 
 	RoleIntaker: {
