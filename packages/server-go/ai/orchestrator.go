@@ -181,6 +181,10 @@ type OrchestratorConfig struct {
 	// env/runtime config, silently dropping the signal the caller computed.
 	RequestedModel string
 
+	// RequestedRole is the caller's chosen specialized agent role for this task
+	// (e.g., "design-reviewer"). Optional — empty defaults to standard orchestrator.
+	RequestedRole string
+
 	// Cancel, when closed, stops the orchestrator at the next safe checkpoint.
 	Cancel <-chan struct{}
 
