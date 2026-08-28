@@ -4,7 +4,7 @@ This file is intentionally limited to what exists in source today. If code and t
 
 ## Activation Route
 
-- `RunAutonomousProject` in `orchestrator.go` routes to event orchestration only when both `USE_EVENT_ORCHESTRATOR=1` and `ENGINE_EXPERIMENTAL_EVENT_ORCHESTRATOR=1` are set.
+- `RunAutonomousProject` in `orchestrator.go` asks `ShouldRunEventOrchestrator`. Default on (`eventOrchestratorDefault = true`); `ENGINE_EVENT_ORCHESTRATOR=1/0` forces either way. Task mode (`cfg.TaskMode`, every SARA dispatch) runs the classic serial loop.
 - `RunEventOrchestratorAsState` adapts event orchestration to `*OrchestrationState`.
 
 ## Implemented Components
@@ -38,6 +38,24 @@ This file is intentionally limited to what exists in source today. If code and t
 - That means the event path is currently a parallel step-bucket executor, not a real specialist-member system.
 - `lead_planner.go` defines a richer specialist composition model, but it is not currently wired into `RunEventOrchestrator` or `createTeamsFromPlan`.
 
+## Task API Surface (`task_api.go`)
+
+How SARA hands one unit of work in and learns what happened. Rules:
+
+- `POST /task` → 202 `{id,...}` at once. Orchestration runs in a goroutine. Planner never on the request path.
+- `GET /task?id=` and `GET /task/<id>` → registry read under RLock. Never waits on a phase. Fields: `status`, `phase`, `stepsDone/stepsTotal`, `alive` (this process owns a goroutine for it), `firstProgressAt`, `lastTokenAt`, `lastToolAt` (evidence stamps from `OrchestratorConfig.OnActivity`), `model`, `tokensIn/tokensOut/subagentsSpawned` (from `OnRunStats`), `coached/escalated` (from `OnCoach`, slice I fills).
+- Registry persisted to `<ENGINE_STATE_DIR>/tasks.json` (else `<project>/.engine/tasks.json`): on accept BEFORE plan, and on every note/plan/finish/stats change. Tmp+rename. Registry lock not held during write.
+- Server start reloads it. Rows `running` under a dead PID → `lost-on-restart` (terminal, `alive:false`, dedupe key released). SARA sees the id, re-dispatches. Nothing forgotten.
+- Wake POST fires on EVERY terminal state — done, failed, canceled, panic. Target: caller `callbackUrl`, else `http://127.0.0.1:$SARA_ENGINE_WAKE_PORT/task-complete` (default 24777). Payload `{id, project, outcome, model, tokensIn, tokensOut, subagentsSpawned, coached, escalated, error}`. Fire-and-forget; GET-by-id stays truth.
+
+## Builder Retry Rules (`orchestrator_phases.go`, `orchestrator.go`)
+
+- Every builder attempt: fresh session, fresh `ChatContext`. Reviewer/critic notes ride in via `step.LastFeedback` as `REVIEWER NOTES` in the prompt.
+- Every run logs phase `tokens`: `model in out elapsed`.
+- Provider fault = provider reported usage (`RunStats.Seen`) AND `OutputTokens == 0` AND run ended inside `zeroOutputWindow` (1s). Backoff 1s / 5s / 15s, new run each. After the schedule: `ErrProviderZeroOutput`; outer loop calls `refundProviderAttempt` — `step.Attempts--`. Provider hiccups never retire a step (err-…002).
+- Stub/ollama runs with no usage keep the plain "builder produced no output" path — counted as an attempt, no backoff.
+- Tests: `zero_output_retry_test.go`, `task_api_persist_test.go`.
+
 ## Validation Surface
 
 The event orchestrator has direct unit coverage in:
@@ -52,12 +70,7 @@ These tests are the canonical behavioral spec for current orchestration behavior
 
 ## Operator Notes
 
-- Enable event orchestration with:
-
-```bash
-export USE_EVENT_ORCHESTRATOR=1
-export ENGINE_EXPERIMENTAL_EVENT_ORCHESTRATOR=1
-```
+- Force event orchestration on/off with `ENGINE_EVENT_ORCHESTRATOR=1` / `=0`. Unset = derived (on, unless task mode or single team).
 
 - Runtime brain state is persisted under the project `.engine` directory and can be inspected during execution.
 

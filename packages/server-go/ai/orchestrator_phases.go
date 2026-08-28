@@ -1,9 +1,11 @@
 package ai
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/engine/server/db"
@@ -402,10 +404,33 @@ func parsePlanFromText(text string) []PlanStep {
 // orchestratorBuildStep runs RoleAutonomousBuilder for exactly one plan step.
 // The builder is given the step body + acceptance + any prior reviewer feedback.
 // Builder is bounded by OrchestratorStepMaxTurns so the outer loop stays in control.
-func orchestratorBuildStep(cfg OrchestratorConfig, state *OrchestrationState, step *PlanStep, redirect string, cancel <-chan struct{}) error {
+// ErrProviderZeroOutput: builder run died in under zeroOutputWindow with zero
+// output tokens. Provider/CLI fault, not model fault. Outer loop refunds the
+// attempt (err-…002: haiku "zero-output 1s" after REJECT burned attempts).
+var ErrProviderZeroOutput = errors.New("provider returned zero output tokens")
+
+// zeroOutputWindow: a run that ends this fast with no tokens never reached a
+// model. zeroOutputBackoff: waits between retries. Vars so tests pin them.
+var (
+	zeroOutputWindow  = time.Second
+	zeroOutputBackoff = []time.Duration{time.Second, 5 * time.Second, 15 * time.Second}
+	// buildSleepFn is the backoff sleep; cancel-aware. Tests stub it.
+	buildSleepFn = func(d time.Duration, cancel <-chan struct{}) bool {
+		select {
+		case <-time.After(d):
+			return true
+		case <-cancel:
+			return false
+		}
+	}
+)
+
+// runBuilderOnce: fresh session + fresh ChatContext, one provider run. Returns
+// collected output and the run's stats (Seen=false when provider gave none).
+func runBuilderOnce(cfg OrchestratorConfig, state *OrchestrationState, step *PlanStep, redirect string, cancel <-chan struct{}) (string, RunStats, time.Duration, error) {
 	sessionID := fmt.Sprintf("%s-step%d-%d", chooseSessionPrefix(cfg), step.Index, time.Now().UnixNano())
 	if err := db.CreateSession(sessionID, cfg.ProjectPath, ""); err != nil {
-		return fmt.Errorf("create step session: %w", err)
+		return "", RunStats{}, 0, fmt.Errorf("create step session: %w", err)
 	}
 
 	policy := ResolveAutonomousPolicy(cfg.ProjectPath)
@@ -418,25 +443,67 @@ func orchestratorBuildStep(cfg OrchestratorConfig, state *OrchestrationState, st
 	ctx.OnError = func(msg string) {
 		oc.Write("\n[error] " + msg)
 	}
+	var stats RunStats
+	var statsMu sync.Mutex
+	outer := ctx.OnRunStats
+	ctx.OnRunStats = func(s RunStats) {
+		statsMu.Lock()
+		stats = s
+		statsMu.Unlock()
+		if outer != nil {
+			outer(s)
+		}
+	}
 
-	// Builder reads vocabulary + PRD + the current module map so it knows
-	// where new code belongs and which terms to use. Design concept omitted
-	// here — the builder is tactical, the strategic framing is the PRD.
-	//
-	// Narrowed to this step. The step is the query: on a plan of any size most
-	// of the PRD and most of the module index describe work this step is not
-	// doing, and that text is paid for on every attempt of every step.
+	// Builder reads vocabulary + PRD + module map, narrowed to this step. The
+	// step is the query: most of the PRD describes work this step is not doing.
 	contextDoc := ComposeDocContextFocused(cfg.ProjectPath, stepQuery(step), DocVocabulary, DocPRD, DocModules)
 	if contextDoc == "" {
 		contextDoc = readContextDoc(cfg.ProjectPath) // legacy fallback
 	}
 	prompt := buildStepPromptWithContext(state, step, redirect, contextDoc)
+	started := time.Now()
 	cfg.chatFnFor()(ctx, prompt)
+	statsMu.Lock()
+	defer statsMu.Unlock()
+	return oc.String(), stats, time.Since(started), nil
+}
 
-	if strings.TrimSpace(oc.String()) == "" {
-		return fmt.Errorf("builder produced no output for step %d", step.Index)
+// orchestratorBuildStep runs the builder for one step.
+//
+// Every attempt is a fresh session and fresh context; reviewer notes ride in
+// via step.LastFeedback (see buildStepPromptWithContext). Token count logged
+// per run. A run with zero output tokens inside zeroOutputWindow is a provider
+// fault: back off (zeroOutputBackoff), retry, then ErrProviderZeroOutput —
+// caller refunds the attempt.
+func orchestratorBuildStep(cfg OrchestratorConfig, state *OrchestrationState, step *PlanStep, redirect string, cancel <-chan struct{}) error {
+	for try := 0; ; try++ {
+		out, stats, elapsed, err := runBuilderOnce(cfg, state, step, redirect, cancel)
+		if err != nil {
+			return err
+		}
+		emit(cfg.OnPhase, "tokens", fmt.Sprintf("step %d run %d: model=%s in=%d out=%d elapsed=%s",
+			step.Index, try+1, stats.Model, stats.InputTokens, stats.OutputTokens, elapsed.Round(time.Millisecond)))
+
+		// Only a provider that REPORTED usage can be judged a provider fault.
+		// Stubs/providers without usage keep the old "no output" path.
+		providerFault := stats.Seen && stats.OutputTokens == 0 && elapsed < zeroOutputWindow && !cancelClosed(cancel)
+		if !providerFault {
+			if strings.TrimSpace(out) == "" {
+				return fmt.Errorf("builder produced no output for step %d", step.Index)
+			}
+			return nil
+		}
+		if try >= len(zeroOutputBackoff) {
+			return fmt.Errorf("step %d: %w after %d retries", step.Index, ErrProviderZeroOutput, try)
+		}
+		wait := zeroOutputBackoff[try]
+		emit(cfg.OnPhase, "provider", fmt.Sprintf("step %d: zero output in %s — provider fault, backoff %s (retry %d/%d, attempt not spent)",
+			step.Index, elapsed.Round(time.Millisecond), wait, try+1, len(zeroOutputBackoff)))
+		if !buildSleepFn(wait, cancel) {
+			return fmt.Errorf("step %d: %w (cancelled during backoff)", step.Index, ErrProviderZeroOutput)
+		}
 	}
-	return nil
 }
 
 // buildStepPrompt frames one plan step for the builder. Reviewer feedback from
@@ -466,7 +533,7 @@ func buildStepPromptWithContext(state *OrchestrationState, step *PlanStep, redir
 		fmt.Fprintf(&b, "Acceptance: %s\n", strings.TrimSpace(step.Acceptance))
 	}
 	if step.Attempts > 1 && strings.TrimSpace(step.LastFeedback) != "" {
-		fmt.Fprintf(&b, "\nPRIOR ATTEMPT FEEDBACK (fix this specifically):\n%s\n", strings.TrimSpace(step.LastFeedback))
+		fmt.Fprintf(&b, "\nREVIEWER NOTES from the prior attempt (fix these first, then re-check Acceptance):\n%s\n", strings.TrimSpace(step.LastFeedback))
 	}
 	b.WriteString("\nTDD discipline (red → green → refactor):\n")
 	b.WriteString("1. RED: write the failing test FIRST. Run it with shell. Confirm it fails for the right reason.\n")
