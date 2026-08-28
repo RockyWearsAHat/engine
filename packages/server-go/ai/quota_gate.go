@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -158,7 +159,11 @@ func quotaGateInstance() *quotaGate {
 			return
 		}
 		runner := quota.DefaultRunner()
-		reg := quota.NewRegistry(runner, quota.AccountsFromEnv(os.Getenv("ENGINE_CLAUDE_ACCOUNTS"))...)
+		// File registry first (SARA_ACCOUNTS_FILE), env fallback. Resolve dedupes
+		// by Identity.Key(): two dirs, one login = one pool.
+		accounts, note := quota.LoadAccounts(os.Getenv("ENGINE_CLAUDE_ACCOUNTS"))
+		log.Printf("quota: %s", note)
+		reg := quota.NewRegistry(runner, accounts...)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		reg.Resolve(ctx)
@@ -417,11 +422,18 @@ func quotaAfter(d QuotaDispatch, stats claudeRunStats, success bool) {
 	if !recording {
 		return
 	}
+	// Wire cost is 0 on subscription runs. Price it from the table so ledger
+	// rows carry real usd.
+	usd := stats.CostUSD
+	if usd == 0 {
+		usd = quota.CostUSD(d.Config.Model, stats.InputTokens, stats.OutputTokens, stats.CacheCreationTokens, stats.CacheReadTokens)
+	}
 	g.ledger.Record(quota.Outcome{
 		Role:             quotaRoleKey(d.Role),
 		Config:           d.Config,
 		Success:          success,
 		Tokens:           stats.TotalTokens(),
+		USD:              usd,
 		SubagentsSpawned: stats.SubagentsSpawned,
 		ProjectID:        d.ProjectID,
 		Duration:         time.Since(d.startedAt),
@@ -464,6 +476,39 @@ func (g *quotaGate) closeQuota(d QuotaDispatch, recording bool) float64 {
 		return 0
 	}
 	return pct - d.pctBefore
+}
+
+// QuotaSnapshot exports this box's local readings for the fleet primary.
+// ok=false when governance is off.
+func QuotaSnapshot(ctx context.Context) (quota.PooledSnapshot, bool) {
+	g := quotaGateInstance()
+	if !g.enabled || g.governor == nil {
+		return quota.PooledSnapshot{}, false
+	}
+	host, _ := os.Hostname()
+	return g.governor.Snapshot(ctx, host), true
+}
+
+// QuotaSetPooled stores the primary's merged snapshot. Governor prefers it
+// over local probes while fresh (< quota.PooledFresh).
+func QuotaSetPooled(s quota.PooledSnapshot) bool {
+	g := quotaGateInstance()
+	if !g.enabled || g.governor == nil {
+		return false
+	}
+	g.governor.SetPooled(s)
+	return true
+}
+
+// QuotaPlannerModelCap: governor's planner ceiling ("haiku" normally,
+// "sonnet" only > 30% under target). Empty when ungoverned. Cap only —
+// callers apply it as a downgrade, never an upgrade.
+func QuotaPlannerModelCap(ctx context.Context) string {
+	g := quotaGateInstance()
+	if !g.enabled || g.governor == nil {
+		return ""
+	}
+	return g.governor.Decide(ctx).PlannerModel
 }
 
 // QuotaReport renders current limit state across accounts plus what the ledger

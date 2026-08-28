@@ -276,6 +276,59 @@ func run() error {
 		}
 	})
 
+	// Fleet pooling. Every box serves its local readings; the primary merges
+	// them by account key and pushes the merge back. Governor prefers pooled
+	// over local while < 2 min old.
+	//
+	//	GET  /quota/snapshot -> {machine, accounts:[{key,name,sessionPct,weekPct,pacePct,resetAt,maxConcurrency}], maxConcurrency, generatedAt}
+	//	POST /quota/pooled   <- same shape (merged)
+	httpHandleFuncFn("/quota/snapshot", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+		defer cancel()
+		w.Header().Set("Content-Type", "application/json")
+		snap, ok := ai.QuotaSnapshot(ctx)
+		if !ok {
+			fmt.Fprint(w, `{"enabled":false,"reason":"quota governance is disabled (ENGINE_QUOTA=0)"}`)
+			return
+		}
+		if err := json.NewEncoder(w).Encode(snap); err != nil {
+			log.Printf("quota: encode snapshot: %v", err)
+		}
+	})
+	httpHandleFuncFn("/quota/pooled", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			return
+		}
+		var snap quota.PooledSnapshot
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&snap); err != nil {
+			http.Error(w, "bad JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if snap.GeneratedAt.IsZero() {
+			snap.GeneratedAt = time.Now()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if !ai.QuotaSetPooled(snap) {
+			fmt.Fprint(w, `{"accepted":false,"reason":"quota governance is disabled (ENGINE_QUOTA=0)"}`)
+			return
+		}
+		fmt.Fprintf(w, `{"accepted":true,"accounts":%d,"fresh":%t}`, len(snap.Accounts), snap.Fresh(time.Now()))
+	})
+
 	// Feedback intake. This is how the score gets its numerator: the engine can
 	// see that a run completed, but only the supervisor speaking for the user
 	// knows whether the result was any good.

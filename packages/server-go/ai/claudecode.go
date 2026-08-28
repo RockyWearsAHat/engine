@@ -188,6 +188,10 @@ func (p *claudecodeProvider) RunLoop(
 	// ledger can recommend a cheaper one next time it is safe to. The bar is
 	// deliberately coarse — finished, no error event, produced output — because
 	// it only has to be applied consistently across configurations.
+	// Subscription runs put total_cost_usd 0 on the wire; price the usage.
+	if stats.CostUSD == 0 {
+		stats.CostUSD = quota.CostUSD(model, stats.InputTokens, stats.OutputTokens, stats.CacheCreationTokens, stats.CacheReadTokens)
+	}
 	quotaAfter(dispatch, stats, err == nil && !stats.SawError && finalText.Len() > 0)
 
 	if stalled.Load() {

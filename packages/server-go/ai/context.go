@@ -2753,6 +2753,14 @@ func runPlannerPrePass(ctx *ChatContext, provider, model, userMessage, branch st
 	if resolvedModel == "" {
 		return ""
 	}
+	// Governor cap: planner runs haiku unless > 30% under target, then
+	// sonnet. Downgrade only — never lifts a cheaper explicit choice. Claude
+	// providers only; ollama/openai planners spend no Anthropic quota.
+	if resolvedProvider == "claudecode" || resolvedProvider == "anthropic" {
+		if capModel := QuotaPlannerModelCap(stdctx.Background()); capModel != "" && modelRank(capModel) < modelRank(resolvedModel) {
+			resolvedModel = capModel
+		}
+	}
 
 	plannerCtx := &ChatContext{
 		ProjectPath:      ctx.ProjectPath,
