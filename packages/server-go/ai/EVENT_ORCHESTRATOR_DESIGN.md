@@ -35,7 +35,8 @@ This file is intentionally limited to what exists in source today. If code and t
 
 ## Current Structural Reality
 
-- Comms hub: `AgentCommsForProject` per project (keyed by project path, no task slug). Orchestrator registers `lead`; `TeamDispatcher` registers every team id; `claudecodeProvider.RunLoop` registers the worker (`registerChatAgent`) **before** the CLI starts, so `agent_list` on a peer already shows it. Bridge tool calls self-register an *unknown* worker as `active`; a peer already in the hub keeps whatever status the dispatcher set (`IsRegistered` guard in `ExecuteBridgeTool`).
+- Comms hub: `AgentCommsForProject` per project (keyed by project path, no task slug). Orchestrator registers `lead`; `TeamDispatcher` registers every team id as `queued`; `claudecodeProvider.RunLoop` registers the worker (`registerChatAgent`) **before** the CLI starts, so `agent_list` on a peer already shows it. `registerChatAgent` always writes status `active` — it overwrites the dispatcher's `queued` on the same id. Intended: CLI start *is* the queued→active edge. Bridge tool calls self-register an *unknown* worker as `active`; a peer already in the hub keeps its status (`IsRegistered` guard in `ExecuteBridgeTool`).
+- Model pin: `cfg.RequestedModel` (SARA's haiku/sonnet/opus tier) lands in `ChatContext.ModelOverride` at **one** seam per path — serial `stageChatContextCreation`, event `newPhaseChat`. `newPhaseChat` feeds every planner phase and `TeamWorker.runStep`, so the pin holds across the whole event run. Role/team env overrides still win over it (floor, not ceiling). Was dropped on the event path before; test `model_pin_event_test.go` guards both call sites.
 - Comms on disk: every `Register` / `Send` mirrors the hub to `<project>/.engine/comms.json` (`comms-<slug>.json` when a hub is built with `NewAgentCommsHubAt(path, slug)`; the shared per-project hub has no slug). Shape: `{updatedAt, agents[], messages[]}` — peers sorted by id, messages by time. Best-effort write; disk trouble never breaks comms. This is the observable proof for "≥2 registered peers, ≥1 `msg-N` exchanged".
 - MCP bridge (`ai/mcp_bridge.go`): `claude -p` workers get `--mcp-config <tmp.json> --allowedTools mcp__engine__*`. The config spawns `<server binary> mcp-bridge` (override `ENGINE_MCP_BRIDGE_CMD`) with env `ENGINE_MCP_PROJECT`, `ENGINE_MCP_AGENT`, `ENGINE_MCP_ROLE`, `ENGINE_MCP_ADDR`. Bridge = stdio JSON-RPC 2.0 (`initialize`, `tools/list`, `tools/call`, `ping`); each `tools/call` POSTs to the running Engine at `/mcp/tool`, which runs the tool in-process against the project hub. Empty addr = in-process. The POST client has **no timeout** — `agent_await` blocks as long as the worker asks; the bridge process dies with the CLI.
 - Bridged tools: `agent_list agent_send agent_inbox agent_receive agent_await signal_done discord_post_progress discord_dm mesh_exec search_tools`. File/shell tools are not bridged — Claude Code has its own. Temp config removed after the run.
@@ -48,6 +49,7 @@ This file is intentionally limited to what exists in source today. If code and t
 The event orchestrator has direct unit coverage in:
 
 - `mcp_bridge_test.go` (routing rule, brain namespacing, bridge wire, fake-claude → bridge → HTTP → hub)
+- `model_pin_event_test.go` (RequestedModel → ModelOverride on planner phases and TeamWorker steps)
 - `orchestrator_event_extra_test.go`
 - `orchestrator_gap_extra_test.go`
 - `orchestrator_run_extra_test.go`
