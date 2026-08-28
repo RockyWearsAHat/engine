@@ -18,11 +18,12 @@ type ModelCost struct {
 }
 
 // knownModelCosts maps model name prefixes to pricing.
-// Values are approximate list prices as of 2026-04.
+// Claude rows match quota/price.go (list, 2026-08). Keep both in step.
 var knownModelCosts = map[string]ModelCost{
-	"claude-opus":    {InputPer1M: 15.0, OutputPer1M: 75.0},
+	"claude-fable":   {InputPer1M: 10.0, OutputPer1M: 50.0},
+	"claude-opus":    {InputPer1M: 5.0, OutputPer1M: 25.0},
 	"claude-sonnet":  {InputPer1M: 3.0, OutputPer1M: 15.0},
-	"claude-haiku":   {InputPer1M: 0.80, OutputPer1M: 4.0},
+	"claude-haiku":   {InputPer1M: 1.0, OutputPer1M: 5.0},
 	"gpt-4o":         {InputPer1M: 2.50, OutputPer1M: 10.0},
 	"gpt-4o-mini":    {InputPer1M: 0.15, OutputPer1M: 0.60},
 	"gpt-4.1":        {InputPer1M: 2.0, OutputPer1M: 8.0},

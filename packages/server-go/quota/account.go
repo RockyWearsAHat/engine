@@ -143,6 +143,72 @@ func AccountsFromEnv(env string) []Account {
 	return out
 }
 
+// AccountsFileEnv names the registry file. Default ~/.sara-accounts.json.
+const AccountsFileEnv = "SARA_ACCOUNTS_FILE"
+
+// AccountsFilePath resolves the registry file path from env or default.
+func AccountsFilePath() string {
+	if v := strings.TrimSpace(os.Getenv(AccountsFileEnv)); v != "" {
+		return expandHome(v)
+	}
+	return expandHome("~/.sara-accounts.json")
+}
+
+// AccountsFromFile reads [{name, configDir}] JSON. Missing file → nil, no
+// error (file optional). Bad JSON → error. Dedupes by name and configDir.
+func AccountsFromFile(path string) ([]Account, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var raw []struct {
+		Name      string `json:"name"`
+		ConfigDir string `json:"configDir"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	var out []Account
+	seenName, seenDir := map[string]bool{}, map[string]bool{}
+	for _, r := range raw {
+		dir := expandHome(strings.TrimSpace(r.ConfigDir))
+		name := strings.TrimSpace(r.Name)
+		if name == "" && dir != "" {
+			name = filepath.Base(strings.TrimSuffix(dir, string(filepath.Separator)))
+		}
+		if name == "" {
+			name = DefaultAccountName
+		}
+		if seenName[name] || (dir != "" && seenDir[dir]) {
+			continue
+		}
+		seenName[name] = true
+		if dir != "" {
+			seenDir[dir] = true
+		}
+		out = append(out, Account{Name: name, ConfigDir: dir})
+	}
+	return out, nil
+}
+
+// LoadAccounts: file first (SARA_ACCOUNTS_FILE), env ENGINE_CLAUDE_ACCOUNTS
+// fallback. Unreadable file → env fallback, reason returned in note.
+func LoadAccounts(env string) (accounts []Account, note string) {
+	path := AccountsFilePath()
+	fromFile, err := AccountsFromFile(path)
+	switch {
+	case err != nil:
+		return AccountsFromEnv(env), fmt.Sprintf("accounts file %s unreadable (%v); using env", path, err)
+	case len(fromFile) > 0:
+		return fromFile, fmt.Sprintf("accounts from %s (%d)", path, len(fromFile))
+	default:
+		return AccountsFromEnv(env), "accounts from env"
+	}
+}
+
 func expandHome(p string) string {
 	if p == "~" || strings.HasPrefix(p, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
