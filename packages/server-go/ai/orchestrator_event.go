@@ -107,7 +107,13 @@ func startEventOrchestrator(cfg OrchestratorConfig) (*EventOrchestrator, error) 
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	brain, _ := NewOrchestrationBrain(cfg.ProjectPath, cfg.Owner, cfg.Repo, cfg.Brief, cfg.SessionIDPrefix)
+	// Task mode = one worklist item. Own brain file so two items on one
+	// repo do not stomp each other's plan.
+	slug := ""
+	if cfg.TaskMode {
+		slug = taskSlug(cfg.TaskID)
+	}
+	brain, _ := NewOrchestrationBrainSlug(cfg.ProjectPath, cfg.Owner, cfg.Repo, cfg.Brief, cfg.SessionIDPrefix, slug)
 
 	bus := NewEventBus()
 	comms := AgentCommsForProject(cfg.ProjectPath)
@@ -186,8 +192,15 @@ func (eo *EventOrchestrator) eventLoop() {
 		eo.dispatcher.Stop()
 	}()
 
-	// Phase 1: Intake (design, PRD, vocabulary)
-	eo.phaseIntake()
+	// Phase 1: Intake (design, PRD, vocabulary). Task mode skips it: item
+	// already decided, existing docs read by planner. Same rule as serial.
+	if eo.cfg.TaskMode {
+		eo.cfg.OnPhase("task", "single worklist item — skipping intake and PRD, planning from the item")
+		eo.brain.UpdateRequirements(ReadDoc(eo.cfg.ProjectPath, DocDesign), ReadDoc(eo.cfg.ProjectPath, DocVocabulary),
+			ReadDoc(eo.cfg.ProjectPath, DocPRD), ReadDoc(eo.cfg.ProjectPath, DocModules))
+	} else {
+		eo.phaseIntake()
+	}
 
 	// Phase 2: Planning
 	if err := eo.phasePlan(); err != nil {
@@ -654,6 +667,11 @@ func newChatContextForPhase(projectPath string, sessionID string) *CapturedChat 
 func newPhaseChat(cfg OrchestratorConfig, sessionID string) *CapturedChat {
 	cc := newChatContextForPhase(cfg.ProjectPath, sessionID)
 	cc.Ctx.Cancel = cfg.Cancel
+	// Model pin. Serial path sets this in stageChatContextCreation; event path
+	// forgot. Result: SARA picked haiku, every phase + every TeamWorker step ran
+	// at env default. One seam for both call sites (planner phases here,
+	// TeamWorker.runStep) so it cannot drift again.
+	cc.Ctx.ModelOverride = cfg.RequestedModel
 	if cfg.OnError != nil {
 		cc.Ctx.OnError = cfg.OnError
 	}

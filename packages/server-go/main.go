@@ -133,6 +133,14 @@ func defaultProjectPath() string {
 }
 
 func main() {
+	// `server mcp-bridge`: not a server. Stdio MCP bridge the CLI spawns per
+	// worker; identity from env. See ai/mcp_bridge.go.
+	if len(os.Args) > 1 && os.Args[1] == ai.MCPBridgeSubcommand {
+		if err := ai.ServeMCPBridge(os.Stdin, os.Stdout, ai.MCPBridgeIdentityFromEnv(os.Getenv)); err != nil {
+			logFatalFn(err)
+		}
+		return
+	}
 	if err := runFn(); err != nil {
 		logFatalFn(err)
 	}
@@ -160,6 +168,7 @@ func run() error {
 			log.Printf("[engine-discord] disabled due to start error: %v", err)
 		} else {
 			setDiscordBridgeFn(discordService)
+			ai.SetBridgeDiscord(discordService.SendDMToOwner, discordService.NotifyProjectProgress)
 			defer discordService.Close() //nolint:errcheck
 		}
 	} else {
@@ -870,10 +879,9 @@ func triggerScaffoldSession(projectPath string, payload json.RawMessage) {
 // It used to bind straight to ai.RunAutonomousProject, the serial loop, which
 // meant the event-driven parallel orchestrator was unreachable from the running
 // server no matter what anyone configured. RunProject is the routing layer: it
-// asks ShouldRunEventOrchestrator whether this particular run has anything to
-// gain from parallel teams, and picks. A single unit of work goes serial; a
-// multi-step project on a healthy quota window runs teams up to the ceiling the
-// governor sets.
+// asks ShouldRunEventOrchestrator and picks. Serial only when plan <= 2 steps
+// AND governor MaxConcurrency < 2; everything else (task mode included) runs
+// the event orchestrator so workers share the comms hub.
 var runOrchestratorFn = ai.RunProject
 
 // postOrchestratorGitHubStatusFn is the injectable hook used to post commit

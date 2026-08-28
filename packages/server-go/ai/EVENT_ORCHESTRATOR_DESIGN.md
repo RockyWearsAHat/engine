@@ -4,8 +4,11 @@ This file is intentionally limited to what exists in source today. If code and t
 
 ## Activation Route
 
-- `RunAutonomousProject` in `orchestrator.go` asks `ShouldRunEventOrchestrator`. Default on (`eventOrchestratorDefault = true`); `ENGINE_EVENT_ORCHESTRATOR=1/0` forces either way. Task mode (`cfg.TaskMode`, every SARA dispatch) runs the classic serial loop.
-- `RunEventOrchestratorAsState` adapts event orchestration to `*OrchestrationState`.
+- `RunProject` (`orchestrator.go`) is the only entry. It calls `ShouldRunEventOrchestrator`.
+- Rule: `ENGINE_EVENT_ORCHESTRATOR=1/0` wins. Else serial **only** when `cfg.PlanSteps <= 2` (0 = unknown) **and** governor `MaxConcurrency < 2`. Everything else → event orchestrator. `TaskMode` no longer forces serial.
+- SARA `/task` dispatches (`task_api.go`, `TaskMode: true`) therefore land here whenever the window has room. `task_api.go` passes `PlanSteps: 0` — step count is unknown at dispatch time, so the `PlanSteps <= 2` half of the serial rule is dormant for real task-mode calls until a caller supplies a count; with room the window decides alone. Log line: `parallel teams — task <slug>: plan step count unknown, quota tier T allows K concurrent teams — comms on` (`N plan step(s) known` only when a caller set `PlanSteps > 0`).
+- Task mode inside the event path: intake/PRD skipped (existing `.engine` docs loaded into the brain), state file `.engine/brain-<taskSlug>.json` (whole-project runs keep `brain.json`).
+- `RunEventOrchestratorAsState` adapts the brain to `*OrchestrationState`.
 
 ## Implemented Components
 
@@ -32,11 +35,14 @@ This file is intentionally limited to what exists in source today. If code and t
 
 ## Current Structural Reality
 
-- In current code, "teams" are not true manager-led specialist groups.
-- `createTeamsFromPlan` groups consecutive steps by simple title heuristics (`db`, `frontend`, `api`, `general`).
-- `TeamWorker.runStep` currently executes every team step with `RoleAutonomousBuilder`, regardless of `TeamState.Role`.
-- That means the event path is currently a parallel step-bucket executor, not a real specialist-member system.
-- `lead_planner.go` defines a richer specialist composition model, but it is not currently wired into `RunEventOrchestrator` or `createTeamsFromPlan`.
+- Comms hub: `AgentCommsForProject` per project (keyed by project path, no task slug). Orchestrator registers `lead`; `TeamDispatcher` registers every team id as `queued`; `claudecodeProvider.RunLoop` registers the worker (`registerChatAgent`) **before** the CLI starts, so `agent_list` on a peer already shows it. `registerChatAgent` always writes status `active` — it overwrites the dispatcher's `queued` on the same id. Intended: CLI start *is* the queued→active edge. Bridge tool calls self-register an *unknown* worker as `active`; a peer already in the hub keeps its status (`IsRegistered` guard in `ExecuteBridgeTool`).
+- Model pin: `cfg.RequestedModel` (SARA's haiku/sonnet/opus tier) lands in `ChatContext.ModelOverride` at **one** seam per path — serial `stageChatContextCreation`, event `newPhaseChat`. `newPhaseChat` feeds every planner phase and `TeamWorker.runStep`, so the pin holds across the whole event run. Role/team env overrides still win over it (floor, not ceiling). Was dropped on the event path before; test `model_pin_event_test.go` guards both call sites.
+- Comms on disk: every `Register` / `Send` mirrors the hub to `<project>/.engine/comms.json` (`comms-<slug>.json` when a hub is built with `NewAgentCommsHubAt(path, slug)`; the shared per-project hub has no slug). Shape: `{updatedAt, agents[], messages[]}` — peers sorted by id, messages by time. Best-effort write; disk trouble never breaks comms. This is the observable proof for "≥2 registered peers, ≥1 `msg-N` exchanged".
+- MCP bridge (`ai/mcp_bridge.go`): `claude -p` workers get `--mcp-config <tmp.json> --allowedTools mcp__engine__*`. The config spawns `<server binary> mcp-bridge` (override `ENGINE_MCP_BRIDGE_CMD`) with env `ENGINE_MCP_PROJECT`, `ENGINE_MCP_AGENT`, `ENGINE_MCP_ROLE`, `ENGINE_MCP_ADDR`. Bridge = stdio JSON-RPC 2.0 (`initialize`, `tools/list`, `tools/call`, `ping`); each `tools/call` POSTs to the running Engine at `/mcp/tool`, which runs the tool in-process against the project hub. Empty addr = in-process. The POST client has **no timeout** — `agent_await` blocks as long as the worker asks; the bridge process dies with the CLI.
+- Bridged tools: `agent_list agent_send agent_inbox agent_receive agent_await signal_done discord_post_progress discord_dm mesh_exec search_tools`. File/shell tools are not bridged — Claude Code has its own. Temp config removed after the run.
+- `--disallowedTools Task` only when governor fanout == 0. Positive fanout = advisory budget in the system prompt.
+- Teams are still step buckets: `createTeamsFromPlan` groups by title keyword (`db`, `frontend`, `api`, `general`); every member runs `RoleAutonomousBuilder`; `lead_planner.go` composition not wired (slice H).
+- No mid-run member spawn / retire yet (slice H).
 
 ## Task API Surface (`task_api.go`)
 
@@ -60,6 +66,8 @@ How SARA hands one unit of work in and learns what happened. Rules:
 
 The event orchestrator has direct unit coverage in:
 
+- `mcp_bridge_test.go` (routing rule, brain namespacing, bridge wire, fake-claude → bridge → HTTP → hub)
+- `model_pin_event_test.go` (RequestedModel → ModelOverride on planner phases and TeamWorker steps)
 - `orchestrator_event_extra_test.go`
 - `orchestrator_gap_extra_test.go`
 - `orchestrator_run_extra_test.go`
@@ -70,9 +78,9 @@ These tests are the canonical behavioral spec for current orchestration behavior
 
 ## Operator Notes
 
-- Force event orchestration on/off with `ENGINE_EVENT_ORCHESTRATOR=1` / `=0`. Unset = derived (on, unless task mode or single team).
-
-- Runtime brain state is persisted under the project `.engine` directory and can be inspected during execution.
+- Default on. Force: `ENGINE_EVENT_ORCHESTRATOR=1` (or `0` for serial). Old `USE_EVENT_ORCHESTRATOR` / `ENGINE_EXPERIMENTAL_EVENT_ORCHESTRATOR` are dead.
+- Bridge callback addr defaults to `http://127.0.0.1:$PORT` (24444); override `ENGINE_MCP_ADDR`.
+- Brain state: `.engine/brain.json` or `.engine/brain-<taskSlug>.json`.
 
 ## Quota Governance (quota/ + quota_gate.go)
 
