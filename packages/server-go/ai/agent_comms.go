@@ -351,11 +351,41 @@ func agentRoleLabel(role AgentRole) string {
 		RoleModuleIndexer:     "module-indexer",
 		RoleArchitect:         "architect",
 		RoleRouter:            "router",
+		RoleCoach:             "coach",
+		RoleDesignReviewer:    "design-reviewer",
 	}
 	if label, ok := labels[role]; ok {
 		return label
 	}
 	return fmt.Sprintf("role-%d", role)
+}
+
+// agentRoleFromLabel reverses agentRoleLabel: string → AgentRole.
+// Returns RoleInteractive (default) if the label is not recognized.
+func agentRoleFromLabel(label string) AgentRole {
+	label = strings.TrimSpace(label)
+	roles := map[string]AgentRole{
+		"lead":           RoleInteractive,
+		"planner":        RolePlanner,
+		"scaffolder":     RoleScaffolder,
+		"implementer":    RoleImplementer,
+		"tester":         RoleTester,
+		"reviewer":       RoleReviewer,
+		"documenter":     RoleDocumenter,
+		"intaker":        RoleIntaker,
+		"builder":        RoleAutonomousBuilder,
+		"griller":        RoleGriller,
+		"prd-writer":     RolePRDWriter,
+		"module-indexer": RoleModuleIndexer,
+		"architect":      RoleArchitect,
+		"router":         RoleRouter,
+		"coach":          RoleCoach,
+		"design-reviewer": RoleDesignReviewer,
+	}
+	if role, ok := roles[label]; ok {
+		return role
+	}
+	return RoleInteractive
 }
 
 func agentCommsReady(ctx *ChatContext) (string, *AgentCommsHub, string, bool) {

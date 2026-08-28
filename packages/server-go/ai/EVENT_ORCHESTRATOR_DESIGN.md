@@ -33,6 +33,31 @@ This file is intentionally limited to what exists in source today. If code and t
 5. `orchestrator_intake.go`
 - Implements intake artifacts and role handoff (`RoleGriller`, `RolePRDWriter`) used by event orchestration.
 
+## Agent Roles (15 total)
+
+Roles are specialized agent personas, each with a system prompt, pre-granted tools, and specific output format.
+
+| Role | Purpose | Input | Output | Model |
+|------|---------|-------|--------|-------|
+| RoleInteractive | Default user-facing chat | User message + context | Helpful reply + tool results | Any |
+| RolePlanner | Numbered implementation plans | Codebase + brief | Numbered steps only | Haiku+ |
+| RoleScaffolder | Compile-valid file stubs | Plan step | File stubs (no logic) | Haiku |
+| RoleImplementer | Production code for one module | File path + spec | Working code for spec | Haiku+ |
+| RoleTester | Test writing + iteration | Failing test output | Fixed code + green tests | Haiku+ |
+| RoleReviewer | Runtime quality review | Diff + screenshots | APPROVE / REJECT + findings | Haiku+ |
+| RoleDocumenter | Documentation updates | Code changes | Updated WORKING_BEHAVIORS.md | Haiku |
+| RoleIntaker | Structured project profile extraction | README / user message | JSON ProjectProfile | Haiku |
+| RoleAutonomousBuilder | Headless scaffold+implement+validate | Project path + brief | Committed, working code | Haiku+ |
+| RoleGriller | Design tree walkthrough | Brief | Structured design.md | Sonnet |
+| RolePRDWriter | Design → vocabulary + PRD | design.md | vocabulary.md + prd.md | Sonnet |
+| RoleModuleIndexer | Module/package strategic index | Codebase | modules.md table | Haiku |
+| RoleArchitect | Ousterhout deep-modules review | Diff + files | APPROVE / REJECT + findings | Haiku+ |
+| RoleRouter | Brief classifier (BUILD vs CHAT) | User message | One word: BUILD or CHAT | Haiku |
+| RoleCoach | Rejected brief decomposer | Brief + REJECT feedback | Decomposed brief for retry | Sonnet |
+| RoleDesignReviewer | Design consistency verification | 2 images + design.dx rules | JSON {pass, violations:[...]} | Haiku |
+
+Reachable from `/task` POST with `role` field: "design-reviewer" → RoleDesignReviewer (strict JSON output, no tool calls, read-only).
+
 ## Plan Decomposition Gate (Slice J)
 
 The planner phase now enforces task decomposition before dispatch:
