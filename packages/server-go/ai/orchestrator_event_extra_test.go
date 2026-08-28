@@ -668,7 +668,10 @@ func TestEventLoop_CancelEvent_EmitsProjectCanceled(t *testing.T) {
 				c.OnChunk(onePlanStep, false)
 				return
 			}
-			c.OnChunk("", false)
+			// Team workers running steps should block long enough for cancel to arrive
+			// (lead/documenter/verifier have no steps, builder team will keep working)
+			time.Sleep(50 * time.Millisecond)
+			c.OnChunk("still working on this...", false)
 		},
 		OnPhase:    func(string, string) {},
 		OnProgress: func(string) {},
@@ -726,14 +729,22 @@ func TestEventLoop_Success_CompletesProject(t *testing.T) {
 		SessionIDPrefix:    "test",
 		MaxOuterIterations: 2,
 		ChatFn: func(c *ChatContext, prompt string) {
+			// Lead team signals done
+			if c.AgentName != "" && strings.Contains(c.AgentName, "lead") {
+				c.OnChunk("Work orchestrated. Calling signal_done.", false)
+				return
+			}
+			// Validation phase
 			if strings.Contains(prompt, "VALIDATION_PASSED") {
 				c.OnChunk("VALIDATION_PASSED", false)
 				return
 			}
+			// Planner phase
 			if strings.Contains(prompt, plannerPromptMarker) {
 				c.OnChunk(onePlanStep, false)
 				return
 			}
+			// Default (intake/grill)
 			c.OnChunk("design", false)
 		},
 		// The team comes from the plan now, the way it does in a real run. This

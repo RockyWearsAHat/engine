@@ -174,8 +174,13 @@ func (d *TeamDispatcher) DispatchTeam(teamID string) error {
 	}
 
 	d.workers[teamID] = worker
+
+	// Update team status to running immediately to prevent re-dispatch during phaseWaitTeams
+	if err := d.brain.UpdateTeamStatus(teamID, "running"); err != nil {
+		log.Printf("team dispatcher: failed to mark team %s running: %v", teamID, err)
+	}
 	if d.comms != nil {
-		d.comms.Register(teamID, t.Role, "queued")
+		d.comms.Register(teamID, t.Role, "running")
 	}
 
 	d.wg.Add(1)
@@ -256,7 +261,8 @@ func (w *TeamWorker) markTeamDone() {
 
 // run executes the team's work on assigned steps.
 func (w *TeamWorker) run() {
-	// Mark team as running
+	// Team status should already be "running" from DispatchTeam, but update it again
+	// to ensure comms are in sync (markTeamRunning is idempotent)
 	w.markTeamRunning()
 
 	for _, stepIdx := range w.steps {

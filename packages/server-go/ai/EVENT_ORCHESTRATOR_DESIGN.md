@@ -41,8 +41,13 @@ This file is intentionally limited to what exists in source today. If code and t
 - MCP bridge (`ai/mcp_bridge.go`): `claude -p` workers get `--mcp-config <tmp.json> --allowedTools mcp__engine__*`. The config spawns `<server binary> mcp-bridge` (override `ENGINE_MCP_BRIDGE_CMD`) with env `ENGINE_MCP_PROJECT`, `ENGINE_MCP_AGENT`, `ENGINE_MCP_ROLE`, `ENGINE_MCP_ADDR`. Bridge = stdio JSON-RPC 2.0 (`initialize`, `tools/list`, `tools/call`, `ping`); each `tools/call` POSTs to the running Engine at `/mcp/tool`, which runs the tool in-process against the project hub. Empty addr = in-process. The POST client has **no timeout** — `agent_await` blocks as long as the worker asks; the bridge process dies with the CLI.
 - Bridged tools: `agent_list agent_send agent_inbox agent_receive agent_await signal_done discord_post_progress discord_dm mesh_exec search_tools`. File/shell tools are not bridged — Claude Code has its own. Temp config removed after the run.
 - `--disallowedTools Task` only when governor fanout == 0. Positive fanout = advisory budget in the system prompt.
-- Teams are still step buckets: `createTeamsFromPlan` groups by title keyword (`db`, `frontend`, `api`, `general`); every member runs `RoleAutonomousBuilder`; `lead_planner.go` composition not wired (slice H).
-- No mid-run member spawn / retire yet (slice H).
+- **Slice H (Self-Shaping Teams)**: `createTeamsFromPlan` now:
+  - Creates mandatory teams: `lead-<iter>`, `documenter-<iter>`, `verifier-<iter>` on every iteration (no steps assigned; provide coordination/review).
+  - Groups remaining plan steps by mapped role (`tester`, `reviewer`, `architect`, `documenter`, `scaffolder`, `implementer`, `builder`).
+  - Each team within an iteration gets a unique ID including the iteration counter to avoid replan collisions.
+  - Teams are reset on replanning: `Dispatcher.Reset()` clears the workers map when `brain.ResetTeams()` is called.
+- **Workflow End Condition**: Project completes when BOTH true: (a) lead member signaled done (via `signal_done` tool), (b) verifier/reviewer result is PASS. Outer loop remains capped at max iterations (3); if either condition fails, loop replans and retries.
+- **Member Lifecycle**: Lead and other members run steps assigned by the plan. Mandatory teams (lead, documenter, verifier) have no steps and complete immediately; they exist to provide coordination and review. `agent_request_member` and `agent_retire` tools wired for mid-run member spawn/retire (slice H).
 
 ## Task API Surface (`task_api.go`)
 
