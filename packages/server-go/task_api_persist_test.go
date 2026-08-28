@@ -15,28 +15,40 @@ import (
 	"github.com/engine/server/ai"
 )
 
+// wakeLog: mutex-guarded wake capture. Read via snapshot() — the hook fires
+// from task goroutines.
+type wakeLog struct {
+	mu    sync.Mutex
+	wakes []map[string]any
+}
+
+func (l *wakeLog) snapshot() []map[string]any {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]map[string]any(nil), l.wakes...)
+}
+
 // freshTaskAPI: empty registry, tasks.json in a temp state dir, routes on a
 // private mux, wake POST captured. Restores globals on cleanup.
-func freshTaskAPI(t *testing.T) (*http.ServeMux, string, *[]map[string]any) {
+func freshTaskAPI(t *testing.T) (*http.ServeMux, string, *wakeLog) {
 	t.Helper()
 	stateDir := t.TempDir()
 	t.Setenv("ENGINE_STATE_DIR", stateDir)
 	origTasks, origPath, origHandle, origRun, origNotify := tasks, tasksFilePath, httpHandleFuncFn, runOrchestratorForTaskFn, notifyCallbackFn
 	tasks = &taskRegistry{tasks: map[string]*engineTask{}, byKey: map[string]string{}}
-	var mu sync.Mutex
-	var wakes []map[string]any
+	wakes := &wakeLog{}
 	notifyCallbackFn = func(url string, payload map[string]any) {
-		mu.Lock()
-		defer mu.Unlock()
+		wakes.mu.Lock()
+		defer wakes.mu.Unlock()
 		payload["_url"] = url
-		wakes = append(wakes, payload)
+		wakes.wakes = append(wakes.wakes, payload)
 	}
 	mux := http.NewServeMux()
 	httpHandleFuncFn = mux.HandleFunc
 	t.Cleanup(func() {
 		tasks, tasksFilePath, httpHandleFuncFn, runOrchestratorForTaskFn, notifyCallbackFn = origTasks, origPath, origHandle, origRun, origNotify
 	})
-	return mux, filepath.Join(stateDir, "tasks.json"), &wakes
+	return mux, filepath.Join(stateDir, "tasks.json"), wakes
 }
 
 func postTask(t *testing.T, mux *http.ServeMux, body map[string]any) (int, map[string]any) {
@@ -217,33 +229,52 @@ func TestTaskAPI_WakeFiresOnCancelWithPayload(t *testing.T) {
 	t.Setenv(wakePortEnv, "25555")
 	project := t.TempDir()
 	registerTaskRoutes(project)
-	// ready closes once stats + coach recorded. Cancel only after — sleep
-	// guessed and flaked (payload tokens 0).
-	ready := make(chan struct{}, 1)
+	// ready carries the TaskID once stats + coach recorded. Cancel only
+	// after OUR id arrives — a goroutine leaked from an earlier test can
+	// call this fn too (global hook) and would false-signal; then cancel
+	// lands while still queued (payload model "", tokens 0).
+	ready := make(chan string, 8)
 	runOrchestratorForTaskFn = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
 		cfg.OnRunStats(ai.RunStats{Model: "haiku", InputTokens: 10, OutputTokens: 5, SubagentsSpawned: 1, Seen: true})
 		cfg.OnRunStats(ai.RunStats{Model: "haiku", InputTokens: 10, OutputTokens: 5, Seen: true})
 		cfg.OnCoach(1, false)
-		close(ready)
+		ready <- cfg.TaskID
 		<-cfg.Cancel
 		return nil, nil
 	}
 	_, out := postTask(t, mux, map[string]any{"project": project, "brief": "cancel me"})
 	id := out["id"].(string)
-	<-ready
+	for {
+		select {
+		case got := <-ready:
+			if got == id {
+				goto started
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("orchestrator never started for our task")
+		}
+	}
+started:
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/task/cancel?id="+id, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("cancel: %d", rec.Code)
 	}
+	// Match wake by id — a task leaked from an earlier test can fire its
+	// wake into this capture too (global hook).
 	deadline := time.Now().Add(3 * time.Second)
-	for len(*wakes) == 0 {
+	var p map[string]any
+	for p == nil {
 		if time.Now().After(deadline) {
 			t.Fatal("wake never fired on cancel")
 		}
+		for _, w := range wakes.snapshot() {
+			if w["id"] == id {
+				p = w
+			}
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	p := (*wakes)[0]
 	if p["_url"] != "http://127.0.0.1:25555/task-complete" {
 		t.Fatalf("wake url: %v", p["_url"])
 	}
