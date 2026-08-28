@@ -551,7 +551,7 @@ var runOrchestratorForTaskFn = func(cfg ai.OrchestratorConfig) (*ai.Orchestratio
 }
 
 // startTask dispatches one unit of work and returns immediately.
-func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, callbackURL string) *engineTask {
+func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role, callbackURL string) *engineTask {
 	id := fmt.Sprintf("task-%d-%s", time.Now().UnixNano()/1e6, shortToken())
 	t := &engineTask{
 		ID:          id,
@@ -590,6 +590,7 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, callb
 			TaskID:          id,
 			PlanSteps:       0, // unknown at dispatch time — see ShouldRunEventOrchestrator comment
 			RequestedModel:  requestedModel,
+			RequestedRole:   role,
 			Cancel:          t.cancel,
 			ChatFn:          aiChatFn,
 			OnPhase: func(phase, detail string) {
@@ -759,6 +760,9 @@ func registerTaskRoutes(defaultProjectPath string) {
 				// chooseModel). Optional — an empty value leaves model
 				// resolution exactly as it was before this field existed.
 				Model string `json:"model"`
+				// Role is the specialized agent role for this task (e.g., "design-reviewer").
+				// Optional — empty defaults to orchestrator behavior.
+				Role string `json:"role"`
 				// CallbackURL, if set, is POSTed to (fire-and-forget, empty
 				// body) when this task reaches a terminal state. Optional --
 				// an empty value leaves the caller polling GET-by-id exactly
@@ -784,7 +788,7 @@ func registerTaskRoutes(defaultProjectPath string) {
 				writeJSON(w, http.StatusOK, snap)
 				return
 			}
-			t := startTask(body.Project, body.Brief, body.Owner, body.Repo, body.Key, body.Model, body.CallbackURL)
+			t := startTask(body.Project, body.Brief, body.Owner, body.Repo, body.Key, body.Model, body.Role, body.CallbackURL)
 			writeJSON(w, http.StatusAccepted, t.snapshot())
 
 		default:

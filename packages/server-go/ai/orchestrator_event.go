@@ -259,7 +259,9 @@ func (eo *EventOrchestrator) phaseIntake() error {
 
 	sessionID := fmt.Sprintf("%s-intake-grill", eo.cfg.SessionIDPrefix)
 	cc := newPhaseChat(eo.cfg, sessionID)
-	cc.Ctx.Role = RoleGriller
+	if strings.TrimSpace(eo.cfg.RequestedRole) == "" {
+		cc.Ctx.Role = RoleGriller
+	}
 
 	// Grill phase (design)
 	eo.cfg.chatFnFor()(cc.Ctx, buildGrillPrompt(eo.cfg.Brief))
@@ -277,7 +279,9 @@ func (eo *EventOrchestrator) phaseIntake() error {
 	eo.cfg.OnPhase("intake", "PRD distillation")
 	sessionID = fmt.Sprintf("%s-intake-prd", eo.cfg.SessionIDPrefix)
 	cc = newPhaseChat(eo.cfg, sessionID)
-	cc.Ctx.Role = RolePRDWriter
+	if strings.TrimSpace(eo.cfg.RequestedRole) == "" {
+		cc.Ctx.Role = RolePRDWriter
+	}
 
 	prd := ReadDoc(eo.cfg.ProjectPath, DocPRD)
 	vocab := ReadDoc(eo.cfg.ProjectPath, DocVocabulary)
@@ -295,7 +299,9 @@ func (eo *EventOrchestrator) phasePlan() error {
 
 	sessionID := fmt.Sprintf("%s-plan-%d", eo.cfg.SessionIDPrefix, eo.brain.OuterIterationCount())
 	cc := newPhaseChat(eo.cfg, sessionID)
-	cc.Ctx.Role = RolePlanner
+	if strings.TrimSpace(eo.cfg.RequestedRole) == "" {
+		cc.Ctx.Role = RolePlanner
+	}
 
 	// The planner prompt is the serial path's, deliberately, because the parser
 	// is the serial path's too — extractPlanFromContext is a one-line wrapper
@@ -493,7 +499,9 @@ func (eo *EventOrchestrator) phaseWaitTeams(teamDone, teamFailed, userRedirect, 
 func (eo *EventOrchestrator) phaseValidate() (bool, string) {
 	sessionID := fmt.Sprintf("%s-validate-%d", eo.cfg.SessionIDPrefix, eo.brain.OuterIterationCount())
 	cc := newPhaseChat(eo.cfg, sessionID)
-	cc.Ctx.Role = RoleReviewer
+	if strings.TrimSpace(eo.cfg.RequestedRole) == "" {
+		cc.Ctx.Role = RoleReviewer
+	}
 
 	prompt := `Run the full test suite and verify the project builds. Report any failures.
 If all tests pass and the project is ready for production, respond with: VALIDATION_PASSED
@@ -672,6 +680,9 @@ func newPhaseChat(cfg OrchestratorConfig, sessionID string) *CapturedChat {
 	// at env default. One seam for both call sites (planner phases here,
 	// TeamWorker.runStep) so it cannot drift again.
 	cc.Ctx.ModelOverride = cfg.RequestedModel
+	if strings.TrimSpace(cfg.RequestedRole) != "" {
+		cc.Ctx.Role = agentRoleFromLabel(cfg.RequestedRole)
+	}
 	if cfg.OnError != nil {
 		cc.Ctx.OnError = cfg.OnError
 	}
