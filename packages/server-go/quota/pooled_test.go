@@ -202,3 +202,88 @@ func TestAccountsFromFile(t *testing.T) {
 		t.Fatalf("env fallback = %+v", got)
 	}
 }
+
+// Snapshot after probe returns real 64% week -> weekPct is 64, not -1.
+func TestSnapshotAfterProbeReturns64Week(t *testing.T) {
+	now := at("12:00")
+	r := &fakeRunner{
+		auth:  map[string]string{"work": authJSON("a@example.com", "org-1")},
+		usage: map[string]string{"work": usageJSON(10, 64, "2:30pm", "Aug 26 at 12:00pm")},
+	}
+	reg := NewRegistry(r, Account{Name: "work", ConfigDir: "/w"})
+	reg.Resolve(context.Background())
+	prober := NewProber(r, time.Minute)
+	prober.SetClock(func() time.Time { return now })
+	g := NewGovernor(reg, prober, DefaultPolicy())
+	g.SetClock(func() time.Time { return now })
+
+	s := g.Snapshot(context.Background(), "mac")
+	if len(s.Accounts) != 1 {
+		t.Fatalf("accounts = %d, want 1", len(s.Accounts))
+	}
+	a := s.Accounts[0]
+	if a.WeekPct != 64 {
+		t.Errorf("weekPct = %.0f, want 64", a.WeekPct)
+	}
+	if a.SessionPct != 10 {
+		t.Errorf("sessionPct = %.0f, want 10", a.SessionPct)
+	}
+}
+
+// SetPooled with -1 row over a known local 64 -> source stays local, not pooled.
+func TestPooledWithUnknownDoesNotOverrideKnownLocal(t *testing.T) {
+	now := at("12:00")
+	r := &fakeRunner{
+		auth:  map[string]string{"work": authJSON("a@example.com", "org-1")},
+		usage: map[string]string{"work": usageJSON(10, 64, "2:30pm", "Aug 26 at 12:00pm")},
+	}
+	reg := NewRegistry(r, Account{Name: "work", ConfigDir: "/w"})
+	reg.Resolve(context.Background())
+	prober := NewProber(r, time.Minute)
+	prober.SetClock(func() time.Time { return now })
+	g := NewGovernor(reg, prober, DefaultPolicy())
+	g.SetClock(func() time.Time { return now })
+
+	// Set pooled with unknown (-1) values
+	g.SetPooled(PooledSnapshot{Machine: "primary", GeneratedAt: now.Add(-30 * time.Second), Accounts: []SnapshotAccount{
+		{Key: "org:org-1", Name: "work", SessionPct: -1, WeekPct: -1, PacePct: -1},
+	}})
+
+	st := g.Status(context.Background())
+	if st.Accounts[0].Source != "local" {
+		t.Fatalf("source = %q, want local (pooled row has -1 values)", st.Accounts[0].Source)
+	}
+	if st.Accounts[0].Week.Percent != 64 {
+		t.Errorf("week%% = %.0f, want 64 from local", st.Accounts[0].Week.Percent)
+	}
+	if st.Accounts[0].Week.Known != true {
+		t.Errorf("week known = %v, want true", st.Accounts[0].Week.Known)
+	}
+}
+
+// Never-probed account -> snapshot ok:false, pct -1.
+func TestNeverProbedAccountSnapshotUnknown(t *testing.T) {
+	now := at("12:00")
+	r := &fakeRunner{
+		auth:  map[string]string{"work": authJSON("a@example.com", "org-1")},
+		usage: map[string]string{}, // No usage data for "work"
+	}
+	reg := NewRegistry(r, Account{Name: "work", ConfigDir: "/w"})
+	reg.Resolve(context.Background())
+	prober := NewProber(r, time.Minute)
+	prober.SetClock(func() time.Time { return now })
+	g := NewGovernor(reg, prober, DefaultPolicy())
+	g.SetClock(func() time.Time { return now })
+
+	s := g.Snapshot(context.Background(), "mac")
+	if len(s.Accounts) != 1 {
+		t.Fatalf("accounts = %d, want 1", len(s.Accounts))
+	}
+	a := s.Accounts[0]
+	if a.SessionPct != -1 {
+		t.Errorf("sessionPct = %.0f, want -1 (unknown)", a.SessionPct)
+	}
+	if a.WeekPct != -1 {
+		t.Errorf("weekPct = %.0f, want -1 (unknown)", a.WeekPct)
+	}
+}

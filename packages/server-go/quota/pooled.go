@@ -209,14 +209,18 @@ func laterReset(a, b string) string {
 }
 
 // toSnapshot rebuilds a governor-readable Snapshot from a wire account.
+// Unknown (-1) values stay as-is; the window is considered known only when
+// both session and week percentages are >= 0.
 func (sa SnapshotAccount) toSnapshot(name string, fetched time.Time) Snapshot {
-	s := Snapshot{Account: name, Ok: sa.SessionPct >= 0 || sa.WeekPct >= 0, FetchedAt: fetched, PlanNote: "pooled"}
+	sessionKnown := sa.SessionPct >= 0
+	weekKnown := sa.WeekPct >= 0
+	s := Snapshot{Account: name, Ok: sessionKnown && weekKnown, FetchedAt: fetched, PlanNote: "pooled"}
 	if !s.Ok {
-		s.Err = "pooled snapshot carried no reading"
+		s.Err = "pooled snapshot carried incomplete reading"
 		return s
 	}
-	s.Session = Window{Name: "session", Label: "Current session", Percent: max0(sa.SessionPct)}
-	s.Week = Window{Name: "week", Label: "Current week (all models)", Percent: max0(sa.WeekPct)}
+	s.Session = Window{Name: "session", Label: "Current session", Percent: sa.SessionPct}
+	s.Week = Window{Name: "week", Label: "Current week (all models)", Percent: sa.WeekPct}
 	if t, err := time.Parse(time.RFC3339, sa.SessionResetAt); err == nil {
 		s.Session.ResetsAt, s.Session.HasReset = t, true
 	}
@@ -269,23 +273,34 @@ func (g *Governor) Pooled() (PooledSnapshot, bool) {
 	return s, s.Fresh(g.now())
 }
 
-// readAccount: pooled reading if fresh and keyed for this account, else local
-// probe. Returns source "pooled" or "local".
+// readAccount: pooled reading if fresh, keyed, and fully known; else local probe.
+// Merge rule: known beats unknown. Known local snapshot always wins over pooled
+// with -1 values. Returns source "pooled" or "local".
 func (g *Governor) readAccount(ctx context.Context, a Account, local map[string]Snapshot) (Snapshot, string) {
+	localSnap := Snapshot{}
+	localOk := false
+	if local != nil {
+		localSnap = local[a.Name]
+		localOk = localSnap.Ok
+	}
+
 	if p, fresh := g.Pooled(); fresh {
 		if sa, ok := p.Find(accountKey(a)); ok {
-			s := sa.toSnapshot(a.Name, p.GeneratedAt)
-			if s.Ok {
-				return s, "pooled"
+			// Pooled row exists. Use it only if it has a complete reading AND
+			// either local is unknown OR pooled has higher percentages (worst wins).
+			if sa.SessionPct >= 0 && sa.WeekPct >= 0 {
+				s := sa.toSnapshot(a.Name, p.GeneratedAt)
+				if s.Ok && (!localOk || (localSnap.Session.Percent <= sa.SessionPct && localSnap.Week.Percent <= sa.WeekPct)) {
+					return s, "pooled"
+				}
 			}
 		}
 	}
-	var s Snapshot
-	if local != nil {
-		s = local[a.Name]
-	} else {
-		s = g.prober.Probe(ctx, a)
+
+	// Fall back to local probe.
+	if local == nil {
+		localSnap = g.prober.Probe(ctx, a)
 	}
-	s.Account = a.Name
-	return s, "local"
+	localSnap.Account = a.Name
+	return localSnap, "local"
 }
