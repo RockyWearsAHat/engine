@@ -38,6 +38,14 @@ This file is intentionally limited to what exists in source today. If code and t
 - That means the event path is currently a parallel step-bucket executor, not a real specialist-member system.
 - `lead_planner.go` defines a richer specialist composition model, but it is not currently wired into `RunEventOrchestrator` or `createTeamsFromPlan`.
 
+## Team Member Communication
+
+- After each plan step completes, `TeamWorker.reportStepToLead` sends a progress message to the lead via `AgentCommsHub.Send()`.
+- Each message has format: `"Step N/total done: <step title>"` with subject `"progress"`.
+- The lead agent can drain its inbox to track which steps have been completed.
+- Team members registered as agents allow status queries and logging via the comms system.
+- This enables the lead to maintain accurate `stepsDone` counters for task progress tracking.
+
 ## Validation Surface
 
 The event orchestrator has direct unit coverage in:

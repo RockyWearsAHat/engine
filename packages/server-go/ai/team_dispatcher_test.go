@@ -206,3 +206,67 @@ func TestTeamWorker_RunStepCancellation(t *testing.T) {
 		t.Fatalf("expected canceled runStep, got %v", err)
 	}
 }
+
+func TestTeamWorker_ReportsProgressToLead(t *testing.T) {
+	projectDir := t.TempDir()
+	brain, err := NewOrchestrationBrain(projectDir, "owner", "repo", "brief", "session")
+	if err != nil {
+		t.Fatalf("brain: %v", err)
+	}
+
+	// Plan with 2 steps to verify progress reporting
+	if err := brain.UpdatePlan([]PlanStep{
+		{Index: 0, Title: "Step One", Body: "First step", Acceptance: "pass"},
+		{Index: 1, Title: "Step Two", Body: "Second step", Acceptance: "pass"},
+	}); err != nil {
+		t.Fatalf("update plan: %v", err)
+	}
+
+	if err := brain.AddTeam("team-multi-0", "general", []int{0, 1}, nil); err != nil {
+		t.Fatalf("add team: %v", err)
+	}
+
+	bus := NewEventBus()
+	comms := NewAgentCommsHub()
+	comms.Register("lead", "orchestrator", "running")
+
+	cfg := OrchestratorConfig{
+		ProjectPath:     projectDir,
+		SessionIDPrefix: "test",
+		ChatFn: func(ctx *ChatContext, _ string) {
+			// Signal done immediately to complete steps
+			ctx.OnChunk("signal_done", false)
+		},
+	}
+
+	dispatcher := NewTeamDispatcher(brain, bus, cfg, 4, comms)
+	if err := dispatcher.DispatchTeam("team-multi-0"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	// Wait for team to complete
+	dispatcher.Wait()
+
+	// Check that lead received progress messages
+	leadMessages := comms.Inbox("lead", false)
+	if len(leadMessages) < 2 {
+		t.Fatalf("expected at least 2 progress messages to lead, got %d", len(leadMessages))
+	}
+
+	// Verify message content
+	if !strings.Contains(leadMessages[0].Body, "Step 1/2") {
+		t.Errorf("first message should contain 'Step 1/2', got: %s", leadMessages[0].Body)
+	}
+	if !strings.Contains(leadMessages[0].Body, "Step One") {
+		t.Errorf("first message should contain step title, got: %s", leadMessages[0].Body)
+	}
+
+	if !strings.Contains(leadMessages[1].Body, "Step 2/2") {
+		t.Errorf("second message should contain 'Step 2/2', got: %s", leadMessages[1].Body)
+	}
+	if !strings.Contains(leadMessages[1].Body, "Step Two") {
+		t.Errorf("second message should contain step title, got: %s", leadMessages[1].Body)
+	}
+
+	dispatcher.Stop()
+}
