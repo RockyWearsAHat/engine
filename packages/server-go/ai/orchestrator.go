@@ -5,6 +5,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -197,6 +198,26 @@ type OrchestratorConfig struct {
 	OnPlanUpdate func(state *OrchestrationState)
 	// OnError is called on terminal failures.
 	OnError func(message string)
+	// OnActivity fires on every streamed token ("token") and tool call ("tool").
+	// Liveness signal for the task API — progress by evidence, not by clock.
+	OnActivity func(kind string)
+	// OnRunStats fires after every provider run with tokens/model/subagents.
+	OnRunStats func(RunStats)
+	// OnCoach fires when a REJECT retry was coached (brief rewritten) or
+	// escalated a model tier. Slice I fills it; task API reports it.
+	OnCoach func(coached int, escalated bool)
+}
+
+// RunStats is what one provider run consumed. Exported form of the claude
+// stream stats; other providers fill what they know.
+type RunStats struct {
+	Model            string
+	InputTokens      int64
+	OutputTokens     int64
+	SubagentsSpawned int
+	Duration         time.Duration
+	// Seen is false when the provider gave no usage at all (ollama, stubs).
+	Seen bool
 }
 
 // chatFnFor returns the effective chat dispatch for cfg, falling back to the
@@ -707,6 +728,9 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 		emit(cfg.OnPhase, "execute", fmt.Sprintf("step %d/%d (attempt %d): %s", step.Index, len(state.Plan), step.Attempts, step.Title))
 		buildErr := orchestratorBuildStep(cfg, state, step, redirect, cancel)
 		if buildErr != nil {
+			if refundProviderAttempt(step, buildErr) {
+				emit(cfg.OnPhase, "provider", fmt.Sprintf("step %d: provider fault, attempt refunded (attempts=%d)", step.Index, step.Attempts))
+			}
 			step.LastFeedback = "Builder error: " + buildErr.Error()
 			if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
 				emitErr(cfg.OnError, fmt.Sprintf("persist builder error feedback: %v", err))
@@ -771,6 +795,17 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 			emit(cfg.OnPhase, "review", fmt.Sprintf("step %d inconclusive review", step.Index))
 		}
 	}
+}
+
+// refundProviderAttempt gives the step its attempt back when the builder
+// error was a provider fault (zero output, no model reached). Model never got
+// a chance; counting it would retire steps on infra hiccups.
+func refundProviderAttempt(step *PlanStep, err error) bool {
+	if !errors.Is(err, ErrProviderZeroOutput) || step.Attempts <= 0 {
+		return false
+	}
+	step.Attempts--
+	return true
 }
 
 // EventOrchestratorEnabled reports whether the parallel multi-team orchestrator

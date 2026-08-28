@@ -25,11 +25,14 @@ package main
 // /quota/rate set exactly this precedent for exactly this caller.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +49,9 @@ const (
 	taskDone     taskStatus = "done"
 	taskFailed   taskStatus = "failed"
 	taskCanceled taskStatus = "canceled"
+	// taskLostOnRestart: registry reloaded from tasks.json, task was running,
+	// process that ran it is gone. Terminal. SARA re-dispatches.
+	taskLostOnRestart taskStatus = "lost-on-restart"
 )
 
 // taskProgressLines is how much of the phase narration is kept per task.
@@ -73,6 +79,24 @@ type engineTask struct {
 	StepsDone   int        `json:"stepsDone"`
 	StepsTotal  int        `json:"stepsTotal"`
 	Progress    []string   `json:"progress"`
+
+	// Liveness by evidence. LastTokenAt/LastToolAt move on streamed tokens
+	// and tool calls; FirstProgressAt is the first of either. Pollers judge
+	// "stuck" from these, not from a clock.
+	FirstProgressAt *time.Time `json:"firstProgressAt,omitempty"`
+	LastTokenAt     *time.Time `json:"lastTokenAt,omitempty"`
+	LastToolAt      *time.Time `json:"lastToolAt,omitempty"`
+
+	// Run tallies. Model = last model a provider run reported.
+	Model            string `json:"model,omitempty"`
+	TokensIn         int64  `json:"tokensIn"`
+	TokensOut        int64  `json:"tokensOut"`
+	SubagentsSpawned int    `json:"subagentsSpawned"`
+	Coached          int    `json:"coached"`
+	Escalated        bool   `json:"escalated"`
+
+	// restored: loaded from tasks.json, no goroutine owns it. Never alive.
+	restored bool
 
 	// CallbackURL, if the caller supplied one, is POSTed to (empty body) when
 	// this task reaches a terminal state. It is a wake signal only, not a
@@ -106,6 +130,23 @@ func (t *engineTask) snapshot() map[string]any {
 		"stepsDone":  t.StepsDone,
 		"stepsTotal": t.StepsTotal,
 		"progress":   progress,
+		// alive: this process owns a goroutine for it right now.
+		"alive":            t.Status == taskRunning && !t.restored,
+		"model":            t.Model,
+		"tokensIn":         t.TokensIn,
+		"tokensOut":        t.TokensOut,
+		"subagentsSpawned": t.SubagentsSpawned,
+		"coached":          t.Coached,
+		"escalated":        t.Escalated,
+	}
+	if t.FirstProgressAt != nil {
+		out["firstProgressAt"] = t.FirstProgressAt.UTC().Format(time.RFC3339)
+	}
+	if t.LastTokenAt != nil {
+		out["lastTokenAt"] = t.LastTokenAt.UTC().Format(time.RFC3339)
+	}
+	if t.LastToolAt != nil {
+		out["lastToolAt"] = t.LastToolAt.UTC().Format(time.RFC3339)
 	}
 	if t.FinishedAt != nil {
 		out["finishedAt"] = t.FinishedAt.UTC().Format(time.RFC3339)
@@ -118,7 +159,6 @@ func (t *engineTask) snapshot() map[string]any {
 
 func (t *engineTask) note(phase, detail string) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if phase != "" {
 		t.Phase = phase
 	}
@@ -131,12 +171,58 @@ func (t *engineTask) note(phase, detail string) {
 	if len(t.Progress) > taskProgressLines {
 		t.Progress = t.Progress[len(t.Progress)-taskProgressLines:]
 	}
+	t.mu.Unlock()
+	tasks.persist()
 }
 
 func (t *engineTask) setPlan(done, total int) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	changed := t.StepsDone != done || t.StepsTotal != total
 	t.StepsDone, t.StepsTotal = done, total
+	t.mu.Unlock()
+	if changed {
+		tasks.persist()
+	}
+}
+
+// activity stamps liveness. Not persisted per token — too hot; persisted on
+// the next note/plan/finish, and the first one (firstProgressAt) right away.
+func (t *engineTask) activity(kind string) {
+	now := time.Now()
+	t.mu.Lock()
+	first := t.FirstProgressAt == nil
+	if first {
+		t.FirstProgressAt = &now
+	}
+	if kind == "tool" {
+		t.LastToolAt = &now
+	} else {
+		t.LastTokenAt = &now
+	}
+	t.mu.Unlock()
+	if first {
+		tasks.persist()
+	}
+}
+
+func (t *engineTask) addRun(s ai.RunStats) {
+	t.mu.Lock()
+	if s.Model != "" {
+		t.Model = s.Model
+	}
+	t.TokensIn += s.InputTokens
+	t.TokensOut += s.OutputTokens
+	t.SubagentsSpawned += s.SubagentsSpawned
+	t.mu.Unlock()
+	tasks.persist()
+}
+
+func (t *engineTask) setCoach(coached int, escalated bool) {
+	t.mu.Lock()
+	t.Coached = coached
+	t.Escalated = t.Escalated || escalated
+	t.mu.Unlock()
+	tasks.persist()
 }
 
 func (t *engineTask) finish(status taskStatus, errMsg string) {
@@ -145,25 +231,74 @@ func (t *engineTask) finish(status taskStatus, errMsg string) {
 	t.Status = status
 	t.FinishedAt = &now
 	t.Err = errMsg
-	callbackURL := t.CallbackURL
 	t.mu.Unlock()
-	notifyCallback(callbackURL)
+	tasks.persist()
+	notifyCallback(t.callbackTarget(), t.completionPayload())
 }
 
-// notifyCallback fires a fire-and-forget wake POST at task completion. Not a
-// delivery guarantee -- see the CallbackURL doc comment on engineTask. Runs
-// synchronously with a short timeout rather than in its own goroutine because
-// finish() is already called from the task's own background goroutine.
-func notifyCallback(url string) {
-	if url == "" {
-		return
+// callbackTarget: caller's URL, else SARA's wake port (SARA_ENGINE_WAKE_PORT,
+// default 24777). Fires on EVERY terminal state — done, failed, canceled.
+func (t *engineTask) callbackTarget() string {
+	t.mu.RLock()
+	url := t.CallbackURL
+	t.mu.RUnlock()
+	if url != "" {
+		return url
 	}
+	return defaultWakeURL()
+}
+
+// wakePortEnv / wakePortDefault: SARA's completion listener.
+const (
+	wakePortEnv     = "SARA_ENGINE_WAKE_PORT"
+	wakePortDefault = "24777"
+)
+
+func defaultWakeURL() string {
+	port := strings.TrimSpace(os.Getenv(wakePortEnv))
+	if port == "" {
+		port = wakePortDefault
+	}
+	return "http://127.0.0.1:" + port + "/task-complete"
+}
+
+// completionPayload is what the wake POST carries. Outcome = status string.
+func (t *engineTask) completionPayload() map[string]any {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return map[string]any{
+		"id":               t.ID,
+		"project":          t.ProjectPath,
+		"outcome":          string(t.Status),
+		"model":            t.Model,
+		"tokensIn":         t.TokensIn,
+		"tokensOut":        t.TokensOut,
+		"subagentsSpawned": t.SubagentsSpawned,
+		"coached":          t.Coached,
+		"escalated":        t.Escalated,
+		"error":            t.Err,
+	}
+}
+
+// notifyCallbackFn is the wake POST. Var so tests capture it.
+var notifyCallbackFn = func(url string, payload map[string]any) {
+	body, _ := json.Marshal(payload)
 	client := http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Post(url, "application/json", nil)
+	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return
 	}
 	resp.Body.Close()
+}
+
+// notifyCallback: fire-and-forget wake POST with the outcome payload. Not a
+// delivery guarantee — GET-by-id stays the truth. Runs synchronously (short
+// timeout); finish() already sits on the task's own goroutine.
+func notifyCallback(url string, payload map[string]any) {
+	if url == "" {
+		return
+	}
+	notifyCallbackFn(url, payload)
 }
 
 func (t *engineTask) stop() {
@@ -185,6 +320,162 @@ type taskRegistry struct {
 var tasks = &taskRegistry{
 	tasks: map[string]*engineTask{},
 	byKey: map[string]string{},
+}
+
+// tasksFilePath is where the registry lives on disk. Empty = not persisted
+// (unit tests). Set by registerTaskRoutes.
+var tasksFilePath string
+
+// persistMu serializes tasks.json writes. Registry lock is NOT held while
+// writing — a slow disk must never stall GET /task.
+var persistMu sync.Mutex
+
+// taskRecord is the on-disk row. Same shape as snapshot(); no mutex.
+type taskRecord struct {
+	ID               string     `json:"id"`
+	Project          string     `json:"project"`
+	Brief            string     `json:"brief"`
+	Key              string     `json:"key,omitempty"`
+	Status           taskStatus `json:"status"`
+	Phase            string     `json:"phase"`
+	Detail           string     `json:"detail"`
+	StartedAt        time.Time  `json:"startedAt"`
+	FinishedAt       *time.Time `json:"finishedAt,omitempty"`
+	Err              string     `json:"error,omitempty"`
+	StepsDone        int        `json:"stepsDone"`
+	StepsTotal       int        `json:"stepsTotal"`
+	Progress         []string   `json:"progress"`
+	FirstProgressAt  *time.Time `json:"firstProgressAt,omitempty"`
+	LastTokenAt      *time.Time `json:"lastTokenAt,omitempty"`
+	LastToolAt       *time.Time `json:"lastToolAt,omitempty"`
+	Model            string     `json:"model,omitempty"`
+	TokensIn         int64      `json:"tokensIn"`
+	TokensOut        int64      `json:"tokensOut"`
+	SubagentsSpawned int        `json:"subagentsSpawned"`
+	Coached          int        `json:"coached"`
+	Escalated        bool       `json:"escalated"`
+	CallbackURL      string     `json:"callbackUrl,omitempty"`
+	// PID of the process that ran it. Reload compares to os.Getpid().
+	PID int `json:"pid"`
+}
+
+type tasksFile struct {
+	Tasks []taskRecord `json:"tasks"`
+}
+
+func (t *engineTask) record(key string) taskRecord {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	progress := make([]string, len(t.Progress))
+	copy(progress, t.Progress)
+	return taskRecord{
+		ID: t.ID, Project: t.ProjectPath, Brief: t.Brief, Key: key,
+		Status: t.Status, Phase: t.Phase, Detail: t.Detail,
+		StartedAt: t.StartedAt, FinishedAt: t.FinishedAt, Err: t.Err,
+		StepsDone: t.StepsDone, StepsTotal: t.StepsTotal, Progress: progress,
+		FirstProgressAt: t.FirstProgressAt, LastTokenAt: t.LastTokenAt, LastToolAt: t.LastToolAt,
+		Model: t.Model, TokensIn: t.TokensIn, TokensOut: t.TokensOut,
+		SubagentsSpawned: t.SubagentsSpawned, Coached: t.Coached, Escalated: t.Escalated,
+		CallbackURL: t.CallbackURL, PID: os.Getpid(),
+	}
+}
+
+// persist writes every task to tasksFilePath (tmp + rename). Called on accept
+// (before plan) and on every state change. No-op when path unset.
+func (r *taskRegistry) persist() {
+	path := tasksFilePath
+	if path == "" {
+		return
+	}
+	r.mu.RLock()
+	keyOf := map[string]string{}
+	for k, id := range r.byKey {
+		keyOf[id] = k
+	}
+	all := make([]*engineTask, 0, len(r.tasks))
+	for _, t := range r.tasks {
+		all = append(all, t)
+	}
+	r.mu.RUnlock()
+
+	f := tasksFile{Tasks: make([]taskRecord, 0, len(all))}
+	for _, t := range all {
+		f.Tasks = append(f.Tasks, t.record(keyOf[t.ID]))
+	}
+	data, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		log.Printf("task api: marshal tasks.json: %v", err)
+		return
+	}
+	persistMu.Lock()
+	defer persistMu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		log.Printf("task api: mkdir for tasks.json: %v", err)
+		return
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		log.Printf("task api: write tasks.json: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		log.Printf("task api: rename tasks.json: %v", err)
+	}
+}
+
+// load reads tasks.json. Tasks that were running under a process that is not
+// this one become lost-on-restart (terminal, alive=false) — SARA sees the id,
+// sees the status, re-dispatches. Nothing forgotten. Returns count lost.
+func (r *taskRegistry) load(path string) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	var f tasksFile
+	if err := json.Unmarshal(data, &f); err != nil {
+		log.Printf("task api: tasks.json unreadable, ignoring: %v", err)
+		return 0
+	}
+	lost := 0
+	r.mu.Lock()
+	for _, rec := range f.Tasks {
+		if _, exists := r.tasks[rec.ID]; exists {
+			continue
+		}
+		t := &engineTask{
+			ID: rec.ID, ProjectPath: rec.Project, Brief: rec.Brief,
+			Status: rec.Status, Phase: rec.Phase, Detail: rec.Detail,
+			StartedAt: rec.StartedAt, FinishedAt: rec.FinishedAt, Err: rec.Err,
+			StepsDone: rec.StepsDone, StepsTotal: rec.StepsTotal, Progress: rec.Progress,
+			FirstProgressAt: rec.FirstProgressAt, LastTokenAt: rec.LastTokenAt, LastToolAt: rec.LastToolAt,
+			Model: rec.Model, TokensIn: rec.TokensIn, TokensOut: rec.TokensOut,
+			SubagentsSpawned: rec.SubagentsSpawned, Coached: rec.Coached, Escalated: rec.Escalated,
+			CallbackURL: rec.CallbackURL, restored: true,
+			cancel: make(chan struct{}),
+		}
+		if t.Status == taskRunning {
+			now := time.Now()
+			t.Status = taskLostOnRestart
+			t.FinishedAt = &now
+			t.Err = "engine restarted while task was running"
+			t.Progress = append(t.Progress, now.UTC().Format("15:04:05")+" lost-on-restart: engine restarted")
+			lost++
+		}
+		r.tasks[t.ID] = t
+		if rec.Key != "" {
+			r.byKey[rec.Key] = t.ID
+		}
+	}
+	r.mu.Unlock()
+	return lost
+}
+
+// taskRegistryPath: <ENGINE_STATE_DIR>/tasks.json, else <project>/.engine/tasks.json.
+func taskRegistryPath(defaultProjectPath string) string {
+	if dir := strings.TrimSpace(os.Getenv("ENGINE_STATE_DIR")); dir != "" {
+		return filepath.Join(dir, "tasks.json")
+	}
+	return filepath.Join(strings.TrimSpace(defaultProjectPath), ".engine", "tasks.json")
 }
 
 func (r *taskRegistry) get(id string) (*engineTask, bool) {
@@ -268,6 +559,9 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, callb
 		cancel:      make(chan struct{}),
 	}
 	tasks.put(dedupeKey, t)
+	// On disk BEFORE the plan runs. Restart between here and the first phase
+	// still leaves a row for SARA to find.
+	tasks.persist()
 
 	go func() {
 		defer func() {
@@ -300,7 +594,10 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, callb
 			OnPlanUpdate: func(st *ai.OrchestrationState) {
 				t.setPlan(doneCount(st), len(st.Plan))
 			},
-			OnError: func(msg string) { t.note("error", msg) },
+			OnError:    func(msg string) { t.note("error", msg) },
+			OnActivity: t.activity,
+			OnRunStats: t.addRun,
+			OnCoach:    t.setCoach,
 		}
 
 		// One orchestrator per working tree at a time. Task-mode runs edit
@@ -391,6 +688,33 @@ func shortToken() string {
 
 // registerTaskRoutes wires the task surface onto the default mux.
 func registerTaskRoutes(defaultProjectPath string) {
+	tasksFilePath = taskRegistryPath(defaultProjectPath)
+	if lost := tasks.load(tasksFilePath); lost > 0 {
+		log.Printf("task api: reloaded %s — %d task(s) lost-on-restart", tasksFilePath, lost)
+	}
+	tasks.persist()
+
+	// GET /task/<id>: path form of GET /task?id=. Never touches the planner —
+	// registry read under RLock, nothing else.
+	httpHandleFuncFn("/task/", func(w http.ResponseWriter, r *http.Request) {
+		cors(w, "GET, OPTIONS")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET required", http.StatusMethodNotAllowed)
+			return
+		}
+		id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/task/"), "/")
+		t, ok := tasks.get(id)
+		if !ok {
+			http.Error(w, "no such task", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, t.snapshot())
+	})
+
 	httpHandleFuncFn("/task", func(w http.ResponseWriter, r *http.Request) {
 		cors(w, "GET, POST, OPTIONS")
 		if r.Method == http.MethodOptions {

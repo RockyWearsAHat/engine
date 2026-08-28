@@ -466,12 +466,15 @@ func firstOllamaModel(url string, listKey string, nameKey string) string {
 // It holds project paths, session IDs, streaming callbacks, tool state, and agent metadata.
 // Zero-valued ChatContext.Cancel is treated as non-cancellable.
 type ChatContext struct {
-	ProjectPath      string
-	SessionID        string
-	OnChunk          func(content string, done bool)
-	OnToolCall       func(name string, input any)
-	OnToolResult     func(name string, result any, isError bool)
-	OnError          func(err string)
+	ProjectPath  string
+	SessionID    string
+	OnChunk      func(content string, done bool)
+	OnToolCall   func(name string, input any)
+	OnToolResult func(name string, result any, isError bool)
+	OnError      func(err string)
+	// OnRunStats fires once per provider run with what it consumed. Nil = nobody
+	// asked. Task API tallies tokens per task from this.
+	OnRunStats       func(RunStats)
 	OnSessionUpdated func(session *db.Session)
 	// GetOpenTabs returns the client's currently open editor tabs.
 	GetOpenTabs func() []TabInfo
@@ -586,6 +589,18 @@ func stageCallbacksInit(oc *OutputCollector, cfg OrchestratorConfig, role AgentR
 	}
 	onToolCall := func(string, any) {}
 	onToolResult := func(string, any, bool) {}
+	// Liveness: task API wants "last token / last tool" timestamps. Hook here,
+	// every role, no per-phase wiring.
+	if cfg.OnActivity != nil {
+		act := cfg.OnActivity
+		onChunk = func(content string, _ bool) {
+			oc.Write(content)
+			if content != "" {
+				act("token")
+			}
+		}
+		onToolCall = func(string, any) { act("tool") }
+	}
 	return onChunk, onError, onToolCall, onToolResult
 }
 
@@ -609,6 +624,7 @@ func stageChatContextCreation(cfg OrchestratorConfig, sessionID string, role Age
 		OnError:       onError,
 		OnToolCall:    onToolCall,
 		OnToolResult:  onToolResult,
+		OnRunStats:    cfg.OnRunStats,
 		ModelOverride: cfg.RequestedModel,
 	}
 }

@@ -189,6 +189,16 @@ func (p *claudecodeProvider) RunLoop(
 	// deliberately coarse — finished, no error event, produced output — because
 	// it only has to be applied consistently across configurations.
 	quotaAfter(dispatch, stats, err == nil && !stats.SawError && finalText.Len() > 0)
+	if ctx.OnRunStats != nil {
+		ctx.OnRunStats(RunStats{
+			Model:            model,
+			InputTokens:      stats.InputTokens,
+			OutputTokens:     stats.OutputTokens,
+			SubagentsSpawned: stats.SubagentsSpawned,
+			Duration:         time.Since(dispatch.startedAt),
+			Seen:             true,
+		})
+	}
 
 	if stalled.Load() {
 		if ctx.OnError != nil {
