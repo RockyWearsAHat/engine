@@ -633,6 +633,9 @@ func stageChatContextCreation(cfg OrchestratorConfig, sessionID string, role Age
 // This consolidates the repeated pattern of building a context with sync.Mutex + strings.Builder
 // for collecting streamed output from a role-based chat session.
 func newChatContextForRole(cfg OrchestratorConfig, sessionID string, role AgentRole, cancel <-chan struct{}) (*ChatContext, *OutputCollector) {
+	if strings.TrimSpace(cfg.RequestedRole) != "" {
+		role = agentRoleFromLabel(cfg.RequestedRole)
+	}
 	oc, onChunk, onError, onToolCall, onToolResult := stageOutputCollectorWithCallbacks(cfg, role)
 	ctx := stageChatContextCreation(cfg, sessionID, role, cancel, onChunk, onError, onToolCall, onToolResult)
 	return ctx, oc
