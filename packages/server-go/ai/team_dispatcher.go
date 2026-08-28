@@ -433,6 +433,14 @@ func (w *TeamWorker) runStep(step *PlanStep, stepIdx int) error {
 	return fmt.Errorf("step timed out after %d turns", w.maxTurns)
 }
 
+// Reset clears all dispatched workers ahead of replanning.
+// Called when transitioning to a new outer iteration to reset dispatcher state.
+func (d *TeamDispatcher) Reset() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.workers = make(map[string]*TeamWorker)
+}
+
 // Stop gracefully stops all workers.
 func (d *TeamDispatcher) Stop() {
 	d.mu.Lock()

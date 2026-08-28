@@ -529,8 +529,11 @@ func (eo *EventOrchestrator) handleRedirect(msg string) {
 // Groups consecutive same-role steps into teams, then maps each team to the appropriate role.
 // Mandatory lead/documenter/verifier teams work across all steps.
 func (eo *EventOrchestrator) createTeamsFromPlan(plan []PlanStep) {
-	// Clear old teams
+	// Clear old teams and dispatcher state
 	eo.brain.ResetTeams()
+	if eo.dispatcher != nil {
+		eo.dispatcher.Reset()
+	}
 
 	if len(plan) == 0 {
 		return
