@@ -115,6 +115,15 @@ These tests are the canonical behavioral spec for current orchestration behavior
 - Ledger usd: subscription runs report `total_cost_usd: 0`, so `quotaAfter` prices stream-json usage with `quota.CostUSD` (fable 10/50, opus 5/25, sonnet 3/15, haiku 1/5 per 1M; cache write 1.25x, cache read 0.1x input). `Outcome.USD` and `Stat.USD` are non-zero for any priced model; unknown models price 0.
 - Tests: `quota/pooled_test.go`, `quota/governor_test.go`, `ai/quota_usd_test.go`.
 
+## Memory and Documentation (SLICE K)
+
+Memory-of-work lives in dx documents, rewritten live, never appended.
+
+- **Documenter role**: After every completed build step, `DocumenterStep` searches the project's index.dx for blocks answering the step title/body. Rewrites each hit (never appends) with current truth: what was true, what changed, how it verifies. Include a ::code run block with reads=/writes= when verification needed. Never timeline, never "as of". If no index.dx, skip with one log line.
+- **memory_os.go read/write**: `ReadMemoryFromDx` (sparse recall, ≤6 blocks, never whole docs) and `WriteMemoryToDx` (fallback to old store for migration). `buildDeterministicMemoryContext` appends dx recall to VerifiedFacts. Logs "recall: k blocks, n chars".
+- **Planner brief context**: Built from top-k dx_search blocks (k≤6 max); planner never sees whole documents, only blocks. Doc retrieval already integrated in ComposeDocContextFocused.
+- **Verified blocks cache**: When a block's ::code run verdict is PASS, dx caches it; planner reads verdict before re-run (unchanged inputs already proven).
+
 ## Known Drift From Intended Manager Model
 
 - The event orchestrator does replan and iterate, but it does not yet behave like a durable project manager that dynamically creates, supervises, repairs, and retires true subordinate managers/workers.

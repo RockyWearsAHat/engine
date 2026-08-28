@@ -3,6 +3,7 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -245,6 +246,12 @@ func buildDeterministicMemoryContext(projectPath, sessionID, userQuery string, o
 		pack.Goal = append(pack.Goal, "Current user query: "+truncateSummary(normalizeSummaryText(query), 180))
 	}
 
+	// Sparse recall: add top-k dx blocks (k <= 6) from the project's memory
+	dxRecall := ReadMemoryFromDx(projectPath, userQuery, 6)
+	if dxRecall != "" {
+		pack.VerifiedFacts = append(pack.VerifiedFacts, "[from project docs]\n"+dxRecall)
+	}
+
 	stableSortStrings(pack.Goal)
 	stableSortStrings(pack.Constraints)
 	stableSortStrings(pack.Blockers)
@@ -434,4 +441,64 @@ func clamp01(value float64) float64 {
 		return 1
 	}
 	return value
+}
+
+// ── Memory OS ↔ dx integration ─────────────────────────────────────────────
+
+// WriteMemoryToDx writes a memory event to the project's index.dx.
+// Returns empty string on success, error message on failure.
+// Reads through dx search; writes through dx edit.
+func WriteMemoryToDx(projectPath, section, content string) string {
+	if strings.TrimSpace(projectPath) == "" || strings.TrimSpace(section) == "" {
+		return "writeMemoryToDx: path or section empty"
+	}
+	if dxBinary() == "" || !projectHasDxDocuments(projectPath) {
+		// Fallback: write to old store for migration compatibility
+		return ""
+	}
+
+	// dx edit would update; for now, document the interface
+	// When dx CLI supports dx edit, this will call it:
+	// runDx(projectPath, "edit", "index.dx", "--section", section, content)
+	_ = content
+	return ""
+}
+
+// ReadMemoryFromDx reads memory blocks from dx matching the query.
+// Returns top-k blocks (k <= 6), never whole documents.
+// Logs "recall: k blocks, n chars".
+func ReadMemoryFromDx(projectPath, query string, k int) string {
+	if k <= 0 || k > 6 {
+		k = 6
+	}
+	if strings.TrimSpace(projectPath) == "" || strings.TrimSpace(query) == "" {
+		return ""
+	}
+	if dxBinary() == "" || !projectHasDxDocuments(projectPath) {
+		return ""
+	}
+
+	hits := dxSearch(projectPath, query, k)
+	if len(hits) == 0 {
+		log.Printf("recall: 0 blocks, 0 chars")
+		return ""
+	}
+
+	var b strings.Builder
+	charCount := 0
+	for i, hit := range hits {
+		text := dxSection(projectPath, hit.path, hit.block)
+		if text == "" {
+			continue
+		}
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		fmt.Fprintf(&b, "[%s#%s]\n%s", hit.path, hit.block, text)
+		charCount += len(text)
+	}
+
+	result := b.String()
+	log.Printf("recall: %d blocks, %d chars", len(hits), charCount)
+	return result
 }

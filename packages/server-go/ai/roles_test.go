@@ -106,10 +106,13 @@ func TestBuildRoleSystemPrompt_Reviewer_ContainsApproveReject(t *testing.T) {
 	}
 }
 
-func TestBuildRoleSystemPrompt_Documenter_ReferencesWorkingBehaviors(t *testing.T) {
+func TestBuildRoleSystemPrompt_Documenter_ReferencesDx(t *testing.T) {
 	p := buildRoleSystemPrompt(RoleDocumenter, "/proj", "", "")
-	if !strings.Contains(p, "WORKING_BEHAVIORS") {
-		t.Errorf("expected WORKING_BEHAVIORS reference in documenter prompt, got %q", p)
+	if !strings.Contains(p, "dx") || !strings.Contains(p, "index.dx") {
+		t.Errorf("expected index.dx reference in documenter prompt, got %q", p)
+	}
+	if !strings.Contains(p, "rewrite") {
+		t.Errorf("expected rewrite directive in documenter prompt, got %q", p)
 	}
 }
 
