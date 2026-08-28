@@ -74,6 +74,16 @@ These tests are the canonical behavioral spec for current orchestration behavior
 
 - Runtime brain state is persisted under the project `.engine` directory and can be inspected during execution.
 
+## Quota Governance (quota/ + quota_gate.go)
+
+- Objective: spend 100% of each Anthropic window by its reset. Under pace = wasted quota, over pace = 429s. `PaceTarget = 1.0`; `Assessment.Pace` = used fraction / elapsed fraction, `Ahead = 1 - pace/target`.
+- Boost: when ahead of target, `paceConcurrency` raises `Plan.MaxConcurrency` and `Plan.SubagentFanout` by `1 + Ahead`, capped at `PaceBoostCap` (2x) × `Policy.MaxConcurrency` / `Policy.MaxSubagents`. Worker model is never touched by pace.
+- Planner model: `Plan.PlannerModel` = `CheapModel` (haiku) unless `Ahead > PlannerSonnetAhead` (0.30), then `MidModel` (sonnet). `runPlannerPrePass` applies it downgrade-only via `modelRank`, and only for `claudecode`/`anthropic` planners; ollama/openai planners are untouched.
+- Accounts: `quota.LoadAccounts` reads `$SARA_ACCOUNTS_FILE` (default `~/.sara-accounts.json`, shape `[{name, configDir}]`) first, falls back to `ENGINE_CLAUDE_ACCOUNTS`. Registry dedupes by `Identity.Key()` (org id or email), so the same login in two config dirs is one account.
+- Pooled fleet snapshot: quota is per Anthropic account, not per box. `GET /quota/snapshot` exports `{machine, accounts:[{key,name,sessionPct,weekPct,pacePct,resetAt,maxConcurrency}], maxConcurrency, generatedAt}`. `POST /quota/pooled` accepts a snapshot merged across machines (`MergeSnapshots`: dedupe by key, worst pct, lowest grant). Governor reads pooled rows instead of probing locally while the snapshot is under `PooledFresh` (2 min); stale = local probe. `AccountStatus.Source` says which.
+- Ledger usd: subscription runs report `total_cost_usd: 0`, so `quotaAfter` prices stream-json usage with `quota.CostUSD` (fable 10/50, opus 5/25, sonnet 3/15, haiku 1/5 per 1M; cache write 1.25x, cache read 0.1x input). `Outcome.USD` and `Stat.USD` are non-zero for any priced model; unknown models price 0.
+- Tests: `quota/pooled_test.go`, `quota/governor_test.go`, `ai/quota_usd_test.go`.
+
 ## Known Drift From Intended Manager Model
 
 - The event orchestrator does replan and iterate, but it does not yet behave like a durable project manager that dynamically creates, supervises, repairs, and retires true subordinate managers/workers.
