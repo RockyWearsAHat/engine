@@ -588,6 +588,7 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, callb
 			SessionIDPrefix: id,
 			TaskMode:        true,
 			TaskID:          id,
+			PlanSteps:       0, // unknown at dispatch time — see ShouldRunEventOrchestrator comment
 			RequestedModel:  requestedModel,
 			Cancel:          t.cancel,
 			ChatFn:          aiChatFn,
@@ -719,6 +720,10 @@ func registerTaskRoutes(defaultProjectPath string) {
 		}
 		writeJSON(w, http.StatusOK, t.snapshot())
 	})
+
+	// Comms bridge callback. claude -p workers hit this via the stdio MCP
+	// bridge (ai/mcp_bridge.go) for agent_* and friends.
+	httpHandleFuncFn(ai.MCPBridgeToolPath, ai.MCPBridgeHTTPHandler)
 
 	httpHandleFuncFn("/task", func(w http.ResponseWriter, r *http.Request) {
 		cors(w, "GET, POST, OPTIONS")
