@@ -159,6 +159,9 @@ type OrchestratorConfig struct {
 	TaskMode bool
 	// TaskID namespaces task-mode orchestration state. Ignored unless TaskMode.
 	TaskID string
+	// PlanSteps is the step count when the caller already knows it (resumed
+	// run, pre-decomposed item). 0 = unknown. Read by ShouldRunEventOrchestrator.
+	PlanSteps int
 
 	// RequestedModel is the caller's chosen model tier for this whole task
 	// (SARA's chooseModel — haiku/sonnet/opus, picked from an item's @tag,
@@ -817,12 +820,14 @@ func eventOrchestratorEnabled() bool { return EventOrchestratorEnabled() }
 // ShouldRunEventOrchestrator decides, for one concrete run, whether the
 // parallel path is the right one.
 //
-// An explicit ENGINE_EVENT_ORCHESTRATOR setting always wins — if someone has
-// said which orchestrator they want, inferring something else from the shape of
-// the work is second-guessing them. Absent that, parallelism has to be earned:
-// it needs work that can genuinely proceed at once, and room in the window to
-// run it. Otherwise the classic loop, whose per-run validation and repair loop
-// are more developed, keeps the run.
+// Explicit ENGINE_EVENT_ORCHESTRATOR wins. Else: serial only when the work is
+// provably small (PlanSteps known, <= 2) AND the window has no room (governor
+// MaxConcurrency < 2). Everything else runs the event orchestrator — that is
+// where the comms hub lives, and a SARA task-mode dispatch must land there or
+// workers never see each other. Task mode alone no longer forces serial.
+//
+// Unknown step count (0) + no room: serial. Cannot prove the work is wide, and
+// the serial loop's repair path is the better single-lane driver.
 func ShouldRunEventOrchestrator(ctx context.Context, cfg OrchestratorConfig) (bool, string) {
 	switch strings.TrimSpace(strings.ToLower(os.Getenv(envEventOrchestrator))) {
 	case "1", "true", "yes", "on":
@@ -833,18 +838,17 @@ func ShouldRunEventOrchestrator(ctx context.Context, cfg OrchestratorConfig) (bo
 	if !eventOrchestratorDefault {
 		return false, "parallel orchestrator off by default"
 	}
-	// A single-unit-of-work run has nothing to parallelise. Task mode is the
-	// SARA bridge's shape — one dx worklist item — and paying for an event bus,
-	// a dispatcher and a team table to run one team is pure overhead.
-	if cfg.TaskMode {
-		return false, "task mode: one unit of work, nothing to run in parallel"
-	}
 	levers := CurrentQuotaLevers(ctx)
-	if levers.MaxConcurrency < 2 {
-		return false, fmt.Sprintf("quota tier %s allows %d concurrent session(s) — no room for parallel teams",
+	if levers.MaxConcurrency < 2 && cfg.PlanSteps <= 2 {
+		return false, fmt.Sprintf("plan <= 2 steps and quota tier %s allows %d concurrent session(s) — serial",
 			levers.TierName, levers.MaxConcurrency)
 	}
-	return true, fmt.Sprintf("quota tier %s allows %d concurrent teams", levers.TierName, levers.MaxConcurrency)
+	mode := "project"
+	if cfg.TaskMode {
+		mode = "task " + taskSlug(cfg.TaskID)
+	}
+	return true, fmt.Sprintf("%s: %d plan step(s) known, quota tier %s allows %d concurrent teams — comms on",
+		mode, cfg.PlanSteps, levers.TierName, levers.MaxConcurrency)
 }
 
 func enrichOrchestratorBrief(projectPath, brief string) string {
