@@ -487,6 +487,18 @@ func buildStepPromptWithContext(state *OrchestrationState, step *PlanStep, redir
 // builder for this step. The reviewer returns APPROVE or REJECT plus a list of
 // findings; we parse that into a verdict + feedback string.
 func orchestratorReviewStep(cfg OrchestratorConfig, state *OrchestrationState, step *PlanStep, cancel <-chan struct{}) (ReviewVerdict, string) {
+	return orchestratorReviewStepBatch(cfg, state, step, 1, cancel)
+}
+
+// orchestratorReviewStepBatch is orchestratorReviewStep generalised to cover
+// more than one already-committed step in a single review call, for callers
+// that want to consolidate review work. Not currently exercised with
+// stepsCovered > 1 — every step is reviewed individually — but kept general
+// since the builder auto-commits after every step, so a caller reviewing N
+// steps at once must be told explicitly to inspect the last N commits (git
+// log/diff HEAD~N..HEAD) rather than rely on the git_diff tool, which only
+// ever sees uncommitted changes.
+func orchestratorReviewStepBatch(cfg OrchestratorConfig, state *OrchestrationState, step *PlanStep, stepsCovered int, cancel <-chan struct{}) (ReviewVerdict, string) {
 	sessionID := fmt.Sprintf("%s-review-%d-%d", chooseSessionPrefix(cfg), step.Index, time.Now().UnixNano())
 	if err := db.CreateSession(sessionID, cfg.ProjectPath, ""); err != nil {
 		return ReviewInconclusive, "create review session: " + err.Error()
@@ -509,7 +521,7 @@ func orchestratorReviewStep(cfg OrchestratorConfig, state *OrchestrationState, s
 	if contextDoc == "" {
 		contextDoc = readContextDoc(cfg.ProjectPath) // legacy fallback
 	}
-	prompt := buildReviewerPromptWithContext(state, step, contextDoc)
+	prompt := buildReviewerPromptWithContextBatch(state, step, contextDoc, stepsCovered)
 	cfg.chatFnFor()(ctx, prompt)
 
 	verdict, feedback := parseReviewerVerdict(oc.String())
@@ -521,20 +533,28 @@ func buildReviewerPrompt(state *OrchestrationState, step *PlanStep) string {
 }
 
 func buildReviewerPromptWithContext(state *OrchestrationState, step *PlanStep, contextDoc string) string {
+	return buildReviewerPromptWithContextBatch(state, step, contextDoc, 1)
+}
+
+func buildReviewerPromptWithContextBatch(state *OrchestrationState, step *PlanStep, contextDoc string, stepsCovered int) string {
 	var b strings.Builder
 	if strings.TrimSpace(contextDoc) != "" {
 		b.WriteString("UBIQUITOUS LANGUAGE (the diff must use these terms):\n")
 		b.WriteString(strings.TrimSpace(contextDoc))
 		b.WriteString("\n\n")
 	}
-	fmt.Fprintf(&b, "Review the most recent changes for step %d of %d in %s/%s.\n", step.Index, len(state.Plan), state.Owner, state.Repo)
+	if stepsCovered > 1 {
+		fmt.Fprintf(&b, "Review the last %d commits (run `git log -%d --stat` then `git diff HEAD~%d..HEAD` with shell — the builder auto-commits every step, so the git_diff tool alone will only show you the most recent one) covering steps ending at step %d of %d in %s/%s.\n", stepsCovered, stepsCovered, stepsCovered, step.Index, len(state.Plan), state.Owner, state.Repo)
+	} else {
+		fmt.Fprintf(&b, "Review the most recent changes for step %d of %d in %s/%s.\n", step.Index, len(state.Plan), state.Owner, state.Repo)
+	}
 	fmt.Fprintf(&b, "Step title: %s\n", step.Title)
 	if strings.TrimSpace(step.Acceptance) != "" {
 		fmt.Fprintf(&b, "Acceptance criterion: %s\n", strings.TrimSpace(step.Acceptance))
 	}
 	b.WriteString("\nRubric — evaluate each:\n")
 	b.WriteString("1. ACCEPTANCE: run the project's tests with shell and the exact verification command from Acceptance. Does it pass?\n")
-	b.WriteString("2. TDD DISCIPLINE: inspect git_diff. Did the change include a NEW test that exercises the new behaviour? Tests must come with implementation, not after.\n")
+	b.WriteString("2. TDD DISCIPLINE: inspect the diff (see above for how to view it across multiple commits). Did the change include a NEW test that exercises the new behaviour? Tests must come with implementation, not after.\n")
 	b.WriteString("3. UBIQUITOUS LANGUAGE: does the code use the project vocabulary above? Inventing new names for existing entities is a defect.\n")
 	b.WriteString("4. DEEP MODULES: are new modules deep (small surface, hidden complexity) or shallow (wide surface for trivial behaviour)? Reject shallow when materially harmful.\n")
 	b.WriteString("5. MINIMAL CODE: are there speculative abstractions, defensive code for impossible cases, or 'while I'm here' refactors of unrelated code? Reject over-engineering when materially harmful.\n")

@@ -37,6 +37,7 @@ func Ready() bool {
 var (
 	globalDBMu      sync.Mutex
 	globalDBProject string
+	globalDBPath    string
 )
 
 // osUserConfigDirFn and osUserHomeDirFn are injectable for tests.
@@ -97,15 +98,51 @@ func initLocked(projectPath string) error {
 	db.SetMaxIdleConns(1)
 	globalDB = db
 	globalDBProject = projectPath
+	globalDBPath = dbPath
 	return migrate()
+}
+
+// dbPathFor is the file a project's state resolves to — the same file for
+// every project when ENGINE_STATE_DIR pins the state directory.
+func dbPathFor(projectPath string) string {
+	return filepath.Join(stateDir(projectPath), "state.db")
 }
 
 // WithProject swaps the global DB to the given project's local database for
 // the duration of fn, then restores the previously active project DB. Calls
 // are serialized via globalDBMu so concurrent autonomous triggers (scaffold,
 // CI fix, issue session) each operate against their own repo's state file.
+//
+// The lock is held for the whole of fn ONLY when fn needs a swap — when the
+// open database is a different file from the one projectPath resolves to.
+// When the state directory is pinned with ENGINE_STATE_DIR every project
+// is the same file, there is nothing to swap and fn runs unlocked, concurrently with any other caller
+// in the same position: SQLite's own WAL + busy timeout serialize the
+// queries. Before this, a server hosting SARA's task API ran exactly one
+// orchestrator at a time across every project, because each task held this
+// mutex for its entire run — the quota governor's concurrency, the engine's
+// dispatch cap and everything in between were moot.
 func WithProject(projectPath string, fn func() error) error {
 	globalDBMu.Lock()
+	// The unlocked path is only safe when NO caller can ever swap the file
+	// out from under it — i.e. when every project resolves to the same
+	// file. Without a pinned dir a same-project caller could run unlocked
+	// while another project's caller swaps globalDB, and its writes would
+	// land in the wrong database.
+	if sharedStateDir() && globalDB != nil && globalDBPath == dbPathFor(projectPath) {
+		globalDBMu.Unlock()
+		return fn()
+	}
+	if globalDB == nil && sharedStateDir() {
+		// First caller under a pinned state dir opens the one shared file;
+		// every later caller takes the unlocked path above.
+		err := initLocked(projectPath)
+		globalDBMu.Unlock()
+		if err != nil {
+			return err
+		}
+		return fn()
+	}
 	defer globalDBMu.Unlock()
 	prev := globalDBProject
 	if err := initLocked(projectPath); err != nil {
@@ -115,6 +152,12 @@ func WithProject(projectPath string, fn func() error) error {
 		_ = initLocked(prev)
 	}()
 	return fn()
+}
+
+// sharedStateDir reports whether ENGINE_STATE_DIR pins one state directory
+// for every project, which makes every project's database the same file.
+func sharedStateDir() bool {
+	return strings.TrimSpace(os.Getenv("ENGINE_STATE_DIR")) != ""
 }
 
 // CurrentProject returns the project path the global DB is currently bound

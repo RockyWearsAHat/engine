@@ -192,6 +192,43 @@ func TestPlanForCutsCheapLeversFirst(t *testing.T) {
 	}
 }
 
+// TierExpand concurrency follows real headroom, clamped to [Steady, max]:
+// Expand may never hand out less than the tier below it, and never more than
+// the static ceiling.
+func TestConcurrencyForHeadroomScalesAndClamps(t *testing.T) {
+	tests := []struct {
+		name     string
+		max      int
+		headroom float64
+		want     int
+	}{
+		{"full headroom uses max", 4, 1.0, 4},
+		{"full headroom, max 1", 1, 1.0, 1},
+		{"full headroom, max 12", 12, 1.0, 12},
+		{"0.9 of 12 rounds to 11", 12, 0.9, 11},
+		{"half headroom of 12 floors at Steady (9)", 12, 0.5, 9},
+		{"half headroom of 4 floors at Steady (3)", 4, 0.5, 3},
+		{"zero headroom still floors at Steady", 4, 0.0, 3},
+		{"negative headroom clamps like zero", 4, -0.5, 3},
+		{"headroom above 1 clamps to max", 4, 1.5, 4},
+		{"max 0 (blocked) stays 0", 0, 1.0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := concurrencyForHeadroom(tt.max, tt.headroom)
+			if got != tt.want {
+				t.Errorf("concurrencyForHeadroom(%d, %.2f) = %d, want %d", tt.max, tt.headroom, got, tt.want)
+			}
+			if got > tt.max {
+				t.Errorf("result %d exceeds max %d — concurrency must not widen", got, tt.max)
+			}
+			if tt.max > 0 && got < max_(1, tt.max*3/4) {
+				t.Errorf("result %d is below Steady's %d — Expand must not undercut the tier below it", got, tt.max*3/4)
+			}
+		})
+	}
+}
+
 // The three levers that reach execution must actually move with the tier.
 //
 // This is the top half of a two-part claim. Here: a different tier produces
