@@ -526,8 +526,13 @@ func buildStepPromptWithContext(state *OrchestrationState, step *PlanStep, redir
 	fmt.Fprintf(&b, "Project: %s/%s\n", state.Owner, state.Repo)
 	fmt.Fprintf(&b, "You are executing step %d of %d in the build plan.\n\n", step.Index, len(state.Plan))
 	fmt.Fprintf(&b, "STEP %d: %s\n", step.Index, step.Title)
-	if strings.TrimSpace(step.Body) != "" {
-		fmt.Fprintf(&b, "Details: %s\n", strings.TrimSpace(step.Body))
+	// Use coaching brief if available (after first REJECT), else original body.
+	briefText := step.Body
+	if strings.TrimSpace(step.CoachingBrief) != "" {
+		briefText = step.CoachingBrief
+	}
+	if strings.TrimSpace(briefText) != "" {
+		fmt.Fprintf(&b, "Details: %s\n", strings.TrimSpace(briefText))
 	}
 	if strings.TrimSpace(step.Acceptance) != "" {
 		fmt.Fprintf(&b, "Acceptance: %s\n", strings.TrimSpace(step.Acceptance))
