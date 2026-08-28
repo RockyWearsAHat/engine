@@ -344,8 +344,9 @@ func TestPhaseWaitTeams_DispatchErrorPath(t *testing.T) {
 	teamFailed := make(chan Event, 1)
 	userRedirect := make(chan Event, 1)
 	cancelEv := make(chan Event, 1)
+	agentMsg := make(chan Event, 1)
 	teamDone <- Event{Type: EventTeamDone, TeamID: "team-a"}
-	err = eo.phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv)
+	err = eo.phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv, agentMsg)
 	if err == nil {
 		t.Fatal("expected dispatch error")
 	}

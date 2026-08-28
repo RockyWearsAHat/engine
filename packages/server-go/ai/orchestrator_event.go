@@ -117,6 +117,7 @@ func startEventOrchestrator(cfg OrchestratorConfig) (*EventOrchestrator, error) 
 
 	bus := NewEventBus()
 	comms := AgentCommsForProject(cfg.ProjectPath)
+	comms.SetBus(bus)
 	comms.Register("lead", "orchestrator", "running")
 
 	// How many teams may run at once is the quota governor's call, not a
@@ -186,6 +187,7 @@ func (eo *EventOrchestrator) eventLoop() {
 	teamFailed := eo.bus.Subscribe(EventTeamFailed, 10)
 	userRedirect := eo.bus.Subscribe(EventUserRedirect, 10)
 	cancelEv := eo.bus.Subscribe(EventCancel, 1)
+	agentMsg := eo.bus.Subscribe(EventAgentMessage, 10)
 
 	defer func() {
 		eo.bus.Close()
@@ -220,7 +222,7 @@ func (eo *EventOrchestrator) eventLoop() {
 		}
 
 		// Wait for all teams to complete or fail
-		if err := eo.phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv); err != nil {
+		if err := eo.phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv, agentMsg); err != nil {
 			if err == context.Canceled {
 				eo.setFailure(context.Canceled)
 				eo.bus.Emit(Event{Type: EventProjectCanceled, Timestamp: time.Now()})
@@ -404,77 +406,45 @@ func (eo *EventOrchestrator) phaseDispatchTeams() error {
 // an event that nothing will ever send. That hang was invisible for as long as
 // RunEventOrchestratorAsState returned before the loop got here; it is the
 // first thing that happens once the wrapper actually waits.
-func (eo *EventOrchestrator) phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv <-chan Event) error {
-	// The progress check runs on a timer rather than a ticker so the FIRST one
-	// can be almost immediate.
-	//
-	// This matters more than it looks. The outer loop runs up to
-	// maxOuterIterations times and calls this on every pass, so when there is
-	// nothing to wait for — an empty plan, a planner that returned nothing, a
-	// ceiling that left everything queued — a full stall interval is paid per
-	// iteration and the run reads as a hang. Measured on the main package's
-	// suite: ten minutes of waiting for events that were never coming.
-	//
-	// It cannot simply return before the select, though. A cancel or a redirect
-	// may already be sitting in its channel, and those must still be honoured —
-	// a cancelled run has to report cancellation, not success. Leaving the check
-	// inside the select keeps that ordering: at entry only the buffered events
-	// are ready, so select takes them; the timer only wins when nothing else is
-	// there to take.
+func (eo *EventOrchestrator) phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv, agentMsg <-chan Event) error {
 	// The fast first check is for exactly one state: no team was ever created.
-	// Then no team event can ever arrive, by construction, and waiting five
-	// seconds to work that out is five seconds of nothing per outer iteration.
-	//
-	// Once a team exists the normal interval applies, because "a team is running
-	// and slow" and "a team is running and stuck" are indistinguishable from
-	// here and only time separates them. That is also why this is not simply an
-	// early return: a cancel or a redirect may already be queued, and those must
-	// still be honoured before any conclusion about progress. Leaving the check
-	// inside the select preserves that — at entry only the buffered events are
-	// ready, so select takes them, and the timer only wins with nothing else to
-	// take.
-	firstCheck := teamWaitStallInterval
+	// Then no team event can ever arrive, by construction. This one-shot check
+	// (never reset) lets that case return immediately. After this, the loop is
+	// purely event-driven.
 	if eo.brain != nil && eo.brain.TeamCount() == 0 {
-		firstCheck = 25 * time.Millisecond
-	}
-	stall := time.NewTimer(firstCheck)
-	defer stall.Stop()
-
-	for {
+		// Check for cancel or redirect that may already be buffered
 		select {
 		case <-eo.ctx.Done():
 			return eo.ctx.Err()
-		case <-stall.C:
-			// Every check after the first is on the slow clock: from here on,
-			// waiting is the normal state and polling it hard would cost real
-			// work nothing but noise.
-			stall.Reset(teamWaitStallInterval)
-
-			// Two states look identical from inside this select and only one of
-			// them is survivable: teams are working and simply slow, or no team
-			// is running at all and no team event can therefore ever arrive. The
-			// second is a permanent hang, and it is reachable normally — a plan
-			// the ceiling left entirely queued, or every dispatched team already
-			// finished.
-			if eo.brain.AllTeamsDone() {
-				return nil
-			}
-			if eo.dispatcher == nil || eo.dispatcher.ActiveTeams() > 0 {
-				continue
-			}
-			// A slot may have freed since the last dispatch round.
-			if err := eo.phaseDispatchTeams(); err != nil {
-				return err
-			}
-			if eo.dispatcher.ActiveTeams() == 0 {
-				return fmt.Errorf("no team is running and %d team(s) are unfinished — nothing can make progress", eo.unfinishedTeams())
-			}
 		case ev := <-cancelEv:
 			_ = ev
 			return context.Canceled
 		case ev := <-userRedirect:
 			msg := ev.Payload["message"].(string)
 			eo.handleRedirect(msg)
+			return nil
+		default:
+			// No buffered event; no teams to wait for, so we're done
+			return nil
+		}
+	}
+
+	for {
+		select {
+		case <-eo.ctx.Done():
+			return eo.ctx.Err()
+		case ev := <-cancelEv:
+			_ = ev
+			return context.Canceled
+		case ev := <-userRedirect:
+			msg := ev.Payload["message"].(string)
+			eo.handleRedirect(msg)
+		case ev := <-agentMsg:
+			// Agent message arrived (request member or retire)
+			to := ev.Payload["to"].(string)
+			if to == "lead" {
+				eo.handleAgentMessage(to)
+			}
 		case ev := <-teamDone:
 			teamID := ev.TeamID
 			eo.cfg.OnProgress(fmt.Sprintf("✓ Team %s completed", teamID))
@@ -497,6 +467,78 @@ func (eo *EventOrchestrator) phaseWaitTeams(teamDone, teamFailed, userRedirect, 
 			eo.brain.UpdateTeamStatus(teamID, "failed")
 		}
 	}
+}
+
+// handleAgentMessage processes an incoming agent message to "lead".
+func (eo *EventOrchestrator) handleAgentMessage(target string) {
+	if target != "lead" {
+		return
+	}
+	// Pull pending messages from lead inbox
+	messages := eo.comms.Inbox("lead", false) // peek, don't consume yet
+	for _, msg := range messages {
+		subject := msg.Subject
+		if strings.Contains(subject, "Request new member:") {
+			eo.handleMemberRequest(msg)
+		} else if strings.Contains(subject, "Agent retiring") {
+			eo.handleMemberRetire(msg)
+		}
+	}
+}
+
+// handleMemberRequest processes a member spawn request from an agent.
+// Expected message format: subject = "Request new member: <role>", body = "role:<role>\nbrief:<brief>"
+func (eo *EventOrchestrator) handleMemberRequest(msg AgentMessage) {
+	// Parse role and brief from body
+	parts := strings.Split(msg.Body, "\n")
+	var role, brief string
+	for _, part := range parts {
+		if strings.HasPrefix(part, "role:") {
+			role = strings.TrimSpace(strings.TrimPrefix(part, "role:"))
+		} else if strings.HasPrefix(part, "brief:") {
+			brief = strings.TrimSpace(strings.TrimPrefix(part, "brief:"))
+		}
+	}
+	if role == "" {
+		eo.cfg.OnError(fmt.Sprintf("member request from %s: no role found in message", msg.From))
+		return
+	}
+
+	// Build team ID
+	teamID := fmt.Sprintf("member-%s-%d", role, eo.brain.OuterIterationCount())
+
+	// Create team (ad hoc support member, no assigned steps)
+	if err := eo.brain.AddTeam(teamID, role, []int{}, nil); err != nil {
+		eo.cfg.OnError(fmt.Sprintf("add member team %s: %v", teamID, err))
+		return
+	}
+
+	// Dispatch the team
+	if err := eo.dispatcher.DispatchTeam(teamID); err != nil {
+		eo.cfg.OnError(fmt.Sprintf("dispatch member team %s: %v", teamID, err))
+		return
+	}
+
+	eo.cfg.OnProgress(fmt.Sprintf("Spawned member team %s (role: %s) — brief: %s", teamID, role, brief))
+
+	// Consume the message now that we've handled it
+	eo.comms.Inbox("lead", true)
+}
+
+// handleMemberRetire processes a retire notification from an agent.
+// Expected message format: subject = "Agent retiring", body = "reason:<reason>"
+func (eo *EventOrchestrator) handleMemberRetire(msg AgentMessage) {
+	// The sender is the retiring team member
+	teamID := msg.From
+	if err := eo.dispatcher.ReleaseTeam(teamID); err != nil {
+		eo.cfg.OnError(fmt.Sprintf("release team %s: %v", teamID, err))
+		return
+	}
+
+	eo.cfg.OnProgress(fmt.Sprintf("Released member team %s", teamID))
+
+	// Consume the message now that we've handled it
+	eo.comms.Inbox("lead", true)
 }
 
 // phaseValidate runs tests + behavior check.

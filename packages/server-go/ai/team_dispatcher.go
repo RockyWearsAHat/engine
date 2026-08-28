@@ -506,3 +506,37 @@ func (d *TeamDispatcher) activeLocked() int {
 	}
 	return count
 }
+
+// ReleaseTeam removes a team from active workers and marks it done in the brain.
+// Called when an agent retires and should be released.
+func (d *TeamDispatcher) ReleaseTeam(teamID string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	w, ok := d.workers[teamID]
+	if !ok {
+		return fmt.Errorf("team %s not found in dispatcher", teamID)
+	}
+
+	// Cancel the worker's context to stop it
+	if w.cancel != nil {
+		w.cancel()
+	}
+
+	// Remove from workers map
+	delete(d.workers, teamID)
+
+	// Update team status in brain
+	if d.brain != nil {
+		if err := d.brain.UpdateTeamStatus(teamID, "retired"); err != nil {
+			log.Printf("failed to mark team %s retired: %v", teamID, err)
+		}
+	}
+
+	// Update comms status
+	if d.comms != nil {
+		d.comms.Register(teamID, w.role, "retired")
+	}
+
+	return nil
+}

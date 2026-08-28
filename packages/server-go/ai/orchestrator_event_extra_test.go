@@ -277,7 +277,8 @@ func TestPhaseWaitTeams_ContextCancelled(t *testing.T) {
 	teamFailed := make(chan Event, 1)
 	userRedirect := make(chan Event, 1)
 	cancelEv := make(chan Event, 1)
-	err := eo.phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv)
+	agentMsg := make(chan Event, 1)
+	err := eo.phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv, agentMsg)
 	if err == nil {
 		t.Error("expected error from pre-cancelled context")
 	}
@@ -312,8 +313,9 @@ func TestPhaseWaitTeams_CancelEvent(t *testing.T) {
 	teamFailed := make(chan Event, 1)
 	userRedirect := make(chan Event, 1)
 	cancelEv := make(chan Event, 1)
+	agentMsg := make(chan Event, 1)
 	cancelEv <- Event{Type: EventCancel}
-	err := eo.phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv)
+	err := eo.phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv, agentMsg)
 	if err != context.Canceled {
 		t.Errorf("expected context.Canceled, got %v", err)
 	}
@@ -349,9 +351,10 @@ func TestPhaseWaitTeams_TeamDone_AllDone(t *testing.T) {
 	teamFailed := make(chan Event, 1)
 	userRedirect := make(chan Event, 1)
 	cancelEv := make(chan Event, 1)
+	agentMsg := make(chan Event, 1)
 	// Send a teamDone event; brain has 0 teams → AllTeamsDone() = true → returns nil
 	teamDone <- Event{Type: EventTeamDone, TeamID: "phantom-team"}
-	err := eo.phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv)
+	err := eo.phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv, agentMsg)
 	if err != nil {
 		t.Errorf("expected nil when all teams done, got %v", err)
 	}
@@ -387,13 +390,14 @@ func TestPhaseWaitTeams_TeamFailed(t *testing.T) {
 	teamFailed := make(chan Event, 1)
 	userRedirect := make(chan Event, 1)
 	cancelEv := make(chan Event, 1)
+	agentMsg := make(chan Event, 1)
 	teamFailed <- Event{
 		Type:    EventTeamFailed,
 		TeamID:  "t1",
 		Payload: EventPayload("error", "build failed"),
 	}
 	// Context times out after team-failed is processed
-	err := eo.phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv)
+	err := eo.phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv, agentMsg)
 	if err == nil {
 		t.Error("expected error from context timeout after team failed")
 	}
@@ -435,6 +439,7 @@ func TestPhaseWaitTeams_UserRedirect(t *testing.T) {
 	teamFailed := make(chan Event, 1)
 	userRedirect := make(chan Event, 1)
 	cancelEv := make(chan Event, 1)
+	agentMsg := make(chan Event, 1)
 	userRedirect <- Event{
 		Type:    EventUserRedirect,
 		Payload: EventPayload("message", "focus on auth"),
@@ -448,7 +453,7 @@ func TestPhaseWaitTeams_UserRedirect(t *testing.T) {
 	// there is nothing left to wait for and returning nil is the correct answer.
 	// It reads as an error only because the wait used to take five seconds to
 	// notice. Asserting the error back would be asserting the slowness.
-	if err := eo.phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv); err != nil && err != context.DeadlineExceeded {
+	if err := eo.phaseWaitTeams(teamDone, teamFailed, userRedirect, cancelEv, agentMsg); err != nil && err != context.DeadlineExceeded {
 		t.Errorf("unexpected error from wait: %v", err)
 	}
 	if brain.LastValidation != "focus on auth" {
