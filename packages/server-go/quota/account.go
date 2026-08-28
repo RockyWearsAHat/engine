@@ -45,6 +45,10 @@ func (i Identity) Key() string {
 		return "org:" + i.OrgID
 	case i.Email != "":
 		return "email:" + strings.ToLower(i.Email)
+	case i.LoggedIn && i.AuthMethod != "":
+		// Token logins (CLAUDE_CODE_OAUTH_TOKEN) report no email/org. One
+		// pool per auth method on this box: usable, never proven distinct.
+		return "auth:" + strings.ToLower(i.AuthMethod)
 	default:
 		return "unknown"
 	}
