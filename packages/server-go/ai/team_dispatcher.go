@@ -553,16 +553,26 @@ func (d *TeamDispatcher) ReleaseTeam(teamID string) error {
 	// Remove from workers map
 	delete(d.workers, teamID)
 
-	// Update team status in brain
+	// Update team status in brain to done (not "retired") so AllTeamsDone recognizes it
 	if d.brain != nil {
-		if err := d.brain.UpdateTeamStatus(teamID, "retired"); err != nil {
-			log.Printf("failed to mark team %s retired: %v", teamID, err)
+		if err := d.brain.UpdateTeamStatus(teamID, "done"); err != nil {
+			log.Printf("failed to mark team %s done: %v", teamID, err)
 		}
 	}
 
 	// Update comms status
 	if d.comms != nil {
 		d.comms.Register(teamID, w.role, "retired")
+	}
+
+	// Emit event so phaseWaitTeams can respond
+	if d.bus != nil {
+		d.bus.Emit(Event{
+			Type:      EventTeamDone,
+			Timestamp: time.Now(),
+			TeamID:    teamID,
+			Payload:   EventPayload("team_id", teamID, "reason", "retired"),
+		})
 	}
 
 	return nil

@@ -647,6 +647,19 @@ func TestEventLoop_DispatchFailureBranch(t *testing.T) {
 				c.OnChunk("prd", false)
 			case RolePlanner:
 				c.OnChunk("1. implement\n   do work\n   Acceptance: `echo ok`", false)
+			case RoleAutonomousBuilder, RoleImplementer:
+				// Builder completes immediately with signal_done
+				c.OnChunk("signal_done", false)
+			case RoleReviewer:
+				// Reviewer approves immediately
+				c.OnChunk("APPROVE", false)
+			case RoleCoach:
+				// Coach returns empty (coaching feedback optional)
+			case RoleDocumenter, RoleInteractive:
+				// Documenter and lead (interactive) don't produce output
+			default:
+				// Any other role: signal done
+				c.OnChunk("signal_done", false)
 			}
 		},
 	}
