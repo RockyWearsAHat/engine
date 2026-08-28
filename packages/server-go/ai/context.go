@@ -924,6 +924,21 @@ var toolRegistry = []anthropicTool{
 			"summary": strProp("Brief summary of what was built and committed"),
 		}),
 	},
+	{
+		Name:        "agent_request_member",
+		Description: "Request the lead agent spawn a new team member with the specified role. Lead grants if headroom allows. Call this to ask for a specialist mid-run.",
+		InputSchema: objSchema([]string{"role", "brief"}, map[string]any{
+			"role":  strProp("Role name (e.g., 'tester', 'reviewer', 'documenter')"),
+			"brief": strProp("Concise task definition for the new member"),
+		}),
+	},
+	{
+		Name:        "agent_retire",
+		Description: "Signal to the lead that this member is done and should be released from the team. Use when your assigned work is complete.",
+		InputSchema: objSchema(nil, map[string]any{
+			"reason": strProp("Optional reason for retiring (e.g., 'assigned work complete', 'blocked on external input')"),
+		}),
+	},
 	// ── Editor UI ────────────────────────────────────────────────────────────
 	{
 		Name:        "get_system_info",
@@ -1578,6 +1593,12 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 			summary = "done"
 		}
 		return summary, false
+
+	case "agent_request_member":
+		return executeAgentRequestMember(input, ctx)
+
+	case "agent_retire":
+		return executeAgentRetire(input, ctx)
 
 	case "mesh_exec":
 		return executeMeshExec(input, ctx)

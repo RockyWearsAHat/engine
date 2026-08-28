@@ -12,6 +12,42 @@ import (
 
 var teamDispatcherStopTimeout = 30 * time.Second
 
+// roleFromString maps a role string to an AgentRole constant.
+func roleFromString(role string) AgentRole {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "lead":
+		return RoleInteractive
+	case "planner":
+		return RolePlanner
+	case "scaffolder":
+		return RoleScaffolder
+	case "implementer":
+		return RoleImplementer
+	case "tester":
+		return RoleTester
+	case "reviewer":
+		return RoleReviewer
+	case "documenter":
+		return RoleDocumenter
+	case "intaker":
+		return RoleIntaker
+	case "griller":
+		return RoleGriller
+	case "prdwriter":
+		return RolePRDWriter
+	case "moduleindexer":
+		return RoleModuleIndexer
+	case "architect":
+		return RoleArchitect
+	case "verifier":
+		return RoleReviewer // Verifier is a skeptic reviewer
+	case "builder":
+		return RoleAutonomousBuilder
+	default:
+		return RoleAutonomousBuilder
+	}
+}
+
 // TeamWorker represents a single execution context for a team.
 type TeamWorker struct {
 	teamID   string
@@ -346,16 +382,15 @@ func (w *TeamWorker) runGatedStep(step *PlanStep, stepIdx int) error {
 		stepIdx, OrchestratorMaxStepAttempts, summarise(lastReason, 300))
 }
 
-// runStep executes one plan step with the team's role (builder → reviewer pipeline).
+// runStep executes one plan step with the team's assigned role.
 func (w *TeamWorker) runStep(step *PlanStep, stepIdx int) error {
 	// Create a session for this step
 	sessionID := fmt.Sprintf("%s-team-%s-step-%d", w.cfg.SessionIDPrefix, w.teamID, stepIdx)
 
-	// Build the step using the same shared builder contract as the main
-	// orchestrator path, so team workers inherit the full autonomous loop
-	// instead of a separate hardcoded prompt variant.
+	// Build the step using the team's assigned role. Each specialist runs its own workflow
+	// instead of all running RoleAutonomousBuilder.
 	cc := newPhaseChat(w.cfg, sessionID)
-	cc.Ctx.Role = RoleAutonomousBuilder
+	cc.Ctx.Role = roleFromString(w.role)
 	cc.Ctx.MaxTurns = 0
 	cc.Ctx.AgentName = w.teamID
 	cc.Ctx.AgentComms = w.comms

@@ -526,7 +526,8 @@ func (eo *EventOrchestrator) handleRedirect(msg string) {
 }
 
 // createTeamsFromPlan chunks the plan into role-based teams.
-// Heuristic: group sequential steps into teams when they share the same domain.
+// Groups consecutive same-role steps into teams, then maps each team to the appropriate role.
+// Mandatory lead/documenter/verifier teams work across all steps.
 func (eo *EventOrchestrator) createTeamsFromPlan(plan []PlanStep) {
 	// Clear old teams
 	eo.brain.ResetTeams()
@@ -535,36 +536,27 @@ func (eo *EventOrchestrator) createTeamsFromPlan(plan []PlanStep) {
 		return
 	}
 
-	// Grouping heuristic: a run of consecutive steps with the same inferred role
-	// becomes one team. Teams run concurrently; steps inside a team run in order.
-	//
-	// KNOWN LIMIT, measured rather than guessed. Parallelism here is bounded by
-	// role DIVERSITY, not by the quota plan. A live run of an eleven-step plan
-	// to build three independent Go packages produced exactly one team —
-	// inferRoleFromStep only distinguishes db / frontend / api / general, and
-	// every step in that plan was "general", so the whole project built
-	// serially inside team-general-0 while the governor's ceiling of three sat
-	// unused. The dispatcher itself is genuinely concurrent and genuinely
-	// capped by the governor (see TestTeamDispatcher_RunsStepsConcurrently and
-	// TestTeamDispatcher_QuotaCeilingSerialisesWork); it is the team formation
-	// above it that hands it only one thing to run.
-	//
-	// The obvious fix — chop a long same-role run into several teams — is NOT
-	// safe as things stand, and that is why it has not been done here. Steps in
-	// different teams run at the same time, so splitting assumes the steps are
-	// independent, and nothing in the plan says whether they are. PlanStep
-	// carries no dependency information and the planner is never asked for any,
-	// so "1. create the module" and "2. add a feature to the module" would be
-	// dispatched concurrently into the same files. Doing this properly means
-	// teaching the planner to declare dependencies and populating AddTeam's
-	// dependsOn (which every caller currently passes as nil) — a plan-format
-	// change, not a grouping tweak.
+	// Team IDs include iteration counter to avoid collisions on replan.
+	iter := eo.brain.OuterIterationCount()
 
+	// Create mandatory cross-team members (don't execute steps; provide support)
+	// Lead orchestrates. When signal_done is called by lead, and verifier PASS,
+	// the workflow ends. No assigned steps.
+	eo.brain.AddTeam(fmt.Sprintf("lead-%d", iter), "lead", []int{}, nil)
+
+	// Documenter writes/updates docs as work happens.
+	eo.brain.AddTeam(fmt.Sprintf("documenter-%d", iter), "documenter", []int{}, nil)
+
+	// Verifier reviews output. On signal_done + verifier PASS, workflow complete.
+	eo.brain.AddTeam(fmt.Sprintf("verifier-%d", iter), "verifier", []int{}, nil)
+
+	// Group consecutive same-role steps into teams.
+	// Steps with the same role run sequentially inside one team; different roles run in parallel.
 	var currentTeamSteps []int
 	var currentRole string
 
 	for i, step := range plan {
-		role := inferRoleFromStep(step)
+		role := mapStepToRole(step)
 
 		if currentRole == "" {
 			currentRole = role
@@ -572,8 +564,8 @@ func (eo *EventOrchestrator) createTeamsFromPlan(plan []PlanStep) {
 		} else if role == currentRole {
 			currentTeamSteps = append(currentTeamSteps, i)
 		} else {
-			// Start a new team
-			teamID := fmt.Sprintf("team-%s-%d", currentRole, eo.brain.TeamCount())
+			// End current team, start new one
+			teamID := fmt.Sprintf("team-%s-%d-%d", currentRole, eo.brain.TeamCount(), iter)
 			eo.brain.AddTeam(teamID, currentRole, currentTeamSteps, nil)
 
 			currentRole = role
@@ -583,9 +575,37 @@ func (eo *EventOrchestrator) createTeamsFromPlan(plan []PlanStep) {
 
 	// Flush last team
 	if len(currentTeamSteps) > 0 {
-		teamID := fmt.Sprintf("team-%s-%d", currentRole, eo.brain.TeamCount())
+		teamID := fmt.Sprintf("team-%s-%d-%d", currentRole, eo.brain.TeamCount(), iter)
 		eo.brain.AddTeam(teamID, currentRole, currentTeamSteps, nil)
 	}
+}
+
+// mapStepToRole assigns a role string to a plan step based on its title and content.
+func mapStepToRole(step PlanStep) string {
+	// Use step title keywords to infer the right role
+	lower := strings.ToLower(step.Title)
+
+	if strings.Contains(lower, "test") || strings.Contains(lower, "debug") || strings.Contains(lower, "fix") {
+		return "tester"
+	}
+	if strings.Contains(lower, "review") || strings.Contains(lower, "refactor") {
+		return "reviewer"
+	}
+	if strings.Contains(lower, "architect") || strings.Contains(lower, "design") {
+		return "architect"
+	}
+	if strings.Contains(lower, "doc") || strings.Contains(lower, "comment") {
+		return "documenter"
+	}
+	if strings.Contains(lower, "scaffold") || strings.Contains(lower, "stub") {
+		return "scaffolder"
+	}
+	if strings.Contains(lower, "implement") || strings.Contains(lower, "write") {
+		return "implementer"
+	}
+
+	// Default to autonomous builder for general work
+	return "builder"
 }
 
 // CapturedChat wraps a ChatContext and captures its output.

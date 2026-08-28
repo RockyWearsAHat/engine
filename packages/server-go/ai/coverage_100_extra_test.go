@@ -690,8 +690,22 @@ func TestCreateTeamsFromPlan_SameRoleAppendBranch(t *testing.T) {
 		{Index: 1, Title: "database migration one"},
 		{Index: 2, Title: "database migration two"},
 	})
-	if len(brain.Teams) != 1 {
-		t.Fatalf("expected one team for same-role contiguous steps, got %d", len(brain.Teams))
+	// Slice H: expect mandatory teams (lead, documenter, verifier) + 1 for same-role steps
+	if len(brain.Teams) != 4 {
+		t.Fatalf("expected 4 teams (3 mandatory + 1 builder), got %d", len(brain.Teams))
+	}
+	// Verify same-role steps are still grouped into one team (optimization preserved)
+	builderTeamCount := 0
+	for _, team := range brain.Teams {
+		if team.Role == "builder" {
+			builderTeamCount++
+			if len(team.AssignedSteps) != 2 {
+				t.Fatalf("expected builder team with 2 steps, got %d", len(team.AssignedSteps))
+			}
+		}
+	}
+	if builderTeamCount != 1 {
+		t.Fatalf("expected exactly 1 builder team, got %d", builderTeamCount)
 	}
 }
 

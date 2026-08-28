@@ -45,6 +45,7 @@ const (
 // signalling — file/shell tools stay Claude Code's own.
 var mcpBridgeToolNames = []string{
 	"agent_list", "agent_send", "agent_inbox", "agent_receive", "agent_await",
+	"agent_request_member", "agent_retire",
 	"signal_done", "discord_post_progress", "discord_dm", "mesh_exec", "search_tools",
 }
 
