@@ -61,13 +61,28 @@ type OrchestrationBrain struct {
 
 	// Session tracking
 	SessionIDPrefix string `json:"session_id_prefix"`
+	// StateSlug namespaces the on-disk file. Empty = brain.json (whole
+	// project). Task-mode runs set it so two items on one repo keep two brains.
+	StateSlug string `json:"state_slug,omitempty"`
+}
+
+// brainStatePath: brain.json, or brain-<slug>.json when namespaced.
+func brainStatePath(projectPath, slug string) string {
+	name := "brain.json"
+	if slug = strings.TrimSpace(slug); slug != "" {
+		name = "brain-" + slug + ".json"
+	}
+	return filepath.Join(projectPath, ".engine", name)
 }
 
 // stageLoadBrainFromDisk attempts to load persisted brain state from disk.
 func stageLoadBrainFromDisk(projectPath string) (*OrchestrationBrain, error) {
-	engineDir := filepath.Join(projectPath, ".engine")
-	statePath := filepath.Join(engineDir, "brain.json")
-	data, err := os.ReadFile(statePath)
+	return stageLoadBrainFromDiskSlug(projectPath, "")
+}
+
+// stageLoadBrainFromDiskSlug loads the namespaced brain file.
+func stageLoadBrainFromDiskSlug(projectPath, slug string) (*OrchestrationBrain, error) {
+	data, err := os.ReadFile(brainStatePath(projectPath, slug))
 	if err != nil {
 		return nil, err
 	}
@@ -94,14 +109,24 @@ func stageInitFreshBrain(projectPath, owner, repo, brief, sessionIDPrefix string
 
 // NewOrchestrationBrain initializes the brain from persisted state or fresh.
 func NewOrchestrationBrain(projectPath, owner, repo, brief, sessionIDPrefix string) (*OrchestrationBrain, error) {
+	return NewOrchestrationBrainSlug(projectPath, owner, repo, brief, sessionIDPrefix, "")
+}
+
+// NewOrchestrationBrainSlug is NewOrchestrationBrain with a state namespace.
+// Task mode passes taskSlug(TaskID); whole-project runs pass "".
+func NewOrchestrationBrainSlug(projectPath, owner, repo, brief, sessionIDPrefix, slug string) (*OrchestrationBrain, error) {
+	slug = strings.TrimSpace(slug)
 	// Try loading from disk
-	if brain, err := stageLoadBrainFromDisk(projectPath); err == nil {
+	if brain, err := stageLoadBrainFromDiskSlug(projectPath, slug); err == nil {
 		brain.UpdatedAt = time.Now()
+		brain.StateSlug = slug
 		return brain, nil
 	}
 
 	// Fall back to fresh initialization
-	return stageInitFreshBrain(projectPath, owner, repo, brief, sessionIDPrefix), nil
+	brain := stageInitFreshBrain(projectPath, owner, repo, brief, sessionIDPrefix)
+	brain.StateSlug = slug
+	return brain, nil
 }
 
 // stageParseVocab transforms a vocabulary string into a map of key-value pairs.
@@ -489,10 +514,9 @@ func (b *OrchestrationBrain) StateSnapshot() *OrchestrationState {
 // stagePersistBrain persists the brain to disk by creating the .engine directory,
 // marshaling to JSON, and writing the file.
 func stagePersistBrain(projectPath string, brain *OrchestrationBrain) error {
-	engineDir := filepath.Join(projectPath, ".engine")
-	_ = os.MkdirAll(engineDir, 0755)
+	_ = os.MkdirAll(filepath.Join(projectPath, ".engine"), 0755)
 
-	statePath := filepath.Join(engineDir, "brain.json")
+	statePath := brainStatePath(projectPath, brain.StateSlug)
 	data, _ := json.MarshalIndent(brain, "", "  ")
 
 	return os.WriteFile(statePath, data, 0644)

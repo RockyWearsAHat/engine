@@ -126,7 +126,13 @@ func (p *claudecodeProvider) RunLoop(
 	// here. (MaxContextTokens binds earlier, where the prompt is assembled —
 	// see governedContextBudget; by the time we are here the history has
 	// already been trimmed to it.)
+	// Hub identity before launch: agent_list on a peer must already show this
+	// worker when the CLI comes up.
+	registerChatAgent(ctx)
 	args := buildClaudeArgs(ctx, model, systemPrompt, dispatch.SubagentFanout)
+	if p := mcpConfigPathFromArgs(args); p != "" {
+		defer os.Remove(p)
+	}
 
 	cmd := exec.CommandContext(runCtx, claudeBinary, args...)
 	if strings.TrimSpace(ctx.ProjectPath) != "" {
@@ -255,6 +261,14 @@ func buildClaudeArgs(ctx *ChatContext, model, systemPrompt string, subagentFanou
 	if m := strings.TrimSpace(model); m != "" && m != "claude-code" && m != "claudecode" {
 		args = append(args, "--model", m)
 	}
+	// Comms bridge. Engine's agent_* / signal_done / discord_* / mesh_exec
+	// tools reach the CLI as mcp__engine__*. Without this the worker is deaf.
+	if path, err := writeMCPConfig(ctx); err == nil {
+		args = append(args, "--mcp-config", path, "--allowedTools", "mcp__"+MCPBridgeServerName+"__*")
+	} else if ctx.OnError != nil {
+		ctx.OnError(mcpBridgeArgError(err))
+	}
+	// fanout 0 = no Task tool. Only then. Positive fanout keeps it.
 	if subagentFanout == 0 {
 		args = append(args, "--disallowedTools", "Task")
 	} else if subagentFanout > 0 {

@@ -391,6 +391,10 @@ func shortToken() string {
 
 // registerTaskRoutes wires the task surface onto the default mux.
 func registerTaskRoutes(defaultProjectPath string) {
+	// Comms bridge callback. claude -p workers hit this via the stdio MCP
+	// bridge (ai/mcp_bridge.go) for agent_* and friends.
+	httpHandleFuncFn(ai.MCPBridgeToolPath, ai.MCPBridgeHTTPHandler)
+
 	httpHandleFuncFn("/task", func(w http.ResponseWriter, r *http.Request) {
 		cors(w, "GET, POST, OPTIONS")
 		if r.Method == http.MethodOptions {
