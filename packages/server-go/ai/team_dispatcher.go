@@ -330,9 +330,36 @@ func (w *TeamWorker) runGatedStep(step *PlanStep, stepIdx int) error {
 			step.LastFeedback = ""
 			return nil
 		case ReviewReject:
+			step.ReviewRejects++
 			step.LastFeedback = msg
 			lastReason = msg
-			w.cfg.OnProgress(fmt.Sprintf("team %s step %d rejected by reviewer (attempt %d)", w.teamID, stepIdx, attempt))
+			w.cfg.OnProgress(fmt.Sprintf("team %s step %d rejected by reviewer (attempt %d/%d)", w.teamID, stepIdx, attempt, OrchestratorMaxStepAttempts))
+
+			// Coaching same as serial path: 1st REJECT → coach + retry; etc.
+			if step.ReviewRejects == 1 {
+				w.cfg.OnProgress(fmt.Sprintf("team %s step %d: spawning coach", w.teamID, stepIdx))
+				newBrief := orchestratorCoachStep(w.cfg, step, cancel)
+				if newBrief != "" {
+					step.CoachingBrief = newBrief
+					if w.cfg.OnCoach != nil {
+						w.cfg.OnCoach(1, false)
+					}
+				}
+			} else if step.ReviewRejects == 2 {
+				w.cfg.OnProgress(fmt.Sprintf("team %s step %d: second REJECT, coaching again", w.teamID, stepIdx))
+				newBrief := orchestratorCoachStep(w.cfg, step, cancel)
+				if newBrief != "" {
+					step.CoachingBrief = newBrief
+					if w.cfg.OnCoach != nil {
+						w.cfg.OnCoach(2, false)
+					}
+				}
+			} else if step.ReviewRejects >= 3 {
+				w.cfg.OnProgress(fmt.Sprintf("team %s step %d: escalating after %d REJECTs", w.teamID, stepIdx, step.ReviewRejects))
+				if w.cfg.OnCoach != nil {
+					w.cfg.OnCoach(step.ReviewRejects, true)
+				}
+			}
 		default:
 			// Inconclusive review is a soft pass in the classic loop, and it has
 			// to be one here too: failing the team on "the reviewer could not

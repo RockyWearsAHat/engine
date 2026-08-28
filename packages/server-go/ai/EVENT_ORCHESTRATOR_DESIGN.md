@@ -54,13 +54,21 @@ How SARA hands one unit of work in and learns what happened. Rules:
 - Server start reloads it. Every row still `running` on reload is marked `failed` (terminal, `alive:false`, `lost:true`, dedupe key released) regardless of PID. SARA's gateway (`myeditor.mjs` asAgentEntry) treats status=failed + lost:true as "MyEditor forgot task", not a failure: engine marks item lastOutcome=lost, re-dispatches, no retry attempt spent. Nothing forgotten.
 - Wake POST fires on EVERY terminal state — done, failed, canceled, panic. Target: caller `callbackUrl`, else `http://127.0.0.1:$SARA_ENGINE_WAKE_PORT/task-complete` (default 24777). Payload `{id, project, outcome, model, tokensIn, tokensOut, subagentsSpawned, coached, escalated, error}`. Fire-and-forget; GET-by-id stays truth.
 
-## Builder Retry Rules (`orchestrator_phases.go`, `orchestrator.go`)
+## Builder Retry Rules (`orchestrator_phases.go`, `orchestrator.go`, `team_dispatcher.go`)
 
-- Every builder attempt: fresh session, fresh `ChatContext`. Reviewer/critic notes ride in via `step.LastFeedback` as `REVIEWER NOTES` in the prompt.
+- Every builder attempt: fresh session, fresh `ChatContext`. Reviewer/critic notes ride in via `step.LastFeedback` as `REVIEWER NOTES` in the prompt, or via `CoachingBrief` when available.
 - Every run logs phase `tokens`: `model in out elapsed`.
 - Provider fault = provider reported usage (`RunStats.Seen`) AND `OutputTokens == 0` AND run ended inside `zeroOutputWindow` (1s). Backoff 1s / 5s / 15s, new run each. After the schedule: `ErrProviderZeroOutput`; outer loop calls `refundProviderAttempt` — `step.Attempts--`. Provider hiccups never retire a step (err-…002).
 - Stub/ollama runs with no usage keep the plain "builder produced no output" path — counted as an attempt, no backoff.
-- Tests: `zero_output_retry_test.go`, `task_api_persist_test.go`.
+
+## Reviewer REJECT Coaching (slice I: coaching, not escalation)
+
+- `PlanStep.ReviewRejects` counts reviewer REJECT verdicts on this step (separate from `Attempts`).
+- On 1st REJECT: `orchestratorCoachStep` spawns RoleCoach (one tier above worker: sonnet when worker is haiku). Coach reads rejection + acceptance criteria + original brief → outputs decomposed brief. `step.CoachingBrief` stores it. On next builder run, `buildStepPromptWithContext` uses `CoachingBrief` instead of `Body`. Re-run on same model. OnCoach fired: `coached=1, escalated=false`.
+- On 2nd REJECT: Coach again with same flow; `LastFeedback` (reviewer notes) injected in the prompt. OnCoach fired: `coached=2, escalated=false`.
+- On 3rd REJECT: Escalate model one tier (haiku→sonnet, sonnet→opus). OnCoach fired: `coached=3, escalated=true`. Allow one more attempt at the higher tier.
+- If 4th attempt fails (rare; escalation worked but insufficient): step retired as failed. No further escalation.
+- Tests: coaching invoked on REJECT → coach-rewritten brief fed to retry; 2nd REJECT → feedback injected; 3rd+ REJECT → escalated flag set; webhook payload carries coached/escalated.
 
 ## Validation Surface
 
