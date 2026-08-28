@@ -109,6 +109,14 @@ How SARA hands one unit of work in and learns what happened. Rules:
 - If 4th attempt fails (rare; escalation worked but insufficient): step retired as failed. No further escalation.
 - Tests: coaching invoked on REJECT → coach-rewritten brief fed to retry; 2nd REJECT → feedback injected; 3rd+ REJECT → escalated flag set; webhook payload carries coached/escalated.
 
+## Team Member Communication
+
+- After each plan step completes, `TeamWorker.reportStepToLead` sends a progress message to the lead via `AgentCommsHub.Send()`.
+- Each message has format: `"Step N/total done: <step title>"` with subject `"progress"`.
+- The lead agent can drain its inbox to track which steps have been completed.
+- Team members registered as agents allow status queries and logging via the comms system.
+- This enables the lead to maintain accurate `stepsDone` counters for task progress tracking.
+
 ## Validation Surface
 
 The event orchestrator has direct unit coverage in:

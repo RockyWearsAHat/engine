@@ -384,6 +384,8 @@ var roleConfigs = map[AgentRole]roleConfig{
 			"TEAM COMMUNICATION RULES:",
 			"- Use agent_list to discover teammates before asking for specialized context.",
 			"- Use agent_send for focused task packets, questions, and review requests; keep messages narrow so each teammate has a clean context window.",
+			"- IMPORTANT: when part of a team working on plan steps, use agent_send to report each step completion to the lead (to: 'lead', subject: 'progress').",
+			"- When blocked waiting for lead input or peer response, use agent_send to ask the lead for guidance or the peer for clarification.",
 			"- Use agent_receive for convenient non-blocking inbox checks and use agent_await only when you need a blocking wait.",
 			"- Share conclusions and evidence, not secrets or irrelevant logs.",
 			"NEVER: produce text that says 'I would write ...' or 'planned' or 'ready to start' without calling write_file immediately after.",

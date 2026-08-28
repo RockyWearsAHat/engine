@@ -223,7 +223,7 @@ func (w *TeamWorker) run() {
 	// Mark team as running
 	w.markTeamRunning()
 
-	for _, stepIdx := range w.steps {
+	for i, stepIdx := range w.steps {
 		plan := w.brain.GetPlan()
 		if stepIdx >= len(plan) {
 			continue
@@ -272,6 +272,9 @@ func (w *TeamWorker) run() {
 		if w.cfg.OnPlanUpdate != nil {
 			w.cfg.OnPlanUpdate(extractOrchestrationState(w.brain))
 		}
+
+		// Report step completion to lead via comms
+		w.reportStepToLead(i+1, len(w.steps), step.Title)
 	}
 
 	// Mark team as done
@@ -425,6 +428,17 @@ func (w *TeamWorker) runStep(step *PlanStep, stepIdx int) error {
 	}
 
 	return fmt.Errorf("step timed out after %d turns", w.maxTurns)
+}
+
+// reportStepToLead sends a progress message from team to lead via agent comms.
+func (w *TeamWorker) reportStepToLead(stepNum, totalSteps int, stepTitle string) {
+	if w.comms == nil {
+		return
+	}
+	msg := fmt.Sprintf("Step %d/%d done: %s", stepNum, totalSteps, stepTitle)
+	if _, err := w.comms.Send(w.teamID, "lead", "progress", msg, ""); err != nil {
+		log.Printf("team dispatcher: failed to send progress to lead: %v", err)
+	}
 }
 
 // Stop gracefully stops all workers.
