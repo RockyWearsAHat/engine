@@ -667,6 +667,11 @@ func newChatContextForPhase(projectPath string, sessionID string) *CapturedChat 
 func newPhaseChat(cfg OrchestratorConfig, sessionID string) *CapturedChat {
 	cc := newChatContextForPhase(cfg.ProjectPath, sessionID)
 	cc.Ctx.Cancel = cfg.Cancel
+	// Model pin. Serial path sets this in stageChatContextCreation; event path
+	// forgot. Result: SARA picked haiku, every phase + every TeamWorker step ran
+	// at env default. One seam for both call sites (planner phases here,
+	// TeamWorker.runStep) so it cannot drift again.
+	cc.Ctx.ModelOverride = cfg.RequestedModel
 	if cfg.OnError != nil {
 		cc.Ctx.OnError = cfg.OnError
 	}
