@@ -157,7 +157,7 @@ func TestTaskAPI_PersistsBeforePlan(t *testing.T) {
 	}
 }
 
-// Restart: running rows come back as lost-on-restart, terminal, not alive.
+// Restart: running rows come back as failed + lost:true, terminal, not alive.
 func TestTaskAPI_ReloadMarksRunningLost(t *testing.T) {
 	mux, path, _ := freshTaskAPI(t)
 	now := time.Now()
@@ -172,8 +172,26 @@ func TestTaskAPI_ReloadMarksRunningLost(t *testing.T) {
 	registerTaskRoutes(t.TempDir())
 
 	code, got := getTask(t, mux, "/task/t-run")
-	if code != http.StatusOK || got["status"] != string(taskLostOnRestart) || got["alive"] != false || got["finishedAt"] == nil {
+	if code != http.StatusOK || got["status"] != string(taskFailed) || got["alive"] != false || got["finishedAt"] == nil {
 		t.Fatalf("lost task wrong: %d %v", code, got)
+	}
+	// Status must be a word the gateway knows (done/failed/canceled); lost
+	// flag tells it apart from a real failure. Survives a second reload too.
+	if got["lost"] != true {
+		t.Fatalf("lost flag missing: %v", got)
+	}
+	switch got["status"] {
+	case "done", "failed", "canceled":
+	default:
+		t.Fatalf("unknown status for gateway: %v", got["status"])
+	}
+	tasks.persist()
+	r2 := &taskRegistry{tasks: map[string]*engineTask{}, byKey: map[string]string{}}
+	if n := r2.load(path); n != 0 {
+		t.Fatalf("second reload re-lost %d", n)
+	}
+	if t2, ok := r2.tasks["t-run"]; !ok || t2.Status != taskFailed || !t2.Lost {
+		t.Fatalf("lost flag did not survive reload: %+v", t2)
 	}
 	if _, running := tasks.liveByKey("k1"); running {
 		t.Fatal("lost task must not dedupe a re-dispatch")
