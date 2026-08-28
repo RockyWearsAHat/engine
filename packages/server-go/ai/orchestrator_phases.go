@@ -375,7 +375,7 @@ func buildPlannerPromptWithContext(brief, contextDoc string) string {
 		b.WriteString(strings.TrimSpace(contextDoc))
 		b.WriteString("\n\n")
 	}
-	b.WriteString("Numbered build plan. TDD shape. Caveman style.\n\n")
+	b.WriteString("Produce a numbered build plan. TDD shape. Caveman style.\n\n")
 	b.WriteString("BRIEF:\n")
 	b.WriteString(brief)
 	b.WriteString("\n\nFormat (no preamble, no remarks):\n")
