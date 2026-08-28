@@ -58,6 +58,48 @@ func orchestratorCriticStep(cfg OrchestratorConfig, step *PlanStep, cancel <-cha
 	return CriticReject, result.FindingsText()
 }
 
+// orchestratorCoachStep rewrites a rejected brief for retry on the same model.
+//
+// When a builder fails the reviewer (REJECT), this spawns a sonnet coach
+// (one tier above a haiku worker) to read the rejection reason + transcript tail,
+// rewrite the brief (decomposed, acceptance stated, files named, reviewer notes folded).
+// Returns the new brief; on error, returns empty and logs the failure.
+func orchestratorCoachStep(cfg OrchestratorConfig, step *PlanStep, cancel <-chan struct{}) string {
+	if cancelClosed(cancel) {
+		return ""
+	}
+
+	sessionID := fmt.Sprintf("%s-coach-%d-%d", chooseSessionPrefix(cfg), step.Index, time.Now().UnixNano())
+	if err := createSessionFn(sessionID, cfg.ProjectPath, ""); err != nil {
+		return ""
+	}
+
+	ctx, _ := newChatContextForRole(cfg, sessionID, RoleCoach, cancel)
+	// Coach is one tier above worker. If worker was haiku, coach is sonnet.
+	// This is enforced by RoleCoach prompt, not by the caller.
+
+	reviewerNotes := ""
+	if step.LastFeedback != "" {
+		reviewerNotes = "Reviewer feedback:\n" + step.LastFeedback + "\n\n"
+	}
+
+	coachPrompt := fmt.Sprintf(
+		"Rewrite this step brief for retry.\n"+
+			"Original brief:\n%s\n\n"+
+			"%s"+
+			"Acceptance criteria:\n%s\n\n"+
+			"Your output: decomposed brief, files named, acceptance restated clearly.",
+		step.Body, reviewerNotes, step.Acceptance)
+
+	var coachOutput strings.Builder
+	ctx.OnChunk = func(content string, done bool) {
+		coachOutput.WriteString(content)
+	}
+	cfg.chatFnFor()(ctx, coachPrompt)
+
+	return strings.TrimSpace(coachOutput.String())
+}
+
 // orchestratorRepairStep tries to fix a failing behavioural validation in place
 // rather than handing the failure back to the builder.
 //
