@@ -329,7 +329,10 @@ func engineMCPAddr() string {
 	if v := strings.TrimSpace(os.Getenv(envMCPAddr)); v != "" {
 		return v
 	}
-	port := strings.TrimSpace(os.Getenv("PORT"))
+	port := strings.TrimSpace(os.Getenv("ENGINE_PORT"))
+	if port == "" {
+		port = strings.TrimSpace(os.Getenv("PORT"))
+	}
 	if port == "" {
 		port = "24444"
 	}
