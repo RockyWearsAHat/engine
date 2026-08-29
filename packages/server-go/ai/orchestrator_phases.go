@@ -51,8 +51,33 @@ func orchestratorPlanPhase(cfg OrchestratorConfig, state *OrchestrationState, ca
 
 	steps := parsePlanFromText(oc.String())
 	if len(steps) == 0 {
-		return fmt.Errorf("plan output empty or unparsable; got %d chars", len(oc.String()))
+		outputLen := len(oc.String())
+		outputStr := oc.String()
+
+		// If output is non-empty, try repair pass to extract a proper plan.
+		if outputLen > 0 {
+			repaired, repairErr := orchestratorRepairPlanPhase(cfg, state, outputStr, cancel)
+			if repairErr == nil && len(repaired) > 0 {
+				// Repair succeeded; use repaired plan and continue to validation gates.
+				state.Plan = repaired
+				// Skip the first validation check (already attempted in repair);
+				// go straight to decomposition gate below.
+				steps = repaired
+			} else {
+				// Repair failed or produced nothing; return error with excerpt.
+				excerpt := outputStr
+				if len(excerpt) > 200 {
+					excerpt = excerpt[:200]
+				}
+				excerpt = strings.TrimSpace(strings.ReplaceAll(excerpt, "\n", " "))
+				return fmt.Errorf("plan output empty or unparsable; got %d chars: %q", outputLen, excerpt)
+			}
+		} else {
+			// Output is truly empty (0 chars).
+			return fmt.Errorf("plan output empty or unparsable; got %d chars", outputLen)
+		}
 	}
+
 	if err := validatePlanQuality(steps); err != nil {
 		repaired, repairErr := orchestratorRepairPlanPhase(cfg, state, oc.String(), cancel)
 		if repairErr != nil {

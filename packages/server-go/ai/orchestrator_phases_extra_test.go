@@ -229,6 +229,104 @@ func TestOrchestratorPlanPhase_RepairFailureBubblesUp(t *testing.T) {
 	}
 }
 
+// TestOrchestratorPlanPhase_RepairsChattyProse tests repair pass on chatty prose with no steps.
+func TestOrchestratorPlanPhase_RepairsChattyProse(t *testing.T) {
+	dir := setupPhasesDB(t)
+	callCount := 0
+	cfg := OrchestratorConfig{
+		ProjectPath:     dir,
+		SessionIDPrefix: "t",
+		OnPhase:         func(string, string) {},
+		OnProgress:      func(string) {},
+		OnError:         func(string) {},
+		ChatFn: func(c *ChatContext, _ string) {
+			callCount++
+			if callCount == 1 {
+				// First output: chatty prose with no numbered steps
+				c.OnChunk("To build this feature, I would start by creating a project structure, then add tests, and implement the core logic. Let me break this down in detail...", false)
+				return
+			}
+			if callCount == 2 {
+				// Repair pass: return valid numbered plan
+				c.OnChunk("1. Scaffold project\n   Create go.mod and initial structure.\n   Acceptance: `go test ./...` passes\n2. Add test\n   Write first failing test.\n   Acceptance: `go test ./...` passes\n", false)
+				return
+			}
+			// Critique phase: approve the repaired plan
+			c.OnChunk("COMPLETE", false)
+		},
+	}
+	state := &OrchestrationState{Brief: "brief", Owner: "o", Repo: "r"}
+	cancel := make(chan struct{})
+	if err := orchestratorPlanPhase(cfg, state, cancel); err != nil {
+		t.Fatalf("expected repair to succeed, got %v", err)
+	}
+	if len(state.Plan) == 0 {
+		t.Error("expected plan steps after repair")
+	}
+	if callCount < 2 {
+		t.Fatalf("expected at least initial pass + repair, got %d calls", callCount)
+	}
+}
+
+// TestOrchestratorPlanPhase_EmptyOutputError tests error message for truly empty output.
+func TestOrchestratorPlanPhase_EmptyOutputError(t *testing.T) {
+	dir := setupPhasesDB(t)
+	cfg := OrchestratorConfig{
+		ProjectPath:     dir,
+		SessionIDPrefix: "t",
+		OnPhase:         func(string, string) {},
+		OnProgress:      func(string) {},
+		OnError:         func(string) {},
+		ChatFn:          func(_ *ChatContext, _ string) {}, // emits nothing
+	}
+	state := &OrchestrationState{Brief: "brief", Owner: "o", Repo: "r"}
+	cancel := make(chan struct{})
+	err := orchestratorPlanPhase(cfg, state, cancel)
+	if err == nil {
+		t.Error("expected error for empty output")
+	}
+	if !strings.Contains(err.Error(), "got 0 chars") {
+		t.Fatalf("expected 'got 0 chars' in error, got %v", err)
+	}
+}
+
+// TestOrchestratorPlanPhase_UnparsableWithExcerpt tests error message includes output excerpt.
+func TestOrchestratorPlanPhase_UnparsableWithExcerpt(t *testing.T) {
+	dir := setupPhasesDB(t)
+	callCount := 0
+	cfg := OrchestratorConfig{
+		ProjectPath:     dir,
+		SessionIDPrefix: "t",
+		OnPhase:         func(string, string) {},
+		OnProgress:      func(string) {},
+		OnError:         func(string) {},
+		ChatFn: func(c *ChatContext, _ string) {
+			callCount++
+			if callCount == 1 {
+				// Output is chatty prose, no numbered steps
+				c.OnChunk("Here is my plan. I would create a structure with tests. This is a detailed explanation.", false)
+				return
+			}
+			// Repair also produces unparsable output (no numbered steps)
+			c.OnChunk("Still unable to format as numbered steps properly because the model is confused.", false)
+		},
+	}
+	state := &OrchestrationState{Brief: "brief", Owner: "o", Repo: "r"}
+	cancel := make(chan struct{})
+	err := orchestratorPlanPhase(cfg, state, cancel)
+	if err == nil {
+		t.Error("expected error for unparsable output")
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "got") || !strings.Contains(errMsg, "chars") {
+		t.Fatalf("expected error format 'got N chars', got %v", err)
+	}
+	// Check that excerpt is in error message (should be from first output)
+	if !strings.Contains(errMsg, "Here is my plan") {
+		t.Fatalf("expected output excerpt in error message, got %v", err)
+	}
+}
+
 func TestOrchestratorRepairPlanPhase_CreateSessionError(t *testing.T) {
 	cfg := OrchestratorConfig{
 		ProjectPath:     t.TempDir(),
