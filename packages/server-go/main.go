@@ -223,7 +223,12 @@ func run() error {
 	}
 
 	// Local mode: plain HTTP, no authentication needed
-	port := os.Getenv("PORT")
+	// ENGINE_PORT first: PORT is the generic name every Node app reads too, and
+	// a worker inheriting it from this process is how Forge once took :24444.
+	port := os.Getenv("ENGINE_PORT")
+	if port == "" {
+		port = os.Getenv("PORT")
+	}
 	if port == "" {
 		port = "24444"
 	}

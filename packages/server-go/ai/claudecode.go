@@ -107,7 +107,7 @@ func (p *claudecodeProvider) RunLoop(
 	// a step that vanishes without explanation is the harder failure to debug.
 	// The project path is the rateable unit: it is what SARA ships and what the
 	// user forms an opinion about, so it is what a later rating is keyed on.
-	dispatch := quotaBefore(runCtx, ctx.Role, model, ctx.ProjectPath, os.Environ())
+	dispatch := quotaBefore(runCtx, ctx.Role, model, ctx.ProjectPath, workerEnv(os.Environ()))
 	if !dispatch.Allow {
 		if ctx.OnError != nil {
 			ctx.OnError(fmt.Sprintf("claudecode: out of subscription quota — %s; retry in %s",
@@ -587,4 +587,20 @@ func contentBlockText(typ, text, inner, name string) string {
 	default:
 		return strings.TrimSpace(text)
 	}
+}
+
+// workerEnv is the engine's own environment minus the variables that describe
+// THIS server rather than the worker's project. PORT is the one that bit:
+// start.sh handed it to the engine to say where to listen, every worker
+// inherited it, and a Forge worker's `npm start` then bound the engine's own
+// port — every /task call after that got Forge's 404 (2026-08-29).
+func workerEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PORT=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
