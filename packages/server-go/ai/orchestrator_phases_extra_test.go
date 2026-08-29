@@ -290,6 +290,34 @@ func TestOrchestratorPlanPhase_EmptyOutputError(t *testing.T) {
 	}
 }
 
+// TestOrchestratorPlanPhase_EmptyOutputWithChatError tests error includes chat context error reason.
+func TestOrchestratorPlanPhase_EmptyOutputWithChatError(t *testing.T) {
+	dir := setupPhasesDB(t)
+	cfg := OrchestratorConfig{
+		ProjectPath:     dir,
+		SessionIDPrefix: "t",
+		OnPhase:         func(string, string) {},
+		OnProgress:      func(string) {},
+		OnError:         func(string) {},
+		ChatFn: func(c *ChatContext, _ string) {
+			// Provider reports a failure and emits no output at all.
+			c.OnError("claudecode: rate limited on session — retry in 30s")
+		},
+	}
+	state := &OrchestrationState{Brief: "brief", Owner: "o", Repo: "r"}
+	cancel := make(chan struct{})
+	err := orchestratorPlanPhase(cfg, state, cancel)
+	if err == nil {
+		t.Fatal("expected error for empty output with chat error")
+	}
+	if !strings.Contains(err.Error(), "got 0 chars") {
+		t.Fatalf("expected 'got 0 chars' in error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "rate limited") {
+		t.Fatalf("expected chat context error reason in error message, got %v", err)
+	}
+}
+
 // TestOrchestratorPlanPhase_UnparsableWithExcerpt tests error message includes output excerpt.
 func TestOrchestratorPlanPhase_UnparsableWithExcerpt(t *testing.T) {
 	dir := setupPhasesDB(t)

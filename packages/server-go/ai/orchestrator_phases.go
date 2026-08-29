@@ -33,6 +33,24 @@ func orchestratorPlanPhase(cfg OrchestratorConfig, state *OrchestrationState, ca
 
 	ctx, oc := newChatContextForRole(cfg, sessionID, RolePlanner, cancel)
 
+	// Wrap ctx.OnError to capture the first non-empty error message, while still
+	// calling the original callback to preserve existing behavior (forwarding to cfg.OnError).
+	var chatErrMu sync.Mutex
+	var chatErrReason string
+	origOnError := ctx.OnError
+	ctx.OnError = func(msg string) {
+		if strings.TrimSpace(msg) != "" {
+			chatErrMu.Lock()
+			if chatErrReason == "" {
+				chatErrReason = msg
+			}
+			chatErrMu.Unlock()
+		}
+		if origOnError != nil {
+			origOnError(msg)
+		}
+	}
+
 	// Planner reads the design-concept + vocabulary + PRD layers — every
 	// piece of documentation the orchestrator built before this phase.
 	//
@@ -73,7 +91,15 @@ func orchestratorPlanPhase(cfg OrchestratorConfig, state *OrchestrationState, ca
 				return fmt.Errorf("plan output empty or unparsable; got %d chars: %q", outputLen, excerpt)
 			}
 		} else {
-			// Output is truly empty (0 chars).
+			// Output is truly empty (0 chars). If the chat context recorded an
+			// error (rate limit, quota, CLI failure, etc.), surface that reason —
+			// it's the only signal explaining why the planner produced nothing.
+			chatErrMu.Lock()
+			reason := chatErrReason
+			chatErrMu.Unlock()
+			if reason != "" {
+				return fmt.Errorf("plan output empty or unparsable; got %d chars: %s", outputLen, reason)
+			}
 			return fmt.Errorf("plan output empty or unparsable; got %d chars", outputLen)
 		}
 	}
