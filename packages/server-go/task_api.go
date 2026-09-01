@@ -65,6 +65,7 @@ type engineTask struct {
 	mu sync.RWMutex
 
 	ID          string     `json:"id"`
+	DispatchID  string     `json:"dispatchId,omitempty"`
 	ProjectPath string     `json:"project"`
 	Brief       string     `json:"brief"`
 	Status      taskStatus `json:"status"`
@@ -123,6 +124,7 @@ func (t *engineTask) snapshot() map[string]any {
 
 	out := map[string]any{
 		"id":         t.ID,
+		"dispatchId": t.DispatchID,
 		"project":    t.ProjectPath,
 		"status":     string(t.Status),
 		"phase":      t.Phase,
@@ -270,6 +272,7 @@ func (t *engineTask) completionPayload() map[string]any {
 	defer t.mu.RUnlock()
 	return map[string]any{
 		"id":               t.ID,
+		"dispatchId":       t.DispatchID,
 		"project":          t.ProjectPath,
 		"outcome":          string(t.Status),
 		"model":            t.Model,
@@ -335,6 +338,7 @@ var persistMu sync.Mutex
 // taskRecord is the on-disk row. Same shape as snapshot(); no mutex.
 type taskRecord struct {
 	ID               string     `json:"id"`
+	DispatchID       string     `json:"dispatchId,omitempty"`
 	Project          string     `json:"project"`
 	Brief            string     `json:"brief"`
 	Key              string     `json:"key,omitempty"`
@@ -373,7 +377,7 @@ func (t *engineTask) record(key string) taskRecord {
 	progress := make([]string, len(t.Progress))
 	copy(progress, t.Progress)
 	return taskRecord{
-		ID: t.ID, Project: t.ProjectPath, Brief: t.Brief, Key: key,
+		ID: t.ID, DispatchID: t.DispatchID, Project: t.ProjectPath, Brief: t.Brief, Key: key,
 		Status: t.Status, Phase: t.Phase, Detail: t.Detail,
 		StartedAt: t.StartedAt, FinishedAt: t.FinishedAt, Err: t.Err,
 		StepsDone: t.StepsDone, StepsTotal: t.StepsTotal, Progress: progress,
@@ -447,7 +451,7 @@ func (r *taskRegistry) load(path string) int {
 			continue
 		}
 		t := &engineTask{
-			ID: rec.ID, ProjectPath: rec.Project, Brief: rec.Brief,
+			ID: rec.ID, DispatchID: rec.DispatchID, ProjectPath: rec.Project, Brief: rec.Brief,
 			Status: rec.Status, Phase: rec.Phase, Detail: rec.Detail,
 			StartedAt: rec.StartedAt, FinishedAt: rec.FinishedAt, Err: rec.Err,
 			StepsDone: rec.StepsDone, StepsTotal: rec.StepsTotal, Progress: rec.Progress,
@@ -551,10 +555,11 @@ var runOrchestratorForTaskFn = func(cfg ai.OrchestratorConfig) (*ai.Orchestratio
 }
 
 // startTask dispatches one unit of work and returns immediately.
-func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role, callbackURL string) *engineTask {
+func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role, callbackURL, dispatchID string) *engineTask {
 	id := fmt.Sprintf("task-%d-%s", time.Now().UnixNano()/1e6, shortToken())
 	t := &engineTask{
 		ID:          id,
+		DispatchID:  dispatchID,
 		ProjectPath: projectPath,
 		Brief:       brief,
 		Status:      taskRunning,
@@ -567,6 +572,7 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role,
 	// On disk BEFORE the plan runs. Restart between here and the first phase
 	// still leaves a row for SARA to find.
 	tasks.persist()
+	log.Printf("task %s: started (dispatchId=%s)", id, dispatchID)
 
 	go func() {
 		defer func() {
@@ -768,6 +774,9 @@ func registerTaskRoutes(defaultProjectPath string) {
 				// an empty value leaves the caller polling GET-by-id exactly
 				// as it always has.
 				CallbackURL string `json:"callbackUrl"`
+				// DispatchID is a per-dispatch correlation id from the gateway.
+				// Optional — an empty value is fine for backward compatibility.
+				DispatchID string `json:"dispatchId"`
 			}
 			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 				http.Error(w, "bad JSON: "+err.Error(), http.StatusBadRequest)
@@ -788,7 +797,7 @@ func registerTaskRoutes(defaultProjectPath string) {
 				writeJSON(w, http.StatusOK, snap)
 				return
 			}
-			t := startTask(body.Project, body.Brief, body.Owner, body.Repo, body.Key, body.Model, body.Role, body.CallbackURL)
+			t := startTask(body.Project, body.Brief, body.Owner, body.Repo, body.Key, body.Model, body.Role, body.CallbackURL, body.DispatchID)
 			writeJSON(w, http.StatusAccepted, t.snapshot())
 
 		default:

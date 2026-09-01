@@ -412,3 +412,46 @@ func TestEngineTaskSnapshotThreadSafety(t *testing.T) {
 	<-done
 	<-done
 }
+
+func TestEngineTaskSnapshotWithDispatchID(t *testing.T) {
+	task := &engineTask{
+		ID:         "task-dispatch",
+		DispatchID: "dispatch-123-abc",
+		Status:     taskRunning,
+		StartedAt:  time.Now(),
+		cancel:     make(chan struct{}),
+	}
+
+	snap := task.snapshot()
+
+	if snap["id"] != "task-dispatch" {
+		t.Errorf("ID mismatch: got %v", snap["id"])
+	}
+	if snap["dispatchId"] != "dispatch-123-abc" {
+		t.Errorf("DispatchID mismatch: got %v", snap["dispatchId"])
+	}
+}
+
+func TestEngineTaskCompletionPayloadWithDispatchID(t *testing.T) {
+	now := time.Now()
+	task := &engineTask{
+		ID:         "task-complete",
+		DispatchID: "dispatch-456-def",
+		Status:     taskDone,
+		StartedAt:  now,
+		FinishedAt: &now,
+		cancel:     make(chan struct{}),
+	}
+
+	payload := task.completionPayload()
+
+	if payload["id"] != "task-complete" {
+		t.Errorf("ID mismatch: got %v", payload["id"])
+	}
+	if payload["dispatchId"] != "dispatch-456-def" {
+		t.Errorf("DispatchID mismatch in completion payload: got %v", payload["dispatchId"])
+	}
+	if payload["outcome"] != "done" {
+		t.Errorf("Outcome mismatch: got %v", payload["outcome"])
+	}
+}
