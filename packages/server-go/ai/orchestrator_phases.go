@@ -635,6 +635,25 @@ func runBuilderOnce(cfg OrchestratorConfig, state *OrchestrationState, step *Pla
 	return oc.String(), stats, time.Since(started), nil
 }
 
+// isQuotaExhaustedError checks if a failure reason indicates quota exhaustion.
+func isQuotaExhaustedError(output string, failureReason string) bool {
+	// Check both the output string and the FailureReason field for quota patterns.
+	// The patterns match what claudecode.go reports when quota blocks.
+	quotaPatterns := []string{
+		"out of subscription quota",
+		"quota-blocked",
+		"quota exhausted",
+		"rate limit",
+	}
+	combined := output + " " + failureReason
+	for _, pattern := range quotaPatterns {
+		if strings.Contains(strings.ToLower(combined), strings.ToLower(pattern)) {
+			return true
+		}
+	}
+	return false
+}
+
 // orchestratorBuildStep runs the builder for one step.
 //
 // Every attempt is a fresh session and fresh context; reviewer notes ride in
@@ -642,7 +661,11 @@ func runBuilderOnce(cfg OrchestratorConfig, state *OrchestrationState, step *Pla
 // per run. A run with zero output tokens inside zeroOutputWindow is a provider
 // fault: back off (zeroOutputBackoff), retry, then ErrProviderZeroOutput —
 // caller refunds the attempt.
+//
+// Similarly, quota-exhausted runs are provider faults: retry with backoff
+// without consuming an attempt. The FailureReason field in RunStats marks these.
 func orchestratorBuildStep(cfg OrchestratorConfig, state *OrchestrationState, step *PlanStep, redirect string, cancel <-chan struct{}) error {
+	quotaRetries := []time.Duration{time.Second, 5 * time.Second, 15 * time.Second}
 	for try := 0; ; try++ {
 		out, stats, elapsed, err := runBuilderOnce(cfg, state, step, redirect, cancel)
 		if err != nil {
@@ -650,6 +673,21 @@ func orchestratorBuildStep(cfg OrchestratorConfig, state *OrchestrationState, st
 		}
 		emit(cfg.OnPhase, "tokens", fmt.Sprintf("step %d run %d: model=%s in=%d out=%d elapsed=%s",
 			step.Index, try+1, stats.Model, stats.InputTokens, stats.OutputTokens, elapsed.Round(time.Millisecond)))
+
+		// Check for quota exhaustion (infrastructure fault, not a step failure).
+		// Quota-exhausted runs don't consume an attempt.
+		if isQuotaExhaustedError(out, stats.FailureReason) {
+			if try >= len(quotaRetries) {
+				return fmt.Errorf("step %d: quota-blocked after %d retries", step.Index, len(quotaRetries))
+			}
+			wait := quotaRetries[try]
+			emit(cfg.OnPhase, "provider", fmt.Sprintf("step %d: quota-blocked — provider fault, backoff %s (retry %d/%d, attempt not spent)",
+				step.Index, wait, try+1, len(quotaRetries)))
+			if !buildSleepFn(wait, cancel) {
+				return fmt.Errorf("step %d: quota-blocked (cancelled during backoff)", step.Index)
+			}
+			continue
+		}
 
 		// Only a provider that REPORTED usage can be judged a provider fault.
 		// Stubs/providers without usage keep the old "no output" path.

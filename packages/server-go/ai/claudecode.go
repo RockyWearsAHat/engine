@@ -107,13 +107,41 @@ func (p *claudecodeProvider) RunLoop(
 	// a step that vanishes without explanation is the harder failure to debug.
 	// The project path is the rateable unit: it is what SARA ships and what the
 	// user forms an opinion about, so it is what a later rating is keyed on.
-	dispatch := quotaBefore(runCtx, ctx.Role, model, ctx.ProjectPath, workerEnv(os.Environ()))
-	if !dispatch.Allow {
-		if ctx.OnError != nil {
-			ctx.OnError(fmt.Sprintf("claudecode: out of subscription quota — %s; retry in %s",
-				dispatch.Reason, dispatch.RetryAfter.Round(time.Minute)))
+	//
+	// When quota blocks a run, retry with backoff up to quotaMaxRetries times,
+	// respecting the dispatch.RetryAfter hint each time.
+	const quotaMaxRetries = 3
+	var dispatch QuotaDispatch
+	for quotaTry := 0; ; quotaTry++ {
+		dispatch = quotaBefore(runCtx, ctx.Role, model, ctx.ProjectPath, workerEnv(os.Environ()))
+		if dispatch.Allow {
+			break
 		}
-		return
+		if quotaTry >= quotaMaxRetries {
+			if ctx.OnError != nil {
+				ctx.OnError(fmt.Sprintf("claudecode: quota-blocked after %d retries — %s",
+					quotaMaxRetries, dispatch.Reason))
+			}
+			return
+		}
+		wait := dispatch.RetryAfter
+		if wait <= 0 {
+			wait = time.Second
+		}
+		// Cap the wait at 2 minutes to avoid extremely long sleeps.
+		if wait > 2*time.Minute {
+			wait = 2 * time.Minute
+		}
+		if ctx.OnError != nil {
+			ctx.OnError(fmt.Sprintf("claudecode: quota-blocked, retrying in %s (attempt %d/%d)",
+				wait.Round(time.Second), quotaTry+1, quotaMaxRetries))
+		}
+		select {
+		case <-time.After(wait):
+			// Continue to next retry
+		case <-runCtx.Done():
+			return
+		}
 	}
 	// quotaAfter below closes the quota measurement bracket and owns the reading;
 	// this only covers the error returns between here and there.
