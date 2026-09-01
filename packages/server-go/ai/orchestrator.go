@@ -230,6 +230,10 @@ type RunStats struct {
 	Duration         time.Duration
 	// Seen is false when the provider gave no usage at all (ollama, stubs).
 	Seen bool
+	// FailureReason, when non-empty, describes why the run failed as an
+	// infrastructure/provider issue (e.g. "quota exhausted"). Used to distinguish
+	// infrastructure faults from actual task failures.
+	FailureReason string
 }
 
 // chatFnFor returns the effective chat dispatch for cfg, falling back to the
