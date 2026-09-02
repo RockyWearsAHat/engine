@@ -457,6 +457,43 @@ var runChatFn = Chat
 // The function blocks until the project is complete, the cancel channel fires,
 // or MaxOuterIterations is hit. Resumability: when called against a project
 // with an existing orchestration.json, it picks up at the first unchecked step.
+// activeProjectDispatches tracks which project paths currently have a
+// RunAutonomousProject call in flight. Without this, two worklist items (or a
+// retry racing an in-progress run) for the same project each spin up their own
+// orchestrator against the same git checkout with zero coordination between
+// them — concurrent Claude sessions committing over each other's work.
+// orchestrator.go's per-task handle registry (keyed "<projectPath>#<taskSlug>")
+// intentionally allows multiple in-flight tasks per project and is untouched
+// by this; this gate is coarser and sits above it, at RunAutonomousProject's
+// entry — the single choke point every production caller (main.go,
+// ws/handler.go, discord/service.go) shares. RunProject below has no
+// production callers yet, but is gated the same way for when it does.
+var (
+	activeProjectDispatchesMu sync.Mutex
+	activeProjectDispatches   = map[string]bool{}
+)
+
+// ErrProjectBusy is returned when another dispatch for the same project path
+// is already running. Callers should treat this like ErrTeamCapReached: leave
+// the item queued and try again later rather than treating it as a failed run.
+var ErrProjectBusy = errors.New("orchestrator: project already has an active dispatch")
+
+func acquireProjectDispatch(projectPath string) bool {
+	activeProjectDispatchesMu.Lock()
+	defer activeProjectDispatchesMu.Unlock()
+	if activeProjectDispatches[projectPath] {
+		return false
+	}
+	activeProjectDispatches[projectPath] = true
+	return true
+}
+
+func releaseProjectDispatch(projectPath string) {
+	activeProjectDispatchesMu.Lock()
+	defer activeProjectDispatchesMu.Unlock()
+	delete(activeProjectDispatches, projectPath)
+}
+
 // RunProject is the single entry point that decides WHICH orchestrator runs.
 //
 // It exists so that choosing between the serial loop and the parallel team path
@@ -472,6 +509,17 @@ func RunProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 
 	if parallel {
 		emit(cfg.OnPhase, "orchestrator", "parallel teams — "+why)
+		// RunAutonomousProject gates itself, but RunEventOrchestratorAsState is
+		// only ever reached through here, so the gate for the parallel-teams
+		// path has to live at this call site instead.
+		projectPath := strings.TrimSpace(cfg.ProjectPath)
+		if projectPath != "" {
+			if !acquireProjectDispatch(projectPath) {
+				emit(cfg.OnPhase, "orchestrator", "project busy — another dispatch is already running, skipping")
+				return nil, ErrProjectBusy
+			}
+			defer releaseProjectDispatch(projectPath)
+		}
 		return RunEventOrchestratorAsState(cfg)
 	}
 	emit(cfg.OnPhase, "orchestrator", "serial loop — "+why)
@@ -482,6 +530,23 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 	if strings.TrimSpace(cfg.ProjectPath) == "" {
 		return nil, fmt.Errorf("orchestrator: project path is required")
 	}
+
+	// task_api.go's task-mode dispatch already serializes per project via
+	// projectGate before it ever calls in here — but the ws chat path
+	// (ws/handler.go) calls RunAutonomousProject directly and only checks
+	// the per-task handle registry, which is keyed "<projectPath>#<taskSlug>"
+	// and so never sees a same-project task-mode run (or vice versa). That
+	// gap is what let unrelated dispatches land on the same checkout at
+	// once. This gate is coarser than the handle registry on purpose: one
+	// project, one live orchestrator run, regardless of which path started
+	// it.
+	projectPath := strings.TrimSpace(cfg.ProjectPath)
+	if !acquireProjectDispatch(projectPath) {
+		emit(cfg.OnPhase, "orchestrator", "project busy — another dispatch is already running, skipping")
+		return nil, ErrProjectBusy
+	}
+	defer releaseProjectDispatch(projectPath)
+
 	cfg.Brief = enrichOrchestratorBrief(cfg.ProjectPath, cfg.Brief)
 
 	// Routing is the orchestrator's first job — and it happens before any
