@@ -383,3 +383,53 @@ func ListBranches(cwd string) ([]string, error) {
 func RunGit(cwd string, args ...string) (string, error) {
 	return run(cwd, args...)
 }
+
+// Checkpoint commits (and optionally pushes) the current state of the repo at
+// repoPath, by shelling out to the `git checkpoint` CLI
+// (~/bin/git-checkpoint, installed as a git subcommand on PATH) instead of
+// hand-rolling merge/push logic here — the CLI already handles a remote that
+// has moved since the last sync via its own internal git-upload logic.
+//
+// push=true commits via the CLI, then pushes via Push (below). Callers must
+// only invoke this on a confirmed success — Checkpoint has no notion of
+// "should I run", it always commits+pushes what's on disk when called.
+//
+// Stages everything (tracked and new) with `git add -A` before invoking the
+// CLI. `git checkpoint` on its own only acts on what is already staged
+// (plain `git diff`/`--cached` checks, which are blind to untracked files),
+// and its own `-a` flag only covers tracked modifications (`git add -u`).
+// Without this pre-stage, an orchestrator run that only created new files —
+// the common case — would leave nothing staged, and `git checkpoint` reports
+// "nothing to commit" and returns success without ever committing them: a
+// silent no-op for exactly the work this function exists to capture.
+//
+// push does NOT pass `git checkpoint`'s own --push flag. Verified against
+// the CLI actually installed on this machine (~/bin/helpers-native via the
+// git-checkpoint/git-upload symlinks): --push shells out internally to
+// `git upload <message>`, which re-checks the working tree for something to
+// stage before it will run `git push` at all. Checkpoint's own commit above
+// already consumes every staged change, so that internal check almost always
+// finds a clean tree and git-upload aborts with "Nothing to commit" — exit
+// 1, no push — even though there is a real, unpushed local commit sitting
+// right there. Confirmed reproducible against a local bare remote. So the
+// push here is Push (below), a function that already existed in this file
+// before Checkpoint did — not new push logic, just the existing one used in
+// the one spot the CLI's own chaining doesn't actually work.
+func Checkpoint(repoPath, message string, push bool) error {
+	if _, err := exec.LookPath("git-checkpoint"); err != nil {
+		return fmt.Errorf("git checkpoint: git-checkpoint not found on PATH: %w", err)
+	}
+	if out, err := run(repoPath, "add", "-A"); err != nil {
+		return fmt.Errorf("git checkpoint: git add -A: %w: %s", err, out)
+	}
+	out, err := run(repoPath, "checkpoint", "-m", message)
+	if err != nil {
+		return fmt.Errorf("git checkpoint: %w: %s", err, out)
+	}
+	if push {
+		if out, err := Push(repoPath, ""); err != nil {
+			return fmt.Errorf("git checkpoint: committed but push failed: %w: %s", err, out)
+		}
+	}
+	return nil
+}
