@@ -92,6 +92,16 @@ func seedWorktreeRuntimeConfig(repoPath, wtPath string) {
 //
 // merge=true triggers `git merge --no-ff <sessionBranch>` in the main repo.
 func CleanupSessionWorktree(sessionID, repoPath string, merge bool) error {
+	return CleanupSessionWorktreeTo(sessionID, repoPath, merge, "")
+}
+
+// CleanupSessionWorktreeTo is CleanupSessionWorktree with an explicit merge
+// target. targetBranch == "" keeps the old behavior (merge into the repo's
+// baseline branch via GetBaseBranch). A caller that knows the session was
+// explicitly scoped to a non-default branch — "unless another locale is
+// specified" — passes that branch here instead of forcing the work back onto
+// base.
+func CleanupSessionWorktreeTo(sessionID, repoPath string, merge bool, targetBranch string) error {
 	wtPath := worktreeCacheDir(sessionID, repoPath)
 
 	if _, err := os.Stat(wtPath); err != nil {
@@ -102,7 +112,10 @@ func CleanupSessionWorktree(sessionID, repoPath string, merge bool) error {
 	branchName := sessionBranchName(sessionID)
 
 	if merge {
-		base := gogit.GetBaseBranch(repoPath)
+		base := strings.TrimSpace(targetBranch)
+		if base == "" {
+			base = gogit.GetBaseBranch(repoPath)
+		}
 		if err := gogit.CheckoutBranch(repoPath, base); err != nil {
 			return fmt.Errorf("checkout baseline %s: %w", base, err)
 		}

@@ -48,7 +48,8 @@ var (
 	dbCreateSession            = db.CreateSession
 	aiBuildInitialSummary      = ai.BuildInitialSessionSummary
 	aiEnsureSessionWorktree    = ai.EnsureSessionWorktree
-	aiCleanupSessionWorktreeDB = ai.CleanupSessionWorktree
+	aiCleanupSessionWorktreeTo = ai.CleanupSessionWorktreeTo
+	gitPushBranchFn            = gogit.PushBranch
 	qualityScanFn              = quality.ScanProject
 	qualityScanWithProgressFn  = func(projectPath string, maxIssues int, onProgress quality.ProgressCallback) (quality.Report, error) {
 		if onProgress == nil {
@@ -669,8 +670,27 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			return
 		}
 		go func() {
-			if cleanupErr := aiCleanupSessionWorktreeDB(msg.SessionID, session.ProjectPath, msg.Merge); cleanupErr != nil {
+			// Base branch is the default merge/push target. If the session
+			// was explicitly opened against some other branch — "unless
+			// another locale is specified" — respect that instead of forcing
+			// the work back onto base.
+			base := gogit.GetBaseBranch(session.ProjectPath)
+			target := base
+			if nd := strings.TrimSpace(session.BranchName); nd != "" && nd != base {
+				target = nd
+			}
+			if cleanupErr := aiCleanupSessionWorktreeTo(msg.SessionID, session.ProjectPath, msg.Merge, target); cleanupErr != nil {
 				log.Printf("[engine] ws: session.cleanup error: %v", cleanupErr)
+				return
+			}
+			// Only a successful merge changes what's on target; a failed or
+			// cancelled session has nothing here to push, and merge=false
+			// means the caller didn't ask for the branch to be folded in.
+			if !msg.Merge {
+				return
+			}
+			if pushErr := gitPushBranchFn(session.ProjectPath, target, ""); pushErr != nil {
+				log.Printf("[engine] ws: session.cleanup push %s failed: %v", target, pushErr)
 			}
 		}()
 		c.send(map[string]any{"type": "session.cleanup.started", "sessionId": msg.SessionID})

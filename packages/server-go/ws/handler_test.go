@@ -1084,9 +1084,9 @@ func TestHandler_SessionCreate_WorktreeUpdate(t *testing.T) {
 }
 
 func TestHandler_SessionCleanup_WorktreeError(t *testing.T) {
-	origClean := aiCleanupSessionWorktreeDB
-	aiCleanupSessionWorktreeDB = func(id, path string, merge bool) error { return errors.New("cleanup error") }
-	defer func() { aiCleanupSessionWorktreeDB = origClean }()
+	origClean := aiCleanupSessionWorktreeTo
+	aiCleanupSessionWorktreeTo = func(id, path string, merge bool, target string) error { return errors.New("cleanup error") }
+	defer func() { aiCleanupSessionWorktreeTo = origClean }()
 
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)

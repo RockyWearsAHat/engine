@@ -453,6 +453,176 @@ func TestPull_Error(t *testing.T) {
 	}
 }
 
+// ─── PushBranch ────────────────────────────────────────────────────────────
+
+func mustRun(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	c := exec.Command("git", args...)
+	c.Dir = dir
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return string(out)
+}
+
+func TestPushBranch_Success(t *testing.T) {
+	repo := initTestRepo(t)
+	bare := initBareRemote(t)
+	mustRun(t, repo, "remote", "add", "origin", bare)
+
+	branch, err := GetCurrentBranch(repo)
+	if err != nil {
+		t.Fatalf("GetCurrentBranch: %v", err)
+	}
+
+	if err := PushBranch(repo, branch, ""); err != nil {
+		t.Fatalf("PushBranch: %v", err)
+	}
+}
+
+func TestPushBranch_MissingBranch(t *testing.T) {
+	repo := initTestRepo(t)
+	if err := PushBranch(repo, "", ""); err == nil {
+		t.Fatal("expected error for empty branch name")
+	}
+}
+
+func TestPushBranch_BadRemote(t *testing.T) {
+	repo := initTestRepo(t)
+	branch, _ := GetCurrentBranch(repo)
+	if err := PushBranch(repo, branch, "no-such-remote"); err == nil {
+		t.Fatal("expected error for missing remote")
+	}
+}
+
+// TestPushBranch_NonFastForward_MergeSucceeds simulates the rui scenario:
+// the remote moved (another clone pushed) since this checkout's last sync,
+// but the two changes don't conflict — PushBranch should fetch, merge, and
+// retry the push, ending with both commits on the remote.
+func TestPushBranch_NonFastForward_MergeSucceeds(t *testing.T) {
+	bare := initBareRemote(t)
+
+	seed := initTestRepo(t)
+	mustRun(t, seed, "remote", "add", "origin", bare)
+	mustRun(t, seed, "push", "origin", "HEAD")
+	branch, err := GetCurrentBranch(seed)
+	if err != nil {
+		t.Fatalf("GetCurrentBranch: %v", err)
+	}
+	// Rename to a fixed local branch name and push it so both clones below
+	// have a real (non-detached) branch to track.
+	mustRun(t, seed, "branch", "-M", branch)
+	mustRun(t, seed, "push", "origin", branch)
+
+	// clone1: our checkout under test.
+	clone1Parent := t.TempDir()
+	clone1 := filepath.Join(clone1Parent, "clone1")
+	mustRun(t, clone1Parent, "clone", "--branch", branch, bare, clone1)
+	mustRun(t, clone1, "config", "user.email", "test@test.com")
+	mustRun(t, clone1, "config", "user.name", "Test")
+
+	// clone2: a "different machine" that pushes first, moving origin ahead.
+	clone2Parent := t.TempDir()
+	clone2 := filepath.Join(clone2Parent, "clone2")
+	mustRun(t, clone2Parent, "clone", "--branch", branch, bare, clone2)
+	mustRun(t, clone2, "config", "user.email", "test2@test.com")
+	mustRun(t, clone2, "config", "user.name", "Test2")
+	if err := os.WriteFile(filepath.Join(clone2, "from-clone2.txt"), []byte("clone2"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, clone2, "add", ".")
+	mustRun(t, clone2, "commit", "-m", "clone2 commit")
+	mustRun(t, clone2, "push", "origin", branch)
+
+	// clone1 makes its own unrelated commit, unaware origin has moved.
+	if err := os.WriteFile(filepath.Join(clone1, "from-clone1.txt"), []byte("clone1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, clone1, "add", ".")
+	mustRun(t, clone1, "commit", "-m", "clone1 commit")
+
+	if err := PushBranch(clone1, branch, ""); err != nil {
+		t.Fatalf("PushBranch: %v", err)
+	}
+
+	// Both files should exist on the merged branch, and origin should have
+	// the merge.
+	if _, err := os.Stat(filepath.Join(clone1, "from-clone1.txt")); err != nil {
+		t.Errorf("clone1's own file missing after merge: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(clone1, "from-clone2.txt")); err != nil {
+		t.Errorf("clone2's file missing after merge: %v", err)
+	}
+	log := mustRun(t, bare, "log", branch, "--oneline")
+	if !strings.Contains(log, "clone1 commit") || !strings.Contains(log, "clone2 commit") {
+		t.Errorf("expected both commits on origin, got:\n%s", log)
+	}
+}
+
+// TestPushBranch_NonFastForward_MergeConflicts covers the unattended-conflict
+// case: the merge itself fails. PushBranch must abort the merge, leave the
+// local commit intact, and return a clear error rather than silently
+// swallowing it or losing work.
+func TestPushBranch_NonFastForward_MergeConflicts(t *testing.T) {
+	bare := initBareRemote(t)
+
+	seed := initTestRepo(t)
+	mustRun(t, seed, "remote", "add", "origin", bare)
+	branch, err := GetCurrentBranch(seed)
+	if err != nil {
+		t.Fatalf("GetCurrentBranch: %v", err)
+	}
+	mustRun(t, seed, "branch", "-M", branch)
+	if err := os.WriteFile(filepath.Join(seed, "shared.txt"), []byte("base\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, seed, "add", ".")
+	mustRun(t, seed, "commit", "-m", "base commit")
+	mustRun(t, seed, "push", "origin", branch)
+
+	clone1Parent := t.TempDir()
+	clone1 := filepath.Join(clone1Parent, "clone1")
+	mustRun(t, clone1Parent, "clone", "--branch", branch, bare, clone1)
+	mustRun(t, clone1, "config", "user.email", "test@test.com")
+	mustRun(t, clone1, "config", "user.name", "Test")
+
+	clone2Parent := t.TempDir()
+	clone2 := filepath.Join(clone2Parent, "clone2")
+	mustRun(t, clone2Parent, "clone", "--branch", branch, bare, clone2)
+	mustRun(t, clone2, "config", "user.email", "test2@test.com")
+	mustRun(t, clone2, "config", "user.name", "Test2")
+	if err := os.WriteFile(filepath.Join(clone2, "shared.txt"), []byte("clone2 change\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, clone2, "add", ".")
+	mustRun(t, clone2, "commit", "-m", "clone2 conflicting commit")
+	mustRun(t, clone2, "push", "origin", branch)
+
+	if err := os.WriteFile(filepath.Join(clone1, "shared.txt"), []byte("clone1 change\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, clone1, "add", ".")
+	mustRun(t, clone1, "commit", "-m", "clone1 conflicting commit")
+
+	if err := PushBranch(clone1, branch, ""); err == nil {
+		t.Fatal("expected error for conflicting merge")
+	}
+
+	// The repo must not be left mid-merge, and the local commit must survive.
+	status := mustRun(t, clone1, "status", "--porcelain")
+	if strings.Contains(status, "UU ") {
+		t.Errorf("merge left unresolved conflict markers: %s", status)
+	}
+	if _, err := os.Stat(filepath.Join(clone1, ".git", "MERGE_HEAD")); err == nil {
+		t.Error("expected merge to be aborted, but MERGE_HEAD still exists")
+	}
+	log := mustRun(t, clone1, "log", "--oneline")
+	if !strings.Contains(log, "clone1 conflicting commit") {
+		t.Errorf("expected local commit preserved, got:\n%s", log)
+	}
+}
+
 // ─── ParseGitHubRepo SSH URL ──────────────────────────────────────────────────
 
 func TestParseGitHubRepo_SSHFormat(t *testing.T) {

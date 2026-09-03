@@ -330,6 +330,65 @@ func Push(cwd, remote string) (string, error) {
 	return out, nil
 }
 
+// PushBranch pushes branchName to remote (defaults to "origin"), for callers
+// that run unattended and need to push a branch other than whatever HEAD
+// currently is.
+//
+// On a plain rejection (remote moved since the local checkout last synced —
+// e.g. another machine pushed to the same branch) it fetches and merges the
+// remote branch in with `--no-edit`, then retries the push once. Merge, not
+// rebase: this runs with nobody watching, and a rebase that conflicts
+// mid-flight has no one to resolve it. If the merge itself conflicts, the
+// merge is aborted, the local commits are left exactly as they were, and a
+// clear error comes back so the caller can surface it as a real failure
+// instead of swallowing it.
+func PushBranch(repoPath, branchName, remote string) error {
+	if remote == "" {
+		remote = "origin"
+	}
+	branchName = strings.TrimSpace(branchName)
+	if branchName == "" {
+		return fmt.Errorf("git push: branch name required")
+	}
+
+	out, err := run(repoPath, "push", remote, branchName)
+	if err == nil {
+		return nil
+	}
+	if !isNonFastForwardRejection(out) {
+		return fmt.Errorf("git push %s %s: %w\n%s", remote, branchName, err, out)
+	}
+
+	// Remote moved since our last sync. Fetch and merge it in, then retry once.
+	if fetchOut, fetchErr := run(repoPath, "fetch", remote, branchName); fetchErr != nil {
+		return fmt.Errorf("git push %s %s: rejected, fetch failed: %w\n%s", remote, branchName, fetchErr, fetchOut)
+	}
+
+	mergeOut, mergeErr := run(repoPath, "merge", "--no-edit", fmt.Sprintf("%s/%s", remote, branchName))
+	if mergeErr != nil {
+		// Do not leave the repo mid-merge, and do not lose the local commits —
+		// abort and report so a human/next pass can look at it.
+		run(repoPath, "merge", "--abort") //nolint:errcheck
+		return fmt.Errorf("git push %s %s: remote diverged and merge failed, local commits preserved, needs manual resolution: %w\n%s", remote, branchName, mergeErr, mergeOut)
+	}
+
+	retryOut, retryErr := run(repoPath, "push", remote, branchName)
+	if retryErr != nil {
+		return fmt.Errorf("git push %s %s: retry after merge failed: %w\n%s", remote, branchName, retryErr, retryOut)
+	}
+	return nil
+}
+
+// isNonFastForwardRejection reports whether git push output looks like a
+// non-fast-forward rejection (remote has commits we don't) rather than some
+// other failure (auth, network, no such remote) that a merge+retry can't fix.
+func isNonFastForwardRejection(out string) bool {
+	low := strings.ToLower(out)
+	return strings.Contains(low, "non-fast-forward") ||
+		strings.Contains(low, "fetch first") ||
+		strings.Contains(low, "updates were rejected")
+}
+
 // Pull pulls from the named remote for the current branch (defaults to "origin").
 func Pull(cwd, remote string) (string, error) {
 	if remote == "" {

@@ -39,6 +39,7 @@ import (
 
 	"github.com/engine/server/ai"
 	"github.com/engine/server/db"
+	gogit "github.com/engine/server/git"
 )
 
 // taskStatus is the lifecycle of one dispatched unit of work.
@@ -645,11 +646,43 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role,
 		case runErr != nil:
 			t.finish(taskFailed, runErr.Error())
 		default:
+			// Task-mode runs edit the project's checkout directly, no worktree,
+			// no branch isolation — the one thing standing between a
+			// successful local run and origin ever finding out about it. Push
+			// only on this success path: a failed/partial run's broken state
+			// must never reach origin.
+			if branch, pushErr := pushTaskBranchFn(projectPath); pushErr != nil {
+				t.note("push", fmt.Sprintf("failed to push %s: %v", branch, pushErr))
+				log.Printf("task %s: push %s failed: %v", id, branch, pushErr)
+			} else if branch != "" {
+				t.note("push", fmt.Sprintf("pushed %s to origin", branch))
+			}
 			t.finish(taskDone, "")
 		}
 	}()
 
 	return t
+}
+
+// pushTaskBranchFn is the injection seam for tests — real pushes must never
+// run in a test process.
+var pushTaskBranchFn = pushTaskBranch
+
+// pushTaskBranch pushes the branch a completed task-mode run just worked on.
+// Default is the repo's current checked-out branch (the normal case: "main").
+// A project can override this via the autonomous policy's Branch setting
+// (.engine/config.yaml autonomous: branch:) — the "unless another locale is
+// specified" clause; task_api has no per-item branch-override field of its
+// own to check, so this project-level one is the existing seam for it.
+func pushTaskBranch(projectPath string) (string, error) {
+	branch, _ := gogit.GetCurrentBranch(projectPath)
+	if policy := ai.ResolveAutonomousPolicy(projectPath); strings.TrimSpace(policy.Branch) != "" {
+		branch = strings.TrimSpace(policy.Branch)
+	}
+	if branch == "" || branch == "unknown" {
+		return branch, fmt.Errorf("no branch to push")
+	}
+	return branch, gogit.PushBranch(projectPath, branch, "")
 }
 
 // projectGates serializes task-mode orchestrators per project path.
