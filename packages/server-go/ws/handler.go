@@ -49,6 +49,9 @@ var (
 	aiBuildInitialSummary      = ai.BuildInitialSessionSummary
 	aiEnsureSessionWorktree    = ai.EnsureSessionWorktree
 	aiCleanupSessionWorktreeDB = ai.CleanupSessionWorktree
+	// checkpointFn commits+pushes via the git-checkpoint CLI (git.Checkpoint).
+	// Injection seam for tests — production never performs a real push.
+	checkpointFn = gogit.Checkpoint
 	qualityScanFn              = quality.ScanProject
 	qualityScanWithProgressFn  = func(projectPath string, maxIssues int, onProgress quality.ProgressCallback) (quality.Report, error) {
 		if onProgress == nil {
@@ -861,6 +864,47 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			if state != nil {
 				summary = fmt.Sprintf("Orchestrator completed (%d steps, %d iterations).", len(state.Plan), state.OuterIterations)
 			}
+
+			// Session lifecycle concludes here: the build pipeline reached a
+			// real success (not conversational, not cancelled, not errored).
+			// Fold the session's isolated worktree branch back into base and
+			// push it — the same "always work back to main" default the
+			// worklist path (task_api.go) gets on a successful item, so an
+			// interactive build session doesn't strand commits the way the
+			// dead worktree-cleanup code used to.
+			//
+			// merge=true always targets CleanupSessionWorktree's own notion
+			// of the baseline (git.GetBaseBranch) — there is no per-session
+			// branch-override surface in the ws protocol to respect instead.
+			//
+			// NOTE: repoPath contract. CleanupSessionWorktree(sessionID,
+			// repoPath, merge) requires repoPath to be the ORIGIN repo (it
+			// recomputes the worktree location from it internally) — not a
+			// worktree path. When EnsureSessionWorktree substituted a real
+			// worktree for this session, projectPath here IS that worktree
+			// path, which this call cannot distinguish from an origin path.
+			// That mirrors the pre-existing "session.cleanup" WS handler
+			// above, which has the exact same call shape and the same gap:
+			// neither has anywhere to recover the true origin path, because
+			// db.Session only stores the (possibly-substituted) ProjectPath.
+			// Verified failure mode in that case: CleanupSessionWorktree's
+			// internal `git checkout <base>` runs from inside the worktree
+			// and fails with "'<base>' is already used by worktree at
+			// '<origin>'", so the merge — and this checkpoint — never runs
+			// for a session that actually got a real worktree. Sessions that
+			// fell back to the origin path (no worktree created) are
+			// unaffected. Flagged, not silently patched here — fixing it
+			// needs either a stored origin-path field on db.Session or a
+			// `git rev-parse --git-common-dir`-based resolver shared by both
+			// call sites.
+			if cleanupErr := aiCleanupSessionWorktreeDB(sessionID, projectPath, true); cleanupErr != nil {
+				log.Printf("[engine] ws: session %s worktree merge-back failed: %v", sessionID, cleanupErr)
+				c.send(map[string]any{"type": "chat.notice", "sessionId": sessionID, "notice": fmt.Sprintf("Session merge-back failed: %v", cleanupErr)})
+			} else if ckErr := checkpointFn(projectPath, fmt.Sprintf("session %s: %s", sessionID, summary), true); ckErr != nil {
+				log.Printf("[engine] ws: session %s checkpoint/push failed: %v", sessionID, ckErr)
+				c.send(map[string]any{"type": "chat.notice", "sessionId": sessionID, "notice": fmt.Sprintf("Checkpoint/push failed: %v", ckErr)})
+			}
+
 			c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": summary, "done": false})
 			c.send(map[string]any{"type": "chat.chunk", "sessionId": sessionID, "content": "", "done": true})
 		}()

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,7 +35,7 @@ func freshTaskAPI(t *testing.T) (*http.ServeMux, string, *wakeLog) {
 	t.Helper()
 	stateDir := t.TempDir()
 	t.Setenv("ENGINE_STATE_DIR", stateDir)
-	origTasks, origPath, origHandle, origRun, origNotify := tasks, tasksFilePath, httpHandleFuncFn, runOrchestratorForTaskFn, notifyCallbackFn
+	origTasks, origPath, origHandle, origRun, origNotify, origCheckpoint := tasks, tasksFilePath, httpHandleFuncFn, runOrchestratorForTaskFn, notifyCallbackFn, checkpointFn
 	tasks = &taskRegistry{tasks: map[string]*engineTask{}, byKey: map[string]string{}}
 	wakes := &wakeLog{}
 	notifyCallbackFn = func(url string, payload map[string]any) {
@@ -45,8 +46,12 @@ func freshTaskAPI(t *testing.T) (*http.ServeMux, string, *wakeLog) {
 	}
 	mux := http.NewServeMux()
 	httpHandleFuncFn = mux.HandleFunc
+	// Default to a no-op: most tests don't care about checkpointing and
+	// must never shell out to the real git-checkpoint CLI or touch a
+	// remote. Tests that DO care override this themselves.
+	checkpointFn = func(repoPath, message string, push bool) error { return nil }
 	t.Cleanup(func() {
-		tasks, tasksFilePath, httpHandleFuncFn, runOrchestratorForTaskFn, notifyCallbackFn = origTasks, origPath, origHandle, origRun, origNotify
+		tasks, tasksFilePath, httpHandleFuncFn, runOrchestratorForTaskFn, notifyCallbackFn, checkpointFn = origTasks, origPath, origHandle, origRun, origNotify, origCheckpoint
 	})
 	return mux, filepath.Join(stateDir, "tasks.json"), wakes
 }
@@ -286,6 +291,140 @@ started:
 	_, got := getTask(t, mux, "/task/"+id)
 	if got["tokensIn"].(float64) != 20 || got["model"] != "haiku" || got["alive"] != false {
 		t.Fatalf("status tallies: %v", got)
+	}
+}
+
+// A successful task-mode run checkpoints and pushes exactly once, against
+// the project path, with a message that carries the task id and brief.
+func TestTaskAPI_ChecksPointsAndPushesOnSuccess(t *testing.T) {
+	mux, _, _ := freshTaskAPI(t)
+	project := t.TempDir()
+	registerTaskRoutes(project)
+	runOrchestratorForTaskFn = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		return &ai.OrchestrationState{}, nil
+	}
+	type call struct {
+		repoPath, message string
+		push              bool
+	}
+	calls := make(chan call, 8)
+	checkpointFn = func(repoPath, message string, push bool) error {
+		calls <- call{repoPath, message, push}
+		return nil
+	}
+
+	code, out := postTask(t, mux, map[string]any{"project": project, "brief": "ship the widget"})
+	if code != http.StatusAccepted {
+		t.Fatalf("code %d", code)
+	}
+	id := out["id"].(string)
+
+	select {
+	case c := <-calls:
+		if c.repoPath != project {
+			t.Fatalf("checkpoint repoPath = %q, want %q", c.repoPath, project)
+		}
+		if !c.push {
+			t.Fatalf("checkpoint push = false, want true")
+		}
+		if !strings.Contains(c.message, id) || !strings.Contains(c.message, "ship the widget") {
+			t.Fatalf("checkpoint message = %q, want it to mention %q and the brief", c.message, id)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("checkpointFn was never called on success")
+	}
+	select {
+	case c := <-calls:
+		t.Fatalf("checkpointFn called a second time: %+v", c)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		_, got := getTask(t, mux, "/task/"+id)
+		if got["status"] == "done" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("task never finished: %v", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A failed run must never be checkpointed or pushed.
+func TestTaskAPI_NoCheckpointOnFailure(t *testing.T) {
+	mux, _, _ := freshTaskAPI(t)
+	project := t.TempDir()
+	registerTaskRoutes(project)
+	runOrchestratorForTaskFn = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		return nil, fmt.Errorf("boom")
+	}
+	calls := make(chan struct{}, 8)
+	checkpointFn = func(repoPath, message string, push bool) error {
+		calls <- struct{}{}
+		return nil
+	}
+
+	_, out := postTask(t, mux, map[string]any{"project": project, "brief": "will fail"})
+	id := out["id"].(string)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		_, got := getTask(t, mux, "/task/"+id)
+		if got["status"] == "failed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("task never failed: %v", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case <-calls:
+		t.Fatal("checkpointFn was called on a failed run")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// A canceled run must never be checkpointed or pushed either.
+func TestTaskAPI_NoCheckpointOnCancel(t *testing.T) {
+	mux, _, _ := freshTaskAPI(t)
+	project := t.TempDir()
+	registerTaskRoutes(project)
+	started := make(chan struct{})
+	runOrchestratorForTaskFn = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		close(started)
+		<-cfg.Cancel
+		return nil, nil
+	}
+	calls := make(chan struct{}, 8)
+	checkpointFn = func(repoPath, message string, push bool) error {
+		calls <- struct{}{}
+		return nil
+	}
+
+	_, out := postTask(t, mux, map[string]any{"project": project, "brief": "will cancel"})
+	id := out["id"].(string)
+	<-started
+	task, _ := tasks.get(id)
+	task.stop()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		_, got := getTask(t, mux, "/task/"+id)
+		if got["status"] == "canceled" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("task never canceled: %v", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case <-calls:
+		t.Fatal("checkpointFn was called on a canceled run")
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

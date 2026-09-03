@@ -1013,3 +1013,126 @@ func TestListBranches_EmptyRepo(t *testing.T) {
 		t.Error("expected non-nil branches slice")
 	}
 }
+
+// TestCheckpoint_NotFoundOnPath asserts Checkpoint loudly errors — never a
+// silent no-op — when the git-checkpoint CLI isn't reachable on PATH.
+func TestCheckpoint_NotFoundOnPath(t *testing.T) {
+	dir := initTestRepo(t)
+	t.Setenv("PATH", "") // no git-checkpoint, no git, nothing resolvable
+	err := Checkpoint(dir, "msg", false)
+	if err == nil {
+		t.Fatal("expected an error when git-checkpoint is not on PATH")
+	}
+	if !strings.Contains(err.Error(), "not found on PATH") {
+		t.Fatalf("error should say git-checkpoint is missing, got: %v", err)
+	}
+}
+
+// TestCheckpoint_CommitsNewFileWithoutPush covers the case Checkpoint exists
+// to fix: an orchestrator run that only created new (untracked) files. Plain
+// `git checkpoint` alone is blind to untracked files and would silently
+// report "nothing to commit" without this function's `git add -A` pre-stage.
+func TestCheckpoint_CommitsNewFileWithoutPush(t *testing.T) {
+	dir := initTestRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "new.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Checkpoint(dir, "commit only, no push", false); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	out, err := run(dir, "log", "--oneline", "-1")
+	if err != nil {
+		t.Fatalf("git log: %v", err)
+	}
+	if !strings.Contains(out, "commit only, no push") {
+		t.Fatalf("HEAD commit message wrong: %q", out)
+	}
+	if status, _ := run(dir, "status", "--porcelain"); status != "" {
+		t.Fatalf("working tree not clean after checkpoint: %q", status)
+	}
+}
+
+// TestCheckpoint_CommitsModifiedTrackedFile covers the tracked-file case
+// (git-checkpoint's own `-a` would cover this alone, but Checkpoint's
+// blanket `git add -A` must not break it).
+func TestCheckpoint_CommitsModifiedTrackedFile(t *testing.T) {
+	dir := initTestRepo(t)
+	tracked := filepath.Join(dir, "tracked.txt")
+	if err := os.WriteFile(tracked, []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(dir, "add", "tracked.txt"); err != nil {
+		t.Fatalf("add: %v\n%s", err, out)
+	}
+	if out, err := run(dir, "-c", "commit.gpgsign=false", "commit", "-m", "seed tracked file"); err != nil {
+		t.Fatalf("seed commit: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(tracked, []byte("v2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Checkpoint(dir, "commit modified tracked file", false); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	content, err := os.ReadFile(tracked)
+	if err != nil || string(content) != "v2" {
+		t.Fatalf("tracked.txt content = %q, %v", content, err)
+	}
+	if status, _ := run(dir, "status", "--porcelain"); status != "" {
+		t.Fatalf("working tree not clean after checkpoint: %q", status)
+	}
+}
+
+// TestCheckpoint_NothingToCommit: an unchanged repo is a legitimate no-op —
+// Checkpoint must not error just because there was nothing to do.
+func TestCheckpoint_NothingToCommit(t *testing.T) {
+	dir := initTestRepo(t)
+	if err := Checkpoint(dir, "nothing changed", false); err != nil {
+		t.Fatalf("Checkpoint on a clean repo should be a no-op, got: %v", err)
+	}
+}
+
+// TestCheckpoint_WithPush is the end-to-end path task_api.go and ws/handler.go
+// actually rely on: commit a new file and land it on the remote, using a
+// local bare repo as the remote so nothing touches the network.
+func TestCheckpoint_WithPush(t *testing.T) {
+	dir := initTestRepo(t)
+	bare := initBareRemote(t)
+	if out, err := exec.Command("git", "-C", dir, "remote", "add", "origin", bare).CombinedOutput(); err != nil {
+		t.Fatalf("add remote: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pushed.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Checkpoint(dir, "commit and push", true); err != nil {
+		t.Fatalf("Checkpoint with push: %v", err)
+	}
+	remoteLog, err := exec.Command("git", "-C", bare, "log", "--oneline", "-1").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log on bare remote: %v\n%s", err, remoteLog)
+	}
+	if !strings.Contains(string(remoteLog), "commit and push") {
+		t.Fatalf("push did not land the checkpoint commit on the remote: %q", remoteLog)
+	}
+}
+
+// TestCheckpoint_PushErrorPropagates: a push failure (no remote configured)
+// must surface as an error, with the local commit already made — not a
+// silent swallow.
+func TestCheckpoint_PushErrorPropagates(t *testing.T) {
+	dir := initTestRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "orphan.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := Checkpoint(dir, "commit with no remote", true)
+	if err == nil {
+		t.Fatal("expected a push error when the repo has no remote")
+	}
+	// The local commit must still have happened even though the push failed.
+	out, logErr := run(dir, "log", "--oneline", "-1")
+	if logErr != nil {
+		t.Fatalf("git log: %v", logErr)
+	}
+	if !strings.Contains(out, "commit with no remote") {
+		t.Fatalf("local commit missing after push failure: %q", out)
+	}
+}
