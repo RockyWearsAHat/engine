@@ -703,6 +703,166 @@ func TestHandler_Chat_BuildRoute_OnErrorRelaysToClient(t *testing.T) {
 	}
 }
 
+// TestHandler_Chat_BuildRoute_ChecksPointsAndPushesOnSuccess covers the
+// session-completion wiring: a successful (non-conversational) build turn
+// must fold the session worktree back and checkpoint+push, in that order.
+func TestHandler_Chat_BuildRoute_ChecksPointsAndPushesOnSuccess(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	origRun := runAutonomousProject
+	defer func() { runAutonomousProject = origRun }()
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		return &ai.OrchestrationState{Plan: []ai.PlanStep{{}}, OuterIterations: 1}, nil
+	}
+
+	type cleanupCall struct {
+		sessionID, path string
+		merge           bool
+	}
+	type checkpointCall struct {
+		path, message string
+		push          bool
+	}
+	cleanupCalls := make(chan cleanupCall, 8)
+	checkpointCalls := make(chan checkpointCall, 8)
+
+	origClean := aiCleanupSessionWorktreeDB
+	defer func() { aiCleanupSessionWorktreeDB = origClean }()
+	aiCleanupSessionWorktreeDB = func(id, path string, merge bool) error {
+		cleanupCalls <- cleanupCall{id, path, merge}
+		return nil
+	}
+	origCheckpoint := checkpointFn
+	defer func() { checkpointFn = origCheckpoint }()
+	checkpointFn = func(path, message string, push bool) error {
+		checkpointCalls <- checkpointCall{path, message, push}
+		return nil
+	}
+
+	writeWSMessage(t, conn, map[string]any{"type": "project.open", "path": projectDir})
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sessionID := sessionMsg["session"].(map[string]any)["id"].(string)
+
+	writeWSMessage(t, conn, map[string]any{"type": "chat", "sessionId": sessionID, "content": "build me a feature"})
+	readWSMessageOfType(t, conn, "chat.started")
+	readWSMessageOfType(t, conn, "chat.chunk") // build summary
+
+	select {
+	case c := <-cleanupCalls:
+		if c.sessionID != sessionID || c.path != projectDir || !c.merge {
+			t.Fatalf("cleanup call = %+v, want session %s path %s merge=true", c, sessionID, projectDir)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("aiCleanupSessionWorktreeDB was never called on success")
+	}
+	select {
+	case c := <-checkpointCalls:
+		if c.path != projectDir || !c.push {
+			t.Fatalf("checkpoint call = %+v, want path %s push=true", c, projectDir)
+		}
+		if !strings.Contains(c.message, sessionID) {
+			t.Fatalf("checkpoint message %q should mention session %s", c.message, sessionID)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("checkpointFn was never called after a successful merge-back")
+	}
+}
+
+// TestHandler_Chat_BuildRoute_NoCheckpointOnCleanupFailure: if the merge-back
+// fails, Checkpoint must not run — nothing to push if the branch never merged.
+func TestHandler_Chat_BuildRoute_NoCheckpointOnCleanupFailure(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	origRun := runAutonomousProject
+	defer func() { runAutonomousProject = origRun }()
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		return &ai.OrchestrationState{Plan: []ai.PlanStep{{}}, OuterIterations: 1}, nil
+	}
+
+	origClean := aiCleanupSessionWorktreeDB
+	defer func() { aiCleanupSessionWorktreeDB = origClean }()
+	aiCleanupSessionWorktreeDB = func(id, path string, merge bool) error {
+		return errors.New("merge conflict")
+	}
+	checkpointCalls := make(chan struct{}, 8)
+	origCheckpoint := checkpointFn
+	defer func() { checkpointFn = origCheckpoint }()
+	checkpointFn = func(path, message string, push bool) error {
+		checkpointCalls <- struct{}{}
+		return nil
+	}
+
+	writeWSMessage(t, conn, map[string]any{"type": "project.open", "path": projectDir})
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sessionID := sessionMsg["session"].(map[string]any)["id"].(string)
+
+	writeWSMessage(t, conn, map[string]any{"type": "chat", "sessionId": sessionID, "content": "build me a feature"})
+	readWSMessageOfType(t, conn, "chat.started")
+	notice := readWSMessageOfType(t, conn, "chat.notice")
+	if !strings.Contains(fmt.Sprint(notice["notice"]), "merge conflict") {
+		t.Fatalf("expected merge-back failure notice, got %+v", notice)
+	}
+	readWSMessageOfType(t, conn, "chat.chunk") // build summary still arrives
+
+	select {
+	case <-checkpointCalls:
+		t.Fatal("checkpointFn was called even though the worktree merge-back failed")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestHandler_Chat_BuildRoute_NoCheckpointOnOrchestratorError: a failed
+// orchestrator run must never reach the cleanup/checkpoint step at all.
+func TestHandler_Chat_BuildRoute_NoCheckpointOnOrchestratorError(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	origRun := runAutonomousProject
+	defer func() { runAutonomousProject = origRun }()
+	runAutonomousProject = func(cfg ai.OrchestratorConfig) (*ai.OrchestrationState, error) {
+		return nil, fmt.Errorf("build failed")
+	}
+
+	cleanupCalls := make(chan struct{}, 8)
+	origClean := aiCleanupSessionWorktreeDB
+	defer func() { aiCleanupSessionWorktreeDB = origClean }()
+	aiCleanupSessionWorktreeDB = func(id, path string, merge bool) error {
+		cleanupCalls <- struct{}{}
+		return nil
+	}
+	checkpointCalls := make(chan struct{}, 8)
+	origCheckpoint := checkpointFn
+	defer func() { checkpointFn = origCheckpoint }()
+	checkpointFn = func(path, message string, push bool) error {
+		checkpointCalls <- struct{}{}
+		return nil
+	}
+
+	writeWSMessage(t, conn, map[string]any{"type": "project.open", "path": projectDir})
+	sessionMsg := readWSMessageOfType(t, conn, "session.created")
+	sessionID := sessionMsg["session"].(map[string]any)["id"].(string)
+
+	writeWSMessage(t, conn, map[string]any{"type": "chat", "sessionId": sessionID, "content": "do a thing"})
+	readWSMessageOfType(t, conn, "chat.started")
+	readWSMessageOfType(t, conn, "chat.error")
+
+	select {
+	case <-cleanupCalls:
+		t.Fatal("aiCleanupSessionWorktreeDB was called after a failed orchestrator run")
+	case <-time.After(200 * time.Millisecond):
+	}
+	select {
+	case <-checkpointCalls:
+		t.Fatal("checkpointFn was called after a failed orchestrator run")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestHandler_Chat_InteractiveRoute_EmptyOnErrorIsIgnored(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)

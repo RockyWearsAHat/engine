@@ -39,6 +39,7 @@ import (
 
 	"github.com/engine/server/ai"
 	"github.com/engine/server/db"
+	gogit "github.com/engine/server/git"
 )
 
 // taskStatus is the lifecycle of one dispatched unit of work.
@@ -550,6 +551,22 @@ var runOrchestratorForTaskFn = func(cfg ai.OrchestratorConfig) (*ai.Orchestratio
 	return runOrchestratorFn(cfg)
 }
 
+// checkpointFn is the injection seam for tests. Bound to git.Checkpoint in
+// production: commit+push via the `git checkpoint` CLI, not a hand-rolled
+// push. Only called on a worklist item's success — see the switch below.
+var checkpointFn = gogit.Checkpoint
+
+// checkpointMessage builds the commit message for a successful worklist item.
+// Falls back to the task id when the brief is empty so the CLI never gets a
+// blank -m.
+func checkpointMessage(taskID, brief string) string {
+	brief = strings.TrimSpace(brief)
+	if brief == "" {
+		return fmt.Sprintf("task %s: completed", taskID)
+	}
+	return fmt.Sprintf("task %s: %s", taskID, brief)
+}
+
 // startTask dispatches one unit of work and returns immediately.
 func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role, callbackURL string) *engineTask {
 	id := fmt.Sprintf("task-%d-%s", time.Now().UnixNano()/1e6, shortToken())
@@ -645,6 +662,18 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role,
 		case runErr != nil:
 			t.finish(taskFailed, runErr.Error())
 		default:
+			// Success only. Push targets whatever branch is currently checked
+			// out in projectPath (normally main) — task-mode items have no
+			// branch-override field on OrchestratorConfig/engineTask today,
+			// so there is nothing else to respect here. A failed/canceled
+			// run must never reach this branch, so nothing gets committed or
+			// pushed for it.
+			if ckErr := checkpointFn(projectPath, checkpointMessage(id, t.Brief), true); ckErr != nil {
+				log.Printf("task %s: checkpoint failed: %v", id, ckErr)
+				t.note("checkpoint", fmt.Sprintf("checkpoint/push failed: %v", ckErr))
+			} else {
+				t.note("checkpoint", "checkpointed and pushed")
+			}
 			t.finish(taskDone, "")
 		}
 	}()
