@@ -1,6 +1,8 @@
 package quota
 
 import (
+	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -246,6 +248,32 @@ func TestParseUsageTolerantVariants(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "comma-separated date format (Sep 4, 7pm)",
+			in:   "Current session: 35% used · resets Sep 4, 7pm (America/Denver)",
+			check: func(t *testing.T, s Snapshot) {
+				if !s.Session.HasReset {
+					t.Fatal("session reset not parsed")
+				}
+				want := time.Date(2026, time.September, 4, 19, 0, 0, 0, loc)
+				if !s.Session.ResetsAt.Equal(want) {
+					t.Errorf("session reset = %v, want %v", s.Session.ResetsAt, want)
+				}
+			},
+		},
+		{
+			name: "comma-separated date with minutes (Sep 5, 3:45pm)",
+			in:   "Current week (all models): 7% used · resets Sep 5, 3:45pm (America/Denver)",
+			check: func(t *testing.T, s Snapshot) {
+				if !s.Week.HasReset {
+					t.Fatal("week reset not parsed")
+				}
+				want := time.Date(2026, time.September, 5, 15, 45, 0, 0, loc)
+				if !s.Week.ResetsAt.Equal(want) {
+					t.Errorf("week reset = %v, want %v", s.Week.ResetsAt, want)
+				}
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -311,5 +339,400 @@ func TestSnapshotTightestAndSummary(t *testing.T) {
 	}
 	if got := s.Summary(); got == "" {
 		t.Error("Summary should render")
+	}
+}
+
+// ── Test fixture parsing from testdata/usage-sample.txt ──
+const fixtureUsageOutput = `You are currently using your subscription to power your Claude Code usage
+
+Current session: 35% used · resets Sep 4, 7pm (America/Denver)
+Current week (all models): 7% used · resets Sep 5, 3pm (America/Denver)
+Current week (Fable): 4% used · resets Sep 5, 3pm (America/Denver)
+
+What's contributing to your limits usage?
+Approximate, based on local sessions on this machine — does not include other devices or claude.ai. Behaviors are independent characteristics, not a breakdown.
+
+Last 24h · 29108 requests · 1308 sessions
+  99% of your usage was while 4+ sessions ran in parallel
+  Top MCP servers: dx 4%
+
+Last 7d · 70105 requests · 2209 sessions
+  87% of your usage was while 4+ sessions ran in parallel
+  Top skills: /run 1%
+  Top MCP servers: dx 1%`
+
+func TestParseUsageFixtureLines(t *testing.T) {
+	loc := denver(t)
+	// Using Sep 4 at noon Denver time as the reference (when fixture was generated).
+	now := time.Date(2026, time.September, 4, 12, 0, 0, 0, loc)
+
+	s, err := ParseUsage(fixtureUsageOutput, now)
+	if err != nil {
+		t.Fatalf("ParseUsage: %v", err)
+	}
+	if !s.Ok {
+		t.Fatalf("expected Ok snapshot, got err=%q", s.Err)
+	}
+
+	// Verify session parsing
+	if s.Session.Percent != 35 {
+		t.Errorf("session percent = %v, want 35", s.Session.Percent)
+	}
+	if !s.Session.HasReset {
+		t.Error("session reset not parsed")
+	}
+	// "Sep 4, 7pm" should be today at 7pm (19:00)
+	wantSessionReset := time.Date(2026, time.September, 4, 19, 0, 0, 0, loc)
+	if s.Session.ResetsAt == nil || !s.Session.ResetsAt.Equal(wantSessionReset) {
+		t.Errorf("session reset = %v, want %v", s.Session.ResetsAt, &wantSessionReset)
+	}
+
+	// Verify week parsing
+	if s.Week.Percent != 7 {
+		t.Errorf("week percent = %v, want 7", s.Week.Percent)
+	}
+	if !s.Week.HasReset {
+		t.Error("week reset not parsed")
+	}
+	// "Sep 5, 3pm" should be tomorrow at 3pm (15:00)
+	wantWeekReset := time.Date(2026, time.September, 5, 15, 0, 0, 0, loc)
+	if s.Week.ResetsAt == nil || !s.Week.ResetsAt.Equal(wantWeekReset) {
+		t.Errorf("week reset = %v, want %v", s.Week.ResetsAt, &wantWeekReset)
+	}
+
+	// Verify per-model parsing
+	if len(s.PerModel) != 1 {
+		t.Fatalf("per-model windows = %d, want 1", len(s.PerModel))
+	}
+	if s.PerModel[0].Name != "week:fable" || s.PerModel[0].Percent != 4 {
+		t.Errorf("per-model[0] = %+v, want week:fable at 4%%", s.PerModel[0])
+	}
+}
+
+// ── Edge case tests ──
+
+func TestParseResetMidnightRollover(t *testing.T) {
+	loc := denver(t)
+
+	// Test: reset time at midnight (00:00)
+	now := time.Date(2026, time.September, 4, 23, 30, 0, 0, loc)
+	got, ok := parseReset("Sep 5 at 12:00am (America/Denver)", now)
+	if !ok {
+		t.Fatal("parseReset failed for midnight")
+	}
+	want := time.Date(2026, time.September, 5, 0, 0, 0, 0, loc)
+	if got == nil || !got.Equal(want) {
+		t.Errorf("midnight reset = %v, want %v", got, &want)
+	}
+}
+
+func TestParseResetTimezoneParsing(t *testing.T) {
+	// Test: various timezone names are parsed correctly.
+	// Invalid timezones fall back gracefully to the reference timezone (now.Location()).
+	cases := []struct {
+		name   string
+		tzStr  string
+		wantOk bool
+	}{
+		{"Denver", "America/Denver", true},
+		{"UTC", "UTC", true},
+		{"London", "Europe/London", true},
+		{"Tokyo", "Asia/Tokyo", true},
+		{"InvalidFallsBackToNow", "Invalid/Timezone", true}, // Falls back to now's timezone
+		{"Empty", "", true}, // Falls back to now's timezone
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			loc := denver(t)
+			now := time.Date(2026, time.September, 4, 12, 0, 0, 0, loc)
+
+			var resetStr string
+			if tc.tzStr != "" {
+				resetStr = fmt.Sprintf("Sep 5 at 3pm (%s)", tc.tzStr)
+			} else {
+				resetStr = "Sep 5 at 3pm"
+			}
+
+			got, ok := parseReset(resetStr, now)
+			if ok != tc.wantOk {
+				if tc.wantOk {
+					t.Errorf("parseReset(%q) failed, expected success", resetStr)
+				} else {
+					t.Errorf("parseReset(%q) succeeded, expected failure", resetStr)
+				}
+				return
+			}
+			if ok && (got == nil || got.IsZero()) {
+				t.Errorf("parseReset returned nil or zero time")
+			}
+		})
+	}
+}
+
+func TestParseResetRelativeTimeConversion(t *testing.T) {
+	loc := denver(t)
+
+	// Test: parse time-only format and convert to absolute UTC
+	// "3pm" with no date should roll to today or tomorrow
+	now := time.Date(2026, time.September, 4, 10, 0, 0, 0, loc)
+	got, ok := parseReset("3pm (America/Denver)", now)
+	if !ok {
+		t.Fatal("parseReset failed for relative time")
+	}
+	// 3pm is in the future (now is 10am), so should be today
+	want := time.Date(2026, time.September, 4, 15, 0, 0, 0, loc)
+	if got == nil || !got.Equal(want) {
+		t.Errorf("relative time = %v, want %v", got, &want)
+	}
+
+	// Test: when time is in the past, roll to tomorrow
+	now = time.Date(2026, time.September, 4, 20, 0, 0, 0, loc)
+	got, ok = parseReset("3pm (America/Denver)", now)
+	if !ok {
+		t.Fatal("parseReset failed")
+	}
+	want = time.Date(2026, time.September, 5, 15, 0, 0, 0, loc)
+	if got == nil || !got.Equal(want) {
+		t.Errorf("relative time past = %v, want %v", got, &want)
+	}
+}
+
+func TestParseResetAbsoluteDateParsing(t *testing.T) {
+	loc := denver(t)
+
+	// Test: absolute date parsing with month name
+	now := time.Date(2026, time.September, 4, 12, 0, 0, 0, loc)
+
+	cases := []struct {
+		name   string
+		input  string
+		want   time.Time
+		wantOk bool
+	}{
+		{
+			"Sep date",
+			"Sep 5 at 3pm (America/Denver)",
+			time.Date(2026, time.September, 5, 15, 0, 0, 0, loc),
+			true,
+		},
+		{
+			"Dec date rolls year forward",
+			"Dec 25 at 9am (America/Denver)",
+			time.Date(2026, time.December, 25, 9, 0, 0, 0, loc),
+			true,
+		},
+		{
+			"Jan date on Dec 31 rolls forward",
+			"Jan 2 at 9am (America/Denver)",
+			time.Date(2027, time.January, 2, 9, 0, 0, 0, loc),
+			true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseReset(tc.input, now)
+			if ok != tc.wantOk {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOk)
+			}
+			if ok && (got == nil || !got.Equal(tc.want)) {
+				t.Errorf("got %v, want %v", got, &tc.want)
+			}
+		})
+	}
+}
+
+func TestParseResetInvalidFormat(t *testing.T) {
+	loc := denver(t)
+	now := time.Date(2026, time.September, 4, 12, 0, 0, 0, loc)
+
+	invalidCases := []string{
+		"invalid time format",
+		"25pm", // Invalid hour
+		"3:75pm", // Invalid minute
+		"99 at 3pm",
+		"",
+		"sometime next week",
+	}
+
+	for _, input := range invalidCases {
+		t.Run(fmt.Sprintf("reject_%q", input), func(t *testing.T) {
+			_, ok := parseReset(input, now)
+			if ok {
+				t.Errorf("parseReset should reject %q", input)
+			}
+		})
+	}
+}
+
+// ── JSON shape verification tests ──
+
+func TestWindowJSONMarshaling(t *testing.T) {
+	loc := denver(t)
+	now := time.Date(2026, time.September, 4, 12, 0, 0, 0, loc)
+
+	s, err := ParseUsage(fixtureUsageOutput, now)
+	if err != nil {
+		t.Fatalf("ParseUsage: %v", err)
+	}
+
+	// Test Window JSON structure
+	// Window.ResetsAt should marshal as JSON with hasReset bool
+	sessionJSON, err := json.Marshal(s.Session)
+	if err != nil {
+		t.Fatalf("json.Marshal(session): %v", err)
+	}
+
+	var sessionData map[string]interface{}
+	if err := json.Unmarshal(sessionJSON, &sessionData); err != nil {
+		t.Fatalf("json.Unmarshal session: %v", err)
+	}
+
+	// Verify expected fields
+	if _, hasResetsAt := sessionData["resetsAt"]; !hasResetsAt {
+		t.Error("session JSON should have resetsAt field")
+	}
+	if _, hasReset := sessionData["hasReset"]; !hasReset {
+		t.Error("session JSON should have hasReset field")
+	}
+	if percent, ok := sessionData["percent"]; !ok {
+		t.Error("session JSON should have percent field")
+	} else {
+		if v, ok := percent.(float64); !ok || v != 35 {
+			t.Errorf("percent = %v, want 35.0", percent)
+		}
+	}
+}
+
+func TestWindowStatusJSONShape(t *testing.T) {
+	loc := denver(t)
+	now := time.Date(2026, time.September, 4, 12, 0, 0, 0, loc)
+
+	s, err := ParseUsage(fixtureUsageOutput, now)
+	if err != nil {
+		t.Fatalf("ParseUsage: %v", err)
+	}
+
+	// Convert Window to WindowStatus (as done in governor.go)
+	sessionStatus := windowStatus(s.Session, s.Ok, now)
+
+	sessionJSON, err := json.Marshal(sessionStatus)
+	if err != nil {
+		t.Fatalf("json.Marshal(windowStatus): %v", err)
+	}
+
+	var statusData map[string]interface{}
+	if err := json.Unmarshal(sessionJSON, &statusData); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+
+	// Verify WindowStatus JSON fields
+	if _, hasResetsAt := statusData["resetsAt"]; !hasResetsAt {
+		t.Error("WindowStatus JSON should have resetsAt field")
+	}
+	if _, hasResetsIn := statusData["resetsIn"]; !hasResetsIn {
+		t.Error("WindowStatus JSON should have resetsIn field")
+	}
+	if known, ok := statusData["known"]; !ok {
+		t.Error("WindowStatus JSON should have known field")
+	} else {
+		if v, ok := known.(bool); !ok || !v {
+			t.Errorf("known = %v, want true", known)
+		}
+	}
+}
+
+func TestSnapshotAccountJSONShape(t *testing.T) {
+	loc := denver(t)
+	now := time.Date(2026, time.September, 4, 12, 0, 0, 0, loc)
+
+	s, err := ParseUsage(fixtureUsageOutput, now)
+	if err != nil {
+		t.Fatalf("ParseUsage: %v", err)
+	}
+
+	// Create a SnapshotAccount (as done in pooled.go)
+	acct := Account{Name: "test"}
+	policy := Policy{}
+	snapAcct := snapshotAccount(acct, s, policy, now)
+
+	snapJSON, err := json.Marshal(snapAcct)
+	if err != nil {
+		t.Fatalf("json.Marshal(SnapshotAccount): %v", err)
+	}
+
+	var acctData map[string]interface{}
+	if err := json.Unmarshal(snapJSON, &acctData); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+
+	// Verify SnapshotAccount JSON fields
+	if _, hasResetAt := acctData["resetAt"]; !hasResetAt {
+		t.Error("SnapshotAccount JSON should have resetAt field")
+	}
+	if _, hasSessionResetAt := acctData["sessionResetAt"]; !hasSessionResetAt {
+		t.Error("SnapshotAccount JSON should have sessionResetAt field")
+	}
+	if _, hasWeekResetAt := acctData["weekResetAt"]; !hasWeekResetAt {
+		t.Error("SnapshotAccount JSON should have weekResetAt field")
+	}
+
+	// Verify resetAt is RFC3339 formatted when present
+	if resetAtStr, ok := acctData["resetAt"].(string); ok && resetAtStr != "" {
+		if _, err := time.Parse(time.RFC3339, resetAtStr); err != nil {
+			t.Errorf("resetAt is not RFC3339: %q (%v)", resetAtStr, err)
+		}
+	}
+}
+
+func TestOmitResetFieldsWhenUnknown(t *testing.T) {
+	loc := denver(t)
+
+	// Parse output with no reset times
+	now := time.Date(2026, time.September, 4, 12, 0, 0, 0, loc)
+	noResetOutput := "Current session: 25% used\nCurrent week (all models): 12% used"
+
+	s, err := ParseUsage(noResetOutput, now)
+	if err != nil {
+		t.Fatalf("ParseUsage: %v", err)
+	}
+
+	// Verify HasReset is false
+	if s.Session.HasReset {
+		t.Error("session should have HasReset=false when no reset was parsed")
+	}
+	if s.Week.HasReset {
+		t.Error("week should have HasReset=false when no reset was parsed")
+	}
+
+	// Verify ResetsAt is nil when unknown
+	if s.Session.ResetsAt != nil {
+		t.Error("session ResetsAt should be nil when no reset was parsed")
+	}
+	if s.Week.ResetsAt != nil {
+		t.Error("week ResetsAt should be nil when no reset was parsed")
+	}
+
+	// Verify Window JSON omits resetsAt when nil (using omitempty tag)
+	sessionJSON, _ := json.Marshal(s.Session)
+	var sessionData map[string]interface{}
+	json.Unmarshal(sessionJSON, &sessionData)
+
+	// When ResetsAt is nil, the JSON key should be absent
+	if _, hasResetsAt := sessionData["resetsAt"]; hasResetsAt {
+		t.Error("Window JSON should omit resetsAt when ResetsAt is nil")
+	}
+
+	// WindowStatus should also omit resetsAt when HasReset=false
+	sessionStatus := windowStatus(s.Session, s.Ok, now)
+	statusJSON, _ := json.Marshal(sessionStatus)
+	var statusData map[string]interface{}
+	json.Unmarshal(statusJSON, &statusData)
+
+	if _, hasResetsAt := statusData["resetsAt"]; hasResetsAt {
+		if v, ok := statusData["resetsAt"].(string); ok && v != "" {
+			t.Error("WindowStatus JSON should omit resetsAt when HasReset=false")
+		}
 	}
 }

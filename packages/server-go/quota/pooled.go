@@ -110,14 +110,14 @@ func snapshotAccount(a Account, s Snapshot, policy Policy, now time.Time) Snapsh
 	if as.PaceKnown {
 		sa.PacePct = as.Pace * 100
 	}
-	if s.Session.HasReset {
+	if s.Session.HasReset && s.Session.ResetsAt != nil {
 		sa.SessionResetAt = s.Session.ResetsAt.Format(time.RFC3339)
 	}
-	if s.Week.HasReset {
+	if s.Week.HasReset && s.Week.ResetsAt != nil {
 		sa.WeekResetAt = s.Week.ResetsAt.Format(time.RFC3339)
 	}
 	tight := s.Tightest()
-	if tight.HasReset {
+	if tight.HasReset && tight.ResetsAt != nil {
 		sa.ResetAt = tight.ResetsAt.Format(time.RFC3339)
 	}
 	sa.MaxConcurrency = paceConcurrency(pl.MaxConcurrency, policy.MaxConcurrency, as)
@@ -226,10 +226,12 @@ func (sa SnapshotAccount) toSnapshot(name string, fetched time.Time) Snapshot {
 	s.Session = Window{Name: "session", Label: "Current session", Percent: sa.SessionPct}
 	s.Week = Window{Name: "week", Label: "Current week (all models)", Percent: sa.WeekPct}
 	if t, err := time.Parse(time.RFC3339, sa.SessionResetAt); err == nil {
-		s.Session.ResetsAt, s.Session.HasReset = t, true
+		s.Session.ResetsAt = &t
+		s.Session.HasReset = true
 	}
 	if t, err := time.Parse(time.RFC3339, sa.WeekResetAt); err == nil {
-		s.Week.ResetsAt, s.Week.HasReset = t, true
+		s.Week.ResetsAt = &t
+		s.Week.HasReset = true
 	}
 	return s
 }
