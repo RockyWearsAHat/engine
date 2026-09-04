@@ -173,6 +173,26 @@ func (p *claudecodeProvider) RunLoop(
 		return
 	}
 
+	// Spawn accounting: the data set used to correlate the box's `[supervisor]
+	// exited with code -1` crashes with commit-memory exhaustion. taskID keys
+	// the registry that lets a restart find and kill exactly this task's
+	// sessions (see session_registry.go); phase distinguishes the plan
+	// session (bounded, must not outlive planPhaseTimeout) from execute.
+	phase := "execute"
+	if ctx.Role == RolePlanner {
+		phase = "plan"
+	}
+	taskID := ctx.TaskID
+	pid := cmd.Process.Pid
+	RegisterSession(taskID, pid, phase)
+	log.Printf("session spawn task=%s phase=%s pid=%d live=%d freeCommitMB=%d",
+		taskID, phase, pid, LiveSessionCount(), freeCommitMB())
+	defer func() {
+		UnregisterSession(taskID, pid)
+		log.Printf("session exit task=%s phase=%s pid=%d live=%d freeCommitMB=%d",
+			taskID, phase, pid, LiveSessionCount(), freeCommitMB())
+	}()
+
 	// Stall watchdog: if the CLI produces no output for idleTimeout, kill it so
 	// the orchestrator can retry rather than block the whole build forever.
 	var lastActivity atomic.Int64
