@@ -184,13 +184,17 @@ func (p *claudecodeProvider) RunLoop(
 	}
 	taskID := ctx.TaskID
 	pid := cmd.Process.Pid
+	spawnedAt := time.Now()
 	RegisterSession(taskID, pid, phase)
 	log.Printf("session spawn task=%s phase=%s pid=%d live=%d freeCommitMB=%d",
 		taskID, phase, pid, LiveSessionCount(), freeCommitMB())
+	// exitStats is filled from the result event once the stream has been read;
+	// a session that dies before it gets there exits with zero turns and its
+	// wall clock, which is itself the telemetry (see sessionExitLogLine).
+	var exitStats claudeRunStats
 	defer func() {
 		UnregisterSession(taskID, pid)
-		log.Printf("session exit task=%s phase=%s pid=%d live=%d freeCommitMB=%d",
-			taskID, phase, pid, LiveSessionCount(), freeCommitMB())
+		log.Print(sessionExitLogLine(taskID, phase, pid, exitStats, time.Since(spawnedAt)))
 	}()
 
 	// Stall watchdog: if the CLI produces no output for idleTimeout, kill it so
@@ -217,6 +221,7 @@ func (p *claudecodeProvider) RunLoop(
 	}()
 
 	stats := parseClaudeStreamWithStats(ctx, &activityReader{r: stdout, last: &lastActivity}, allToolCalls, finalText, dispatch.Account)
+	exitStats = stats
 
 	err = cmd.Wait()
 
@@ -358,6 +363,7 @@ type claudeStreamEvent struct {
 	} `json:"usage"`
 	CostUSD      float64 `json:"total_cost_usd"`
 	NumTurns     int     `json:"num_turns"`
+	DurationMs   int64   `json:"duration_ms"`
 	SubagentStat struct {
 		Spawned int `json:"spawned"`
 	} `json:"subagent_stats"`
@@ -373,7 +379,10 @@ type claudeRunStats struct {
 	CacheReadTokens     int64
 	CostUSD             float64
 	NumTurns            int
-	SubagentsSpawned    int
+	// DurationMs is the CLI's own wall-clock figure from the result event; 0
+	// when the run never reached one (killed, stalled, crashed).
+	DurationMs       int64
+	SubagentsSpawned int
 	// SawError is true if the result event reported failure.
 	SawError bool
 	// LimitStatus is the last rate-limit status seen on this run.
@@ -498,6 +507,7 @@ func parseClaudeStreamWithStats(ctx *ChatContext, r io.Reader, allToolCalls *[]T
 			stats.CacheReadTokens = ev.Usage.CacheReadInputTokens
 			stats.CostUSD = ev.CostUSD
 			stats.NumTurns = ev.NumTurns
+			stats.DurationMs = ev.DurationMs
 			stats.SubagentsSpawned = ev.SubagentStat.Spawned
 			stats.SawError = ev.IsError
 			if ev.IsError && ctx.OnError != nil {
@@ -518,6 +528,30 @@ func parseClaudeStreamWithStats(ctx *ChatContext, r io.Reader, allToolCalls *[]T
 		}
 	}
 	return stats
+}
+
+// sessionExitLogLine is the `session exit` accounting line, with what the
+// session actually spent appended: turns and duration always, tokens when the
+// result event carried usage.
+//
+// duration_ms prefers the CLI's own figure — it excludes process start-up and
+// our teardown, so it is the number to compare against the model's turns —
+// and falls back to wall clock since spawn when the run never produced a
+// result event, because a killed or stalled session is precisely the one whose
+// duration the budget telemetry most needs to see.
+func sessionExitLogLine(taskID, phase string, pid int, stats claudeRunStats, wall time.Duration) string {
+	durationMs := stats.DurationMs
+	if durationMs <= 0 {
+		durationMs = wall.Milliseconds()
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "session exit task=%s phase=%s pid=%d turns=%d duration_ms=%d",
+		taskID, phase, pid, stats.NumTurns, durationMs)
+	if stats.InputTokens > 0 || stats.OutputTokens > 0 {
+		fmt.Fprintf(&b, " tokens_in=%d tokens_out=%d", stats.InputTokens, stats.OutputTokens)
+	}
+	fmt.Fprintf(&b, " live=%d freeCommitMB=%d", LiveSessionCount(), freeCommitMB())
+	return b.String()
 }
 
 // describeReset renders " (resets 3:04PM)" when the event carried a reset time,

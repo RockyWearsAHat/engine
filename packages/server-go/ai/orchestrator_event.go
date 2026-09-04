@@ -728,9 +728,19 @@ func (eo *EventOrchestrator) phaseValidate() (bool, string) {
 If all tests pass and the project is ready for production, respond with: VALIDATION_PASSED
 Otherwise, describe the failures and what needs to be fixed.`
 
-	eo.cfg.chatFnFor()(cc.Ctx, prompt)
+	// A validate session that outruns sessionBudget is a failed validation,
+	// not a passed one: whatever it managed to print before being cut off is
+	// carried back as feedback, and the outer loop spends an iteration on the
+	// re-plan exactly as it would for any other failure. Trusting a
+	// VALIDATION_PASSED that happened to stream out of a session we then had
+	// to kill would be trusting a verdict the reviewer never finished reaching.
+	budgetHit := runBoundedSession(eo.cfg, "validate", cc, prompt)
 
 	output := cc.GetOutput()
+	if budgetHit {
+		return false, fmt.Sprintf("session budget hit: validate session exceeded %s; output so far: %s",
+			sessionBudget, summarise(output, 300))
+	}
 
 	// Check if validation passed
 	if strings.Contains(output, "VALIDATION_PASSED") {
@@ -894,13 +904,11 @@ func newChatContextForPhase(projectPath string, sessionID string) *CapturedChat 
 // phase boundary, which for a long builder turn is the difference between
 // stopping and appearing not to.
 //
-// TODO: Session budget enforcement needs integration with team_dispatcher.go.
-// Each session should be monitored for wall-clock duration and killed if it
-// exceeds sessionBudget (default 8 minutes). Track via context.WithTimeout or
-// a separate budget checker.
-//
-// TODO: Instrumentation — parse claude -p output JSON for num_turns/duration_ms/usage
-// and log on session exit for budget telemetry.
+// Session wall-clock ceilings are NOT set here: the plan phase bounds itself to
+// planBudgetItem, and the validate and execute phases go through
+// runBoundedSession, which enforces sessionBudget. Per-session telemetry
+// (turns, duration, tokens) is logged by the claudecode provider on the
+// `session exit` line, where the result event and the real PID both live.
 func newPhaseChat(cfg OrchestratorConfig, sessionID string) *CapturedChat {
 	cc := newChatContextForPhase(cfg.ProjectPath, sessionID)
 	cc.Ctx.Cancel = cfg.Cancel
@@ -917,6 +925,71 @@ func newPhaseChat(cfg OrchestratorConfig, sessionID string) *CapturedChat {
 		cc.Ctx.OnError = cfg.OnError
 	}
 	return cc
+}
+
+// killSessionTreeFn and liveSessionPIDsFn are the hard-stop hooks
+// runBoundedSession uses. Vars so tests can observe the kill without a real
+// process tree behind it.
+var (
+	killSessionTreeFn = KillPIDTree
+	liveSessionPIDsFn = LiveSessionPIDs
+)
+
+// runBoundedSession runs one chat call under the per-session wall-clock
+// ceiling and reports whether the ceiling was hit.
+//
+// It is the execute/validate counterpart of the plan phase's own bound, and
+// enforces it the same way, in two stages:
+//
+//  1. At sessionBudget the session's cancel channel is closed, so the
+//     provider's cancel bridge can tear the CLI down cleanly.
+//  2. If the call has still not returned planPhaseHardStopGrace later, every
+//     `claude` process registered for this task is tree-killed. That is the
+//     backstop for the case the plan phase was chasing: a cancel that the
+//     provider never acted on, leaving a stuck session alive into the next
+//     phase.
+//
+// Either way the caller proceeds with whatever output was captured; a session
+// that ran out of time is reported as a budget hit, not a hang, and the caller
+// spends an iteration on it rather than the rest of the task's wall clock.
+// Sessions with no TaskID have nothing in the registry to kill — the registry
+// keys on task — so for those stage 2 is the log line only.
+func runBoundedSession(cfg OrchestratorConfig, phase string, cc *CapturedChat, prompt string) bool {
+	start := time.Now()
+	boundedCancel := make(chan struct{})
+	cc.Ctx.Cancel = orchestratorMergedCancel(cfg.Cancel, boundedCancel)
+
+	done := make(chan struct{})
+	go func() {
+		cfg.chatFnFor()(cc.Ctx, prompt)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return false
+	case <-time.After(sessionBudget):
+		close(boundedCancel)
+	}
+
+	killed := 0
+	select {
+	case <-done:
+	case <-time.After(planPhaseHardStopGrace):
+		if cfg.TaskID != "" {
+			for _, pid := range liveSessionPIDsFn(cfg.TaskID) {
+				if err := killSessionTreeFn(pid); err == nil {
+					killed++
+				}
+			}
+		}
+		// done fires once the killed RunLoop actually returns; drain it so the
+		// goroutine above cannot leak, but do not block the phase on it.
+		go func() { <-done }()
+	}
+	log.Printf("session budget hit task=%s phase=%s after %ds (budget %s, force-killed %d process tree(s)) — using output produced so far",
+		cfg.TaskID, phase, int(time.Since(start).Seconds()), sessionBudget, killed)
+	return true
 }
 
 func inferRoleFromStep(step PlanStep) string {
