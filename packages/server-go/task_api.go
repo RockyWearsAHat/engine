@@ -143,6 +143,7 @@ func (t *engineTask) snapshot() map[string]any {
 		"escalated":        t.Escalated,
 		"lost":             t.Lost,
 		"sessionPids":      ai.LiveSessionPIDs(t.ID),
+		"liveSessions":     ai.LiveTaskSessionCount(t.ID),
 	}
 	if t.FirstProgressAt != nil {
 		out["firstProgressAt"] = t.FirstProgressAt.UTC().Format(time.RFC3339)

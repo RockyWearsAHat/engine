@@ -86,6 +86,14 @@ func LiveSessionCount() int {
 	return n
 }
 
+// LiveTaskSessionCount returns how many `claude` sessions are currently live
+// for a specific task. Used for per-task accounting in spawn logs.
+func LiveTaskSessionCount(taskID string) int {
+	sessionRegistryMu.Lock()
+	defer sessionRegistryMu.Unlock()
+	return len(sessionRegistry[taskID])
+}
+
 // LiveTreeCount returns the count of distinct process trees (each tree has one
 // root PID — the `claude` process itself). Used for process pile-up visibility
 // in spawn/exit logs.
