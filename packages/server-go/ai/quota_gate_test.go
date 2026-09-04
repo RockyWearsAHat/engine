@@ -1,8 +1,12 @@
 package ai
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/engine/server/quota"
 )
 
 // The single most important property of the wiring: with governance disabled,
@@ -191,5 +195,140 @@ func TestDescribeResetOmitsAbsentTimes(t *testing.T) {
 	}
 	if strings.Contains(errs[0], "1970") {
 		t.Errorf("a zero time leaked into the message: %q", errs[0])
+	}
+}
+
+// Test that the snapshot cache returns immediately without blocking on probe.
+func TestSnapshotCacheReturnsImmediately(t *testing.T) {
+	// Create a cache with a long refresh interval so first refresh is still in progress.
+	now := time.Now()
+	cache := newSnapshotCache(10*time.Second, func() time.Time { return now })
+
+	// Create a mock refresh function that sleeps 3 seconds.
+	started := make(chan struct{}, 1)
+	refreshFn := func(ctx context.Context) quota.PooledSnapshot {
+		started <- struct{}{}
+		time.Sleep(3 * time.Second) // Simulate slow probe
+		return quota.PooledSnapshot{
+			Machine:     "test",
+			GeneratedAt: now,
+			Accounts:    []quota.SnapshotAccount{{Name: "account1"}},
+		}
+	}
+
+	cache.start(refreshFn)
+	defer cache.stop()
+
+	// Wait for refresh to start, then immediately request the snapshot.
+	<-started
+	start := time.Now()
+	snap, stale := cache.get()
+	elapsed := time.Since(start)
+
+	// The get() should return in << 100ms, not wait for the 3 second refresh.
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("get() took %v, expected << 100ms", elapsed)
+	}
+
+	// Before the first refresh completes, the snapshot is stale.
+	if !stale {
+		t.Error("snapshot should be stale before first refresh completes")
+	}
+
+	// The snapshot itself should be minimal (never refreshed).
+	if snap.Machine != "" {
+		t.Errorf("machine = %q, expected empty before refresh", snap.Machine)
+	}
+}
+
+// Test that after refresh, the snapshot is returned with correct stale flag.
+func TestSnapshotCacheMarksFreshAndStale(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	currentTime := baseTime
+	now := func() time.Time { return currentTime }
+	cache := newSnapshotCache(30*time.Second, now)
+
+	// Refresh immediately with a known snapshot.
+	started := make(chan struct{}, 1)
+	refreshFn := func(ctx context.Context) quota.PooledSnapshot {
+		started <- struct{}{}
+		return quota.PooledSnapshot{
+			Machine:     "test-box",
+			GeneratedAt: currentTime,
+			Accounts:    []quota.SnapshotAccount{{Name: "acc1", SessionPct: 50}},
+		}
+	}
+
+	cache.start(refreshFn)
+	defer cache.stop()
+
+	// First refresh runs immediately; wait for it.
+	<-started
+	time.Sleep(10 * time.Millisecond)
+
+	// Fresh snapshot (< 30s old) should not be stale.
+	currentTime = baseTime.Add(15 * time.Second)
+	snap, stale := cache.get()
+	if stale {
+		t.Error("snapshot 15s old should not be stale (interval=30s)")
+	}
+	if snap.Machine != "test-box" {
+		t.Errorf("machine = %q, want test-box", snap.Machine)
+	}
+
+	// Stale snapshot (> 2×30s = 60s old) should be marked stale.
+	currentTime = baseTime.Add(70 * time.Second)
+	snap, stale = cache.get()
+	if !stale {
+		t.Error("snapshot 70s old should be stale (2× interval = 60s)")
+	}
+	// Data is still there, just marked stale so caller knows it's old.
+	if snap.Machine != "test-box" {
+		t.Errorf("stale snapshot still has data: machine = %q", snap.Machine)
+	}
+}
+
+// Test that the refresh loop stops cleanly with no goroutine leak.
+func TestSnapshotCacheStopsCleanly(t *testing.T) {
+	cache := newSnapshotCache(10*time.Millisecond, time.Now)
+
+	tick := 0
+	refreshFn := func(ctx context.Context) quota.PooledSnapshot {
+		tick++
+		return quota.PooledSnapshot{Machine: "test", GeneratedAt: time.Now()}
+	}
+
+	cache.start(refreshFn)
+
+	// Let a refresh or two run.
+	time.Sleep(50 * time.Millisecond)
+	beforeTick := tick
+
+	// Stop should block until the goroutine exits.
+	cache.stop()
+
+	// After a short delay, if the goroutine is still running it would increment tick.
+	time.Sleep(50 * time.Millisecond)
+	afterTick := tick
+
+	// tick might have incremented once more before the stop was processed,
+	// but not significantly more (no indefinite loop).
+	if afterTick > beforeTick+2 {
+		t.Errorf("too many ticks after stop: %d -> %d", beforeTick, afterTick)
+	}
+}
+
+// Test that QuotaSnapshot returns the cache with stale flag set.
+func TestQuotaSnapshotReturnsStaleFlag(t *testing.T) {
+	t.Setenv("ENGINE_QUOTA", "0")
+	resetQuotaGateForTest()
+
+	// With governance disabled, QuotaSnapshot returns false OK.
+	snap, ok := QuotaSnapshot(context.Background())
+	if ok {
+		t.Fatal("QuotaSnapshot should return false when governance is disabled")
+	}
+	if snap.Stale {
+		t.Error("disabled snapshot should not have stale flag set (only enabled does)")
 	}
 }
