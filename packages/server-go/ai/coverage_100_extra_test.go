@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -848,5 +849,121 @@ func TestEventLoop_NonCanceledWaitErrorBranch(t *testing.T) {
 	eo.eventLoop()
 	if !strings.Contains(gotErr, "team execution failed") {
 		t.Fatalf("expected non-canceled wait error path, got %q", gotErr)
+	}
+}
+
+// TestPhasePlan_BudgetExhaustedFallsBackToOneStepPlanAndExecutes reproduces the
+// live regression: a TaskMode plan phase that never returns before the wall
+// clock budget used to leave phasePlan with zero parsed steps, which returned
+// an error, which eventLoop turned into eo.fail — ending the task with no
+// execute phase at all. The fix falls back to a one-step plan (the worklist
+// item verbatim) and continues into execute exactly as a real plan would.
+func TestPhasePlan_BudgetExhaustedFallsBackToOneStepPlanAndExecutes(t *testing.T) {
+	oldTimeout, oldGrace := planPhaseTimeout, planPhaseHardStopGrace
+	planPhaseTimeout = 30 * time.Millisecond
+	planPhaseHardStopGrace = 30 * time.Millisecond
+	defer func() { planPhaseTimeout, planPhaseHardStopGrace = oldTimeout, oldGrace }()
+
+	dir := t.TempDir()
+	brain, err := NewOrchestrationBrain(dir, "o", "r", "brief", "task1")
+	if err != nil {
+		t.Fatalf("brain: %v", err)
+	}
+	bus := NewEventBus()
+	comms := NewAgentCommsHub()
+
+	var phasesMu sync.Mutex
+	var phases []string
+
+	item := "fix the flaky login test"
+	cfg := OrchestratorConfig{
+		ProjectPath:     dir,
+		Owner:           "o",
+		Repo:            "r",
+		Brief:           item,
+		TaskMode:        true,
+		TaskID:          "task1",
+		SessionIDPrefix: "t",
+		OnPhase: func(phase, _ string) {
+			phasesMu.Lock()
+			phases = append(phases, phase)
+			phasesMu.Unlock()
+		},
+		OnProgress: func(string) {},
+		OnError:    func(string) {},
+		ChatFn: func(c *ChatContext, _ string) {
+			if c.Role == RolePlanner {
+				// Block well past the (shortened) plan budget so phasePlan's
+				// own select{} deadline fires and force-kills this call.
+				time.Sleep(400 * time.Millisecond)
+			}
+		},
+	}
+	dispatcher := NewTeamDispatcher(brain, bus, cfg, 4, comms)
+	ctx, cancel := stdctx.WithCancel(stdctx.Background())
+
+	eo := &EventOrchestrator{
+		cfg:                cfg,
+		brain:              brain,
+		bus:                bus,
+		dispatcher:         dispatcher,
+		comms:              comms,
+		ctx:                ctx,
+		cancel:             cancel,
+		redirectQueue:      make(chan string, 1),
+		maxOuterIterations: 1,
+	}
+
+	// eventLoop calls OnPhase synchronously from its own goroutine, so watch
+	// for "execute" and cancel as soon as it fires — proof the plan fallback
+	// let the run proceed past phasePlan without waiting for a full team run.
+	done := make(chan struct{})
+	go func() {
+		eo.eventLoop()
+		close(done)
+	}()
+
+	deadline := time.After(5 * time.Second)
+	for {
+		phasesMu.Lock()
+		sawExecute := false
+		for _, p := range phases {
+			if p == "execute" {
+				sawExecute = true
+			}
+		}
+		phasesMu.Unlock()
+		if sawExecute {
+			cancel()
+			break
+		}
+		select {
+		case <-deadline:
+			cancel()
+			t.Fatal("execute phase never entered after plan budget exhausted")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	<-done
+
+	phasesMu.Lock()
+	defer phasesMu.Unlock()
+	sawPlan, sawExecute := false, false
+	for _, p := range phases {
+		if p == "plan" {
+			sawPlan = true
+		}
+		if p == "execute" {
+			sawExecute = true
+		}
+	}
+	if !sawPlan || !sawExecute {
+		t.Fatalf("expected plan then execute phases, got %v", phases)
+	}
+	if len(brain.Plan) != 1 {
+		t.Fatalf("expected one-step fallback plan, got %d steps", len(brain.Plan))
+	}
+	if !strings.Contains(brain.Plan[0].Body, item) {
+		t.Fatalf("expected fallback step body to contain the worklist item verbatim, got %q", brain.Plan[0].Body)
 	}
 }
