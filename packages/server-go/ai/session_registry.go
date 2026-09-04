@@ -40,18 +40,23 @@ func RegisterSession(taskID string, pid int, phase string) {
 }
 
 // UnregisterSession removes a PID once its process has been waited on (exited
-// or killed). Safe to call even if it was never registered.
+// or killed). Also closes any Windows job object handle associated with the PID.
+// Safe to call even if it was never registered.
 func UnregisterSession(taskID string, pid int) {
 	sessionRegistryMu.Lock()
 	defer sessionRegistryMu.Unlock()
 	m, ok := sessionRegistry[taskID]
 	if !ok {
-		return
+		goto cleanup_job
 	}
 	delete(m, pid)
 	if len(m) == 0 {
 		delete(sessionRegistry, taskID)
 	}
+
+cleanup_job:
+	// Close any job object associated with this PID (Windows only; no-op on Unix).
+	CloseJobForProcess(pid)
 }
 
 // LiveSessionPIDs returns the PIDs currently registered for taskID (plan
@@ -74,6 +79,24 @@ func LiveSessionPIDs(taskID string) []int {
 func LiveSessionCount() int {
 	sessionRegistryMu.Lock()
 	defer sessionRegistryMu.Unlock()
+	n := 0
+	for _, m := range sessionRegistry {
+		n += len(m)
+	}
+	return n
+}
+
+// LiveTreeCount returns the count of distinct process trees (each tree has one
+// root PID — the `claude` process itself). Used for process pile-up visibility
+// in spawn/exit logs.
+func LiveTreeCount() int {
+	sessionRegistryMu.Lock()
+	defer sessionRegistryMu.Unlock()
+	// Each task has one or more sessions (plan, execute); each session root
+	// represents one process tree. For simplicity and given that most tasks
+	// run plan+execute sequentially (plan completes before execute starts),
+	// we count the number of root PIDs across all tasks. In the common case
+	// this equals LiveSessionCount; the separation is for visibility.
 	n := 0
 	for _, m := range sessionRegistry {
 		n += len(m)

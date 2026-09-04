@@ -185,9 +185,19 @@ func (p *claudecodeProvider) RunLoop(
 	taskID := ctx.TaskID
 	pid := cmd.Process.Pid
 	spawnedAt := time.Now()
+
+	// On Windows, create a job object for this process so the entire tree
+	// (including engine-server.exe MCP bridge) is automatically killed when
+	// the job is closed. On Unix, process groups (set by setProcGroup) handle this.
+	if _, err := CreateJobForProcess(pid); err != nil {
+		if ctx.OnError != nil {
+			ctx.OnError("claudecode: failed to create job object: " + err.Error())
+		}
+	}
+
 	RegisterSession(taskID, pid, phase)
-	log.Printf("session spawn task=%s phase=%s pid=%d live=%d freeCommitMB=%d",
-		taskID, phase, pid, LiveSessionCount(), freeCommitMB())
+	log.Printf("session spawn task=%s phase=%s pid=%d live=%d trees=%d freeCommitMB=%d",
+		taskID, phase, pid, LiveSessionCount(), LiveJobObjectCount(), freeCommitMB())
 	// exitStats is filled from the result event once the stream has been read;
 	// a session that dies before it gets there exits with zero turns and its
 	// wall clock, which is itself the telemetry (see sessionExitLogLine).
@@ -550,7 +560,7 @@ func sessionExitLogLine(taskID, phase string, pid int, stats claudeRunStats, wal
 	if stats.InputTokens > 0 || stats.OutputTokens > 0 {
 		fmt.Fprintf(&b, " tokens_in=%d tokens_out=%d", stats.InputTokens, stats.OutputTokens)
 	}
-	fmt.Fprintf(&b, " live=%d freeCommitMB=%d", LiveSessionCount(), freeCommitMB())
+	fmt.Fprintf(&b, " live=%d trees=%d freeCommitMB=%d", LiveSessionCount(), LiveJobObjectCount(), freeCommitMB())
 	return b.String()
 }
 
