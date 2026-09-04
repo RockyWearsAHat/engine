@@ -41,14 +41,26 @@ func effectiveTeamSize(requested int) int {
 // runs on haiku and gets a hard wall-clock cap rather than the full run
 // budget every execute-phase session gets. Prevents "plan" from becoming a
 // second uncapped session per item.
-const planPhaseTimeout = 60 * time.Second
+//
+// Default 180s, overridable via MYEDITOR_PLAN_BUDGET_SECS — 60s proved too
+// tight on a loaded box (plans observed taking 130-160s that would otherwise
+// reach execute) and the hard-stop below now has a non-fatal fallback, so a
+// generous default costs nothing but a slower deadline.
+var planPhaseTimeout = func() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("MYEDITOR_PLAN_BUDGET_SECS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 180 * time.Second
+}()
 
 // planPhaseHardStopGrace is added on top of planPhaseTimeout before phasePlan
 // itself gives up waiting on the plan call and moves on with whatever output
 // was captured. It covers the provider's own cancel-bridge + cmd.WaitDelay
 // teardown (~5s) plus taskkill/kill(2) overhead, so this only fires when that
 // teardown has actually failed to happen in time — not on every run.
-const planPhaseHardStopGrace = 15 * time.Second
+var planPhaseHardStopGrace = 15 * time.Second
 
 // EventOrchestrator runs the event-driven autonomy loop.
 // It manages intake → requirements → planning → team dispatch → validation → completion.
@@ -392,6 +404,7 @@ func (eo *EventOrchestrator) phasePlan() error {
 	// kills any session still registered for this task so a stuck `claude -p`
 	// never survives into the execute phase — the "two live sessions per task"
 	// bug this was chasing.
+	planStart := time.Now()
 	if eo.cfg.TaskMode {
 		done := make(chan struct{})
 		go func() {
@@ -418,6 +431,30 @@ func (eo *EventOrchestrator) phasePlan() error {
 	// Parse plan from context output
 	output := cc.GetOutput()
 	plan := extractPlanFromContext(output)
+
+	// TaskMode's plan phase failing must never end the task: the item itself
+	// is already a decided, executable unit of work (that is the whole point
+	// of TaskMode), so a planner that produced nothing — because it was
+	// killed at the wall-clock deadline, or simply answered with unparseable
+	// text — falls back to a one-step plan that IS the item, verbatim, and
+	// execution proceeds exactly as it would from a real plan.
+	//
+	// Before this, an empty plan here returned an error, eventLoop called
+	// eo.fail and returned, and the task ended silently: no execute phase,
+	// no error visible to the operator beyond a log line, and the engine
+	// re-requested the same worklist item a minute later — burning quota on
+	// repeated dead plan phases instead of ever doing the work.
+	if len(plan) == 0 && eo.cfg.TaskMode {
+		item := strings.TrimSpace(eo.cfg.Brief)
+		log.Printf("plan: budget exhausted after %.0fs — executing the item as a one-step plan",
+			time.Since(planStart).Seconds())
+		plan = []PlanStep{{
+			Index:     1,
+			Title:     "Do the worklist item",
+			Body:      fmt.Sprintf("Do this item: %s; commit when done; tick the item.", item),
+			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+		}}
+	}
 
 	// An empty plan is terminal, not something to carry on from.
 	//
