@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/engine/server/ai"
@@ -441,6 +443,24 @@ func run() error {
 	startEventsWatcher()
 	// Register the webhook route.
 	httpHandleFn("/webhook/github", webhookReceiver)
+
+	// Graceful stop: the box daemon's service spec for sara-myeditor has no
+	// stopCommand configured and a 2s stopTimeoutSecs — it asks nicely once,
+	// then kills. Without a handler that "ask" did nothing (log evidence:
+	// "did not stop when asked and was killed"), so every deploy hard-killed
+	// mid-flight instead of letting tasks.json's in-memory state (already
+	// otherwise persisted on every task state change, but not necessarily
+	// the instant this arrives) flush. This is deliberately cheap — a single
+	// persist + exit — to fit inside that 2s budget rather than trying to
+	// drain in-flight tasks, which cannot finish in 2s anyway.
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		<-sigCh
+		log.Printf("engine: stop signal received — flushing tasks.json and exiting")
+		tasks.persist()
+		os.Exit(0)
+	}()
 
 	addr := ":" + port
 	fmt.Printf("Server running on http://localhost%s\n", addr)
