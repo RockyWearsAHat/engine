@@ -412,3 +412,60 @@ func TestEngineTaskSnapshotThreadSafety(t *testing.T) {
 	<-done
 	<-done
 }
+
+func TestGlobalTaskGate_CeilingFromEngineOverridesDefault(t *testing.T) {
+	g := &globalTaskGate{}
+	if got := g.ceilingLocked(); got != defaultMaxTasks() {
+		t.Fatalf("unset ceiling = %d, want defaultMaxTasks() = %d", got, defaultMaxTasks())
+	}
+	g.setCeiling(11)
+	if got := g.ceilingLocked(); got != 11 {
+		t.Fatalf("ceiling after setCeiling(11) = %d, want 11", got)
+	}
+	// A dispatch that sends no allowedConcurrency (0) must not clobber the
+	// last real value with a stale low number.
+	g.setCeiling(0)
+	if got := g.ceilingLocked(); got != 11 {
+		t.Fatalf("ceiling after setCeiling(0) = %d, want unchanged 11", got)
+	}
+}
+
+func TestGlobalTaskGate_AcquireBlocksAtCeilingReleasesOnStop(t *testing.T) {
+	g := &globalTaskGate{ceil: 1}
+	cancel := make(chan struct{})
+
+	release1 := g.acquire(cancel)
+	if release1 == nil {
+		t.Fatal("first acquire at ceiling 1 should succeed")
+	}
+
+	// Second acquire must block until release1 runs or cancel fires — prove
+	// it blocks by racing a short cancel.
+	done := make(chan func())
+	go func() { done <- g.acquire(cancel) }()
+
+	select {
+	case r := <-done:
+		if r != nil {
+			t.Fatal("second acquire should not succeed while the ceiling is full")
+		}
+		t.Fatal("second acquire returned before cancel/release — did not block")
+	case <-time.After(50 * time.Millisecond):
+		// still blocked, as expected
+	}
+
+	close(cancel)
+	select {
+	case r := <-done:
+		if r != nil {
+			t.Fatal("acquire after cancel should return nil, not a release func")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("acquire never returned after cancel")
+	}
+
+	release1()
+	if g.count != 0 {
+		t.Fatalf("count after release = %d, want 0", g.count)
+	}
+}

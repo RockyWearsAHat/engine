@@ -33,6 +33,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -631,6 +632,18 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role,
 		// task stays in phase "queued" while it waits — its poller reads that
 		// as "not started", not "stalled" — and different projects do not
 		// wait on each other.
+		// Global running-task ceiling first — cheap to hold, sized from the
+		// engine's own allowance — then the per-project gate, which is about
+		// git-checkout correctness, not throughput. Order matters: waiting on
+		// the (usually free) project gate while occupying a scarce global
+		// slot would starve other projects' tasks for no reason.
+		releaseGlobal := taskGate.acquire(t.cancel)
+		if releaseGlobal == nil {
+			t.finish(taskCanceled, "canceled while queued")
+			return
+		}
+		defer releaseGlobal()
+
 		release := projectGate.acquire(projectPath, t.cancel)
 		if release == nil {
 			t.finish(taskCanceled, "canceled while queued")
@@ -689,6 +702,92 @@ type projectGates struct {
 }
 
 var projectGate = &projectGates{slots: map[string]chan struct{}{}}
+
+// globalTaskGate is MyEditor's own ceiling on how many task-mode dispatches
+// may be actively running (past "queued", inside the orchestrator) at once,
+// across every project.
+//
+// Before this existed there was no such ceiling in code at all — only the
+// per-project gate above, which caps ONE project to one run at a time for git
+// correctness, not throughput. What was observed on the box acting like a
+// global cap of ~3 was the quota governor's tier-based MaxConcurrency (a
+// "steady" tier landing at policy.MaxConcurrency*3/4 = 3) leaking into
+// concurrency decisions it was never meant to gate — team formation inside a
+// single dispatch, not how many dispatches MyEditor accepts. That leak is
+// fixed at the team-dispatcher call site (effectiveTeamSize); this gate is
+// the real, intentional ceiling: sized from the engine's own dispatch payload
+// (allowedConcurrency — the count it decided the box can carry) rather than
+// from a local quota tier table, so MyEditor never second-guesses an
+// allowance the engine already computed. Falls back to MYEDITOR_MAX_TASKS,
+// then 16, only when the engine has not told it anything.
+type globalTaskGate struct {
+	mu    sync.Mutex
+	count int
+	ceil  int // last allowedConcurrency seen from a dispatch; 0 = unset
+}
+
+var taskGate = &globalTaskGate{}
+
+// globalTaskGatePollInterval governs how often a queued task rechecks the
+// gate. Var, not const, so tests can shorten it.
+var globalTaskGatePollInterval = 200 * time.Millisecond
+
+// defaultMaxTasks is MYEDITOR_MAX_TASKS, else 16. Read live (not cached) so
+// an operator override takes effect without a restart.
+func defaultMaxTasks() int {
+	if v := strings.TrimSpace(os.Getenv("MYEDITOR_MAX_TASKS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 16
+}
+
+// setCeiling records the engine's latest allowedConcurrency. A dispatch that
+// does not send one (0) leaves the previous ceiling — and eventually
+// defaultMaxTasks() — in force rather than clamping to some remembered stale
+// low number.
+func (g *globalTaskGate) setCeiling(n int) {
+	if n <= 0 {
+		return
+	}
+	g.mu.Lock()
+	g.ceil = n
+	g.mu.Unlock()
+}
+
+func (g *globalTaskGate) ceilingLocked() int {
+	if g.ceil > 0 {
+		return g.ceil
+	}
+	return defaultMaxTasks()
+}
+
+// acquire blocks (polling) until a running-task slot is free or cancel fires.
+// Polling rather than a fixed-capacity channel because the ceiling itself
+// changes at runtime as the engine's allowance changes.
+func (g *globalTaskGate) acquire(cancel <-chan struct{}) func() {
+	ticker := time.NewTicker(globalTaskGatePollInterval)
+	defer ticker.Stop()
+	for {
+		g.mu.Lock()
+		if g.count < g.ceilingLocked() {
+			g.count++
+			g.mu.Unlock()
+			return func() {
+				g.mu.Lock()
+				g.count--
+				g.mu.Unlock()
+			}
+		}
+		g.mu.Unlock()
+		select {
+		case <-ticker.C:
+		case <-cancel:
+			return nil
+		}
+	}
+}
 
 // acquire blocks until the project's slot is free or cancel fires. It
 // returns the release func, or nil if cancelled while waiting.
@@ -799,6 +898,13 @@ func registerTaskRoutes(defaultProjectPath string) {
 				// else MYEDITOR_TEAM_SIZE, else 1). Only set this when the
 				// dispatch genuinely wants a team.
 				TeamSize int `json:"teamSize"`
+				// AllowedConcurrency is the engine's own read of how many
+				// task-mode dispatches the box can carry right now (its
+				// governor's allowance, not MyEditor's local quota tier
+				// table). MyEditor uses it as taskGate's running-task
+				// ceiling. Optional — 0/absent leaves the previous ceiling
+				// (or MYEDITOR_MAX_TASKS, or 16) in force.
+				AllowedConcurrency int `json:"allowedConcurrency"`
 				// CallbackURL, if set, is POSTed to (fire-and-forget, empty
 				// body) when this task reaches a terminal state. Optional --
 				// an empty value leaves the caller polling GET-by-id exactly
@@ -824,6 +930,7 @@ func registerTaskRoutes(defaultProjectPath string) {
 				writeJSON(w, http.StatusOK, snap)
 				return
 			}
+			taskGate.setCeiling(body.AllowedConcurrency)
 			t := startTask(body.Project, body.Brief, body.Owner, body.Repo, body.Key, body.Model, body.Role, body.CallbackURL, body.TeamSize)
 			writeJSON(w, http.StatusAccepted, t.snapshot())
 
@@ -869,6 +976,9 @@ func registerTaskRoutes(defaultProjectPath string) {
 		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 		defer cancel()
 		lv := ai.CurrentQuotaLevers(ctx)
+		taskGate.mu.Lock()
+		runningTasks, taskCeiling := taskGate.count, taskGate.ceilingLocked()
+		taskGate.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"maxConcurrency":   lv.MaxConcurrency,
 			"subagentFanout":   lv.SubagentFanout,
@@ -876,6 +986,13 @@ func registerTaskRoutes(defaultProjectPath string) {
 			"tier":             lv.TierName,
 			"governed":         lv.Governed,
 			"parallelDefault":  ai.EventOrchestratorEnabled(),
+			// runningTasks/taskCeiling are MyEditor's own admission gate — the
+			// engine's allowedConcurrency (or MYEDITOR_MAX_TASKS/16 fallback),
+			// not the quota tier's per-session MaxConcurrency above. Reported
+			// separately so the engine can tell "MyEditor is at capacity" from
+			// "the quota tier changed".
+			"runningTasks": runningTasks,
+			"taskCeiling":  taskCeiling,
 		})
 	})
 }
