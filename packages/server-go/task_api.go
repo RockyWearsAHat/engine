@@ -568,7 +568,7 @@ func checkpointMessage(taskID, brief string) string {
 }
 
 // startTask dispatches one unit of work and returns immediately.
-func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role, callbackURL string) *engineTask {
+func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role, callbackURL string, teamSize int) *engineTask {
 	id := fmt.Sprintf("task-%d-%s", time.Now().UnixNano()/1e6, shortToken())
 	t := &engineTask{
 		ID:          id,
@@ -608,6 +608,7 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role,
 			PlanSteps:       0, // unknown at dispatch time — see ShouldRunEventOrchestrator comment
 			RequestedModel:  requestedModel,
 			RequestedRole:   role,
+			TeamSize:        teamSize,
 			Cancel:          t.cancel,
 			ChatFn:          aiChatFn,
 			OnPhase: func(phase, detail string) {
@@ -792,6 +793,12 @@ func registerTaskRoutes(defaultProjectPath string) {
 				// Role is the specialized agent role for this task (e.g., "design-reviewer").
 				// Optional — empty defaults to orchestrator behavior.
 				Role string `json:"role"`
+				// TeamSize is an explicit request for more than one concurrent
+				// worker on this item. Optional — 0/absent means the default,
+				// one item = one worker (ai.effectiveTeamSize: cfg.TeamSize,
+				// else MYEDITOR_TEAM_SIZE, else 1). Only set this when the
+				// dispatch genuinely wants a team.
+				TeamSize int `json:"teamSize"`
 				// CallbackURL, if set, is POSTed to (fire-and-forget, empty
 				// body) when this task reaches a terminal state. Optional --
 				// an empty value leaves the caller polling GET-by-id exactly
@@ -817,7 +824,7 @@ func registerTaskRoutes(defaultProjectPath string) {
 				writeJSON(w, http.StatusOK, snap)
 				return
 			}
-			t := startTask(body.Project, body.Brief, body.Owner, body.Repo, body.Key, body.Model, body.Role, body.CallbackURL)
+			t := startTask(body.Project, body.Brief, body.Owner, body.Repo, body.Key, body.Model, body.Role, body.CallbackURL, body.TeamSize)
 			writeJSON(w, http.StatusAccepted, t.snapshot())
 
 		default:

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +19,29 @@ import (
 // hangs, long enough that it costs nothing on a healthy run. Var, not const, so
 // tests can shorten it.
 var teamWaitStallInterval = 5 * time.Second
+
+// effectiveTeamSize resolves how many teams/workers a single dispatch may run
+// concurrently. requested is OrchestratorConfig.TeamSize — the dispatch
+// payload's explicit ask, 0 meaning "no opinion". Precedence: requested wins
+// outright when > 0; else MYEDITOR_TEAM_SIZE; else 1 (one item = one worker).
+func effectiveTeamSize(requested int) int {
+	if requested > 0 {
+		return requested
+	}
+	if v := strings.TrimSpace(os.Getenv("MYEDITOR_TEAM_SIZE")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 1
+}
+
+// planPhaseTimeout bounds the plan phase for a single dispatched item: it is
+// scoping work already decided (TaskMode), not conceiving a project, so it
+// runs on haiku and gets a hard wall-clock cap rather than the full run
+// budget every execute-phase session gets. Prevents "plan" from becoming a
+// second uncapped session per item.
+const planPhaseTimeout = 60 * time.Second
 
 // EventOrchestrator runs the event-driven autonomy loop.
 // It manages intake → requirements → planning → team dispatch → validation → completion.
@@ -119,22 +144,20 @@ func startEventOrchestrator(cfg OrchestratorConfig) (*EventOrchestrator, error) 
 	comms := AgentCommsForProject(cfg.ProjectPath)
 	comms.Register("lead", "orchestrator", "running")
 
-	// How many teams may run at once is the quota governor's call, not a
-	// literal. It used to be 4 — hardcoded, and not enforced anywhere either.
-	// Parallelism is the single biggest multiplier on how fast the rolling
-	// window drains, so the number has to come from whatever is left in it and
-	// has to be re-read as the run proceeds.
+	// How many teams may run at once for THIS dispatch. One item = one worker
+	// by default: sizing this off the quota governor's MaxConcurrency lever
+	// (as it used to) meant a single dx worklist item could fan out into as
+	// many concurrent `claude -p` sessions as the tier allowed project-wide —
+	// 3 in-flight tasks measured as 14 concurrent CLI processes, exhausting
+	// box memory before the governor ever got a chance to react. The quota
+	// lever still bounds real per-project fan-out elsewhere (quotaBefore,
+	// SubagentFanout); it has no business also multiplying team count for a
+	// dispatch that never asked for a team.
+	//
+	// Precedence: cfg.TeamSize (the dispatch payload's explicit request) wins
+	// outright; else MYEDITOR_TEAM_SIZE (operator override); else 1.
 	capFn := func() int {
-		levers := CurrentQuotaLevers(ctx)
-		n := levers.MaxConcurrency
-		if n < 1 {
-			// A blocked or unreadable governor still has to let one team
-			// through. Stopping the project entirely is quotaBefore's decision
-			// to make at dispatch time, where it can say why; silently freezing
-			// the team loop here would just look like a hang.
-			n = 1
-		}
-		return n
+		return effectiveTeamSize(cfg.TeamSize)
 	}
 	dispatcher := NewTeamDispatcherWithCap(brain, bus, cfg, capFn, comms)
 
@@ -301,6 +324,30 @@ func (eo *EventOrchestrator) phasePlan() error {
 	cc := newPhaseChat(eo.cfg, sessionID)
 	if strings.TrimSpace(eo.cfg.RequestedRole) == "" {
 		cc.Ctx.Role = RolePlanner
+	}
+
+	// Task mode's plan phase is one already-decided item, not a project to
+	// conceive: bound it to a 60s wall clock, and to haiku unless the caller
+	// pinned a specific model for this dispatch (RequestedModel wins — that
+	// pin is a floor for the whole run, not something the plan phase should
+	// silently override). Without this a "plan" phase was a second uncapped
+	// `claude -p` session per dispatched item, on top of whatever the
+	// execute phase spent.
+	if eo.cfg.TaskMode {
+		if strings.TrimSpace(eo.cfg.RequestedModel) == "" {
+			cc.Ctx.ModelOverride = "haiku"
+		}
+		timer := time.NewTimer(planPhaseTimeout)
+		defer timer.Stop()
+		boundedCancel := make(chan struct{})
+		go func() {
+			select {
+			case <-timer.C:
+				close(boundedCancel)
+			case <-eo.ctx.Done():
+			}
+		}()
+		cc.Ctx.Cancel = orchestratorMergedCancel(eo.cfg.Cancel, boundedCancel)
 	}
 
 	// The planner prompt is the serial path's, deliberately, because the parser

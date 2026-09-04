@@ -146,6 +146,15 @@ func (p *claudecodeProvider) RunLoop(
 		cmd.Env = dispatch.Env
 	}
 	cmd.Stdin = strings.NewReader(prompt)
+	setProcGroup(cmd)
+	// CommandContext's default cancellation only ever kills this one PID
+	// (Kill()/TerminateProcess). That leaves the engine-server.exe MCP bridge
+	// child (and anything the CLI itself spawned) running and holding memory
+	// after the run this process belonged to is done — measured as 3
+	// in-flight tasks becoming 14 live processes on the box. Override Cancel
+	// to kill the whole tree instead, on stall, cancellation, and task stop.
+	cmd.Cancel = func() error { return killProcessTree(cmd) }
+	cmd.WaitDelay = 5 * time.Second
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -283,6 +292,13 @@ func buildClaudeArgs(ctx *ChatContext, model, systemPrompt string, subagentFanou
 	} else if ctx.OnError != nil {
 		ctx.OnError(mcpBridgeArgError(err))
 	}
+	// One item = one worker is the default for every session, regardless of
+	// fanout: say so in the brief, not just in the toolset, because the model
+	// can be talked into "coordinating a team" narratively (structuring the
+	// work that way, shelling out to other tools) even where the Task tool
+	// itself is not blocked.
+	systemPrompt = strings.TrimSpace(systemPrompt +
+		"\n\nDo the work yourself in this one session. Do NOT spawn sub-agents or teams.")
 	// fanout 0 = no Task tool. Only then. Positive fanout keeps it.
 	if subagentFanout == 0 {
 		args = append(args, "--disallowedTools", "Task")
