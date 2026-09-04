@@ -61,8 +61,9 @@ type Window struct {
 	// Percent used, 0-100.
 	Percent float64 `json:"percent"`
 	// ResetsAt is when this window refills. Only meaningful if HasReset.
-	ResetsAt time.Time `json:"resetsAt,omitempty"`
-	HasReset bool      `json:"hasReset"`
+	// Omitted from JSON when nil (reset time unknown).
+	ResetsAt *time.Time `json:"resetsAt,omitempty"`
+	HasReset bool       `json:"hasReset"`
 }
 
 // Remaining is the unspent share of the window, 0-1.
@@ -226,11 +227,11 @@ func (s Snapshot) Detail() string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "session %.0f%%", s.Session.Percent)
-	if s.Session.HasReset {
+	if s.Session.HasReset && s.Session.ResetsAt != nil {
 		fmt.Fprintf(&b, " (resets %s)", s.Session.ResetsAt.Format(time.Kitchen))
 	}
 	fmt.Fprintf(&b, ", week %.0f%%", s.Week.Percent)
-	if s.Week.HasReset {
+	if s.Week.HasReset && s.Week.ResetsAt != nil {
 		fmt.Fprintf(&b, " (resets %s)", s.Week.ResetsAt.Format("Jan 2"))
 	}
 	for _, w := range s.PerModel {

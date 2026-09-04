@@ -95,7 +95,7 @@ const (
 // Returns ok=false when there is no reset time to measure elapsed against; the
 // caller must then fall back rather than treat 0 as "no usage".
 func Pace(w Window, dur time.Duration, now time.Time) (float64, bool) {
-	if !w.HasReset || dur <= 0 {
+	if !w.HasReset || w.ResetsAt == nil || dur <= 0 {
 		return 0, false
 	}
 	remaining := w.ResetsAt.Sub(now)
@@ -174,7 +174,7 @@ func Assess(s Snapshot, now time.Time) Assessment {
 	tight := s.Tightest()
 	a.Headroom = tight.Remaining()
 	a.Binding = tight.Name
-	if tight.HasReset {
+	if tight.HasReset && tight.ResetsAt != nil {
 		if d := tight.ResetsAt.Sub(now); d > 0 {
 			a.ResetsIn = d
 		}
@@ -634,7 +634,7 @@ type WindowStatus struct {
 
 func windowStatus(w Window, ok bool, now time.Time) WindowStatus {
 	ws := WindowStatus{Name: w.Name, Label: w.Label, Known: ok, Percent: w.Percent}
-	if ok && w.HasReset {
+	if ok && w.HasReset && w.ResetsAt != nil {
 		ws.ResetsAt = w.ResetsAt.Format(time.RFC3339)
 		if d := w.ResetsAt.Sub(now); d > 0 {
 			ws.ResetsIn = d.Round(time.Minute).String()
