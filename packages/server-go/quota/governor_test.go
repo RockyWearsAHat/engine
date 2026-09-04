@@ -17,6 +17,11 @@ func at(hhmm string) time.Time {
 	return t
 }
 
+// ptr converts a time.Time to a *time.Time pointer for use in Window struct literals.
+func ptr(t time.Time) *time.Time {
+	return &t
+}
+
 func TestPace(t *testing.T) {
 	now := at("12:00")
 	tests := []struct {
@@ -30,7 +35,7 @@ func TestPace(t *testing.T) {
 		{
 			// Half the window gone, half the quota gone: exactly on pace.
 			name:   "on pace",
-			w:      Window{Percent: 50, ResetsAt: now.Add(150 * time.Minute), HasReset: true},
+			w:      Window{Percent: 50, ResetsAt: ptr(now.Add(150 * time.Minute)), HasReset: true},
 			dur:    SessionWindow,
 			want:   1.0,
 			wantOk: true,
@@ -38,7 +43,7 @@ func TestPace(t *testing.T) {
 		{
 			// Half the window gone, all the quota gone: will hit the wall.
 			name:   "double pace",
-			w:      Window{Percent: 100, ResetsAt: now.Add(150 * time.Minute), HasReset: true},
+			w:      Window{Percent: 100, ResetsAt: ptr(now.Add(150 * time.Minute)), HasReset: true},
 			dur:    SessionWindow,
 			want:   2.0,
 			wantOk: true,
@@ -46,7 +51,7 @@ func TestPace(t *testing.T) {
 		{
 			// Most of the window gone, barely used: will waste most of it.
 			name:   "under pace wastes the window",
-			w:      Window{Percent: 20, ResetsAt: now.Add(30 * time.Minute), HasReset: true},
+			w:      Window{Percent: 20, ResetsAt: ptr(now.Add(30 * time.Minute)), HasReset: true},
 			dur:    SessionWindow,
 			want:   0.222,
 			wantOk: true,
@@ -60,14 +65,14 @@ func TestPace(t *testing.T) {
 		{
 			// The guard that stops a fresh window producing an infinite pace.
 			name:   "start of window is clamped",
-			w:      Window{Percent: 1, ResetsAt: now.Add(SessionWindow), HasReset: true},
+			w:      Window{Percent: 1, ResetsAt: ptr(now.Add(SessionWindow)), HasReset: true},
 			dur:    SessionWindow,
 			want:   0.5,
 			wantOk: true,
 		},
 		{
 			name:   "reset beyond the window length is not trusted",
-			w:      Window{Percent: 50, ResetsAt: now.Add(9 * time.Hour), HasReset: true},
+			w:      Window{Percent: 50, ResetsAt: ptr(now.Add(9 * time.Hour)), HasReset: true},
 			dur:    SessionWindow,
 			wantOk: false,
 		},
@@ -101,8 +106,8 @@ func TestAssessTiers(t *testing.T) {
 	snap := func(session, week float64) Snapshot {
 		return Snapshot{
 			Ok:      true,
-			Session: Window{Name: "session", Percent: session, ResetsAt: midSession, HasReset: true},
-			Week:    Window{Name: "week", Percent: week, ResetsAt: midWeek, HasReset: true},
+			Session: Window{Name: "session", Percent: session, ResetsAt: ptr(midSession), HasReset: true},
+			Week:    Window{Name: "week", Percent: week, ResetsAt: ptr(midWeek), HasReset: true},
 		}
 	}
 
@@ -153,8 +158,8 @@ func TestAssessPerModelWindowBinds(t *testing.T) {
 	now := at("12:00")
 	s := Snapshot{
 		Ok:      true,
-		Session: Window{Name: "session", Percent: 10, ResetsAt: now.Add(150 * time.Minute), HasReset: true},
-		Week:    Window{Name: "week", Percent: 20, ResetsAt: now.Add(84 * time.Hour), HasReset: true},
+		Session: Window{Name: "session", Percent: 10, ResetsAt: ptr(now.Add(150 * time.Minute)), HasReset: true},
+		Week:    Window{Name: "week", Percent: 20, ResetsAt: ptr(now.Add(84 * time.Hour)), HasReset: true},
 		PerModel: []Window{
 			{Name: "week:fable", Label: "Current week (Fable)", Percent: 97},
 		},
@@ -232,8 +237,8 @@ func TestPaceConcurrencyBoostsUnderTarget(t *testing.T) {
 func TestAssessTargetLineIs100Percent(t *testing.T) {
 	now := at("12:00")
 	s := Snapshot{Ok: true,
-		Session: Window{Name: "session", Percent: 25, ResetsAt: now.Add(150 * time.Minute), HasReset: true},
-		Week:    Window{Name: "week", Percent: 10, ResetsAt: now.Add(84 * time.Hour), HasReset: true},
+		Session: Window{Name: "session", Percent: 25, ResetsAt: ptr(now.Add(150 * time.Minute)), HasReset: true},
+		Week:    Window{Name: "week", Percent: 10, ResetsAt: ptr(now.Add(84 * time.Hour)), HasReset: true},
 	}
 	a := Assess(s, now)
 	if a.PaceTarget != 1.0 {

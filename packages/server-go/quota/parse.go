@@ -44,8 +44,8 @@ var (
 	// is anchored at the END rather than the name being anchored at the start.
 	shareRe = regexp.MustCompile(`^(.*\S)\s+([0-9]+(?:\.[0-9]+)?)\s*%$`)
 
-	// "Aug 23 at 8pm (America/Denver)" / "Aug 29 at 3:05pm" / "8pm"
-	resetRe = regexp.MustCompile(`^(?:([A-Za-z]{3,9})\s+([0-9]{1,2})\s+at\s+)?([0-9]{1,2})(?::([0-9]{2}))?\s*([ap]\.?m\.?)?\s*(?:\(([^)]+)\))?\s*$`)
+	// "Aug 23 at 8pm (America/Denver)" / "Sep 4, 7pm (America/Denver)" / "Aug 29 at 3:05pm" / "8pm"
+	resetRe = regexp.MustCompile(`^(?:([A-Za-z]{3,9})\s+([0-9]{1,2})\s*(?:at|,)\s+)?([0-9]{1,2})(?::([0-9]{2}))?\s*([ap]\.?m\.?)?\s*(?:\(([^)]+)\))?\s*$`)
 )
 
 // ErrNoLimits is returned when the output carried no recognisable limit line.
@@ -84,7 +84,8 @@ func ParseUsage(text string, now time.Time) (Snapshot, error) {
 			w := Window{Percent: pct, Label: trimmed}
 			if resetStr != "" {
 				if at, ok := parseReset(resetStr, now); ok {
-					w.ResetsAt, w.HasReset = at, true
+					w.ResetsAt = at
+					w.HasReset = true
 				}
 			}
 			switch {
@@ -259,10 +260,10 @@ func parseShares(s string) []Share {
 //
 // Returns ok=false rather than a guess when the string does not match; callers
 // then treat the window as having no known reset instead of a wrong one.
-func parseReset(s string, now time.Time) (time.Time, bool) {
+func parseReset(s string, now time.Time) (*time.Time, bool) {
 	m := resetRe.FindStringSubmatch(strings.TrimSpace(s))
 	if m == nil {
-		return time.Time{}, false
+		return nil, false
 	}
 	monStr, dayStr, hourStr, minStr, ampm, tzStr := m[1], m[2], m[3], m[4], strings.ToLower(m[5]), m[6]
 
@@ -276,12 +277,12 @@ func parseReset(s string, now time.Time) (time.Time, bool) {
 
 	hour, err := strconv.Atoi(hourStr)
 	if err != nil || hour < 0 || hour > 23 {
-		return time.Time{}, false
+		return nil, false
 	}
 	minute := 0
 	if minStr != "" {
 		if minute, err = strconv.Atoi(minStr); err != nil || minute < 0 || minute > 59 {
-			return time.Time{}, false
+			return nil, false
 		}
 	}
 	ampm = strings.ReplaceAll(ampm, ".", "")
@@ -304,22 +305,22 @@ func parseReset(s string, now time.Time) (time.Time, bool) {
 		if at.Before(ref) {
 			at = at.AddDate(0, 0, 1)
 		}
-		return at, true
+		return &at, true
 	}
 
 	mon, ok := parseMonth(monStr)
 	if !ok {
-		return time.Time{}, false
+		return nil, false
 	}
 	day, err := strconv.Atoi(dayStr)
 	if err != nil || day < 1 || day > 31 {
-		return time.Time{}, false
+		return nil, false
 	}
 	at := time.Date(ref.Year(), mon, day, hour, minute, 0, 0, loc)
 	if at.Before(ref.AddDate(0, 0, -1)) {
 		at = at.AddDate(1, 0, 0)
 	}
-	return at, true
+	return &at, true
 }
 
 var months = map[string]time.Month{
