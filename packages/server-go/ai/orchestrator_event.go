@@ -62,6 +62,63 @@ var planPhaseTimeout = func() time.Duration {
 // teardown has actually failed to happen in time — not on every run.
 var planPhaseHardStopGrace = 15 * time.Second
 
+// taskWallBudgetItem is the maximum wall-clock time for a single worklist item.
+// Default 20 minutes; tasks that exceed this fail. Overridable via
+// MYEDITOR_TASK_BUDGET_MIN_HAIKU_ITEM.
+var taskWallBudgetItem = func() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("MYEDITOR_TASK_BUDGET_MIN_HAIKU_ITEM")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 20 * 60 * time.Second
+}()
+
+// taskWallBudgetOther is the maximum wall-clock time for non-item work.
+// Default 45 minutes. Overridable via MYEDITOR_TASK_BUDGET_MIN.
+var taskWallBudgetOther = func() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("MYEDITOR_TASK_BUDGET_MIN")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 45 * 60 * time.Second
+}()
+
+// maxIterationsItem is the maximum outer iterations for a single worklist item.
+// Default 3; items that hit this cap fail. Overridable via
+// MYEDITOR_MAX_ITERATIONS_ITEM.
+var maxIterationsItem = func() int {
+	if v := strings.TrimSpace(os.Getenv("MYEDITOR_MAX_ITERATIONS_ITEM")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 3
+}()
+
+// sessionBudget is the maximum wall-clock time for a single chat session.
+// Default 8 minutes. Overridable via MYEDITOR_SESSION_BUDGET_SECS.
+var sessionBudget = func() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("MYEDITOR_SESSION_BUDGET_SECS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 8 * 60 * time.Second
+}()
+
+// planBudgetItem is the maximum wall-clock time for planning a single item.
+// Default 45 seconds. Overridable via MYEDITOR_PLAN_BUDGET_SECS_ITEM.
+var planBudgetItem = func() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("MYEDITOR_PLAN_BUDGET_SECS_ITEM")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 45 * time.Second
+}()
+
 // EventOrchestrator runs the event-driven autonomy loop.
 // It manages intake → requirements → planning → team dispatch → validation → completion.
 type EventOrchestrator struct {
@@ -78,6 +135,11 @@ type EventOrchestrator struct {
 	paused             bool
 	pausedUntil        <-chan struct{}
 	maxOuterIterations int
+
+	// Budget tracking for task-mode items
+	taskStartTime      time.Time
+	taskWallBudget     time.Duration
+	iterationCap       int
 
 	// failure is why the run ended badly, or nil if it did not.
 	//
@@ -190,11 +252,27 @@ func startEventOrchestrator(cfg OrchestratorConfig) (*EventOrchestrator, error) 
 		cancel:             cancel,
 		redirectQueue:      make(chan string, 10),
 		maxOuterIterations: cfg.MaxOuterIterations,
+		taskStartTime:      time.Now(),
 	}
 
 	if eo.maxOuterIterations <= 0 {
 		eo.maxOuterIterations = OrchestratorMaxOuterIterations
 	}
+
+	// Calculate effective taskWallBudget based on TaskMode and RequestedModel.
+	// Task mode gets a tighter budget and lower iteration cap.
+	if cfg.TaskMode {
+		eo.taskWallBudget = taskWallBudgetItem
+		eo.iterationCap = maxIterationsItem
+	} else {
+		eo.taskWallBudget = taskWallBudgetOther
+		eo.iterationCap = eo.maxOuterIterations
+	}
+
+	// Log budget at task start
+	budgetMin := int(eo.taskWallBudget.Minutes())
+	eo.cfg.OnProgress(fmt.Sprintf("budget: plan=%ds session=%ds task=%dm iterations=%d",
+		int(planPhaseTimeout.Seconds()), int(sessionBudget.Seconds()), budgetMin, eo.iterationCap))
 
 	// Honour the caller's cancel channel. The event orchestrator had its own
 	// context and ignored cfg.Cancel entirely, so a caller holding the only
@@ -251,9 +329,16 @@ func (eo *EventOrchestrator) eventLoop() {
 	}
 
 	// Phase 3+: Execute with team dispatch + validation loop
-	for eo.brain.OuterIterationCount() < eo.maxOuterIterations {
+	for eo.brain.OuterIterationCount() < eo.iterationCap {
 		iteration := eo.brain.NextOuterIteration()
-		eo.cfg.OnPhase("execute", fmt.Sprintf("iteration %d/%d", iteration, eo.maxOuterIterations))
+		eo.cfg.OnPhase("execute", fmt.Sprintf("iteration %d/%d", iteration, eo.iterationCap))
+
+		// Check wall-clock budget before dispatch
+		if time.Since(eo.taskStartTime) > eo.taskWallBudget {
+			eo.fail(fmt.Errorf("budget: task wall %dm exceeded after %d iterations",
+				int(eo.taskWallBudget.Minutes()), eo.brain.OuterIterationCount()))
+			return
+		}
 
 		// Dispatch ready teams
 		if err := eo.phaseDispatchTeams(); err != nil {
@@ -269,6 +354,13 @@ func (eo *EventOrchestrator) eventLoop() {
 				return
 			}
 			eo.fail(fmt.Errorf("team execution failed: %w", err))
+			return
+		}
+
+		// Check wall-clock budget after teams complete
+		if time.Since(eo.taskStartTime) > eo.taskWallBudget {
+			eo.fail(fmt.Errorf("budget: task wall %dm exceeded after %d iterations",
+				int(eo.taskWallBudget.Minutes()), eo.brain.OuterIterationCount()))
 			return
 		}
 
@@ -292,7 +384,13 @@ func (eo *EventOrchestrator) eventLoop() {
 		}
 	}
 
-	eo.fail(fmt.Errorf("max iterations (%d) reached", eo.maxOuterIterations))
+	// Check if we hit the iteration cap
+	if eo.brain.OuterIterationCount() >= eo.iterationCap {
+		eo.fail(fmt.Errorf("budget: %d iterations without passing validation", eo.brain.OuterIterationCount()))
+		return
+	}
+
+	eo.fail(fmt.Errorf("max iterations (%d) reached", eo.iterationCap))
 }
 
 // phaseIntake runs design grill → PRD distillation.
@@ -346,7 +444,7 @@ func (eo *EventOrchestrator) phasePlan() error {
 	}
 
 	// Task mode's plan phase is one already-decided item, not a project to
-	// conceive: bound it to a 60s wall clock, and to haiku unless the caller
+	// conceive: bound it to planBudgetItem wall clock, and to haiku unless the caller
 	// pinned a specific model for this dispatch (RequestedModel wins — that
 	// pin is a floor for the whole run, not something the plan phase should
 	// silently override). Without this a "plan" phase was a second uncapped
@@ -356,7 +454,7 @@ func (eo *EventOrchestrator) phasePlan() error {
 		if strings.TrimSpace(eo.cfg.RequestedModel) == "" {
 			cc.Ctx.ModelOverride = "haiku"
 		}
-		timer := time.NewTimer(planPhaseTimeout)
+		timer := time.NewTimer(planBudgetItem)
 		defer timer.Stop()
 		boundedCancel := make(chan struct{})
 		go func() {
@@ -413,12 +511,12 @@ func (eo *EventOrchestrator) phasePlan() error {
 		}()
 		select {
 		case <-done:
-		case <-time.After(planPhaseTimeout + planPhaseHardStopGrace):
+		case <-time.After(planBudgetItem + planPhaseHardStopGrace):
 			for _, pid := range LiveSessionPIDs(eo.cfg.TaskID) {
 				_ = KillPIDTree(pid)
 			}
 			log.Printf("task %s: plan phase exceeded %s wall clock (budget %s) — force-killed, using output produced so far",
-				eo.cfg.TaskID, planPhaseTimeout+planPhaseHardStopGrace, planPhaseTimeout)
+				eo.cfg.TaskID, planBudgetItem+planPhaseHardStopGrace, planBudgetItem)
 			// done fires once the killed RunLoop actually returns and the
 			// goroutine above closes it; drain it so that goroutine cannot
 			// leak, but do not block the phase on it any longer.
@@ -795,6 +893,14 @@ func newChatContextForPhase(projectPath string, sessionID string) *CapturedChat 
 // cfg.Cancel means a stopped run stops inside the phase rather than at the next
 // phase boundary, which for a long builder turn is the difference between
 // stopping and appearing not to.
+//
+// TODO: Session budget enforcement needs integration with team_dispatcher.go.
+// Each session should be monitored for wall-clock duration and killed if it
+// exceeds sessionBudget (default 8 minutes). Track via context.WithTimeout or
+// a separate budget checker.
+//
+// TODO: Instrumentation — parse claude -p output JSON for num_turns/duration_ms/usage
+// and log on session exit for budget telemetry.
 func newPhaseChat(cfg OrchestratorConfig, sessionID string) *CapturedChat {
 	cc := newChatContextForPhase(cfg.ProjectPath, sessionID)
 	cc.Ctx.Cancel = cfg.Cancel
