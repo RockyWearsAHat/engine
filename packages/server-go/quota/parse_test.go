@@ -736,3 +736,90 @@ func TestOmitResetFieldsWhenUnknown(t *testing.T) {
 		}
 	}
 }
+
+func TestFixtureWeekResetCarriedInPooledSnapshot(t *testing.T) {
+	// Test: week reset time is parsed, carried through pooled snapshot wire format,
+	// and reconstructed correctly in UTC. This verifies both the parsing
+	// (fixture → Snapshot) and the pooling round-trip (Snapshot → SnapshotAccount → Snapshot).
+	loc := denver(t)
+	now := time.Date(2026, time.September, 4, 12, 0, 0, 0, loc)
+
+	s, err := ParseUsage(fixtureUsageOutput, now)
+	if err != nil {
+		t.Fatalf("ParseUsage: %v", err)
+	}
+	if !s.Ok {
+		t.Fatalf("expected Ok snapshot, got err=%q", s.Err)
+	}
+
+	// Verify week reset is parsed
+	if !s.Week.HasReset {
+		t.Fatal("week.HasReset should be true")
+	}
+	if s.Week.ResetsAt == nil {
+		t.Fatal("week.ResetsAt should not be nil")
+	}
+
+	// Verify week reset time is correct in Denver time (3pm = 15:00)
+	wantWeekResetDenver := time.Date(2026, time.September, 5, 15, 0, 0, 0, loc)
+	if !s.Week.ResetsAt.Equal(wantWeekResetDenver) {
+		t.Errorf("week.ResetsAt (Denver) = %v, want %v", s.Week.ResetsAt, wantWeekResetDenver)
+	}
+
+	// Verify week reset time is correct in UTC (3pm Denver + 6 hours = 9pm UTC = 21:00 UTC)
+	wantWeekResetUTC := time.Date(2026, time.September, 5, 21, 0, 0, 0, time.UTC)
+	if !s.Week.ResetsAt.UTC().Equal(wantWeekResetUTC) {
+		t.Errorf("week.ResetsAt (UTC) = %v, want %v", s.Week.ResetsAt.UTC(), wantWeekResetUTC)
+	}
+
+	// Verify session reset time is correct in UTC (7pm Denver + 6 hours = 1am next day UTC = 01:00 UTC Sep 5)
+	if !s.Session.HasReset {
+		t.Fatal("session.HasReset should be true")
+	}
+	if s.Session.ResetsAt == nil {
+		t.Fatal("session.ResetsAt should not be nil")
+	}
+	wantSessionResetUTC := time.Date(2026, time.September, 5, 1, 0, 0, 0, time.UTC)
+	if !s.Session.ResetsAt.UTC().Equal(wantSessionResetUTC) {
+		t.Errorf("session.ResetsAt (UTC) = %v, want %v", s.Session.ResetsAt.UTC(), wantSessionResetUTC)
+	}
+
+	// Test pooled snapshot wire format: convert to SnapshotAccount and back.
+	// This simulates the /quota/snapshot endpoint serializing to JSON and another
+	// box deserializing it.
+	policy := DefaultPolicy()
+	sa := snapshotAccount(Account{Name: "test", Identity: Identity{Email: "test@example.com"}}, s, policy, now)
+
+	// Verify SnapshotAccount carries both resets in RFC3339 format
+	if sa.SessionResetAt == "" {
+		t.Error("SnapshotAccount.SessionResetAt should not be empty")
+	}
+	if sa.WeekResetAt == "" {
+		t.Error("SnapshotAccount.WeekResetAt should not be empty")
+	}
+
+	// Reconstruct Snapshot from SnapshotAccount (simulating deserialization from /quota/snapshot)
+	s2 := sa.toSnapshot("test", now)
+
+	// Verify reconstructed week reset is present and correct in UTC
+	if !s2.Week.HasReset {
+		t.Fatal("reconstructed week.HasReset should be true")
+	}
+	if s2.Week.ResetsAt == nil {
+		t.Fatal("reconstructed week.ResetsAt should not be nil")
+	}
+	if !s2.Week.ResetsAt.UTC().Equal(wantWeekResetUTC) {
+		t.Errorf("reconstructed week.ResetsAt (UTC) = %v, want %v", s2.Week.ResetsAt.UTC(), wantWeekResetUTC)
+	}
+
+	// Verify reconstructed session reset is present and correct in UTC
+	if !s2.Session.HasReset {
+		t.Fatal("reconstructed session.HasReset should be true")
+	}
+	if s2.Session.ResetsAt == nil {
+		t.Fatal("reconstructed session.ResetsAt should not be nil")
+	}
+	if !s2.Session.ResetsAt.UTC().Equal(wantSessionResetUTC) {
+		t.Errorf("reconstructed session.ResetsAt (UTC) = %v, want %v", s2.Session.ResetsAt.UTC(), wantSessionResetUTC)
+	}
+}
