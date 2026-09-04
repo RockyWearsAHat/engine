@@ -147,3 +147,119 @@ func TestProcessTreeKill(t *testing.T) {
 	}
 	t.Logf("process exit code: %d (killed processes typically have non-zero exit)", exitCode)
 }
+
+// mockProcessLister implements processLister for testing boot sweep and guard logic.
+type mockProcessLister struct {
+	processes      []processInfo
+	killLog        []int // tracks which PIDs were killed
+	killShouldFail bool
+}
+
+func (m *mockProcessLister) ListProcesses() ([]processInfo, error) {
+	return m.processes, nil
+}
+
+func (m *mockProcessLister) KillProcess(pid int) error {
+	if m.killShouldFail {
+		return fmt.Errorf("kill failed")
+	}
+	m.killLog = append(m.killLog, pid)
+	return nil
+}
+
+// TestBootSweepEnumeration verifies that boot sweep correctly identifies and kills orphaned processes.
+func TestBootSweepEnumeration(t *testing.T) {
+	currentPID := os.Getpid()
+	lister := &mockProcessLister{
+		processes: []processInfo{
+			{PID: currentPID, ParentPID: 1, ExeName: "engine-server.exe", WorkingSet: 10},
+			{PID: 9001, ParentPID: currentPID, ExeName: "claude.exe", WorkingSet: 20}, // live (current server child)
+			{PID: 9002, ParentPID: 0, ExeName: "claude.exe", WorkingSet: 30},           // orphan (no parent)
+			{PID: 9003, ParentPID: 9999, ExeName: "claude.exe", WorkingSet: 40},        // orphan (parent doesn't exist)
+			{PID: 9004, ParentPID: currentPID, ExeName: "engine-server.exe", WorkingSet: 15}, // orphan
+			{PID: 9005, ParentPID: 1, ExeName: "node.exe", WorkingSet: 5},             // not our concern
+		},
+	}
+
+	killed, reclaimedMB := bootSweepWithLister(lister)
+
+	// Should kill: 9002 (orphan), 9003 (orphan), 9004 (engine-server.exe)
+	// Should NOT kill: currentPID, 9001 (live), 9005 (node.exe)
+	expectedKilled := 3
+	if killed != expectedKilled {
+		t.Errorf("expected %d killed, got %d", expectedKilled, killed)
+	}
+
+	expectedMB := int64(30 + 40 + 15) // 9002, 9003, 9004
+	if reclaimedMB != expectedMB {
+		t.Errorf("expected %d MB reclaimed, got %d", expectedMB, reclaimedMB)
+	}
+
+	// Verify the right PIDs were killed.
+	if len(lister.killLog) != expectedKilled {
+		t.Errorf("expected %d kill calls, got %d", expectedKilled, len(lister.killLog))
+	}
+
+	killMap := make(map[int]bool)
+	for _, pid := range lister.killLog {
+		killMap[pid] = true
+	}
+
+	for _, expectedPID := range []int{9002, 9003, 9004} {
+		if !killMap[expectedPID] {
+			t.Errorf("expected PID %d to be killed, but wasn't", expectedPID)
+		}
+	}
+}
+
+// TestBootSweepWithNoOrphans verifies boot sweep logs "nothing to reap" when no orphans found.
+func TestBootSweepWithNoOrphans(t *testing.T) {
+	currentPID := os.Getpid()
+	lister := &mockProcessLister{
+		processes: []processInfo{
+			{PID: currentPID, ParentPID: 1, ExeName: "engine-server.exe", WorkingSet: 10},
+			{PID: 9001, ParentPID: currentPID, ExeName: "claude.exe", WorkingSet: 20},
+		},
+	}
+
+	killed, reclaimedMB := bootSweepWithLister(lister)
+
+	if killed != 0 || reclaimedMB != 0 {
+		t.Errorf("expected 0 killed and reclaimed, got %d killed, %d MB", killed, reclaimedMB)
+	}
+
+	if len(lister.killLog) != 0 {
+		t.Errorf("expected no kill calls, got %d", len(lister.killLog))
+	}
+}
+
+// TestPeriodicGuardEnumeration verifies guard correctly kills processes with dead parents.
+func TestPeriodicGuardEnumeration(t *testing.T) {
+	currentPID := os.Getpid()
+	lister := &mockProcessLister{
+		processes: []processInfo{
+			{PID: currentPID, ParentPID: 1, ExeName: "engine-server.exe", WorkingSet: 10},
+			{PID: 9001, ParentPID: currentPID, ExeName: "claude.exe", WorkingSet: 20}, // live
+			{PID: 9002, ParentPID: 9999, ExeName: "claude.exe", WorkingSet: 30},        // orphan
+			{PID: 9004, ParentPID: 1, ExeName: "engine-server.exe", WorkingSet: 15},   // orphan
+		},
+	}
+
+	killed := guardOnceWithLister(lister)
+
+	expectedKilled := 2 // 9002 (orphan claude) and 9004 (engine-server)
+	if killed != expectedKilled {
+		t.Errorf("expected %d killed, got %d", expectedKilled, killed)
+	}
+
+	killMap := make(map[int]bool)
+	for _, pid := range lister.killLog {
+		killMap[pid] = true
+	}
+
+	for _, expectedPID := range []int{9002, 9004} {
+		if !killMap[expectedPID] {
+			t.Errorf("expected PID %d to be killed, but wasn't", expectedPID)
+		}
+	}
+}
