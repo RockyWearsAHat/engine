@@ -158,6 +158,12 @@ func run() error {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
 
+	// Boot sweep: kill orphaned processes from prior instance before accepting tasks.
+	ai.BootSweep()
+
+	// Start periodic guard to reap stray processes every 60 seconds.
+	ai.StartPeriodicGuard()
+
 	hub := newHubFn(projectPath)
 
 	if cfg, err := loadDiscordConfigFn(projectPath); err != nil {
