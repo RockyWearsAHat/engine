@@ -272,7 +272,7 @@ func startEventOrchestrator(cfg OrchestratorConfig) (*EventOrchestrator, error) 
 	// Log budget at task start
 	budgetMin := int(eo.taskWallBudget.Minutes())
 	eo.cfg.OnProgress(fmt.Sprintf("budget: plan=%ds session=%ds task=%dm iterations=%d",
-		int(planPhaseTimeout.Seconds()), int(sessionBudget.Seconds()), budgetMin, eo.iterationCap))
+		int(planPhaseTimeout.Seconds()), int(sessionBudget.Seconds()), budgetMin, eo.effectiveIterationCap()))
 
 	// Honour the caller's cancel channel. The event orchestrator had its own
 	// context and ignored cfg.Cancel entirely, so a caller holding the only
@@ -297,6 +297,23 @@ func startEventOrchestrator(cfg OrchestratorConfig) (*EventOrchestrator, error) 
 	}()
 
 	return eo, nil
+}
+
+// effectiveIterationCap returns the iteration limit, using the legacy default
+// when the orchestrator was not initialized via startEventOrchestrator.
+// Struct-literal tests bypass startEventOrchestrator and leave iterationCap at 0,
+// so zero means "use maxOuterIterations" (the legacy behavior).
+func (eo *EventOrchestrator) effectiveIterationCap() int {
+	if eo.iterationCap <= 0 {
+		return eo.maxOuterIterations
+	}
+	return eo.iterationCap
+}
+
+// shouldCheckWallBudget returns whether this task has a wall-clock budget.
+// Zero taskWallBudget means no budget (legacy struct-literal orchestrators).
+func (eo *EventOrchestrator) shouldCheckWallBudget() bool {
+	return eo.taskWallBudget > 0
 }
 
 // eventLoop is the main event-driven orchestrator loop.
@@ -329,12 +346,12 @@ func (eo *EventOrchestrator) eventLoop() {
 	}
 
 	// Phase 3+: Execute with team dispatch + validation loop
-	for eo.brain.OuterIterationCount() < eo.iterationCap {
+	for eo.brain.OuterIterationCount() < eo.effectiveIterationCap() {
 		iteration := eo.brain.NextOuterIteration()
-		eo.cfg.OnPhase("execute", fmt.Sprintf("iteration %d/%d", iteration, eo.iterationCap))
+		eo.cfg.OnPhase("execute", fmt.Sprintf("iteration %d/%d", iteration, eo.effectiveIterationCap()))
 
 		// Check wall-clock budget before dispatch
-		if time.Since(eo.taskStartTime) > eo.taskWallBudget {
+		if eo.shouldCheckWallBudget() && time.Since(eo.taskStartTime) > eo.taskWallBudget {
 			eo.fail(fmt.Errorf("budget: task wall %dm exceeded after %d iterations",
 				int(eo.taskWallBudget.Minutes()), eo.brain.OuterIterationCount()))
 			return
@@ -358,7 +375,7 @@ func (eo *EventOrchestrator) eventLoop() {
 		}
 
 		// Check wall-clock budget after teams complete
-		if time.Since(eo.taskStartTime) > eo.taskWallBudget {
+		if eo.shouldCheckWallBudget() && time.Since(eo.taskStartTime) > eo.taskWallBudget {
 			eo.fail(fmt.Errorf("budget: task wall %dm exceeded after %d iterations",
 				int(eo.taskWallBudget.Minutes()), eo.brain.OuterIterationCount()))
 			return
@@ -384,13 +401,11 @@ func (eo *EventOrchestrator) eventLoop() {
 		}
 	}
 
-	// Check if we hit the iteration cap
-	if eo.brain.OuterIterationCount() >= eo.iterationCap {
-		eo.fail(fmt.Errorf("budget: %d iterations without passing validation", eo.brain.OuterIterationCount()))
+	// Check if we hit the iteration cap without passing validation
+	if eo.brain.OuterIterationCount() >= eo.effectiveIterationCap() {
+		eo.fail(fmt.Errorf("max iterations (%d) reached without passing validation", eo.effectiveIterationCap()))
 		return
 	}
-
-	eo.fail(fmt.Errorf("max iterations (%d) reached", eo.iterationCap))
 }
 
 // phaseIntake runs design grill → PRD distillation.
