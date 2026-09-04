@@ -45,6 +45,10 @@ type PooledSnapshot struct {
 	Accounts       []SnapshotAccount `json:"accounts"`
 	MaxConcurrency int               `json:"maxConcurrency"`
 	GeneratedAt    time.Time         `json:"generatedAt"`
+	// Stale is true when the snapshot is older than 2× the refresh interval
+	// (or has never been refreshed). Callers should prefer fresh snapshots
+	// but can use stale ones as fallback.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // Fresh reports whether the snapshot is young enough to govern on.

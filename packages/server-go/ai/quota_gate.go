@@ -50,6 +50,10 @@ type quotaGate struct {
 	obsMu     sync.Mutex
 	obsNextID uint64
 	obsActive map[uint64]bool
+
+	// snapshotCache holds the cached snapshot and refreshes it in the background.
+	// The cache prevents /quota/snapshot from blocking on probe I/O.
+	snapshotCache *snapshotCache
 }
 
 var (
@@ -75,6 +79,9 @@ func quotaObserver() *quota.Observer {
 // environment. Test-only; the gate is deliberately process-wide in production
 // because account resolution should happen once, not per dispatch.
 func resetQuotaGateForTest() {
+	if gate != nil && gate.snapshotCache != nil {
+		gate.snapshotCache.stop()
+	}
 	gateOnce = sync.Once{}
 	gate = nil
 	observerOnce = sync.Once{}
@@ -83,6 +90,14 @@ func resetQuotaGateForTest() {
 
 // gateBuiltForTest reports whether the (expensive) gate has been constructed.
 func gateBuiltForTest() bool { return gate != nil }
+
+// closeQuotaGateForShutdown stops the background snapshot refresh.
+// Safe to call even if the gate was never built.
+func closeQuotaGateForShutdown() {
+	if gate != nil && gate.snapshotCache != nil {
+		gate.snapshotCache.stop()
+	}
+}
 
 // quotaEnabled reports whether quota governance is active. On unless explicitly
 // disabled — an engine that cannot see its own fuel gauge is the problem this
@@ -113,6 +128,102 @@ func quotaLedgerPath() string {
 }
 
 // quotaPolicyFromEnv reads the ceilings, falling back to the built-in defaults.
+// snapshotCache holds a cached PooledSnapshot and refreshes it on a background
+// goroutine. The cache prevents /quota/snapshot from blocking on probe I/O.
+//
+// The cache returns immediately with stale=true when no refresh has completed
+// yet, or stale=false when the snapshot is fresh (< 2x the refresh interval).
+type snapshotCache struct {
+	// Config
+	interval time.Duration
+	now      func() time.Time
+
+	// State
+	mu        sync.RWMutex
+	snap      quota.PooledSnapshot
+	refreshed bool
+	stopCh    chan struct{}
+	doneCh    chan struct{}
+}
+
+// newSnapshotCache creates a cache that refreshes every interval.
+// A zero interval uses the default (30s).
+func newSnapshotCache(interval time.Duration, now func() time.Time) *snapshotCache {
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	if now == nil {
+		now = time.Now
+	}
+	return &snapshotCache{
+		interval: interval,
+		now:      now,
+		stopCh:   make(chan struct{}),
+		doneCh:   make(chan struct{}),
+	}
+}
+
+// get returns the cached snapshot and whether it is stale.
+// Stale means refreshedAt is older than 2x the interval (or never refreshed).
+func (sc *snapshotCache) get() (quota.PooledSnapshot, bool) {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	if !sc.refreshed {
+		// Never refreshed yet; always stale.
+		return sc.snap, true
+	}
+	age := sc.now().Sub(sc.snap.GeneratedAt)
+	stale := age > 2*sc.interval
+	return sc.snap, stale
+}
+
+// set updates the cached snapshot.
+func (sc *snapshotCache) set(snap quota.PooledSnapshot) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	sc.snap = snap
+	sc.refreshed = true
+}
+
+// start begins the background refresh loop. Safe to call once.
+func (sc *snapshotCache) start(refreshFn func(context.Context) quota.PooledSnapshot) {
+	go func() {
+		ticker := time.NewTicker(sc.interval)
+		defer ticker.Stop()
+		defer close(sc.doneCh)
+
+		// Initial refresh immediately (without waiting for the first tick).
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		snap := refreshFn(ctx)
+		cancel()
+		if snap.Machine != "" {
+			sc.set(snap)
+		}
+
+		for {
+			select {
+			case <-sc.stopCh:
+				return
+			case <-ticker.C:
+				// Refresh with a timeout. Use context.Background() so a caller
+				// giving up early doesn't cancel the refresh.
+				ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+				snap := refreshFn(ctx)
+				cancel()
+				if snap.Machine != "" {
+					sc.set(snap)
+				}
+			}
+		}
+	}()
+}
+
+// stop stops the refresh loop and waits for it to finish.
+func (sc *snapshotCache) stop() {
+	close(sc.stopCh)
+	<-sc.doneCh
+}
+
 func quotaPolicyFromEnv() quota.Policy {
 	p := quota.DefaultPolicy()
 	if n := envInt("ENGINE_QUOTA_MAX_CONCURRENCY", 0); n > 0 {
@@ -182,6 +293,15 @@ func quotaGateInstance() *quotaGate {
 			MinSamples: envInt("ENGINE_QUOTA_MIN_SAMPLES", 0),
 			SuccessBar: envFloat("ENGINE_QUOTA_SUCCESS_BAR", 0),
 		})
+
+		// Start the snapshot cache. It refreshes in the background so /quota/snapshot
+		// never blocks on probe I/O.
+		g.snapshotCache = newSnapshotCache(0, time.Now)
+		host, _ := os.Hostname()
+		g.snapshotCache.start(func(ctx context.Context) quota.PooledSnapshot {
+			return g.governor.Snapshot(ctx, host)
+		})
+
 		gate = g
 	})
 	return gate
@@ -480,13 +600,18 @@ func (g *quotaGate) closeQuota(d QuotaDispatch, recording bool) float64 {
 
 // QuotaSnapshot exports this box's local readings for the fleet primary.
 // ok=false when governance is off.
+//
+// The snapshot is cached and returns immediately with a stale flag indicating
+// whether the data is older than the refresh interval (or has never been
+// refreshed). This prevents the handler from blocking on probe I/O.
 func QuotaSnapshot(ctx context.Context) (quota.PooledSnapshot, bool) {
 	g := quotaGateInstance()
 	if !g.enabled || g.governor == nil {
 		return quota.PooledSnapshot{}, false
 	}
-	host, _ := os.Hostname()
-	return g.governor.Snapshot(ctx, host), true
+	snap, stale := g.snapshotCache.get()
+	snap.Stale = stale
+	return snap, true
 }
 
 // QuotaSetPooled stores the primary's merged snapshot. Governor prefers it
