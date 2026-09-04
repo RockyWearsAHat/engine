@@ -185,6 +185,19 @@ type OrchestratorConfig struct {
 	// (e.g., "design-reviewer"). Optional — empty defaults to standard orchestrator.
 	RequestedRole string
 
+	// TeamSize is how many teams/workers may run concurrently for this one
+	// dispatch. 0 = unset, falls back to MYEDITOR_TEAM_SIZE (default 1).
+	//
+	// One item = one worker is the default: before this field existed, the
+	// event orchestrator sized concurrent teams off the quota governor's
+	// MaxConcurrency lever, so a single dx worklist item could fan out into
+	// 3-5 concurrent `claude -p` sessions purely because the quota tier
+	// allowed that many concurrent sessions project-wide — never because the
+	// item asked for a team. That is what exhausted box memory: 3 in-flight
+	// tasks became 14 concurrent CLI processes. Set TeamSize > 1 only when
+	// the dispatch payload explicitly asks for a team.
+	TeamSize int
+
 	// Cancel, when closed, stops the orchestrator at the next safe checkpoint.
 	Cancel <-chan struct{}
 
