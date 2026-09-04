@@ -127,10 +127,18 @@ func (p *claudecodeProvider) RunLoop(
 	// here. (MaxContextTokens binds earlier, where the prompt is assembled —
 	// see governedContextBudget; by the time we are here the history has
 	// already been trimmed to it.)
+	//
+	// Task mode (single worklist item) runs one session per iteration with no
+	// subagent fan-out. The goal is one process per item, memory-efficiently,
+	// not concurrent teams. Override the governor's ceiling regardless of tier.
+	subagentFanout := dispatch.SubagentFanout
+	if strings.TrimSpace(ctx.TaskID) != "" {
+		subagentFanout = 0
+	}
 	// Hub identity before launch: agent_list on a peer must already show this
 	// worker when the CLI comes up.
 	registerChatAgent(ctx)
-	args := buildClaudeArgs(ctx, model, systemPrompt, dispatch.SubagentFanout)
+	args := buildClaudeArgs(ctx, model, systemPrompt, subagentFanout)
 	if p := mcpConfigPathFromArgs(args); p != "" {
 		defer os.Remove(p)
 	}
@@ -196,8 +204,9 @@ func (p *claudecodeProvider) RunLoop(
 	}
 
 	RegisterSession(taskID, pid, phase)
-	log.Printf("session spawn task=%s phase=%s pid=%d live=%d trees=%d freeCommitMB=%d",
-		taskID, phase, pid, LiveSessionCount(), LiveJobObjectCount(), freeCommitMB())
+	taskSessions := LiveTaskSessionCount(taskID)
+	log.Printf("session spawn task=%s phase=%s pid=%d live=%d trees=%d taskSessions=%d freeCommitMB=%d",
+		taskID, phase, pid, LiveSessionCount(), LiveJobObjectCount(), taskSessions, freeCommitMB())
 	// exitStats is filled from the result event once the stream has been read;
 	// a session that dies before it gets there exits with zero turns and its
 	// wall clock, which is itself the telemetry (see sessionExitLogLine).

@@ -333,6 +333,7 @@ func (eo *EventOrchestrator) eventLoop() {
 	// already decided, existing docs read by planner. Same rule as serial.
 	if eo.cfg.TaskMode {
 		eo.cfg.OnPhase("task", "single worklist item — skipping intake and PRD, planning from the item")
+		log.Printf("mode=item sessions=1 fanout=0")
 		eo.brain.UpdateRequirements(ReadDoc(eo.cfg.ProjectPath, DocDesign), ReadDoc(eo.cfg.ProjectPath, DocVocabulary),
 			ReadDoc(eo.cfg.ProjectPath, DocPRD), ReadDoc(eo.cfg.ProjectPath, DocModules))
 	} else {

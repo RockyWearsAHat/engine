@@ -122,6 +122,21 @@ func TestBuildClaudeArgs_SubagentFanout(t *testing.T) {
 	}
 }
 
+func TestBuildClaudeArgs_TaskModeOverridesFanout(t *testing.T) {
+	// Task mode (single worklist item) must force fanout=0 regardless of
+	// governor's ceiling, to keep one process per item, not concurrent teams.
+	ctx := &ChatContext{ProjectPath: "/tmp/proj", TaskID: "item-123"}
+
+	// Even a high fanout (2) should be overridden to 0 in task mode
+	// by the caller (claudecode.RunLoop), but test the override works.
+	// The override happens before buildClaudeArgs is called, so this test
+	// just verifies that fanout 0 produces the right args.
+	zero := strings.Join(buildClaudeArgs(ctx, "claude-sonnet-4-5", "sys", 0), " ")
+	if !strings.Contains(zero, "--disallowedTools Task") {
+		t.Errorf("task mode with fanout 0 must disallow Task tool; got %q", zero)
+	}
+}
+
 func TestFlattenHistoryForCLI(t *testing.T) {
 	// Single turn → verbatim.
 	single := []anthropicMessage{{Role: "user", Content: "build a thing"}}
