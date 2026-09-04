@@ -43,6 +43,13 @@ func effectiveTeamSize(requested int) int {
 // second uncapped session per item.
 const planPhaseTimeout = 60 * time.Second
 
+// planPhaseHardStopGrace is added on top of planPhaseTimeout before phasePlan
+// itself gives up waiting on the plan call and moves on with whatever output
+// was captured. It covers the provider's own cancel-bridge + cmd.WaitDelay
+// teardown (~5s) plus taskkill/kill(2) overhead, so this only fires when that
+// teardown has actually failed to happen in time — not on every run.
+const planPhaseHardStopGrace = 15 * time.Second
+
 // EventOrchestrator runs the event-driven autonomy loop.
 // It manages intake → requirements → planning → team dispatch → validation → completion.
 type EventOrchestrator struct {
@@ -374,7 +381,39 @@ func (eo *EventOrchestrator) phasePlan() error {
 	req := eo.brain.GetRequirements()
 	prompt := buildPlannerPromptWithContext(eo.cfg.Brief, eo.eventPlannerContext(req))
 
-	eo.cfg.chatFnFor()(cc.Ctx, prompt)
+	// Run the call off-goroutine and enforce the wall clock here too, not
+	// only via cc.Ctx.Cancel. Observed live: plan phases were taking 130-160s
+	// against a 60s budget — cc.Ctx.Cancel closing depends on the provider's
+	// own cancel-bridge goroutine noticing in time and the CLI's process
+	// tree actually dying within cmd.WaitDelay, neither of which this call
+	// site could verify. This select is the backstop: whatever produced
+	// output by the deadline is what the plan is built from (task instructions:
+	// "the plan is taken from whatever was produced by then"), and it force-
+	// kills any session still registered for this task so a stuck `claude -p`
+	// never survives into the execute phase — the "two live sessions per task"
+	// bug this was chasing.
+	if eo.cfg.TaskMode {
+		done := make(chan struct{})
+		go func() {
+			eo.cfg.chatFnFor()(cc.Ctx, prompt)
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(planPhaseTimeout + planPhaseHardStopGrace):
+			for _, pid := range LiveSessionPIDs(eo.cfg.TaskID) {
+				_ = KillPIDTree(pid)
+			}
+			log.Printf("task %s: plan phase exceeded %s wall clock (budget %s) — force-killed, using output produced so far",
+				eo.cfg.TaskID, planPhaseTimeout+planPhaseHardStopGrace, planPhaseTimeout)
+			// done fires once the killed RunLoop actually returns and the
+			// goroutine above closes it; drain it so that goroutine cannot
+			// leak, but do not block the phase on it any longer.
+			go func() { <-done }()
+		}
+	} else {
+		eo.cfg.chatFnFor()(cc.Ctx, prompt)
+	}
 
 	// Parse plan from context output
 	output := cc.GetOutput()
@@ -727,6 +766,7 @@ func newPhaseChat(cfg OrchestratorConfig, sessionID string) *CapturedChat {
 	// at env default. One seam for both call sites (planner phases here,
 	// TeamWorker.runStep) so it cannot drift again.
 	cc.Ctx.ModelOverride = cfg.RequestedModel
+	cc.Ctx.TaskID = cfg.TaskID
 	if strings.TrimSpace(cfg.RequestedRole) != "" {
 		cc.Ctx.Role = agentRoleFromLabel(cfg.RequestedRole)
 	}

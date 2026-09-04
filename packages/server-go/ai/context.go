@@ -498,6 +498,11 @@ type ChatContext struct {
 	// Role determines the lean system prompt and pre-granted tool set.
 	// Defaults to RoleInteractive when zero-valued.
 	Role AgentRole
+	// TaskID correlates this chat/provider run with the task-api row that
+	// dispatched it (OrchestratorConfig.TaskID). Empty outside task mode.
+	// claudecode.go uses it to key the live-session registry so a restart
+	// can find and kill exactly the sessions a given task spawned.
+	TaskID string
 	// ProviderOverride overrides the provider for this Chat (e.g., "anthropic", "openai").
 	// Empty string uses auto-detection from model name.
 	ProviderOverride string

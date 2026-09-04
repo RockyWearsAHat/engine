@@ -142,6 +142,7 @@ func (t *engineTask) snapshot() map[string]any {
 		"coached":          t.Coached,
 		"escalated":        t.Escalated,
 		"lost":             t.Lost,
+		"sessionPids":      ai.LiveSessionPIDs(t.ID),
 	}
 	if t.FirstProgressAt != nil {
 		out["firstProgressAt"] = t.FirstProgressAt.UTC().Format(time.RFC3339)
@@ -363,6 +364,12 @@ type taskRecord struct {
 	// PID of the process that ran it. Not compared on reload — every
 	// running row found on reload is marked failed/lost regardless of PID.
 	PID int `json:"pid"`
+	// SessionPIDs are the `claude` CLI processes this task has spawned and
+	// not yet reaped (plan and/or execute — see ai.RegisterSession). On
+	// reload, a row still "running" has its sessions tree-killed by these
+	// PIDs before the row is marked failed+lost, so a restart never leaves
+	// them running as orphans holding box memory.
+	SessionPIDs []int `json:"sessionPids,omitempty"`
 }
 
 type tasksFile struct {
@@ -383,6 +390,7 @@ func (t *engineTask) record(key string) taskRecord {
 		Model: t.Model, TokensIn: t.TokensIn, TokensOut: t.TokensOut,
 		SubagentsSpawned: t.SubagentsSpawned, Coached: t.Coached, Escalated: t.Escalated,
 		CallbackURL: t.CallbackURL, Lost: t.Lost, PID: os.Getpid(),
+		SessionPIDs: ai.LiveSessionPIDs(t.ID),
 	}
 }
 
@@ -460,6 +468,23 @@ func (r *taskRegistry) load(path string) int {
 			cancel: make(chan struct{}),
 		}
 		if t.Status == taskRunning {
+			// The claude.exe/claude session(s) this task spawned survive the
+			// engine restart as orphans (children reparent) unless killed
+			// here — that is what turns a handful of restarted tasks into a
+			// pile of live `claude` processes eating box memory until the
+			// next crash. Kill every PID this row remembers spawning before
+			// marking it failed+lost.
+			reaped := 0
+			for _, pid := range rec.SessionPIDs {
+				if err := ai.KillPIDTree(pid); err != nil {
+					log.Printf("task api: reap pid %d for task %s: %v", pid, t.ID, err)
+					continue
+				}
+				reaped++
+			}
+			if reaped > 0 {
+				log.Printf("task api: reaped %d orphan session(s) for task %s", reaped, t.ID)
+			}
 			now := time.Now()
 			t.Status = taskFailed
 			t.Lost = true
