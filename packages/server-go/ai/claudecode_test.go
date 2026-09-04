@@ -65,11 +65,31 @@ func TestBuildClaudeArgs_SentinelModelOmitted(t *testing.T) {
 	if strings.Contains(joined, "--model") {
 		t.Errorf("sentinel model should not produce --model flag; got %q", joined)
 	}
-	if strings.Contains(joined, "--append-system-prompt") {
-		t.Errorf("empty system prompt should not produce --append-system-prompt; got %q", joined)
+	// Every session gets the one-item-one-worker directive appended, even
+	// with an empty input system prompt — so --append-system-prompt is now
+	// always present, and must carry that directive.
+	if !strings.Contains(joined, "--append-system-prompt") {
+		t.Errorf("the one-worker directive should still produce --append-system-prompt; got %q", joined)
+	}
+	if !strings.Contains(joined, "Do NOT spawn sub-agents or teams") {
+		t.Errorf("missing one-item-one-worker directive; got %q", joined)
 	}
 	if strings.Contains(joined, "--add-dir") {
 		t.Errorf("empty project path should not produce --add-dir; got %q", joined)
+	}
+}
+
+// The default brief — every session, regardless of fanout tier — must tell
+// the model to do the work itself rather than spinning up a team. This is
+// what stopped a single dispatched item from fanning out into several
+// concurrent `claude -p` processes.
+func TestBuildClaudeArgs_OneWorkerDirectiveAlwaysPresent(t *testing.T) {
+	ctx := &ChatContext{ProjectPath: "/tmp/proj"}
+	for _, fanout := range []int{-1, 0, 1, 2} {
+		joined := strings.Join(buildClaudeArgs(ctx, "claude-sonnet-4-5", "sys", fanout), " ")
+		if !strings.Contains(joined, "Do the work yourself in this one session. Do NOT spawn sub-agents or teams.") {
+			t.Errorf("fanout %d: missing one-item-one-worker directive; got %q", fanout, joined)
+		}
 	}
 }
 
