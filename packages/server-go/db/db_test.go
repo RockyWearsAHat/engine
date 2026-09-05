@@ -429,6 +429,49 @@ func TestGetProjectAttentionResiduals_DefaultLimit(t *testing.T) {
 	}
 }
 
+func TestSaveAttentionResiduals_DuplicateID_IsIdempotent(t *testing.T) {
+	initTestDB(t)
+
+	if err := CreateSession("dup-sess", "/p", "main"); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := SaveMessage("dup-msg-1", "dup-sess", "user", "test", nil); err != nil {
+		t.Fatalf("SaveMessage: %v", err)
+	}
+
+	residual := AttentionResidual{
+		ID:          "dup-residual",
+		SessionID:   "dup-sess",
+		MessageID:   "dup-msg-1",
+		SourceKey:   "file:main.go",
+		SourceType:  "file",
+		SourceLabel: "main.go",
+		QueryText:   "search query",
+		Weight:      0.8,
+		Score:       0.9,
+		Context:     "relevant context",
+	}
+
+	// Save the same residual twice
+	if err := SaveAttentionResiduals([]AttentionResidual{residual}); err != nil {
+		t.Fatalf("SaveAttentionResiduals (first): %v", err)
+	}
+
+	// Save again with same ID (should be idempotent, no error)
+	if err := SaveAttentionResiduals([]AttentionResidual{residual}); err != nil {
+		t.Fatalf("SaveAttentionResiduals (second): %v", err)
+	}
+
+	// Verify only one row exists
+	results, err := GetProjectAttentionResiduals("/p", 10)
+	if err != nil {
+		t.Fatalf("GetProjectAttentionResiduals: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("len = %d, want 1", len(results))
+	}
+}
+
 func TestDiscordRecordMessage(t *testing.T) {
 	initTestDB(t)
 
