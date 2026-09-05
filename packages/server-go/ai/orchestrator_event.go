@@ -110,6 +110,10 @@ var sessionBudget = func() time.Duration {
 	return 8 * 60 * time.Second
 }()
 
+// sessionCheckInterval is how often runBoundedSession re-examines idle and
+// absolute timeouts. Var, not const, so tests can shrink it with the timeouts.
+var sessionCheckInterval = 10 * time.Second
+
 // sessionIdleTimeout is the maximum time a session may be silent (no token or
 // tool call output) before being killed. Default 300 seconds (5 minutes).
 // Overridable via MYEDITOR_SESSION_IDLE_SECS.
@@ -1127,7 +1131,7 @@ func runBoundedSession(cfg OrchestratorConfig, phase string, cc *CapturedChat, p
 	}()
 
 	// Monitor for idle timeout or absolute timeout
-	ticker := time.NewTicker(10 * time.Second) // Check every 10 seconds
+	ticker := time.NewTicker(sessionCheckInterval)
 	defer ticker.Stop()
 
 	var idleKill, backstopKill bool
