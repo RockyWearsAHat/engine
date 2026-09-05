@@ -467,7 +467,8 @@ func CreateSession(id, projectPath, branchName string) error {
 	}
 	t := now()
 	_, err := globalDB.Exec(
-		`INSERT INTO sessions (id, project_path, branch_name, summary, created_at, updated_at) VALUES (?,?,?,'',?,?)`,
+		`INSERT INTO sessions (id, project_path, branch_name, summary, created_at, updated_at) VALUES (?,?,?,'',?,?)
+		 ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`,
 		id, projectPath, branchName, t, t,
 	)
 	return err
