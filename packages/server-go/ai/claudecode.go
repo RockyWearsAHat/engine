@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -26,9 +27,19 @@ var memoryReader func() int64
 // Package-level var so tests can inject a mock. By default, it reads the env var.
 var memorySpawnWaitSecsFn func() time.Duration
 
+// spawnTimes tracks recent spawn times (in nanoseconds since epoch) for admission gating.
+// Protected by spawnTimesMu. Oldest entries are pruned as they age past warmupSecs.
+var spawnTimes []int64
+var spawnTimesMu sync.Mutex
+
+// timeSinceNanoFn is the injected function to read current time in nanoseconds.
+// Package-level var so tests can inject a mock. By default, it calls time.Now().UnixNano().
+var timeSinceNanoFn func() int64
+
 func init() {
 	memoryReader = freeCommitMB
 	memorySpawnWaitSecsFn = memorySpawnWaitSecsEnv
+	timeSinceNanoFn = func() int64 { return time.Now().UnixNano() }
 }
 
 // claudecodeIdleTimeout returns how long the provider waits with NO output from
@@ -77,54 +88,161 @@ func memorySpawnWaitSecs() time.Duration {
 	return memorySpawnWaitSecsFn()
 }
 
-// waitForMemory is the admission gate before spawning a claude session. It polls
-// memoryReader (freeCommitMB by default, injected in tests) and waits if free
-// memory is below the reserve threshold. Returns the final free memory observed.
+// expectedSessionMB returns the expected memory usage (in MB) for a single
+// spawned session. This is used to account for sessions that have been admitted
+// recently but have not yet grown to their full size. Override with
+// MYEDITOR_SESSION_EXPECTED_MB.
+func expectedSessionMB() int64 {
+	if v := strings.TrimSpace(os.Getenv("MYEDITOR_SESSION_EXPECTED_MB")); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 1400
+}
+
+// expectedSpawnMinGapSecs returns the minimum number of seconds between spawns
+// to allow memory measurements to stabilize. Override with
+// MYEDITOR_SPAWN_MIN_GAP_SECS.
+func expectedSpawnMinGapSecs() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("MYEDITOR_SPAWN_MIN_GAP_SECS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 4 * time.Second
+}
+
+// expectedSpawnWarmupSecs returns the duration (in seconds) for which a spawned
+// session is considered "young" and counted toward the memory headroom requirement.
+// Sessions older than this age are not counted. Override with
+// MYEDITOR_SPAWN_WARMUP_SECS.
+func expectedSpawnWarmupSecs() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("MYEDITOR_SPAWN_WARMUP_SECS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 120 * time.Second
+}
+
+// waitForMemory is the admission gate before spawning a claude session. It gates
+// on both current free memory and the expected growth from recently admitted sessions,
+// enforces a minimum gap between admissions, and polls until memory is sufficient.
+// Returns the final free memory observed.
 //
 //   - If memoryReader() returns <= 0 (unmeasurable), does not wait.
-//   - If free memory >= reserve, returns immediately.
-//   - If free memory < reserve, polls every 5 seconds up to memorySpawnWaitSecs(),
-//     logging once at first deferral, once when proceeding after waiting, or once
-//     on timeout.
+//   - Enforces a minimum gap between spawns (MYEDITOR_SPAWN_MIN_GAP_SECS, default 4s).
+//     The wait honors cancellation and counts toward the overall timeout.
+//   - Accounts for sessions spawned in the last MYEDITOR_SPAWN_WARMUP_SECS (default 120s):
+//     the test is free - reserve >= expectedSessionMB * (1 + youngSessions).
+//     This ensures the gate reserves memory for sessions still growing.
+//   - If memory test fails, polls every 5 seconds up to memorySpawnWaitSecs(),
+//     logging the reason at first deferral and upon proceeding or timeout.
 //   - Respects ctx.Cancel so a cancelled task does not sit in the loop.
 //   - Never deadlocks a task; the stall clock only starts after the gate returns.
 func waitForMemory(ctx context.Context, taskID, phase string) int64 {
 	reserve := memoryReserveMB()
+	expectedMB := expectedSessionMB()
+	minGap := expectedSpawnMinGapSecs()
+	warmupSecs := expectedSpawnWarmupSecs()
 	maxWait := memorySpawnWaitSecs()
 	pollInterval := 5 * time.Second
 
+	// Enforce minimum gap between spawns. This wait is part of the overall
+	// admission timeout, not an additional delay.
+	now := timeSinceNanoFn()
+	lastSpawnNano := int64(0)
+	spawnTimesMu.Lock()
+	if len(spawnTimes) > 0 {
+		lastSpawnNano = spawnTimes[len(spawnTimes)-1]
+	}
+	spawnTimesMu.Unlock()
+
 	start := time.Now()
+	gapWaitDone := false
 	deferralLogged := false
+	var deferralReason string
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
 	for {
+		// Check if we need to wait for the minimum gap to pass.
+		if !gapWaitDone {
+			timeSinceLastSpawn := time.Duration(now - lastSpawnNano)
+			if timeSinceLastSpawn < minGap {
+				timeToWait := minGap - timeSinceLastSpawn
+				select {
+				case <-ctx.Done():
+					// Task was cancelled; proceed anyway so the task doesn't hang.
+					if !deferralLogged {
+						log.Printf("session spawn context cancelled after %.0fs wait (gap enforcement)", time.Since(start).Seconds())
+						deferralLogged = true
+					}
+					gapWaitDone = true
+				case <-time.After(timeToWait):
+					// Gap enforcement satisfied; update now and move on.
+					now = timeSinceNanoFn()
+					gapWaitDone = true
+				}
+				continue
+			}
+			gapWaitDone = true
+		}
+
 		free := memoryReader()
 
 		// If unmeasurable (returns <= 0), do not wait — let the task proceed.
 		if free <= 0 {
+			// Record this spawn before returning.
+			spawnTimesMu.Lock()
+			spawnTimes = append(spawnTimes, now)
+			spawnTimesMu.Unlock()
 			return free
 		}
+
+		// Prune old spawn times from the tracking list (older than warmupSecs).
+		cutoffNano := now - warmupSecs.Nanoseconds()
+		spawnTimesMu.Lock()
+		for len(spawnTimes) > 0 && spawnTimes[0] < cutoffNano {
+			spawnTimes = spawnTimes[1:]
+		}
+		youngSessions := int64(len(spawnTimes))
+		spawnTimesMu.Unlock()
+
+		// Calculate the memory requirement: we need to reserve for this spawn
+		// (expectedMB) plus all young sessions still growing (youngSessions * expectedMB).
+		requiredFree := reserve + expectedMB*(1+youngSessions)
+		sufficientMemory := free >= requiredFree
 
 		// If sufficient memory, proceed.
-		if free >= reserve {
+		if sufficientMemory {
 			if deferralLogged {
 				elapsed := time.Since(start).Seconds()
-				log.Printf("session spawn resumed task=%s after %.0fs (free commit %d MB)", taskID, elapsed, free)
+				log.Printf("session spawn resumed task=%s after %.0fs (free commit %d MB; %s)", taskID, elapsed, free, deferralReason)
 			}
+			// Record this spawn time before returning.
+			spawnTimesMu.Lock()
+			spawnTimes = append(spawnTimes, now)
+			spawnTimesMu.Unlock()
 			return free
 		}
 
-		// Memory is low. Log deferral on first check.
+		// Memory is insufficient. Log deferral on first check.
 		if !deferralLogged {
-			log.Printf("session spawn deferred task=%s phase=%s: free commit %d MB < %d MB reserve", taskID, phase, free, reserve)
+			deferralReason = fmt.Sprintf("(%d young sessions, need %d MB headroom, have %d MB)", youngSessions, requiredFree-reserve, free)
+			log.Printf("session spawn deferred task=%s phase=%s: %s", taskID, phase, deferralReason)
 			deferralLogged = true
 		}
 
 		// Check timeout.
 		if time.Since(start) > maxWait {
-			log.Printf("session spawn proceeding after %.0fs wait: free commit still %d MB", time.Since(start).Seconds(), free)
+			log.Printf("session spawn proceeding after %.0fs wait: free commit still %d MB (timeout)", time.Since(start).Seconds(), free)
+			// Record this spawn time before returning.
+			spawnTimesMu.Lock()
+			spawnTimes = append(spawnTimes, now)
+			spawnTimesMu.Unlock()
 			return free
 		}
 
@@ -135,8 +253,14 @@ func waitForMemory(ctx context.Context, taskID, phase string) int64 {
 			if deferralLogged {
 				log.Printf("session spawn context cancelled after %.0fs wait", time.Since(start).Seconds())
 			}
+			// Record this spawn time before returning.
+			spawnTimesMu.Lock()
+			spawnTimes = append(spawnTimes, now)
+			spawnTimesMu.Unlock()
 			return free
 		case <-ticker.C:
+			// Update the current time for the next iteration.
+			now = timeSinceNanoFn()
 			// Continue polling.
 		}
 	}
