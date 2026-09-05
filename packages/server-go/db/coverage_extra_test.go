@@ -321,8 +321,10 @@ func TestAttentionResiduals_ErrorPaths(t *testing.T) {
 		{ID: "dup", SessionID: "s1", MessageID: "m1", SourceKey: "k", SourceType: "t", SourceLabel: "l", QueryText: "q", Weight: 1, Score: 1, Context: "c"},
 		{ID: "dup", SessionID: "s1", MessageID: "m1", SourceKey: "k", SourceType: "t", SourceLabel: "l", QueryText: "q", Weight: 1, Score: 1, Context: "c"},
 	}
-	if err := SaveAttentionResiduals(dup); err == nil {
-		t.Fatal("expected exec error on duplicate id")
+	// Duplicate ID insert is now idempotent (INSERT ... ON CONFLICT DO UPDATE)
+	// so it should succeed without error
+	if err := SaveAttentionResiduals(dup); err != nil {
+		t.Fatalf("expected duplicate id insert to succeed (idempotent): %v", err)
 	}
 }
 

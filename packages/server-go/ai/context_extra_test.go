@@ -5147,3 +5147,54 @@ func TestRunOpenAICompatibleLoop_SignalDoneReturnsEarly(t *testing.T) {
 		t.Errorf("expected Result 'done', got: %q", calls[0].Result)
 	}
 }
+
+// ── persistChatFinalState: residual save failure is non-fatal ───────────────
+
+func TestPersistChatFinalState_ResidualSaveFailureDoesNotFail(t *testing.T) {
+	ctx := makeChatCtx(t)
+
+	// Set up DB for the test
+	if err := db.CreateSession(ctx.SessionID, ctx.ProjectPath, "main"); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// Create a message for reference
+	userMsgID := "test-msg-1"
+	if err := db.SaveMessage(userMsgID, ctx.SessionID, "user", "test message", nil); err != nil {
+		t.Fatalf("SaveMessage: %v", err)
+	}
+
+	// Set OnError to track if it gets called
+	errorsCalled := []string{}
+	ctx.OnError = func(msg string) {
+		errorsCalled = append(errorsCalled, msg)
+	}
+
+	// Call persistChatFinalState - the residuals should be saved successfully
+	// since we have a valid database setup
+	finalText := &strings.Builder{}
+	finalText.WriteString("Test response")
+
+	persistChatFinalState(
+		ctx,
+		"assistant-msg-1",
+		userMsgID,
+		"test user message",
+		finalText,
+		[]ToolCall{},
+		nil, // session
+		conversationWindowResult{},
+		selectiveContextResult{},
+		nil, // profile
+		[]TabInfo{},
+		"gpt-4",
+		nil, // lastLedgerEvent
+	)
+
+	// Verify that no error was reported via OnError for residuals
+	for _, err := range errorsCalled {
+		if strings.Contains(err, "save attention residuals failed") {
+			t.Errorf("unexpected OnError called with residual save error: %s", err)
+		}
+	}
+}

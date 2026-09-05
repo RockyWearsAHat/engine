@@ -2464,7 +2464,7 @@ func persistChatFinalState(ctx *ChatContext, assistantMessageID, userMsgID, user
 			return session.Summary
 		}(),
 	)); err != nil {
-		ctx.OnError(fmt.Sprintf("save attention residuals failed: %v", err))
+		log.Printf("memory_os: save attention residuals failed (task continues): %v", err)
 	}
 
 	// Update session summary and handoff cache if a new summary was generated.
