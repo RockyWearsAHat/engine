@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/engine/server/db"
 )
 
 // TestInferRoleFromStep_DB verifies DB/database/schema titles → "db".
@@ -1206,5 +1208,41 @@ func TestPhasePlan_NonItemModeAlwaysRunsSession(t *testing.T) {
 	// Verify the chat function WAS called
 	if !chatCalled {
 		t.Fatal("expected chat to be called in non-item mode")
+	}
+}
+
+// TestTeamStepSession_ResumeIdempotent verifies that creating the same team-step
+// session ID twice succeeds (idempotent) and leaves one row in the database.
+// This tests the fix for the bug where resumed tasks failed with
+// "UNIQUE constraint failed: sessions.id" on their first boot.
+func TestTeamStepSession_ResumeIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	setupTestDBWithStateDir(t, dir)
+
+	// Simulate the session ID that would be created for a team step
+	// Format: <taskID>-team-<team>-step-<n>
+	sessionID := "task-1788571908411-6ffc-team-team-general-0-step-0"
+
+	// Create the session the first time (initial run)
+	if err := db.CreateSession(sessionID, dir, ""); err != nil {
+		t.Fatalf("first CreateSession: %v", err)
+	}
+
+	// Create the same session again (simulating a resume after restart)
+	// This should succeed with the idempotent INSERT ... ON CONFLICT
+	if err := db.CreateSession(sessionID, dir, ""); err != nil {
+		t.Fatalf("second CreateSession (resume): %v", err)
+	}
+
+	// Verify there is exactly one row with this ID
+	sess, err := db.GetSession(sessionID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if sess.ID != sessionID {
+		t.Errorf("ID = %q, want %q", sess.ID, sessionID)
+	}
+	if sess.ProjectPath != dir {
+		t.Errorf("ProjectPath = %q, want %q", sess.ProjectPath, dir)
 	}
 }

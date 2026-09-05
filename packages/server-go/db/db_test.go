@@ -78,6 +78,37 @@ func TestCreateSession_And_GetSession(t *testing.T) {
 	}
 }
 
+func TestCreateSession_Idempotent(t *testing.T) {
+	initTestDB(t)
+
+	// Create session the first time
+	if err := CreateSession("sess-idempotent", "/project/a", "main"); err != nil {
+		t.Fatalf("first CreateSession: %v", err)
+	}
+
+	// Create the same session again (should succeed on conflict)
+	if err := CreateSession("sess-idempotent", "/project/a", "main"); err != nil {
+		t.Fatalf("second CreateSession (should be idempotent): %v", err)
+	}
+
+	// Verify there is exactly one row with this ID
+	sess, err := GetSession("sess-idempotent")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if sess.ID != "sess-idempotent" {
+		t.Errorf("ID = %q, want sess-idempotent", sess.ID)
+	}
+
+	// Verify the session row is correct
+	if sess.ProjectPath != "/project/a" {
+		t.Errorf("ProjectPath = %q, want /project/a", sess.ProjectPath)
+	}
+	if sess.BranchName != "main" {
+		t.Errorf("BranchName = %q, want main", sess.BranchName)
+	}
+}
+
 func TestGetSession_NotFound(t *testing.T) {
 	initTestDB(t)
 
