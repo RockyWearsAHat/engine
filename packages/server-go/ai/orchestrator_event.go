@@ -63,7 +63,7 @@ var planPhaseTimeout = func() time.Duration {
 var planPhaseHardStopGrace = 15 * time.Second
 
 // taskWallBudgetItem is the maximum wall-clock time for a single worklist item.
-// Default 20 minutes; tasks that exceed this fail. Overridable via
+// Default 60 minutes; tasks that exceed this fail. Overridable via
 // MYEDITOR_TASK_BUDGET_MIN_HAIKU_ITEM.
 var taskWallBudgetItem = func() time.Duration {
 	if v := strings.TrimSpace(os.Getenv("MYEDITOR_TASK_BUDGET_MIN_HAIKU_ITEM")); v != "" {
@@ -71,7 +71,7 @@ var taskWallBudgetItem = func() time.Duration {
 			return time.Duration(n) * time.Second
 		}
 	}
-	return 20 * 60 * time.Second
+	return 60 * 60 * time.Second
 }()
 
 // taskWallBudgetOther is the maximum wall-clock time for non-item work.
@@ -98,7 +98,9 @@ var maxIterationsItem = func() int {
 }()
 
 // sessionBudget is the maximum wall-clock time for a single chat session.
-// Default 8 minutes. Overridable via MYEDITOR_SESSION_BUDGET_SECS.
+// DEPRECATED: Use sessionIdleTimeout + sessionMaxTimeout instead.
+// Kept for backward compatibility. Default 8 minutes.
+// Overridable via MYEDITOR_SESSION_BUDGET_SECS.
 var sessionBudget = func() time.Duration {
 	if v := strings.TrimSpace(os.Getenv("MYEDITOR_SESSION_BUDGET_SECS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -106,6 +108,30 @@ var sessionBudget = func() time.Duration {
 		}
 	}
 	return 8 * 60 * time.Second
+}()
+
+// sessionIdleTimeout is the maximum time a session may be silent (no token or
+// tool call output) before being killed. Default 300 seconds (5 minutes).
+// Overridable via MYEDITOR_SESSION_IDLE_SECS.
+var sessionIdleTimeout = func() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("MYEDITOR_SESSION_IDLE_SECS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 300 * time.Second
+}()
+
+// sessionMaxTimeout is the absolute maximum wall-clock time for a session,
+// regardless of activity. Prevents truly stuck sessions from running forever.
+// Default 2700 seconds (45 minutes). Overridable via MYEDITOR_SESSION_MAX_SECS.
+var sessionMaxTimeout = func() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("MYEDITOR_SESSION_MAX_SECS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 2700 * time.Second
 }()
 
 // planBudgetItem is the maximum wall-clock time for planning a single item.
@@ -148,6 +174,12 @@ type EventOrchestrator struct {
 	taskStartTime  time.Time
 	taskWallBudget time.Duration
 	iterationCap   int
+
+	// Session tracking for iteration continuity
+	// lastExecuteSessionID holds the Claude session ID from the previous execute
+	// iteration, used to resume the session in the next iteration if available.
+	lastExecuteSessionID string
+	sessionIDMu          sync.Mutex
 
 	// failure is why the run ended badly, or nil if it did not.
 	//
@@ -263,6 +295,21 @@ func startEventOrchestrator(cfg OrchestratorConfig) (*EventOrchestrator, error) 
 		taskStartTime:      time.Now(),
 	}
 
+	// Wrap OnClaudeSession to track execute session IDs for iteration continuity
+	originalOnClaudeSession := cfg.OnClaudeSession
+	cfg.OnClaudeSession = func(phase, sessionID string) {
+		// Track execute sessions for resumption in the next iteration
+		if phase == "execute" && sessionID != "" {
+			eo.sessionIDMu.Lock()
+			eo.lastExecuteSessionID = sessionID
+			eo.sessionIDMu.Unlock()
+		}
+		// Call the original callback (e.g., to store in task API)
+		if originalOnClaudeSession != nil {
+			originalOnClaudeSession(phase, sessionID)
+		}
+	}
+
 	if eo.maxOuterIterations <= 0 {
 		eo.maxOuterIterations = OrchestratorMaxOuterIterations
 	}
@@ -358,6 +405,27 @@ func (eo *EventOrchestrator) eventLoop() {
 	for eo.brain.OuterIterationCount() < eo.effectiveIterationCap() {
 		iteration := eo.brain.NextOuterIteration()
 		eo.cfg.OnPhase("execute", fmt.Sprintf("iteration %d/%d", iteration, eo.effectiveIterationCap()))
+
+		// Iteration continuity: if we have a previous execute session, resume it
+		// instead of starting fresh. This allows productive work to continue
+		// across iteration boundaries without re-running from scratch.
+		if iteration > 1 {
+			eo.sessionIDMu.Lock()
+			if eo.lastExecuteSessionID != "" {
+				prevSessionID := eo.lastExecuteSessionID
+				eo.sessionIDMu.Unlock()
+				eo.cfg.ResumeSessionID = prevSessionID
+				reason := "unknown"
+				if eo.brain.GetLastValidation() != "" {
+					reason = "validate feedback"
+				}
+				eo.cfg.OnProgress(fmt.Sprintf("execute iteration %d/%d resumes claude session %s (reason: %s)",
+					iteration, eo.effectiveIterationCap(), prevSessionID, reason))
+				log.Printf("execute iteration %d/%d resumes claude session %s", iteration, eo.effectiveIterationCap(), prevSessionID)
+			} else {
+				eo.sessionIDMu.Unlock()
+			}
+		}
 
 		// Check wall-clock budget before dispatch
 		if eo.shouldCheckWallBudget() && time.Since(eo.taskStartTime) > eo.taskWallBudget {
@@ -990,28 +1058,66 @@ var (
 	liveSessionPIDsFn = LiveSessionPIDs
 )
 
-// runBoundedSession runs one chat call under the per-session wall-clock
-// ceiling and reports whether the ceiling was hit.
+// runBoundedSession runs one chat call under idle-based and absolute time limits.
+// Returns true if the session was killed due to timeout (idle or absolute).
 //
-// It is the execute/validate counterpart of the plan phase's own bound, and
-// enforces it the same way, in two stages:
+// The session is killed if:
+//   - No token or tool activity for sessionIdleTimeout (e.g., 5 minutes)
+//   - Absolute time since start exceeds sessionMaxTimeout (e.g., 45 minutes)
 //
-//  1. At sessionBudget the session's cancel channel is closed, so the
+// The timeout is enforced in two stages:
+//  1. When a timeout is detected, the session's cancel channel is closed so the
 //     provider's cancel bridge can tear the CLI down cleanly.
 //  2. If the call has still not returned planPhaseHardStopGrace later, every
 //     `claude` process registered for this task is tree-killed. That is the
-//     backstop for the case the plan phase was chasing: a cancel that the
-//     provider never acted on, leaving a stuck session alive into the next
-//     phase.
+//     backstop for when a cancel that the provider never acted on leaves a stuck
+//     session alive into the next phase.
 //
 // Either way the caller proceeds with whatever output was captured; a session
 // that ran out of time is reported as a budget hit, not a hang, and the caller
 // spends an iteration on it rather than the rest of the task's wall clock.
 // Sessions with no TaskID have nothing in the registry to kill — the registry
-// keys on task — so for those stage 2 is the log line only.
+// keys on task — so for those the kill is the log line only.
 func runBoundedSession(cfg OrchestratorConfig, phase string, cc *CapturedChat, prompt string) bool {
 	start := time.Now()
 	boundedCancel := make(chan struct{})
+
+	// Track activity time; both output and tool calls update this
+	var activityMu sync.Mutex
+	lastActivity := start
+
+	// Wrap the callbacks to track activity
+	originalOnChunk := cc.Ctx.OnChunk
+	originalOnToolCall := cc.Ctx.OnToolCall
+	originalOnToolResult := cc.Ctx.OnToolResult
+
+	cc.Ctx.OnChunk = func(content string, done bool) {
+		activityMu.Lock()
+		lastActivity = time.Now()
+		activityMu.Unlock()
+		if originalOnChunk != nil {
+			originalOnChunk(content, done)
+		}
+	}
+
+	cc.Ctx.OnToolCall = func(name string, input any) {
+		activityMu.Lock()
+		lastActivity = time.Now()
+		activityMu.Unlock()
+		if originalOnToolCall != nil {
+			originalOnToolCall(name, input)
+		}
+	}
+
+	cc.Ctx.OnToolResult = func(name string, result any, isError bool) {
+		activityMu.Lock()
+		lastActivity = time.Now()
+		activityMu.Unlock()
+		if originalOnToolResult != nil {
+			originalOnToolResult(name, result, isError)
+		}
+	}
+
 	cc.Ctx.Cancel = orchestratorMergedCancel(cfg.Cancel, boundedCancel)
 
 	done := make(chan struct{})
@@ -1020,13 +1126,43 @@ func runBoundedSession(cfg OrchestratorConfig, phase string, cc *CapturedChat, p
 		close(done)
 	}()
 
-	select {
-	case <-done:
-		return false
-	case <-time.After(sessionBudget):
-		close(boundedCancel)
+	// Monitor for idle timeout or absolute timeout
+	ticker := time.NewTicker(10 * time.Second) // Check every 10 seconds
+	defer ticker.Stop()
+
+	var idleKill, backstopKill bool
+
+	for {
+		select {
+		case <-done:
+			return false
+		case <-ticker.C:
+			now := time.Now()
+			activityMu.Lock()
+			timeSinceActivity := now.Sub(lastActivity)
+			activityMu.Unlock()
+
+			// Check absolute timeout first (always fatal)
+			if now.Sub(start) > sessionMaxTimeout {
+				backstopKill = true
+				close(boundedCancel)
+				break
+			}
+
+			// Check idle timeout
+			if timeSinceActivity > sessionIdleTimeout {
+				idleKill = true
+				close(boundedCancel)
+				break
+			}
+		}
+
+		if idleKill || backstopKill {
+			break
+		}
 	}
 
+	// Wait for the session to finish, with a grace period for cleanup
 	killed := 0
 	select {
 	case <-done:
@@ -1042,8 +1178,17 @@ func runBoundedSession(cfg OrchestratorConfig, phase string, cc *CapturedChat, p
 		// goroutine above cannot leak, but do not block the phase on it.
 		go func() { <-done }()
 	}
-	log.Printf("session budget hit task=%s phase=%s after %ds (budget %s, force-killed %d process tree(s)) — using output produced so far",
-		cfg.TaskID, phase, int(time.Since(start).Seconds()), sessionBudget, killed)
+
+	// Log the reason for killing the session
+	elapsed := int(time.Since(start).Seconds())
+	if idleKill {
+		log.Printf("session idle-killed task=%s phase=%s after %ds without output (idle limit %ds, force-killed %d process tree(s))",
+			cfg.TaskID, phase, elapsed, int(sessionIdleTimeout.Seconds()), killed)
+	} else if backstopKill {
+		log.Printf("session budget hit task=%s phase=%s after %ds (budget %s, force-killed %d process tree(s)) — using output produced so far",
+			cfg.TaskID, phase, elapsed, sessionMaxTimeout, killed)
+	}
+
 	return true
 }
 

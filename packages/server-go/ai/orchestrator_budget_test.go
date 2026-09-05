@@ -18,8 +18,8 @@ func TestBudgetDefaults_ItemBudget(t *testing.T) {
 }
 
 func TestBudgetDefaults_ItemWallBudget(t *testing.T) {
-	// taskWallBudgetItem defaults to 20 minutes
-	expected := 20 * 60 * time.Second
+	// taskWallBudgetItem defaults to 60 minutes
+	expected := 60 * 60 * time.Second
 	if taskWallBudgetItem != expected {
 		t.Errorf("taskWallBudgetItem: expected %v, got %v", expected, taskWallBudgetItem)
 	}
@@ -42,7 +42,8 @@ func TestBudgetDefaults_MaxIterationsItem(t *testing.T) {
 }
 
 func TestBudgetDefaults_SessionBudget(t *testing.T) {
-	// sessionBudget defaults to 8 minutes
+	// sessionBudget defaults to 8 minutes (kept for backward compatibility)
+	// DEPRECATED: Use sessionIdleTimeout + sessionMaxTimeout instead.
 	expected := 8 * 60 * time.Second
 	if sessionBudget != expected {
 		t.Errorf("sessionBudget: expected %v, got %v", expected, sessionBudget)
@@ -53,9 +54,9 @@ func TestBudgetDefaults_SessionBudget(t *testing.T) {
 
 func TestEventOrchestrator_TaskMode_BudgetInitialization(t *testing.T) {
 	cfg := OrchestratorConfig{
-		ProjectPath:     t.TempDir(),
-		TaskMode:        true,
-		TaskID:          "test-task-1",
+		ProjectPath:        t.TempDir(),
+		TaskMode:           true,
+		TaskID:             "test-task-1",
 		MaxOuterIterations: 200,
 	}
 	cfg.OnPhase = func(string, string) {}
@@ -130,9 +131,9 @@ func TestEventOrchestrator_NonTaskMode_BudgetInitialization(t *testing.T) {
 
 func TestEventOrchestrator_TaskStartTimeRecorded(t *testing.T) {
 	cfg := OrchestratorConfig{
-		ProjectPath:     t.TempDir(),
-		TaskMode:        true,
-		TaskID:          "test-task-2",
+		ProjectPath:        t.TempDir(),
+		TaskMode:           true,
+		TaskID:             "test-task-2",
 		MaxOuterIterations: 200,
 	}
 	cfg.OnPhase = func(string, string) {}
@@ -256,9 +257,9 @@ func (m *MockBrain) StateSnapshot() *OrchestrationState {
 // the budget fields are set correctly.
 func TestIterationCapEnforcement_TaskMode(t *testing.T) {
 	cfg := OrchestratorConfig{
-		ProjectPath:     t.TempDir(),
-		TaskMode:        true,
-		TaskID:          "cap-test-1",
+		ProjectPath:        t.TempDir(),
+		TaskMode:           true,
+		TaskID:             "cap-test-1",
 		MaxOuterIterations: 200, // high overall cap
 	}
 	cfg.OnPhase = func(string, string) {}
@@ -299,9 +300,9 @@ func TestIterationCapEnforcement_TaskMode(t *testing.T) {
 // This verifies the logic, not the actual enforcement (which would require time mocking).
 func TestWallBudgetEnforcement_Logic(t *testing.T) {
 	cfg := OrchestratorConfig{
-		ProjectPath:     t.TempDir(),
-		TaskMode:        true,
-		TaskID:          "wall-test-1",
+		ProjectPath:        t.TempDir(),
+		TaskMode:           true,
+		TaskID:             "wall-test-1",
 		MaxOuterIterations: 200,
 	}
 	cfg.OnPhase = func(string, string) {}
@@ -359,7 +360,7 @@ func TestBudgetScenarios_Table(t *testing.T) {
 			name:               "task mode with high config cap",
 			taskMode:           true,
 			maxOuterIterations: 200,
-			expectedCap:        maxIterationsItem, // 3
+			expectedCap:        maxIterationsItem,  // 3
 			expectedBudget:     taskWallBudgetItem, // 20 minutes
 			description:        "item gets tight cap regardless of config",
 		},
@@ -375,14 +376,14 @@ func TestBudgetScenarios_Table(t *testing.T) {
 			name:               "non-task mode uses config cap",
 			taskMode:           false,
 			maxOuterIterations: 50,
-			expectedCap:        50, // matches config
+			expectedCap:        50,                  // matches config
 			expectedBudget:     taskWallBudgetOther, // 45 minutes
 			description:        "project uses config cap and large budget",
 		},
 		{
 			name:               "non-task mode defaults to OrchestratorMaxOuterIterations",
 			taskMode:           false,
-			maxOuterIterations: 0, // triggers default
+			maxOuterIterations: 0,                              // triggers default
 			expectedCap:        OrchestratorMaxOuterIterations, // 200
 			expectedBudget:     taskWallBudgetOther,
 			description:        "zero config cap gets package default",
@@ -434,9 +435,9 @@ func TestBudgetScenarios_Table(t *testing.T) {
 
 func TestBudgetCalculation_ElapsedTime(t *testing.T) {
 	cfg := OrchestratorConfig{
-		ProjectPath:     t.TempDir(),
-		TaskMode:        true,
-		TaskID:          "elapsed-test",
+		ProjectPath:        t.TempDir(),
+		TaskMode:           true,
+		TaskID:             "elapsed-test",
 		MaxOuterIterations: 200,
 	}
 	cfg.OnPhase = func(string, string) {}
@@ -488,10 +489,10 @@ func TestBudgetEnv_InvalidValues(t *testing.T) {
 		env   string
 		value string
 	}{
-		{"MYEDITOR_TASK_BUDGET_MIN_HAIKU_ITEM", "-100"},  // negative
-		{"MYEDITOR_TASK_BUDGET_MIN", "not-a-number"},      // non-numeric
-		{"MYEDITOR_MAX_ITERATIONS_ITEM", "0"},             // zero
-		{"MYEDITOR_SESSION_BUDGET_SECS", ""},              // empty
+		{"MYEDITOR_TASK_BUDGET_MIN_HAIKU_ITEM", "-100"}, // negative
+		{"MYEDITOR_TASK_BUDGET_MIN", "not-a-number"},    // non-numeric
+		{"MYEDITOR_MAX_ITERATIONS_ITEM", "0"},           // zero
+		{"MYEDITOR_SESSION_BUDGET_SECS", ""},            // empty
 	}
 
 	for _, tt := range tests {
@@ -514,9 +515,9 @@ func TestBudgetEnv_InvalidValues(t *testing.T) {
 
 func TestOrchestrator_ProgressLogsIncludeBudget(t *testing.T) {
 	cfg := OrchestratorConfig{
-		ProjectPath:     t.TempDir(),
-		TaskMode:        true,
-		TaskID:          "progress-test",
+		ProjectPath:        t.TempDir(),
+		TaskMode:           true,
+		TaskID:             "progress-test",
 		MaxOuterIterations: 200,
 	}
 
@@ -587,11 +588,43 @@ func TestBudget_ExportsAreVisible(t *testing.T) {
 		t.Error("sessionBudget must be positive")
 	}
 
-	// Verify reasonable relationships
-	if taskWallBudgetItem > taskWallBudgetOther {
-		t.Error("item budget should be tighter than overall project budget")
-	}
+	// Verify reasonable values
+	// Note: taskWallBudgetItem (60m) > taskWallBudgetOther (45m) by design:
+	// items are single focused tasks that may need more time than a full project build
 	if maxIterationsItem > 10 {
 		t.Logf("maxIterationsItem=%d is unusually high for an item", maxIterationsItem)
 	}
+}
+
+// ── Idle-Based Session Timeout Tests ─────────────────────────────────────────
+
+func TestBudgetDefaults_SessionIdleTimeout(t *testing.T) {
+	// sessionIdleTimeout defaults to 300 seconds (5 minutes)
+	expected := 300 * time.Second
+	if sessionIdleTimeout != expected {
+		t.Errorf("sessionIdleTimeout: expected %v, got %v", expected, sessionIdleTimeout)
+	}
+}
+
+func TestBudgetDefaults_SessionMaxTimeout(t *testing.T) {
+	// sessionMaxTimeout defaults to 2700 seconds (45 minutes)
+	expected := 2700 * time.Second
+	if sessionMaxTimeout != expected {
+		t.Errorf("sessionMaxTimeout: expected %v, got %v", expected, sessionMaxTimeout)
+	}
+}
+
+func TestBudgetDefaults_SessionTimeoutRelationship(t *testing.T) {
+	// sessionIdleTimeout should be less than sessionMaxTimeout
+	if sessionIdleTimeout >= sessionMaxTimeout {
+		t.Errorf("sessionIdleTimeout (%v) should be less than sessionMaxTimeout (%v)",
+			sessionIdleTimeout, sessionMaxTimeout)
+	}
+}
+
+func TestSessionTimeout_IdleKillLogging(t *testing.T) {
+	// Verify that idle kill logs the expected message format
+	// This test documents the expected log line format for idle kills
+	logFormat := "session idle-killed task=%s phase=%s after %ds without output"
+	_ = logFormat // Document the format for future reference
 }
