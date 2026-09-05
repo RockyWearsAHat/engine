@@ -388,6 +388,9 @@ func (w *TeamWorker) runStep(step *PlanStep, stepIdx int) error {
 	if strings.TrimSpace(w.cfg.RequestedRole) == "" {
 		cc.Ctx.Role = RoleAutonomousBuilder
 	}
+	// Execution is what resumption is for: this is the session that holds the
+	// half-finished work a restart interrupted.
+	cc.Ctx.ResumeSessionID = w.cfg.ResumeSessionID
 	cc.Ctx.MaxTurns = 0
 	cc.Ctx.AgentName = w.teamID
 	cc.Ctx.AgentComms = w.comms

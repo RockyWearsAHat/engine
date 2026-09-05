@@ -269,3 +269,119 @@ func TestParseClaudeStream_ToleratesGarbageLines(t *testing.T) {
 		t.Errorf("expected to skip garbage and parse valid line, got %q", final.String())
 	}
 }
+
+// The session id is the whole basis of resumption, and it arrives more than
+// once per run (init, then result). It must be reported on the first sighting
+// and never again: the callback persists to disk, so firing per event would
+// rewrite the same row for every event carrying an id.
+func TestParseClaudeStream_ReportsSessionIDOnce(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"sess-abc"}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}`,
+		`{"type":"result","subtype":"success","session_id":"sess-abc","result":"done"}`,
+	}, "\n")
+
+	var seen []string
+	var final strings.Builder
+	ctx := &ChatContext{
+		OnClaudeSession: func(id string) { seen = append(seen, id) },
+		OnError:         func(string) { t.Error("unexpected OnError") },
+	}
+	parseClaudeStream(ctx, strings.NewReader(stream), nil, &final)
+
+	if len(seen) != 1 {
+		t.Fatalf("OnClaudeSession fired %d time(s) (%v), want exactly 1", len(seen), seen)
+	}
+	if seen[0] != "sess-abc" {
+		t.Errorf("session id = %q, want sess-abc", seen[0])
+	}
+}
+
+// A run that reaches the result event without an init event still has to yield
+// its session id — that is the only handle a repair gets.
+func TestParseClaudeStream_SessionIDFromResultEvent(t *testing.T) {
+	var seen []string
+	var final strings.Builder
+	ctx := &ChatContext{OnClaudeSession: func(id string) { seen = append(seen, id) }}
+	parseClaudeStream(ctx,
+		strings.NewReader(`{"type":"result","subtype":"success","session_id":"sess-late","result":"ok"}`),
+		nil, &final)
+
+	if len(seen) != 1 || seen[0] != "sess-late" {
+		t.Fatalf("session ids = %v, want [sess-late]", seen)
+	}
+}
+
+// An empty session id is not a session. Reporting one would put a resume
+// handle on the task record that --resume cannot use.
+func TestParseClaudeStream_EmptySessionIDNotReported(t *testing.T) {
+	var final strings.Builder
+	ctx := &ChatContext{
+		OnClaudeSession: func(id string) { t.Fatalf("reported empty session id %q", id) },
+	}
+	parseClaudeStream(ctx,
+		strings.NewReader(`{"type":"system","subtype":"init","session_id":""}`+"\n"+
+			`{"type":"result","subtype":"success","result":"ok"}`),
+		nil, &final)
+}
+
+// A nil OnClaudeSession is the normal case outside task mode.
+func TestParseClaudeStream_NilSessionCallbackIsSafe(t *testing.T) {
+	var final strings.Builder
+	ctx := &ChatContext{}
+	parseClaudeStream(ctx,
+		strings.NewReader(`{"type":"system","subtype":"init","session_id":"sess-1"}`),
+		nil, &final)
+}
+
+func TestBuildClaudeArgs_ResumeSessionID(t *testing.T) {
+	ctx := &ChatContext{ProjectPath: "/tmp/proj", ResumeSessionID: "sess-xyz"}
+	joined := strings.Join(buildClaudeArgs(ctx, "", "be a builder", -1), " ")
+	if !strings.Contains(joined, "--resume sess-xyz") {
+		t.Errorf("args %q missing --resume sess-xyz", joined)
+	}
+
+	fresh := strings.Join(buildClaudeArgs(&ChatContext{ProjectPath: "/tmp/proj"}, "", "be a builder", -1), " ")
+	if strings.Contains(fresh, "--resume") {
+		t.Errorf("fresh run must not resume: %q", fresh)
+	}
+}
+
+// Resumption is for the session that holds the half-finished work. A planner
+// context must stay cold, or a repair forks the interrupted conversation into
+// re-planning instead of finishing.
+func TestStageChatContextCreation_ResumeOnlyForBuilder(t *testing.T) {
+	cfg := OrchestratorConfig{ProjectPath: "/tmp/proj", ResumeSessionID: "sess-resume"}
+	noop := func(string, bool) {}
+	builder := stageChatContextCreation(cfg, "s1", RoleAutonomousBuilder, nil, noop, func(string) {}, func(string, any) {}, func(string, any, bool) {})
+	if builder.ResumeSessionID != "sess-resume" {
+		t.Errorf("builder ResumeSessionID = %q, want sess-resume", builder.ResumeSessionID)
+	}
+	planner := stageChatContextCreation(cfg, "s2", RolePlanner, nil, noop, func(string) {}, func(string, any) {}, func(string, any, bool) {})
+	if planner.ResumeSessionID != "" {
+		t.Errorf("planner ResumeSessionID = %q, want empty", planner.ResumeSessionID)
+	}
+}
+
+// The provider reports a bare session id; the phase it belongs to is added
+// where the role is known.
+func TestStageChatContextCreation_ClaudeSessionCarriesPhase(t *testing.T) {
+	var got []string
+	cfg := OrchestratorConfig{
+		OnClaudeSession: func(phase, id string) { got = append(got, phase+"="+id) },
+	}
+	noop := func(string, bool) {}
+	for _, tc := range []struct {
+		role AgentRole
+		want string
+	}{
+		{RolePlanner, "plan=s"},
+		{RoleAutonomousBuilder, "execute=s"},
+	} {
+		ctx := stageChatContextCreation(cfg, "sid", tc.role, nil, noop, func(string) {}, func(string, any) {}, func(string, any, bool) {})
+		ctx.OnClaudeSession("s")
+		if got[len(got)-1] != tc.want {
+			t.Errorf("role %v reported %q, want %q", tc.role, got[len(got)-1], tc.want)
+		}
+	}
+}

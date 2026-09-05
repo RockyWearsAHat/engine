@@ -474,7 +474,17 @@ type ChatContext struct {
 	OnError      func(err string)
 	// OnRunStats fires once per provider run with what it consumed. Nil = nobody
 	// asked. Task API tallies tokens per task from this.
-	OnRunStats       func(RunStats)
+	OnRunStats func(RunStats)
+	// OnClaudeSession fires once per Claude Code run with the CLI's own session
+	// id, as soon as the run announces one. Nil = nobody asked.
+	//
+	// This is the hook that makes an interrupted task repairable: the task API
+	// persists the id, so an engine restart can hand the same conversation back
+	// to the CLI with --resume rather than starting the item over.
+	OnClaudeSession func(sessionID string)
+	// ResumeSessionID, when set, continues that Claude Code session instead of
+	// opening a new one (buildClaudeArgs adds --resume). Empty is a fresh run.
+	ResumeSessionID  string
 	OnSessionUpdated func(session *db.Session)
 	// GetOpenTabs returns the client's currently open editor tabs.
 	GetOpenTabs func() []TabInfo
@@ -620,7 +630,7 @@ func stageOutputCollectorWithCallbacks(cfg OrchestratorConfig, role AgentRole) (
 
 // stageChatContextCreation constructs a ChatContext from config, sessionID, role, cancel, and callbacks.
 func stageChatContextCreation(cfg OrchestratorConfig, sessionID string, role AgentRole, cancel <-chan struct{}, onChunk func(string, bool), onError func(string), onToolCall func(string, any), onToolResult func(string, any, bool)) *ChatContext {
-	return &ChatContext{
+	ctx := &ChatContext{
 		ProjectPath:   cfg.ProjectPath,
 		SessionID:     sessionID,
 		Role:          role,
@@ -632,6 +642,19 @@ func stageChatContextCreation(cfg OrchestratorConfig, sessionID string, role Age
 		OnRunStats:    cfg.OnRunStats,
 		ModelOverride: cfg.RequestedModel,
 	}
+	// The provider reports one bare session id; the phase it belongs to is
+	// known here, from the role, so the two are joined at the only place that
+	// has both. Same phase vocabulary the session registry uses.
+	if cfg.OnClaudeSession != nil {
+		phase := claudeSessionPhase(role)
+		report := cfg.OnClaudeSession
+		ctx.OnClaudeSession = func(sessionID string) { report(phase, sessionID) }
+	}
+	// Resume the builder, not the planner — see OrchestratorConfig.ResumeSessionID.
+	if role == RoleAutonomousBuilder {
+		ctx.ResumeSessionID = cfg.ResumeSessionID
+	}
+	return ctx
 }
 
 // newChatContextForRole creates a ChatContext with output collection pre-configured.

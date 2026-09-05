@@ -934,6 +934,18 @@ func newPhaseChat(cfg OrchestratorConfig, sessionID string) *CapturedChat {
 	// TeamWorker.runStep) so it cannot drift again.
 	cc.Ctx.ModelOverride = cfg.RequestedModel
 	cc.Ctx.TaskID = cfg.TaskID
+	// Session capture, for the same reason the model pin is here: the serial
+	// path wires this in stageChatContextCreation and the event path is the one
+	// that actually runs task-mode work. The phase is read when the callback
+	// fires, not now — callers (TeamWorker.runStep) set the builder role after
+	// this returns, and reading it early would file every team step under
+	// "plan".
+	if cfg.OnClaudeSession != nil {
+		report := cfg.OnClaudeSession
+		cc.Ctx.OnClaudeSession = func(sessionID string) {
+			report(claudeSessionPhase(cc.Ctx.Role), sessionID)
+		}
+	}
 	if strings.TrimSpace(cfg.RequestedRole) != "" {
 		cc.Ctx.Role = agentRoleFromLabel(cfg.RequestedRole)
 	}
