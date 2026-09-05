@@ -30,6 +30,17 @@ func SaveAttentionResiduals(residuals []AttentionResidual) error {
 		INSERT INTO attention_residuals (
 			id, session_id, message_id, source_key, source_type, source_label, query_text, weight, score, context, created_at
 		) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET
+			session_id = excluded.session_id,
+			message_id = excluded.message_id,
+			source_key = excluded.source_key,
+			source_type = excluded.source_type,
+			source_label = excluded.source_label,
+			query_text = excluded.query_text,
+			weight = excluded.weight,
+			score = excluded.score,
+			context = excluded.context,
+			created_at = excluded.created_at
 	`)
 	if err != nil {
 		return err
