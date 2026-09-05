@@ -392,11 +392,20 @@ func TestWaitForMemory_UnmeasurableReturnsImmediately(t *testing.T) {
 	// With an unmeasurable memory reader (returns <= 0), the gate should not wait.
 	callCount := 0
 	oldReader := memoryReader
-	defer func() { memoryReader = oldReader }()
+	defer func() {
+		memoryReader = oldReader
+		spawnTimesMu.Lock()
+		spawnTimes = []int64{}
+		spawnTimesMu.Unlock()
+	}()
 	memoryReader = func() int64 {
 		callCount++
 		return -1 // unmeasurable
 	}
+
+	spawnTimesMu.Lock()
+	spawnTimes = []int64{}
+	spawnTimesMu.Unlock()
 
 	ctx := context.Background()
 	free := waitForMemory(ctx, "task1", "execute")
@@ -412,7 +421,17 @@ func TestWaitForMemory_SufficientMemoryReturnsImmediately(t *testing.T) {
 	// With sufficient memory (>= reserve), the gate should not wait.
 	callCount := 0
 	oldReader := memoryReader
-	defer func() { memoryReader = oldReader }()
+	defer func() {
+		memoryReader = oldReader
+		spawnTimesMu.Lock()
+		spawnTimes = []int64{}
+		spawnTimesMu.Unlock()
+	}()
+
+	spawnTimesMu.Lock()
+	spawnTimes = []int64{}
+	spawnTimesMu.Unlock()
+
 	memoryReader = func() int64 {
 		callCount++
 		return 5000 // well above default 3072 MB reserve
@@ -434,7 +453,17 @@ func TestWaitForMemory_WaitsUntilSufficientMemory(t *testing.T) {
 	reads := []int64{100, 5000}
 	readIndex := 0
 	oldReader := memoryReader
-	defer func() { memoryReader = oldReader }()
+	defer func() {
+		memoryReader = oldReader
+		spawnTimesMu.Lock()
+		spawnTimes = []int64{}
+		spawnTimesMu.Unlock()
+	}()
+
+	spawnTimesMu.Lock()
+	spawnTimes = []int64{}
+	spawnTimesMu.Unlock()
+
 	memoryReader = func() int64 {
 		if readIndex < len(reads) {
 			val := reads[readIndex]
@@ -473,7 +502,17 @@ func TestWaitForMemory_ProceedsAfterTimeout(t *testing.T) {
 	// proceed after the timeout with a log message. Note: the poll interval is 5s,
 	// so even with a 1s timeout, we wait until the first poll completes.
 	oldReader := memoryReader
-	defer func() { memoryReader = oldReader }()
+	defer func() {
+		memoryReader = oldReader
+		spawnTimesMu.Lock()
+		spawnTimes = []int64{}
+		spawnTimesMu.Unlock()
+	}()
+
+	spawnTimesMu.Lock()
+	spawnTimes = []int64{}
+	spawnTimesMu.Unlock()
+
 	memoryReader = func() int64 {
 		return 100 // always low
 	}
@@ -503,7 +542,17 @@ func TestWaitForMemory_HonoursContextCancel(t *testing.T) {
 	// If the context is cancelled while waiting, the gate should return
 	// immediately without deadlocking.
 	oldReader := memoryReader
-	defer func() { memoryReader = oldReader }()
+	defer func() {
+		memoryReader = oldReader
+		spawnTimesMu.Lock()
+		spawnTimes = []int64{}
+		spawnTimesMu.Unlock()
+	}()
+
+	spawnTimesMu.Lock()
+	spawnTimes = []int64{}
+	spawnTimesMu.Unlock()
+
 	memoryReader = func() int64 {
 		return 100 // always low, would wait forever without cancel
 	}
@@ -524,5 +573,209 @@ func TestWaitForMemory_HonoursContextCancel(t *testing.T) {
 	// Should have returned in roughly 500ms when cancelled.
 	if elapsed < 400*time.Millisecond || elapsed > 1*time.Second {
 		t.Errorf("elapsed time %.1fs, expected ~0.5s", elapsed.Seconds())
+	}
+}
+
+func TestWaitForMemory_AccountsForYoungSessions(t *testing.T) {
+	// With 12000 MB free and 8 sessions spawned 10s ago (young), the 9th should
+	// wait because: need 3072 (reserve) + 1400*9 (expected sessions) = 15672 MB,
+	// but only have 12000 MB.
+	oldReader := memoryReader
+	oldGetWaitSecs := memorySpawnWaitSecsFn
+	oldTimeNano := timeSinceNanoFn
+
+	defer func() {
+		memoryReader = oldReader
+		memorySpawnWaitSecsFn = oldGetWaitSecs
+		timeSinceNanoFn = oldTimeNano
+		spawnTimesMu.Lock()
+		spawnTimes = []int64{}
+		spawnTimesMu.Unlock()
+	}()
+
+	// Set up time: now is 1000, young sessions at time 990 (10s ago).
+	now := int64(1000 * time.Second.Nanoseconds())
+	youngSessionTime := int64(990 * time.Second.Nanoseconds())
+
+	// Pre-populate with 8 young sessions.
+	spawnTimesMu.Lock()
+	spawnTimes = []int64{
+		youngSessionTime, youngSessionTime, youngSessionTime, youngSessionTime,
+		youngSessionTime, youngSessionTime, youngSessionTime, youngSessionTime,
+	}
+	spawnTimesMu.Unlock()
+
+	callCount := 0
+	memoryReader = func() int64 {
+		callCount++
+		if callCount == 1 {
+			return 12000 // insufficient: need 15672, have 12000
+		}
+		// On second call, return enough.
+		return 16000
+	}
+
+	timeSinceNanoFn = func() int64 {
+		return now
+	}
+
+	memorySpawnWaitSecsFn = func() time.Duration {
+		return 10 * time.Second
+	}
+
+	ctx := context.Background()
+	start := time.Now()
+	free := waitForMemory(ctx, "task-burst", "execute")
+	elapsed := time.Since(start)
+
+	if free != 16000 {
+		t.Errorf("waitForMemory returned %d, want 16000", free)
+	}
+	if callCount < 2 {
+		t.Errorf("memoryReader called %d times, want at least 2", callCount)
+	}
+	// Should have waited one poll interval (5s).
+	if elapsed < 4*time.Second || elapsed > 8*time.Second {
+		t.Errorf("elapsed time %.1fs, expected ~5s", elapsed.Seconds())
+	}
+}
+
+func TestWaitForMemory_NoYoungSessionsProceedsImmediately(t *testing.T) {
+	// With 12000 MB free and no young sessions, the spawn should proceed
+	// immediately because: need 3072 (reserve) + 1400*1 = 4472 MB, have 12000 MB.
+	oldReader := memoryReader
+	oldTimeNano := timeSinceNanoFn
+
+	defer func() {
+		memoryReader = oldReader
+		timeSinceNanoFn = oldTimeNano
+		spawnTimesMu.Lock()
+		spawnTimes = []int64{}
+		spawnTimesMu.Unlock()
+	}()
+
+	callCount := 0
+	memoryReader = func() int64 {
+		callCount++
+		return 12000
+	}
+
+	spawnTimesMu.Lock()
+	spawnTimes = []int64{} // no young sessions
+	spawnTimesMu.Unlock()
+
+	timeSinceNanoFn = func() int64 {
+		return int64(1000 * time.Second.Nanoseconds())
+	}
+
+	ctx := context.Background()
+	free := waitForMemory(ctx, "task-clean", "execute")
+
+	if free != 12000 {
+		t.Errorf("waitForMemory returned %d, want 12000", free)
+	}
+	if callCount != 1 {
+		t.Errorf("memoryReader called %d times, want 1 (immediate return)", callCount)
+	}
+}
+
+func TestWaitForMemory_EnforcesMinimumGapBetweenSpawns(t *testing.T) {
+	// Two back-to-back admissions should be at least MYEDITOR_SPAWN_MIN_GAP_SECS apart.
+	oldReader := memoryReader
+	oldTimeNano := timeSinceNanoFn
+
+	defer func() {
+		memoryReader = oldReader
+		timeSinceNanoFn = oldTimeNano
+		spawnTimesMu.Lock()
+		spawnTimes = []int64{}
+		spawnTimesMu.Unlock()
+	}()
+
+	memoryReader = func() int64 {
+		return 12000 // always sufficient
+	}
+
+	// Simulate one spawn at t=1000.
+	spawnTimesMu.Lock()
+	spawnTimes = []int64{int64(1000 * time.Second.Nanoseconds())}
+	spawnTimesMu.Unlock()
+
+	now := int64(1002 * time.Second.Nanoseconds()) // now is t=1002 (2s later)
+	callCount := 0
+
+	timeSinceNanoFn = func() int64 {
+		callCount++
+		// First call (min gap check): return now (1002).
+		// After gap wait completes, return now + gap time (1004).
+		if callCount == 1 {
+			return now
+		}
+		return int64(1004 * time.Second.Nanoseconds()) // skip to 1004 (gap satisfied)
+	}
+
+	ctx := context.Background()
+	start := time.Now()
+	free := waitForMemory(ctx, "task-gap", "execute")
+	elapsed := time.Since(start)
+
+	if free != 12000 {
+		t.Errorf("waitForMemory returned %d, want 12000", free)
+	}
+	// Should have waited roughly 2 seconds for the gap to elapse.
+	if elapsed < 1500*time.Millisecond || elapsed > 3*time.Second {
+		t.Errorf("elapsed time %.1fs, expected ~2s for gap enforcement", elapsed.Seconds())
+	}
+}
+
+func TestWaitForMemory_YoungSessionsAgeOut(t *testing.T) {
+	// Sessions older than MYEDITOR_SPAWN_WARMUP_SECS should not count toward
+	// the young sessions and should be pruned from tracking.
+	oldReader := memoryReader
+	oldTimeNano := timeSinceNanoFn
+
+	defer func() {
+		memoryReader = oldReader
+		timeSinceNanoFn = oldTimeNano
+		spawnTimesMu.Lock()
+		spawnTimes = []int64{}
+		spawnTimesMu.Unlock()
+	}()
+
+	callCount := 0
+	memoryReader = func() int64 {
+		callCount++
+		return 12000
+	}
+
+	// Pre-populate with 8 sessions at time 1000, but we're now at time 1200 (200s later).
+	// With default warmup of 120s, these should be aged out and not count.
+	oldSessionTime := int64(1000 * time.Second.Nanoseconds())
+	spawnTimesMu.Lock()
+	spawnTimes = []int64{
+		oldSessionTime, oldSessionTime, oldSessionTime, oldSessionTime,
+		oldSessionTime, oldSessionTime, oldSessionTime, oldSessionTime,
+	}
+	spawnTimesMu.Unlock()
+
+	now := int64(1200 * time.Second.Nanoseconds())
+	timeSinceNanoFn = func() int64 {
+		return now
+	}
+
+	ctx := context.Background()
+	free := waitForMemory(ctx, "task-old", "execute")
+
+	if free != 12000 {
+		t.Errorf("waitForMemory returned %d, want 12000", free)
+	}
+	if callCount != 1 {
+		t.Errorf("memoryReader called %d times, want 1", callCount)
+	}
+	// Check that old sessions were pruned and new one was added.
+	spawnTimesMu.Lock()
+	defer spawnTimesMu.Unlock()
+	if len(spawnTimes) != 1 {
+		t.Errorf("spawnTimes has %d entries after aging out, want 1 (the new spawn)", len(spawnTimes))
 	}
 }
