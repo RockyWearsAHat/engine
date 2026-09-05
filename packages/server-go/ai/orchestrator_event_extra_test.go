@@ -1054,3 +1054,157 @@ func TestPersistBrainState(t *testing.T) {
 		t.Logf("persist failed: %v", err)
 	}
 }
+
+// TestPhasePlan_ItemModeSkipsSession verifies that single worklist items skip
+// the plan session entirely when MYEDITOR_ITEM_PLAN is not set.
+func TestPhasePlan_ItemModeSkipsSession(t *testing.T) {
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "owner", "repo", "test item brief", "t")
+
+	chatCalled := false
+	cfg := OrchestratorConfig{
+		ProjectPath:     dir,
+		TaskMode:        true,
+		TaskID:          "item-test-1",
+		Brief:           "test item brief",
+		OnPhase:         func(string, string) {},
+		OnProgress:      func(string) {},
+		OnError:         func(string) {},
+		SessionIDPrefix: "t",
+		ChatFn: func(c *ChatContext, _ string) {
+			// This should NOT be called for item mode when the env var is not set
+			chatCalled = true
+			c.OnChunk("1. some plan step\n   body\n   Acceptance: `go test ./...`", false)
+		},
+	}
+
+	eo := &EventOrchestrator{
+		cfg:            cfg,
+		brain:          brain,
+		bus:            NewEventBus(),
+		dispatcher:     NewTeamDispatcher(brain, NewEventBus(), cfg, 1, NewAgentCommsHub()),
+		ctx:            context.Background(),
+		taskWallBudget: 20 * 60 * time.Second,
+		iterationCap:   3,
+	}
+
+	// In item mode with MYEDITOR_ITEM_PLAN not set, the plan session should be skipped
+	err := eo.phasePlan()
+	if err != nil {
+		t.Fatalf("phasePlan failed: %v", err)
+	}
+
+	// Verify the chat function was NOT called
+	if chatCalled {
+		t.Fatal("expected chat to NOT be called in item mode when MYEDITOR_ITEM_PLAN is not set")
+	}
+
+	// Verify a one-step plan was created
+	if len(brain.Plan) != 1 {
+		t.Fatalf("expected 1 plan step, got %d", len(brain.Plan))
+	}
+
+	// Verify the plan step contains the item brief
+	if !strings.Contains(brain.Plan[0].Body, "test item brief") {
+		t.Errorf("expected plan body to contain item brief, got: %q", brain.Plan[0].Body)
+	}
+}
+
+// TestPhasePlan_ItemModeWithEnvVarRunsSession verifies that setting
+// MYEDITOR_ITEM_PLAN=1 re-enables the plan session for items.
+func TestPhasePlan_ItemModeWithEnvVarRunsSession(t *testing.T) {
+	t.Setenv("MYEDITOR_ITEM_PLAN", "1")
+
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "owner", "repo", "test item brief", "t")
+
+	chatCalled := false
+	cfg := OrchestratorConfig{
+		ProjectPath:     dir,
+		TaskMode:        true,
+		TaskID:          "item-test-2",
+		Brief:           "test item brief",
+		OnPhase:         func(string, string) {},
+		OnProgress:      func(string) {},
+		OnError:         func(string) {},
+		SessionIDPrefix: "t",
+		ChatFn: func(c *ChatContext, _ string) {
+			// This SHOULD be called when MYEDITOR_ITEM_PLAN=1
+			chatCalled = true
+			c.OnChunk("1. planner output step\n   body\n   Acceptance: `go test ./...`", false)
+		},
+	}
+
+	eo := &EventOrchestrator{
+		cfg:            cfg,
+		brain:          brain,
+		bus:            NewEventBus(),
+		dispatcher:     NewTeamDispatcher(brain, NewEventBus(), cfg, 1, NewAgentCommsHub()),
+		ctx:            context.Background(),
+		taskWallBudget: 20 * 60 * time.Second,
+		iterationCap:   3,
+	}
+
+	// With MYEDITOR_ITEM_PLAN=1, the plan session should run
+	err := eo.phasePlan()
+	if err != nil {
+		t.Fatalf("phasePlan failed: %v", err)
+	}
+
+	// Verify the chat function WAS called
+	if !chatCalled {
+		t.Fatal("expected chat to be called in item mode when MYEDITOR_ITEM_PLAN=1")
+	}
+
+	// Verify the plan step came from the chat
+	if len(brain.Plan) != 1 {
+		t.Fatalf("expected 1 plan step, got %d", len(brain.Plan))
+	}
+	if !strings.Contains(brain.Plan[0].Title, "planner output step") {
+		t.Errorf("expected plan to contain planner output, got: %q", brain.Plan[0].Title)
+	}
+}
+
+// TestPhasePlan_NonItemModeAlwaysRunsSession verifies that non-item mode
+// (project builds) always runs the plan session regardless of env vars.
+func TestPhasePlan_NonItemModeAlwaysRunsSession(t *testing.T) {
+	dir := t.TempDir()
+	brain, _ := NewOrchestrationBrain(dir, "owner", "repo", "build project", "t")
+
+	chatCalled := false
+	cfg := OrchestratorConfig{
+		ProjectPath:     dir,
+		TaskMode:        false, // NOT task mode
+		Brief:           "build project",
+		OnPhase:         func(string, string) {},
+		OnProgress:      func(string) {},
+		OnError:         func(string) {},
+		SessionIDPrefix: "t",
+		ChatFn: func(c *ChatContext, _ string) {
+			// This SHOULD be called for non-item mode
+			chatCalled = true
+			c.OnChunk("1. project step\n   body\n   Acceptance: `go test ./...`", false)
+		},
+	}
+
+	eo := &EventOrchestrator{
+		cfg:            cfg,
+		brain:          brain,
+		bus:            NewEventBus(),
+		dispatcher:     NewTeamDispatcher(brain, NewEventBus(), cfg, 1, NewAgentCommsHub()),
+		ctx:            context.Background(),
+		taskWallBudget: 45 * 60 * time.Second,
+		iterationCap:   200,
+	}
+
+	// In non-item mode, the plan session should always run
+	err := eo.phasePlan()
+	if err != nil {
+		t.Fatalf("phasePlan failed: %v", err)
+	}
+
+	// Verify the chat function WAS called
+	if !chatCalled {
+		t.Fatal("expected chat to be called in non-item mode")
+	}
+}

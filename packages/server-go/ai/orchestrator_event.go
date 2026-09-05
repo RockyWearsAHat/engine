@@ -119,6 +119,14 @@ var planBudgetItem = func() time.Duration {
 	return 45 * time.Second
 }()
 
+// itemPlanEnabled reports whether to run the plan session for single worklist items.
+// Default false (skip plan phase for items, execute one-step plan directly).
+// Overridable via MYEDITOR_ITEM_PLAN=1 to restore the old behavior for testing.
+func itemPlanEnabled() bool {
+	v := strings.TrimSpace(os.Getenv("MYEDITOR_ITEM_PLAN"))
+	return v == "1"
+}
+
 // EventOrchestrator runs the event-driven autonomy loop.
 // It manages intake → requirements → planning → team dispatch → validation → completion.
 type EventOrchestrator struct {
@@ -137,9 +145,9 @@ type EventOrchestrator struct {
 	maxOuterIterations int
 
 	// Budget tracking for task-mode items
-	taskStartTime      time.Time
-	taskWallBudget     time.Duration
-	iterationCap       int
+	taskStartTime  time.Time
+	taskWallBudget time.Duration
+	iterationCap   int
 
 	// failure is why the run ended badly, or nil if it did not.
 	//
@@ -453,121 +461,140 @@ func (eo *EventOrchestrator) phaseIntake() error {
 func (eo *EventOrchestrator) phasePlan() error {
 	eo.cfg.OnPhase("plan", "generating plan")
 
-	sessionID := fmt.Sprintf("%s-plan-%d", eo.cfg.SessionIDPrefix, eo.brain.OuterIterationCount())
-	cc := newPhaseChat(eo.cfg, sessionID)
-	if strings.TrimSpace(eo.cfg.RequestedRole) == "" {
-		cc.Ctx.Role = RolePlanner
-	}
-
-	// Task mode's plan phase is one already-decided item, not a project to
-	// conceive: bound it to planBudgetItem wall clock, and to haiku unless the caller
-	// pinned a specific model for this dispatch (RequestedModel wins — that
-	// pin is a floor for the whole run, not something the plan phase should
-	// silently override). Without this a "plan" phase was a second uncapped
-	// `claude -p` session per dispatched item, on top of whatever the
-	// execute phase spent.
-	if eo.cfg.TaskMode {
-		if strings.TrimSpace(eo.cfg.RequestedModel) == "" {
-			cc.Ctx.ModelOverride = "haiku"
-		}
-		timer := time.NewTimer(planBudgetItem)
-		defer timer.Stop()
-		boundedCancel := make(chan struct{})
-		go func() {
-			select {
-			case <-timer.C:
-				close(boundedCancel)
-			case <-eo.ctx.Done():
-			}
-		}()
-		cc.Ctx.Cancel = orchestratorMergedCancel(eo.cfg.Cancel, boundedCancel)
-	}
-
-	// The planner prompt is the serial path's, deliberately, because the parser
-	// is the serial path's too — extractPlanFromContext is a one-line wrapper
-	// around parsePlanFromText.
-	//
-	// The prompt this replaces had two independent defects, both fatal and both
-	// invisible while nothing called this code:
-	//
-	//  1. It never included the brief. It was assembled purely from the brain's
-	//     requirements — PRD, vocabulary, design, module index — every one of
-	//     which phaseIntake fills in by reading .engine docs that a fresh project
-	//     does not have. So on a new project the planner was asked to "create a
-	//     concrete numbered plan to implement the project" with four empty
-	//     sections and no statement anywhere of what the project was.
-	//
-	//  2. It asked for JSON. parsePlanFromText reads numbered markdown
-	//     (`^\s*(\d+)\.\s+`) and understands no JSON at all, so even a model that
-	//     answered the prompt perfectly parsed to zero steps.
-	//
-	// Sharing the builder is what stops these drifting apart again: there is one
-	// planner output format in this codebase and one thing that writes prompts
-	// asking for it.
-	req := eo.brain.GetRequirements()
-	prompt := buildPlannerPromptWithContext(eo.cfg.Brief, eo.eventPlannerContext(req))
-
-	// Run the call off-goroutine and enforce the wall clock here too, not
-	// only via cc.Ctx.Cancel. Observed live: plan phases were taking 130-160s
-	// against a 60s budget — cc.Ctx.Cancel closing depends on the provider's
-	// own cancel-bridge goroutine noticing in time and the CLI's process
-	// tree actually dying within cmd.WaitDelay, neither of which this call
-	// site could verify. This select is the backstop: whatever produced
-	// output by the deadline is what the plan is built from (task instructions:
-	// "the plan is taken from whatever was produced by then"), and it force-
-	// kills any session still registered for this task so a stuck `claude -p`
-	// never survives into the execute phase — the "two live sessions per task"
-	// bug this was chasing.
+	var plan []PlanStep
+	var output string
 	planStart := time.Now()
-	if eo.cfg.TaskMode {
-		done := make(chan struct{})
-		go func() {
-			eo.cfg.chatFnFor()(cc.Ctx, prompt)
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(planBudgetItem + planPhaseHardStopGrace):
-			for _, pid := range LiveSessionPIDs(eo.cfg.TaskID) {
-				_ = KillPIDTree(pid)
-			}
-			log.Printf("task %s: plan phase exceeded %s wall clock (budget %s) — force-killed, using output produced so far",
-				eo.cfg.TaskID, planBudgetItem+planPhaseHardStopGrace, planBudgetItem)
-			// done fires once the killed RunLoop actually returns and the
-			// goroutine above closes it; drain it so that goroutine cannot
-			// leak, but do not block the phase on it any longer.
-			go func() { <-done }()
-		}
-	} else {
-		eo.cfg.chatFnFor()(cc.Ctx, prompt)
-	}
 
-	// Parse plan from context output
-	output := cc.GetOutput()
-	plan := extractPlanFromContext(output)
-
-	// TaskMode's plan phase failing must never end the task: the item itself
-	// is already a decided, executable unit of work (that is the whole point
-	// of TaskMode), so a planner that produced nothing — because it was
-	// killed at the wall-clock deadline, or simply answered with unparseable
-	// text — falls back to a one-step plan that IS the item, verbatim, and
-	// execution proceeds exactly as it would from a real plan.
-	//
-	// Before this, an empty plan here returned an error, eventLoop called
-	// eo.fail and returned, and the task ended silently: no execute phase,
-	// no error visible to the operator beyond a log line, and the engine
-	// re-requested the same worklist item a minute later — burning quota on
-	// repeated dead plan phases instead of ever doing the work.
-	if len(plan) == 0 && eo.cfg.TaskMode {
+	// Single worklist item mode: skip the plan phase entirely when MYEDITOR_ITEM_PLAN
+	// is not set to "1". The item itself is the work unit; the plan is one step.
+	// This was burning a session and 60s per item on a force-killed plan phase
+	// that produced nothing — the fallback one-step plan is the right behavior.
+	if eo.cfg.TaskMode && !itemPlanEnabled() {
+		log.Printf("plan: single item — executing as a one-step plan (plan phase skipped)")
 		item := strings.TrimSpace(eo.cfg.Brief)
-		log.Printf("plan: budget exhausted after %.0fs — executing the item as a one-step plan",
-			time.Since(planStart).Seconds())
 		plan = []PlanStep{{
 			Index:     1,
 			Title:     "Do the worklist item",
 			Body:      fmt.Sprintf("Do this item: %s; commit when done; tick the item.", item),
 			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 		}}
+	} else {
+		// Normal plan phase (non-item, or item with MYEDITOR_ITEM_PLAN=1)
+		sessionID := fmt.Sprintf("%s-plan-%d", eo.cfg.SessionIDPrefix, eo.brain.OuterIterationCount())
+		cc := newPhaseChat(eo.cfg, sessionID)
+		if strings.TrimSpace(eo.cfg.RequestedRole) == "" {
+			cc.Ctx.Role = RolePlanner
+		}
+
+		// Task mode's plan phase is one already-decided item, not a project to
+		// conceive: bound it to planBudgetItem wall clock, and to haiku unless the caller
+		// pinned a specific model for this dispatch (RequestedModel wins — that
+		// pin is a floor for the whole run, not something the plan phase should
+		// silently override). Without this a "plan" phase was a second uncapped
+		// `claude -p` session per dispatched item, on top of whatever the
+		// execute phase spent.
+		if eo.cfg.TaskMode {
+			if strings.TrimSpace(eo.cfg.RequestedModel) == "" {
+				cc.Ctx.ModelOverride = "haiku"
+			}
+			timer := time.NewTimer(planBudgetItem)
+			defer timer.Stop()
+			boundedCancel := make(chan struct{})
+			go func() {
+				select {
+				case <-timer.C:
+					close(boundedCancel)
+				case <-eo.ctx.Done():
+				}
+			}()
+			cc.Ctx.Cancel = orchestratorMergedCancel(eo.cfg.Cancel, boundedCancel)
+		}
+
+		// The planner prompt is the serial path's, deliberately, because the parser
+		// is the serial path's too — extractPlanFromContext is a one-line wrapper
+		// around parsePlanFromText.
+		//
+		// The prompt this replaces had two independent defects, both fatal and both
+		// invisible while nothing called this code:
+		//
+		//  1. It never included the brief. It was assembled purely from the brain's
+		//     requirements — PRD, vocabulary, design, module index — every one of
+		//     which phaseIntake fills in by reading .engine docs that a fresh project
+		//     does not have. So on a new project the planner was asked to "create a
+		//     concrete numbered plan to implement the project" with four empty
+		//     sections and no statement anywhere of what the project was.
+		//
+		//  2. It asked for JSON. parsePlanFromText reads numbered markdown
+		//     (`^\s*(\d+)\.\s+`) and understands no JSON at all, so even a model that
+		//     answered the prompt perfectly parsed to zero steps.
+		//
+		// Sharing the builder is what stops these drifting apart again: there is one
+		// planner output format in this codebase and one thing that writes prompts
+		// asking for it.
+		req := eo.brain.GetRequirements()
+		prompt := buildPlannerPromptWithContext(eo.cfg.Brief, eo.eventPlannerContext(req))
+
+		// Run the call off-goroutine and enforce the wall clock here too, not
+		// only via cc.Ctx.Cancel. Observed live: plan phases were taking 130-160s
+		// against a 60s budget — cc.Ctx.Cancel closing depends on the provider's
+		// own cancel-bridge goroutine noticing in time and the CLI's process
+		// tree actually dying within cmd.WaitDelay, neither of which this call
+		// site could verify. This select is the backstop: whatever produced
+		// output by the deadline is what the plan is built from (task instructions:
+		// "the plan is taken from whatever was produced by then"), and it force-
+		// kills any session still registered for this task so a stuck `claude -p`
+		// never survives into the execute phase — the "two live sessions per task"
+		// bug this was chasing.
+		if eo.cfg.TaskMode {
+			done := make(chan struct{})
+			go func() {
+				eo.cfg.chatFnFor()(cc.Ctx, prompt)
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(planBudgetItem + planPhaseHardStopGrace):
+				for _, pid := range LiveSessionPIDs(eo.cfg.TaskID) {
+					_ = KillPIDTree(pid)
+				}
+				log.Printf("task %s: plan phase exceeded %s wall clock (budget %s) — force-killed, using output produced so far",
+					eo.cfg.TaskID, planBudgetItem+planPhaseHardStopGrace, planBudgetItem)
+				// done fires once the killed RunLoop actually returns and the
+				// goroutine above closes it; drain it so that goroutine cannot
+				// leak, but do not block the phase on it any longer.
+				go func() { <-done }()
+			}
+		} else {
+			eo.cfg.chatFnFor()(cc.Ctx, prompt)
+		}
+
+		// Parse plan from context output
+		output = cc.GetOutput()
+		plan = extractPlanFromContext(output)
+
+		// TaskMode's plan phase failing must never end the task: the item itself
+		// is already a decided, executable unit of work (that is the whole point
+		// of TaskMode), so a planner that produced nothing — because it was
+		// killed at the wall-clock deadline, or simply answered with unparseable
+		// text — falls back to a one-step plan that IS the item, verbatim, and
+		// execution proceeds exactly as it would from a real plan.
+		//
+		// Before this, an empty plan here returned an error, eventLoop called
+		// eo.fail and returned, and the task ended silently: no execute phase,
+		// no error visible to the operator beyond a log line, and the engine
+		// re-requested the same worklist item a minute later — burning quota on
+		// repeated dead plan phases instead of ever doing the work.
+		if len(plan) == 0 && eo.cfg.TaskMode {
+			item := strings.TrimSpace(eo.cfg.Brief)
+			log.Printf("plan: budget exhausted after %.0fs — executing the item as a one-step plan",
+				time.Since(planStart).Seconds())
+			plan = []PlanStep{{
+				Index:     1,
+				Title:     "Do the worklist item",
+				Body:      fmt.Sprintf("Do this item: %s; commit when done; tick the item.", item),
+				UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+			}}
+		}
 	}
 
 	// An empty plan is terminal, not something to carry on from.
