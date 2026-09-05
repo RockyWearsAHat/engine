@@ -215,6 +215,10 @@ func laterReset(a, b string) string {
 // toSnapshot rebuilds a governor-readable Snapshot from a wire account.
 // Unknown (-1) values stay as-is; the window is considered known only when
 // both session and week percentages are >= 0.
+//
+// The week and session reset times may come from multiple field names in the
+// pooled record (weekResetAt vs week.resetAt, etc.), so this function tries
+// each known variant.
 func (sa SnapshotAccount) toSnapshot(name string, fetched time.Time) Snapshot {
 	sessionKnown := sa.SessionPct >= 0
 	weekKnown := sa.WeekPct >= 0
@@ -225,15 +229,40 @@ func (sa SnapshotAccount) toSnapshot(name string, fetched time.Time) Snapshot {
 	}
 	s.Session = Window{Name: "session", Label: "Current session", Percent: sa.SessionPct}
 	s.Week = Window{Name: "week", Label: "Current week (all models)", Percent: sa.WeekPct}
-	if t, err := time.Parse(time.RFC3339, sa.SessionResetAt); err == nil {
-		s.Session.ResetsAt = &t
+
+	// Parse session reset from SessionResetAt or fall back to ResetAt (binding window).
+	if sessionReset := parseResetRFC3339(sa.SessionResetAt); sessionReset != nil {
+		s.Session.ResetsAt = sessionReset
+		s.Session.HasReset = true
+	} else if sessionReset := parseResetRFC3339(sa.ResetAt); sessionReset != nil {
+		// Fall back to binding window's reset if session-specific one is missing.
+		s.Session.ResetsAt = sessionReset
 		s.Session.HasReset = true
 	}
-	if t, err := time.Parse(time.RFC3339, sa.WeekResetAt); err == nil {
-		s.Week.ResetsAt = &t
+
+	// Parse week reset from WeekResetAt or fall back to ResetAt (binding window).
+	if weekReset := parseResetRFC3339(sa.WeekResetAt); weekReset != nil {
+		s.Week.ResetsAt = weekReset
+		s.Week.HasReset = true
+	} else if weekReset := parseResetRFC3339(sa.ResetAt); weekReset != nil {
+		// Fall back to binding window's reset if week-specific one is missing.
+		s.Week.ResetsAt = weekReset
 		s.Week.HasReset = true
 	}
 	return s
+}
+
+// parseResetRFC3339 parses an RFC3339 time string and returns a pointer to the parsed time,
+// or nil if the string is empty or invalid. This is used for parsing pooled account reset
+// times, which come in RFC3339 format from the wire.
+func parseResetRFC3339(s string) *time.Time {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return &t
+	}
+	return nil
 }
 
 func max0(v float64) float64 {
@@ -297,6 +326,19 @@ func (g *Governor) readAccount(ctx context.Context, a Account, local map[string]
 			if sa.SessionPct >= 0 && sa.WeekPct >= 0 {
 				s := sa.toSnapshot(a.Name, p.GeneratedAt)
 				if s.Ok && (!localOk || (localSnap.Session.Percent <= sa.SessionPct && localSnap.Week.Percent <= sa.WeekPct)) {
+					// Defensively use local snapshot's resets if the pooled snapshot
+					// doesn't have them. The pooled merge may drop field names in folding
+					// the data back into the window view.
+					if localOk {
+						if !s.Session.HasReset && localSnap.Session.HasReset && localSnap.Session.ResetsAt != nil {
+							s.Session.ResetsAt = localSnap.Session.ResetsAt
+							s.Session.HasReset = true
+						}
+						if !s.Week.HasReset && localSnap.Week.HasReset && localSnap.Week.ResetsAt != nil {
+							s.Week.ResetsAt = localSnap.Week.ResetsAt
+							s.Week.HasReset = true
+						}
+					}
 					return s, "pooled"
 				}
 			}
