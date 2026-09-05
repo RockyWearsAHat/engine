@@ -228,6 +228,17 @@ type OrchestratorConfig struct {
 	OnActivity func(kind string)
 	// OnRunStats fires after every provider run with tokens/model/subagents.
 	OnRunStats func(RunStats)
+	// OnClaudeSession fires with the Claude Code session id a phase opened, as
+	// soon as the CLI announces it. phase is "plan" or "execute". The task API
+	// persists these so a restart can resume the run instead of losing it.
+	OnClaudeSession func(phase, sessionID string)
+	// ResumeSessionID, when set, makes this run continue an existing Claude
+	// Code conversation rather than starting cold. It is applied to the
+	// execution (builder) sessions only — a planning session is cheap and its
+	// output is a plan, so re-deriving one is not what resumption is for.
+	//
+	// Set by the task API's repair path after an engine restart.
+	ResumeSessionID string
 	// OnCoach fires when a REJECT retry was coached (brief rewritten) or
 	// escalated a model tier. Slice I fills it; task API reports it.
 	OnCoach func(coached int, escalated bool)
