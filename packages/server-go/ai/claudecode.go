@@ -17,6 +17,20 @@ import (
 	"github.com/engine/server/quota"
 )
 
+// memoryReader is the injected function to read free commit memory in MB.
+// Package-level var so tests can inject a mock. By default, it calls freeCommitMB.
+// Initialized in init() to avoid build-tag issues.
+var memoryReader func() int64
+
+// memorySpawnWaitSecsFn is the injected function to read the spawn wait timeout.
+// Package-level var so tests can inject a mock. By default, it reads the env var.
+var memorySpawnWaitSecsFn func() time.Duration
+
+func init() {
+	memoryReader = freeCommitMB
+	memorySpawnWaitSecsFn = memorySpawnWaitSecsEnv
+}
+
 // claudecodeIdleTimeout returns how long the provider waits with NO output from
 // `claude -p` before treating the run as stalled, killing it, and surfacing an
 // error so the orchestrator retries the step. Without this, a hung CLI (e.g. a
@@ -30,6 +44,102 @@ func claudecodeIdleTimeout() time.Duration {
 		}
 	}
 	return 180 * time.Second
+}
+
+// memoryReserveMB returns the minimum free commit memory (in MB) required before
+// spawning a new claude session. If free memory drops below this, the spawn gate
+// will wait (up to memorySpawnWaitSecs) before proceeding. Override with
+// MYEDITOR_MEMORY_RESERVE_MB.
+func memoryReserveMB() int64 {
+	if v := strings.TrimSpace(os.Getenv("MYEDITOR_MEMORY_RESERVE_MB")); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 3072
+}
+
+// memorySpawnWaitSecsEnv returns the maximum time (in seconds) to wait for free
+// memory to become available before spawning a claude session anyway, reading from
+// the MYEDITOR_SPAWN_WAIT_SECS environment variable.
+func memorySpawnWaitSecsEnv() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("MYEDITOR_SPAWN_WAIT_SECS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 600 * time.Second
+}
+
+// memorySpawnWaitSecs returns the maximum time to wait for memory using the
+// injected memorySpawnWaitSecsFn (for testability).
+func memorySpawnWaitSecs() time.Duration {
+	return memorySpawnWaitSecsFn()
+}
+
+// waitForMemory is the admission gate before spawning a claude session. It polls
+// memoryReader (freeCommitMB by default, injected in tests) and waits if free
+// memory is below the reserve threshold. Returns the final free memory observed.
+//
+//   - If memoryReader() returns <= 0 (unmeasurable), does not wait.
+//   - If free memory >= reserve, returns immediately.
+//   - If free memory < reserve, polls every 5 seconds up to memorySpawnWaitSecs(),
+//     logging once at first deferral, once when proceeding after waiting, or once
+//     on timeout.
+//   - Respects ctx.Cancel so a cancelled task does not sit in the loop.
+//   - Never deadlocks a task; the stall clock only starts after the gate returns.
+func waitForMemory(ctx context.Context, taskID, phase string) int64 {
+	reserve := memoryReserveMB()
+	maxWait := memorySpawnWaitSecs()
+	pollInterval := 5 * time.Second
+
+	start := time.Now()
+	deferralLogged := false
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		free := memoryReader()
+
+		// If unmeasurable (returns <= 0), do not wait — let the task proceed.
+		if free <= 0 {
+			return free
+		}
+
+		// If sufficient memory, proceed.
+		if free >= reserve {
+			if deferralLogged {
+				elapsed := time.Since(start).Seconds()
+				log.Printf("session spawn resumed task=%s after %.0fs (free commit %d MB)", taskID, elapsed, free)
+			}
+			return free
+		}
+
+		// Memory is low. Log deferral on first check.
+		if !deferralLogged {
+			log.Printf("session spawn deferred task=%s phase=%s: free commit %d MB < %d MB reserve", taskID, phase, free, reserve)
+			deferralLogged = true
+		}
+
+		// Check timeout.
+		if time.Since(start) > maxWait {
+			log.Printf("session spawn proceeding after %.0fs wait: free commit still %d MB", time.Since(start).Seconds(), free)
+			return free
+		}
+
+		// Wait for next poll or context cancellation.
+		select {
+		case <-ctx.Done():
+			// Task was cancelled; proceed anyway so the task doesn't hang.
+			if deferralLogged {
+				log.Printf("session spawn context cancelled after %.0fs wait", time.Since(start).Seconds())
+			}
+			return free
+		case <-ticker.C:
+			// Continue polling.
+		}
+	}
 }
 
 // activityReader wraps an io.Reader and records the wall-clock time of the last
@@ -174,6 +284,12 @@ func (p *claudecodeProvider) RunLoop(
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 
+	// Memory admission gate: wait if free commit is below the reserve threshold.
+	// This prevents the spawn loop from starving the box with dozens of sessions.
+	phase := claudeSessionPhase(ctx.Role)
+	taskID := ctx.TaskID
+	waitForMemory(runCtx, taskID, phase)
+
 	if err := cmd.Start(); err != nil {
 		if ctx.OnError != nil {
 			ctx.OnError("claudecode: failed to start `claude` (is the CLI installed and logged in?): " + err.Error())
@@ -186,8 +302,6 @@ func (p *claudecodeProvider) RunLoop(
 	// the registry that lets a restart find and kill exactly this task's
 	// sessions (see session_registry.go); phase distinguishes the plan
 	// session (bounded, must not outlive planPhaseTimeout) from execute.
-	phase := claudeSessionPhase(ctx.Role)
-	taskID := ctx.TaskID
 	pid := cmd.Process.Pid
 	spawnedAt := time.Now()
 
@@ -215,6 +329,8 @@ func (p *claudecodeProvider) RunLoop(
 
 	// Stall watchdog: if the CLI produces no output for idleTimeout, kill it so
 	// the orchestrator can retry rather than block the whole build forever.
+	// Initialize the activity timestamp AFTER the process starts so the stall timer
+	// only counts actual run time, not the memory wait time.
 	var lastActivity atomic.Int64
 	lastActivity.Store(time.Now().UnixNano())
 	var stalled atomic.Bool
