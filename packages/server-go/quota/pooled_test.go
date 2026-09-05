@@ -287,3 +287,80 @@ func TestNeverProbedAccountSnapshotUnknown(t *testing.T) {
 		t.Errorf("weekPct = %.0f, want -1 (unknown)", a.WeekPct)
 	}
 }
+
+// Pooled record with week reset in weekResetAt field (the gateway merge format)
+// should carry the reset through to the status and compute weekPaceKnown correctly.
+func TestPooledRecordWithWeekResetKeepsItInStatus(t *testing.T) {
+	now := at("12:00")
+	r := &fakeRunner{
+		auth:  map[string]string{"default": authJSON("user@example.com", "org-default")},
+		usage: map[string]string{"default": usageJSON(8, 16, "11:59pm", "Sep 5 at 3:00pm")},
+	}
+	reg := NewRegistry(r, Account{Name: "default", ConfigDir: "/config"})
+	reg.Resolve(context.Background())
+	prober := NewProber(r, time.Minute)
+	prober.SetClock(func() time.Time { return now })
+	g := NewGovernor(reg, prober, DefaultPolicy())
+	g.SetClock(func() time.Time { return now })
+
+	// Simulate the gateway's merge output: SnapshotAccount with flat weekResetAt
+	// and sessionResetAt fields (not nested). The week reset is at Sep 5 @ 3pm (15:00).
+	weekResetTime := now.Add(27 * time.Hour) // Will reset tomorrow at 3pm
+	// Session reset is within the 5-hour window (in about 4 hours)
+	sessionResetTime := now.Add(4 * time.Hour)
+	g.SetPooled(PooledSnapshot{
+		Machine:     "primary",
+		GeneratedAt: now,
+		Accounts: []SnapshotAccount{
+			{
+				Key:            "org:org-default",
+				Name:           "default",
+				SessionPct:     8,
+				WeekPct:        16,
+				PacePct:        50,
+				SessionResetAt: sessionResetTime.Format(time.RFC3339),
+				WeekResetAt:    weekResetTime.Format(time.RFC3339),
+				MaxConcurrency: 2,
+			},
+		},
+		MaxConcurrency: 2,
+	})
+
+	// Get status and verify week reset is present and weekPaceKnown is computed
+	st := g.Status(context.Background())
+	if len(st.Accounts) != 1 {
+		t.Fatalf("accounts = %d, want 1", len(st.Accounts))
+	}
+	acc := st.Accounts[0]
+
+	if acc.Source != "pooled" {
+		t.Errorf("source = %q, want pooled", acc.Source)
+	}
+
+	// Week window should have the reset time
+	if acc.Week.ResetsAt == "" {
+		t.Error("week.resetsAt is empty, should have the reset time")
+	}
+	if acc.Week.ResetsIn == "" {
+		t.Error("week.resetsIn is empty, should be computed")
+	}
+	if !acc.Week.Known {
+		t.Error("week.known should be true")
+	}
+
+	// Assessment should have weekPaceKnown=true (not false as in the bug)
+	if !acc.Assessment.WeekPaceKnown {
+		t.Errorf("weekPaceKnown = false, want true (week reset is now present)")
+	}
+	if acc.Assessment.WeekPace == 0 {
+		t.Errorf("weekPace = 0, want non-zero (should be computed from 16%% usage and ~27h until reset)")
+	}
+
+	// Session should also have the reset
+	if acc.Session.ResetsAt == "" {
+		t.Error("session.resetsAt is empty, should have the reset time")
+	}
+	if !acc.Assessment.SessionPaceKnown {
+		t.Errorf("sessionPaceKnown = false, want true (session reset is present)")
+	}
+}
