@@ -1,8 +1,10 @@
 package ai
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewProviderForName_ClaudeCode(t *testing.T) {
@@ -383,5 +385,144 @@ func TestStageChatContextCreation_ClaudeSessionCarriesPhase(t *testing.T) {
 		if got[len(got)-1] != tc.want {
 			t.Errorf("role %v reported %q, want %q", tc.role, got[len(got)-1], tc.want)
 		}
+	}
+}
+
+func TestWaitForMemory_UnmeasurableReturnsImmediately(t *testing.T) {
+	// With an unmeasurable memory reader (returns <= 0), the gate should not wait.
+	callCount := 0
+	oldReader := memoryReader
+	defer func() { memoryReader = oldReader }()
+	memoryReader = func() int64 {
+		callCount++
+		return -1 // unmeasurable
+	}
+
+	ctx := context.Background()
+	free := waitForMemory(ctx, "task1", "execute")
+	if free != -1 {
+		t.Errorf("waitForMemory returned %d, want -1", free)
+	}
+	if callCount != 1 {
+		t.Errorf("memoryReader called %d times, want 1 (immediate return)", callCount)
+	}
+}
+
+func TestWaitForMemory_SufficientMemoryReturnsImmediately(t *testing.T) {
+	// With sufficient memory (>= reserve), the gate should not wait.
+	callCount := 0
+	oldReader := memoryReader
+	defer func() { memoryReader = oldReader }()
+	memoryReader = func() int64 {
+		callCount++
+		return 5000 // well above default 3072 MB reserve
+	}
+
+	ctx := context.Background()
+	free := waitForMemory(ctx, "task2", "plan")
+	if free != 5000 {
+		t.Errorf("waitForMemory returned %d, want 5000", free)
+	}
+	if callCount != 1 {
+		t.Errorf("memoryReader called %d times, want 1 (immediate return)", callCount)
+	}
+}
+
+func TestWaitForMemory_WaitsUntilSufficientMemory(t *testing.T) {
+	// With an injected memory reader returning 100 MB then 5000 MB, the gate
+	// should wait one poll (5 seconds) and then proceed.
+	reads := []int64{100, 5000}
+	readIndex := 0
+	oldReader := memoryReader
+	defer func() { memoryReader = oldReader }()
+	memoryReader = func() int64 {
+		if readIndex < len(reads) {
+			val := reads[readIndex]
+			readIndex++
+			return val
+		}
+		return reads[len(reads)-1]
+	}
+
+	// Use a small timeout for the test.
+	oldGetWaitSecs := memorySpawnWaitSecsFn
+	defer func() { memorySpawnWaitSecsFn = oldGetWaitSecs }()
+	memorySpawnWaitSecsFn = func() time.Duration {
+		return 10 * time.Second // allow plenty of time
+	}
+
+	ctx := context.Background()
+	start := time.Now()
+	free := waitForMemory(ctx, "task3", "execute")
+	elapsed := time.Since(start)
+
+	if free != 5000 {
+		t.Errorf("waitForMemory returned %d, want 5000", free)
+	}
+	if readIndex != 2 {
+		t.Errorf("memoryReader called %d times, want 2", readIndex)
+	}
+	// Should have waited roughly 5 seconds (one poll interval).
+	if elapsed < 4*time.Second || elapsed > 8*time.Second {
+		t.Errorf("elapsed time %.1fs, expected ~5s", elapsed.Seconds())
+	}
+}
+
+func TestWaitForMemory_ProceedsAfterTimeout(t *testing.T) {
+	// With a permanently low memory reader and a short timeout, the gate should
+	// proceed after the timeout with a log message. Note: the poll interval is 5s,
+	// so even with a 1s timeout, we wait until the first poll completes.
+	oldReader := memoryReader
+	defer func() { memoryReader = oldReader }()
+	memoryReader = func() int64 {
+		return 100 // always low
+	}
+
+	// Override wait timeout to a value less than the poll interval (5s).
+	oldGetWaitSecs := memorySpawnWaitSecsFn
+	defer func() { memorySpawnWaitSecsFn = oldGetWaitSecs }()
+	memorySpawnWaitSecsFn = func() time.Duration {
+		return 1 * time.Second // timeout < poll interval
+	}
+
+	ctx := context.Background()
+	start := time.Now()
+	free := waitForMemory(ctx, "task4", "plan")
+	elapsed := time.Since(start)
+
+	if free != 100 {
+		t.Errorf("waitForMemory returned %d, want 100", free)
+	}
+	// Should have waited roughly 5 seconds (one full poll interval), then detected timeout.
+	if elapsed < 4*time.Second || elapsed > 6*time.Second {
+		t.Errorf("elapsed time %.1fs, expected ~5s (one poll interval)", elapsed.Seconds())
+	}
+}
+
+func TestWaitForMemory_HonoursContextCancel(t *testing.T) {
+	// If the context is cancelled while waiting, the gate should return
+	// immediately without deadlocking.
+	oldReader := memoryReader
+	defer func() { memoryReader = oldReader }()
+	memoryReader = func() int64 {
+		return 100 // always low, would wait forever without cancel
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	free := waitForMemory(ctx, "task5", "execute")
+	elapsed := time.Since(start)
+
+	if free != 100 {
+		t.Errorf("waitForMemory returned %d, want 100", free)
+	}
+	// Should have returned in roughly 500ms when cancelled.
+	if elapsed < 400*time.Millisecond || elapsed > 1*time.Second {
+		t.Errorf("elapsed time %.1fs, expected ~0.5s", elapsed.Seconds())
 	}
 }
