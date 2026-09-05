@@ -98,6 +98,17 @@ type engineTask struct {
 	// gateway knows that word); Lost tells it apart from a real failure.
 	Lost bool `json:"lost"`
 
+	// ClaudeSessions maps a phase ("plan", "execute") to the Claude Code
+	// session id that phase opened, and LastSessionPhase names the most
+	// recent one. Together they are the handle a restart needs: with them a
+	// running task is repaired and resumed (`claude --resume`), without them
+	// it can only be marked lost and re-run from nothing.
+	//
+	// No JSON tags: these are live fields. They reach disk through record()
+	// and taskRecord, not through snapshot(), which is the HTTP shape.
+	ClaudeSessions   map[string]string
+	LastSessionPhase string
+
 	// restored: loaded from tasks.json, no goroutine owns it. Never alive.
 	restored bool
 
@@ -221,6 +232,31 @@ func (t *engineTask) addRun(s ai.RunStats) {
 	t.SubagentsSpawned += s.SubagentsSpawned
 	t.mu.Unlock()
 	tasks.persist()
+}
+
+// updateClaudeSessions records the Claude Code session a phase opened.
+//
+// Persisted the moment it changes, not at the end of the phase, because the
+// case it exists for is the engine dying mid-run: a session id still in memory
+// when that happens is one the restart cannot resume from. Repeats of an id
+// already on file (the CLI reports it on init and again on result) do not
+// rewrite tasks.json.
+func (t *engineTask) updateClaudeSessions(phase, sessionID string) {
+	phase, sessionID = strings.TrimSpace(phase), strings.TrimSpace(sessionID)
+	if phase == "" || sessionID == "" {
+		return
+	}
+	t.mu.Lock()
+	if t.ClaudeSessions == nil {
+		t.ClaudeSessions = map[string]string{}
+	}
+	changed := t.ClaudeSessions[phase] != sessionID
+	t.ClaudeSessions[phase] = sessionID
+	t.LastSessionPhase = phase
+	t.mu.Unlock()
+	if changed {
+		tasks.persist()
+	}
 }
 
 func (t *engineTask) setCoach(coached int, escalated bool) {
@@ -365,6 +401,12 @@ type taskRecord struct {
 	// PID of the process that ran it. Not compared on reload — every
 	// running row found on reload is marked failed/lost regardless of PID.
 	PID int `json:"pid"`
+	// ClaudeSessions/LastSessionPhase are what make a restart repairable:
+	// the Claude Code conversation each phase opened, and the newest one.
+	// Absent on rows written before this existed — such a row is not
+	// resumable and takes the old failed+lost treatment.
+	ClaudeSessions   map[string]string `json:"claudeSessions,omitempty"`
+	LastSessionPhase string            `json:"lastSessionPhase,omitempty"`
 	// SessionPIDs are the `claude` CLI processes this task has spawned and
 	// not yet reaped (plan and/or execute — see ai.RegisterSession). On
 	// reload, a row still "running" has its sessions tree-killed by these
@@ -382,8 +424,16 @@ func (t *engineTask) record(key string) taskRecord {
 	defer t.mu.RUnlock()
 	progress := make([]string, len(t.Progress))
 	copy(progress, t.Progress)
+	var sessions map[string]string
+	if len(t.ClaudeSessions) > 0 {
+		sessions = make(map[string]string, len(t.ClaudeSessions))
+		for phase, id := range t.ClaudeSessions {
+			sessions[phase] = id
+		}
+	}
 	return taskRecord{
 		ID: t.ID, Project: t.ProjectPath, Brief: t.Brief, Key: key,
+		ClaudeSessions: sessions, LastSessionPhase: t.LastSessionPhase,
 		Status: t.Status, Phase: t.Phase, Detail: t.Detail,
 		StartedAt: t.StartedAt, FinishedAt: t.FinishedAt, Err: t.Err,
 		StepsDone: t.StepsDone, StepsTotal: t.StepsTotal, Progress: progress,
@@ -438,9 +488,80 @@ func (r *taskRegistry) persist() {
 	}
 }
 
-// load reads tasks.json. Every row still running becomes failed + lost:true
-// (terminal, alive=false). Status stays "failed" — a word SARA's gateway
-// knows; an unknown status reads as running forever. Returns count lost.
+// repairInspection is what the working tree and the CLI's own records say
+// about a task that was running when the engine went down. Gathered by
+// inspectForRepair (task_repair.go); judged by decideRepair.
+type repairInspection struct {
+	// DirtyFiles is the count of uncommitted paths in the project.
+	DirtyFiles int
+	// NewCommits are commits made since the task started — the work it
+	// already landed before the restart.
+	NewCommits []string
+	// ItemTicked: the worklist item this task was working is checked off in
+	// the project's dx documents.
+	ItemTicked bool
+	// TranscriptSummary is the tail of the Claude Code session transcript.
+	// Empty means the CLI has no record of the session at all, which is the
+	// one condition resumption cannot survive.
+	TranscriptSummary string
+}
+
+// repairDecision is what to do with such a task.
+type repairDecision string
+
+const (
+	// repairLost: nothing to resume from. Old treatment — failed + lost.
+	repairLost repairDecision = "lost"
+	// repairDone: the work is already on disk. Finish it properly rather
+	// than re-running an item that is complete.
+	repairDone repairDecision = "done"
+	// repairResume: hand the conversation back to the CLI and carry on.
+	repairResume repairDecision = "resume"
+)
+
+// decideRepair judges one interrupted task. Pure: every input is in insp, so
+// the policy is testable without a repository, a CLI, or a restart.
+//
+// The order matters. No transcript is disqualifying regardless of what the
+// tree looks like — without it there is no session to resume and guessing
+// "done" from a clean tree would silently drop unfinished work. A ticked item
+// with nothing uncommitted is the one case where re-running is pure waste: the
+// item says the work is done and the tree agrees. Everything else resumes,
+// including a ticked item with a dirty tree, because uncommitted changes mean
+// the run had not finished putting the work away.
+func decideRepair(insp repairInspection) repairDecision {
+	switch {
+	case strings.TrimSpace(insp.TranscriptSummary) == "":
+		return repairLost
+	case insp.ItemTicked && insp.DirtyFiles == 0:
+		return repairDone
+	default:
+		return repairResume
+	}
+}
+
+// pendingRepair pairs a restored task with the row it was restored from:
+// repairTask needs the record's session ids and start time, and the live task
+// to report progress into.
+type pendingRepair struct {
+	rec  taskRecord
+	task *engineTask
+}
+
+// repairTaskFn is the injection seam for tests. Bound to repairTask.
+var repairTaskFn = repairTask
+
+// load reads tasks.json. A row still running is either REPAIRED or lost:
+//
+//   - with a Claude Code session id on file it stays running, moves to phase
+//     "resume", and a goroutine repairs it (inspect the tree, then resume the
+//     session, finish it, or give up) — see repairTask.
+//   - without one there is nothing to resume from, so it becomes failed +
+//     lost:true (terminal, alive=false). Status stays "failed" — a word SARA's
+//     gateway knows; an unknown status reads as running forever.
+//
+// Returns the count marked lost. Resumed rows are not losses and are not
+// counted.
 func (r *taskRegistry) load(path string) int {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -452,10 +573,18 @@ func (r *taskRegistry) load(path string) int {
 		return 0
 	}
 	lost := 0
+	var repairs []pendingRepair
 	r.mu.Lock()
 	for _, rec := range f.Tasks {
 		if _, exists := r.tasks[rec.ID]; exists {
 			continue
+		}
+		var sessions map[string]string
+		if len(rec.ClaudeSessions) > 0 {
+			sessions = make(map[string]string, len(rec.ClaudeSessions))
+			for phase, id := range rec.ClaudeSessions {
+				sessions[phase] = id
+			}
 		}
 		t := &engineTask{
 			ID: rec.ID, ProjectPath: rec.Project, Brief: rec.Brief,
@@ -466,6 +595,7 @@ func (r *taskRegistry) load(path string) int {
 			Model: rec.Model, TokensIn: rec.TokensIn, TokensOut: rec.TokensOut,
 			SubagentsSpawned: rec.SubagentsSpawned, Coached: rec.Coached, Escalated: rec.Escalated,
 			CallbackURL: rec.CallbackURL, Lost: rec.Lost, restored: true,
+			ClaudeSessions: sessions, LastSessionPhase: rec.LastSessionPhase,
 			cancel: make(chan struct{}),
 		}
 		if t.Status == taskRunning {
@@ -473,8 +603,10 @@ func (r *taskRegistry) load(path string) int {
 			// engine restart as orphans (children reparent) unless killed
 			// here — that is what turns a handful of restarted tasks into a
 			// pile of live `claude` processes eating box memory until the
-			// next crash. Kill every PID this row remembers spawning before
-			// marking it failed+lost.
+			// next crash. Kill every PID this row remembers spawning first,
+			// on both paths: a resumed task starts a NEW `claude --resume`,
+			// so leaving the old process alive would mean two of them on the
+			// same working tree.
 			reaped := 0
 			for _, pid := range rec.SessionPIDs {
 				if err := ai.KillPIDTree(pid); err != nil {
@@ -487,12 +619,25 @@ func (r *taskRegistry) load(path string) int {
 				log.Printf("task api: reaped %d orphan session(s) for task %s", reaped, t.ID)
 			}
 			now := time.Now()
-			t.Status = taskFailed
-			t.Lost = true
-			t.FinishedAt = &now
-			t.Err = "engine restarted while task was running"
-			t.Progress = append(t.Progress, now.UTC().Format("15:04:05")+" failed (lost): engine restarted while running")
-			lost++
+			if sid := strings.TrimSpace(sessions[rec.LastSessionPhase]); sid != "" {
+				// Repairable. The row keeps its id, its key and its running
+				// status: to SARA this is the same task still being worked,
+				// which it is — the conversation doing the work survived the
+				// process that was watching it.
+				t.Phase = "resume"
+				t.Detail = "engine restarted; repairing from claude session " + sid
+				t.Progress = append(t.Progress, now.UTC().Format("15:04:05")+" resume: "+t.Detail)
+				// A goroutine is about to own it again, so it is alive.
+				t.restored = false
+				repairs = append(repairs, pendingRepair{rec: rec, task: t})
+			} else {
+				t.Status = taskFailed
+				t.Lost = true
+				t.FinishedAt = &now
+				t.Err = "engine restarted while task was running"
+				t.Progress = append(t.Progress, now.UTC().Format("15:04:05")+" failed (lost): engine restarted while running")
+				lost++
+			}
 		}
 		r.tasks[t.ID] = t
 		if rec.Key != "" {
@@ -500,6 +645,12 @@ func (r *taskRegistry) load(path string) int {
 		}
 	}
 	r.mu.Unlock()
+
+	// Outside the registry lock: repairTask inspects a repository and can run a
+	// whole orchestrator, and it calls back into the registry to persist.
+	for _, p := range repairs {
+		go repairTaskFn(p.rec, p.task)
+	}
 	return lost
 }
 
@@ -594,6 +745,25 @@ func checkpointMessage(taskID, brief string) string {
 	return fmt.Sprintf("task %s: %s", taskID, brief)
 }
 
+// completeTaskSuccess is the one way a task ends well: checkpoint the work,
+// then finish (which fires the caller's wake callback).
+//
+// Push targets whatever branch is currently checked out in the project
+// (normally main) — task-mode items have no branch-override field on
+// OrchestratorConfig/engineTask today, so there is nothing else to respect
+// here. A failed or canceled run must never reach this path, so nothing gets
+// committed or pushed for it. The repair path calls this too, for the task
+// that turns out to have finished its work before the engine went down.
+func completeTaskSuccess(t *engineTask) {
+	if ckErr := checkpointFn(t.ProjectPath, checkpointMessage(t.ID, t.Brief), true); ckErr != nil {
+		log.Printf("task %s: checkpoint failed: %v", t.ID, ckErr)
+		t.note("checkpoint", fmt.Sprintf("checkpoint/push failed: %v", ckErr))
+	} else {
+		t.note("checkpoint", "checkpointed and pushed")
+	}
+	t.finish(taskDone, "")
+}
+
 // startTask dispatches one unit of work and returns immediately.
 func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role, callbackURL string, teamSize int) *engineTask {
 	id := fmt.Sprintf("task-%d-%s", time.Now().UnixNano()/1e6, shortToken())
@@ -646,10 +816,11 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role,
 			OnPlanUpdate: func(st *ai.OrchestrationState) {
 				t.setPlan(doneCount(st), len(st.Plan))
 			},
-			OnError:    func(msg string) { t.note("error", msg) },
-			OnActivity: t.activity,
-			OnRunStats: t.addRun,
-			OnCoach:    t.setCoach,
+			OnError:         func(msg string) { t.note("error", msg) },
+			OnActivity:      t.activity,
+			OnRunStats:      t.addRun,
+			OnCoach:         t.setCoach,
+			OnClaudeSession: t.updateClaudeSessions,
 		}
 
 		// One orchestrator per working tree at a time. Task-mode runs edit
@@ -702,19 +873,7 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role,
 		case runErr != nil:
 			t.finish(taskFailed, runErr.Error())
 		default:
-			// Success only. Push targets whatever branch is currently checked
-			// out in projectPath (normally main) — task-mode items have no
-			// branch-override field on OrchestratorConfig/engineTask today,
-			// so there is nothing else to respect here. A failed/canceled
-			// run must never reach this branch, so nothing gets committed or
-			// pushed for it.
-			if ckErr := checkpointFn(projectPath, checkpointMessage(id, t.Brief), true); ckErr != nil {
-				log.Printf("task %s: checkpoint failed: %v", id, ckErr)
-				t.note("checkpoint", fmt.Sprintf("checkpoint/push failed: %v", ckErr))
-			} else {
-				t.note("checkpoint", "checkpointed and pushed")
-			}
-			t.finish(taskDone, "")
+			completeTaskSuccess(t)
 		}
 	}()
 

@@ -186,10 +186,7 @@ func (p *claudecodeProvider) RunLoop(
 	// the registry that lets a restart find and kill exactly this task's
 	// sessions (see session_registry.go); phase distinguishes the plan
 	// session (bounded, must not outlive planPhaseTimeout) from execute.
-	phase := "execute"
-	if ctx.Role == RolePlanner {
-		phase = "plan"
-	}
+	phase := claudeSessionPhase(ctx.Role)
 	taskID := ctx.TaskID
 	pid := cmd.Process.Pid
 	spawnedAt := time.Now()
@@ -358,7 +355,25 @@ func buildClaudeArgs(ctx *ChatContext, model, systemPrompt string, subagentFanou
 	if p := strings.TrimSpace(ctx.ProjectPath); p != "" {
 		args = append(args, "--add-dir", p)
 	}
+	// Resumption. The CLI keeps the full conversation for a session id, so
+	// --resume continues the interrupted run's own reasoning and file context
+	// instead of paying for a cold re-read of work already done. Empty is the
+	// normal case: a fresh session.
+	if rs := strings.TrimSpace(ctx.ResumeSessionID); rs != "" {
+		args = append(args, "--resume", rs)
+	}
 	return args
+}
+
+// claudeSessionPhase names the phase a session belongs to, from the role that
+// opened it. Two names only, because that is the distinction the session
+// registry and the task record both care about: the bounded planning session
+// versus the long execution one.
+func claudeSessionPhase(role AgentRole) string {
+	if role == RolePlanner {
+		return "plan"
+	}
+	return "execute"
 }
 
 // claudeStreamEvent is the subset of Claude Code's stream-json event schema we
@@ -368,8 +383,13 @@ type claudeStreamEvent struct {
 	Type    string `json:"type"` // "system" | "assistant" | "user" | "result" | "rate_limit_event" | ...
 	Subtype string `json:"subtype"`
 	IsError bool   `json:"is_error"`
-	Result  string `json:"result"` // final text on the terminal "result" event
-	Message struct {
+	// SessionID is the CLI's own conversation id. It is on the opening
+	// system/init event and again on the terminal result event, and it is the
+	// only handle `claude --resume` accepts — so it is what turns an
+	// interrupted run into a resumable one rather than a re-run from scratch.
+	SessionID string `json:"session_id"`
+	Result    string `json:"result"` // final text on the terminal "result" event
+	Message   struct {
 		Content []claudeContentBlock `json:"content"`
 	} `json:"message"`
 	// Usage and CostUSD appear on the terminal "result" event. Field names
@@ -455,6 +475,22 @@ func parseClaudeStreamWithStats(ctx *ChatContext, r io.Reader, allToolCalls *[]T
 	// above bufio's default 64KB token limit.
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 
+	// The session id repeats on several events in one run (init, then result).
+	// The callback is a "this run is now resumable, here is its handle" signal,
+	// so it fires on the first non-empty id and never again: a caller that
+	// persists on every call would write the same row once per event.
+	sessionReported := false
+	reportSession := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" || sessionReported {
+			return
+		}
+		sessionReported = true
+		if ctx.OnClaudeSession != nil {
+			ctx.OnClaudeSession(id)
+		}
+	}
+
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || !strings.HasPrefix(line, "{") {
@@ -466,6 +502,12 @@ func parseClaudeStreamWithStats(ctx *ChatContext, r io.Reader, allToolCalls *[]T
 		}
 
 		switch ev.Type {
+		case "system", "init":
+			// The opening event of a run. Its only job here is the session id:
+			// reporting it now (rather than waiting for the result event) is
+			// what makes a run that never reaches a result — killed, stalled,
+			// engine restarted — resumable at all.
+			reportSession(ev.SessionID)
 		case "rate_limit_event":
 			lev, ok := observeLimitEvent(account, line)
 			if !ok {
@@ -520,6 +562,7 @@ func parseClaudeStreamWithStats(ctx *ChatContext, r io.Reader, allToolCalls *[]T
 				}
 			}
 		case "result":
+			reportSession(ev.SessionID)
 			stats.InputTokens = ev.Usage.InputTokens
 			stats.OutputTokens = ev.Usage.OutputTokens
 			stats.CacheCreationTokens = ev.Usage.CacheCreationInputTokens
