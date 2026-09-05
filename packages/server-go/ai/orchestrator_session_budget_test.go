@@ -30,9 +30,19 @@ func captureLog(t *testing.T) *bytes.Buffer {
 func shortSessionBudget(t *testing.T, budget, grace time.Duration) {
 	t.Helper()
 	prevBudget, prevGrace := sessionBudget, planPhaseHardStopGrace
+	prevIdle, prevMax, prevCheck := sessionIdleTimeout, sessionMaxTimeout, sessionCheckInterval
 	sessionBudget, planPhaseHardStopGrace = budget, grace
+	// Sessions end on idleness now: a silent fake session is cut at `budget`
+	// by the idle limit, and the backstop equals it too. The check interval
+	// must be finer than the budget or a 40 ms ceiling waits 10 s to fire.
+	sessionIdleTimeout, sessionMaxTimeout = budget, budget
+	sessionCheckInterval = budget / 4
+	if sessionCheckInterval < time.Millisecond {
+		sessionCheckInterval = time.Millisecond
+	}
 	t.Cleanup(func() {
 		sessionBudget, planPhaseHardStopGrace = prevBudget, prevGrace
+		sessionIdleTimeout, sessionMaxTimeout, sessionCheckInterval = prevIdle, prevMax, prevCheck
 	})
 }
 
