@@ -559,27 +559,15 @@ func (eo *EventOrchestrator) phasePlan() error {
 		}
 
 		// Task mode's plan phase is one already-decided item, not a project to
-		// conceive: bound it to planBudgetItem wall clock, and to haiku unless the caller
-		// pinned a specific model for this dispatch (RequestedModel wins — that
-		// pin is a floor for the whole run, not something the plan phase should
-		// silently override). Without this a "plan" phase was a second uncapped
-		// `claude -p` session per dispatched item, on top of whatever the
-		// execute phase spent.
+		// conceive: use haiku unless the caller pinned a specific model for this
+		// dispatch (RequestedModel wins — that pin is a floor for the whole run,
+		// not something the plan phase should silently override). The wall-clock
+		// budget is enforced below in the select that both task and non-task modes
+		// use now.
 		if eo.cfg.TaskMode {
 			if strings.TrimSpace(eo.cfg.RequestedModel) == "" {
 				cc.Ctx.ModelOverride = "haiku"
 			}
-			timer := time.NewTimer(planBudgetItem)
-			defer timer.Stop()
-			boundedCancel := make(chan struct{})
-			go func() {
-				select {
-				case <-timer.C:
-					close(boundedCancel)
-				case <-eo.ctx.Done():
-				}
-			}()
-			cc.Ctx.Cancel = orchestratorMergedCancel(eo.cfg.Cancel, boundedCancel)
 		}
 
 		// The planner prompt is the serial path's, deliberately, because the parser
@@ -617,27 +605,33 @@ func (eo *EventOrchestrator) phasePlan() error {
 		// kills any session still registered for this task so a stuck `claude -p`
 		// never survives into the execute phase — the "two live sessions per task"
 		// bug this was chasing.
-		if eo.cfg.TaskMode {
-			done := make(chan struct{})
-			go func() {
-				eo.cfg.chatFnFor()(cc.Ctx, prompt)
-				close(done)
-			}()
-			select {
-			case <-done:
-			case <-time.After(planBudgetItem + planPhaseHardStopGrace):
+		//
+		// Both task and non-task modes now use the same budget (planBudgetItem +
+		// planPhaseHardStopGrace). This prevents non-task plan calls from running
+		// unbounded for up to the full task wall clock timeout.
+		done := make(chan struct{})
+		go func() {
+			eo.cfg.chatFnFor()(cc.Ctx, prompt)
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(planBudgetItem + planPhaseHardStopGrace):
+			if eo.cfg.TaskID != "" {
 				for _, pid := range LiveSessionPIDs(eo.cfg.TaskID) {
 					_ = KillPIDTree(pid)
 				}
-				log.Printf("task %s: plan phase exceeded %s wall clock (budget %s) — force-killed, using output produced so far",
-					eo.cfg.TaskID, planBudgetItem+planPhaseHardStopGrace, planBudgetItem)
-				// done fires once the killed RunLoop actually returns and the
-				// goroutine above closes it; drain it so that goroutine cannot
-				// leak, but do not block the phase on it any longer.
-				go func() { <-done }()
 			}
-		} else {
-			eo.cfg.chatFnFor()(cc.Ctx, prompt)
+			prefix := "plan phase"
+			if eo.cfg.TaskMode {
+				prefix = "task " + eo.cfg.TaskID + ": plan phase"
+			}
+			log.Printf("%s exceeded %s wall clock (budget %s) — force-killed, using output produced so far",
+				prefix, planBudgetItem+planPhaseHardStopGrace, planBudgetItem)
+			// done fires once the killed RunLoop actually returns and the
+			// goroutine above closes it; drain it so that goroutine cannot
+			// leak, but do not block the phase on it any longer.
+			go func() { <-done }()
 		}
 
 		// Parse plan from context output
