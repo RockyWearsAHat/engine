@@ -1246,3 +1246,4 @@ func TestTeamStepSession_ResumeIdempotent(t *testing.T) {
 		t.Errorf("ProjectPath = %q, want %q", sess.ProjectPath, dir)
 	}
 }
+
