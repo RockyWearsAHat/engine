@@ -482,6 +482,9 @@ type ChatContext struct {
 	// persists the id, so an engine restart can hand the same conversation back
 	// to the CLI with --resume rather than starting the item over.
 	OnClaudeSession func(sessionID string)
+	// OnProcessStarted fires once when the Claude Code process is actually spawned
+	// (after any spawn gate deferral). Used to reset idle deadline in bounded sessions.
+	OnProcessStarted func()
 	// ResumeSessionID, when set, continues that Claude Code session instead of
 	// opening a new one (buildClaudeArgs adds --resume). Empty is a fresh run.
 	ResumeSessionID  string

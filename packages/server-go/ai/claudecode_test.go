@@ -408,9 +408,9 @@ func TestWaitForMemory_UnmeasurableReturnsImmediately(t *testing.T) {
 	spawnTimesMu.Unlock()
 
 	ctx := context.Background()
-	free := waitForMemory(ctx, "task1", "execute")
-	if free != -1 {
-		t.Errorf("waitForMemory returned %d, want -1", free)
+	result := waitForMemory(ctx, "task1", "execute")
+	if result.FreeMB != -1 {
+		t.Errorf("waitForMemory returned %d, want -1", result.FreeMB)
 	}
 	if callCount != 1 {
 		t.Errorf("memoryReader called %d times, want 1 (immediate return)", callCount)
@@ -438,9 +438,9 @@ func TestWaitForMemory_SufficientMemoryReturnsImmediately(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	free := waitForMemory(ctx, "task2", "plan")
-	if free != 5000 {
-		t.Errorf("waitForMemory returned %d, want 5000", free)
+	result := waitForMemory(ctx, "task2", "plan")
+	if result.FreeMB != 5000 {
+		t.Errorf("waitForMemory returned %d, want 5000", result.FreeMB)
 	}
 	if callCount != 1 {
 		t.Errorf("memoryReader called %d times, want 1 (immediate return)", callCount)
@@ -482,11 +482,11 @@ func TestWaitForMemory_WaitsUntilSufficientMemory(t *testing.T) {
 
 	ctx := context.Background()
 	start := time.Now()
-	free := waitForMemory(ctx, "task3", "execute")
+	result := waitForMemory(ctx, "task3", "execute")
 	elapsed := time.Since(start)
 
-	if free != 5000 {
-		t.Errorf("waitForMemory returned %d, want 5000", free)
+	if result.FreeMB != 5000 {
+		t.Errorf("waitForMemory returned %d, want 5000", result.FreeMB)
 	}
 	if readIndex != 2 {
 		t.Errorf("memoryReader called %d times, want 2", readIndex)
@@ -526,11 +526,11 @@ func TestWaitForMemory_ProceedsAfterTimeout(t *testing.T) {
 
 	ctx := context.Background()
 	start := time.Now()
-	free := waitForMemory(ctx, "task4", "plan")
+	result := waitForMemory(ctx, "task4", "plan")
 	elapsed := time.Since(start)
 
-	if free != 100 {
-		t.Errorf("waitForMemory returned %d, want 100", free)
+	if result.FreeMB != 100 {
+		t.Errorf("waitForMemory returned %d, want 100", result.FreeMB)
 	}
 	// Should have waited roughly 5 seconds (one full poll interval), then detected timeout.
 	if elapsed < 4*time.Second || elapsed > 6*time.Second {
@@ -564,11 +564,11 @@ func TestWaitForMemory_HonoursContextCancel(t *testing.T) {
 	}()
 
 	start := time.Now()
-	free := waitForMemory(ctx, "task5", "execute")
+	result := waitForMemory(ctx, "task5", "execute")
 	elapsed := time.Since(start)
 
-	if free != 100 {
-		t.Errorf("waitForMemory returned %d, want 100", free)
+	if result.FreeMB != 100 {
+		t.Errorf("waitForMemory returned %d, want 100", result.FreeMB)
 	}
 	// Should have returned in roughly 500ms when cancelled.
 	if elapsed < 400*time.Millisecond || elapsed > 1*time.Second {
@@ -625,11 +625,11 @@ func TestWaitForMemory_AccountsForYoungSessions(t *testing.T) {
 
 	ctx := context.Background()
 	start := time.Now()
-	free := waitForMemory(ctx, "task-burst", "execute")
+	result := waitForMemory(ctx, "task-burst", "execute")
 	elapsed := time.Since(start)
 
-	if free != 16000 {
-		t.Errorf("waitForMemory returned %d, want 16000", free)
+	if result.FreeMB != 16000 {
+		t.Errorf("waitForMemory returned %d, want 16000", result.FreeMB)
 	}
 	if callCount < 2 {
 		t.Errorf("memoryReader called %d times, want at least 2", callCount)
@@ -669,10 +669,10 @@ func TestWaitForMemory_NoYoungSessionsProceedsImmediately(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	free := waitForMemory(ctx, "task-clean", "execute")
+	result := waitForMemory(ctx, "task-clean", "execute")
 
-	if free != 12000 {
-		t.Errorf("waitForMemory returned %d, want 12000", free)
+	if result.FreeMB != 12000 {
+		t.Errorf("waitForMemory returned %d, want 12000", result.FreeMB)
 	}
 	if callCount != 1 {
 		t.Errorf("memoryReader called %d times, want 1 (immediate return)", callCount)
@@ -716,11 +716,11 @@ func TestWaitForMemory_EnforcesMinimumGapBetweenSpawns(t *testing.T) {
 
 	ctx := context.Background()
 	start := time.Now()
-	free := waitForMemory(ctx, "task-gap", "execute")
+	result := waitForMemory(ctx, "task-gap", "execute")
 	elapsed := time.Since(start)
 
-	if free != 12000 {
-		t.Errorf("waitForMemory returned %d, want 12000", free)
+	if result.FreeMB != 12000 {
+		t.Errorf("waitForMemory returned %d, want 12000", result.FreeMB)
 	}
 	// Should have waited roughly 2 seconds for the gap to elapse.
 	if elapsed < 1500*time.Millisecond || elapsed > 3*time.Second {
@@ -764,10 +764,10 @@ func TestWaitForMemory_YoungSessionsAgeOut(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	free := waitForMemory(ctx, "task-old", "execute")
+	result := waitForMemory(ctx, "task-old", "execute")
 
-	if free != 12000 {
-		t.Errorf("waitForMemory returned %d, want 12000", free)
+	if result.FreeMB != 12000 {
+		t.Errorf("waitForMemory returned %d, want 12000", result.FreeMB)
 	}
 	if callCount != 1 {
 		t.Errorf("memoryReader called %d times, want 1", callCount)

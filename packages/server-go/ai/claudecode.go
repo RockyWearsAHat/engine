@@ -27,6 +27,10 @@ var memoryReader func() int64
 // Package-level var so tests can inject a mock. By default, it reads the env var.
 var memorySpawnWaitSecsFn func() time.Duration
 
+// startupTimeoutFn is the injected function to read the startup timeout.
+// Package-level var so tests can inject a mock. By default, it reads the env var.
+var startupTimeoutFn func() time.Duration
+
 // spawnTimes tracks recent spawn times (in nanoseconds since epoch) for admission gating.
 // Protected by spawnTimesMu. Oldest entries are pruned as they age past warmupSecs.
 var spawnTimes []int64
@@ -39,6 +43,7 @@ var timeSinceNanoFn func() int64
 func init() {
 	memoryReader = freeCommitMB
 	memorySpawnWaitSecsFn = memorySpawnWaitSecsEnv
+	startupTimeoutFn = claudecodeStartupTimeoutEnv
 	timeSinceNanoFn = func() int64 { return time.Now().UnixNano() }
 }
 
@@ -55,6 +60,24 @@ func claudecodeIdleTimeout() time.Duration {
 		}
 	}
 	return 180 * time.Second
+}
+
+// claudecodeStartupTimeoutEnv returns the maximum time to wait for the first
+// stream-json event from `claude -p` before killing it as a startup hang.
+// Without this, a CLI that fails to produce any output leaves no diagnostic.
+// Override with ENGINE_CLAUDECODE_STARTUP_TIMEOUT_SEC.
+func claudecodeStartupTimeoutEnv() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("ENGINE_CLAUDECODE_STARTUP_TIMEOUT_SEC")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 90 * time.Second
+}
+
+// claudecodeStartupTimeout returns the startup timeout using the injected function.
+func claudecodeStartupTimeout() time.Duration {
+	return startupTimeoutFn()
 }
 
 // memoryReserveMB returns the minimum free commit memory (in MB) required before
@@ -86,6 +109,19 @@ func memorySpawnWaitSecsEnv() time.Duration {
 // injected memorySpawnWaitSecsFn (for testability).
 func memorySpawnWaitSecs() time.Duration {
 	return memorySpawnWaitSecsFn()
+}
+
+// spawnWaitMaxSecs returns the absolute maximum time to wait for the spawn gate
+// before giving up with a spawn-deferred error. If the memory gate defers longer
+// than this, the provider returns an error rather than blocking the session timer.
+// Override with MYEDITOR_SPAWN_WAIT_MAX_SECS.
+func spawnWaitMaxSecs() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("MYEDITOR_SPAWN_WAIT_MAX_SECS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 600 * time.Second
 }
 
 // expectedSessionMB returns the expected memory usage (in MB) for a single
@@ -126,10 +162,18 @@ func expectedSpawnWarmupSecs() time.Duration {
 	return 120 * time.Second
 }
 
+// spawnWaitResult holds the outcome of the spawn gate wait.
+type spawnWaitResult struct {
+	FreeMB  int64         // Final free commit memory observed
+	Reason  string        // Deferral reason, if any (empty if no deferral)
+	Elapsed time.Duration // Total time spent waiting
+	Err     error         // Non-nil if spawn-deferred timeout exceeded
+}
+
 // waitForMemory is the admission gate before spawning a claude session. It gates
 // on both current free memory and the expected growth from recently admitted sessions,
 // enforces a minimum gap between admissions, and polls until memory is sufficient.
-// Returns the final free memory observed.
+// Returns result with free memory, deferral reason, elapsed time, and error.
 //
 //   - If memoryReader() returns <= 0 (unmeasurable), does not wait.
 //   - Enforces a minimum gap between spawns (MYEDITOR_SPAWN_MIN_GAP_SECS, default 4s).
@@ -139,14 +183,16 @@ func expectedSpawnWarmupSecs() time.Duration {
 //     This ensures the gate reserves memory for sessions still growing.
 //   - If memory test fails, polls every 5 seconds up to memorySpawnWaitSecs(),
 //     logging the reason at first deferral and upon proceeding or timeout.
+//   - If deferral exceeds spawnWaitMaxSecs(), returns spawn-deferred error.
 //   - Respects ctx.Cancel so a cancelled task does not sit in the loop.
 //   - Never deadlocks a task; the stall clock only starts after the gate returns.
-func waitForMemory(ctx context.Context, taskID, phase string) int64 {
+func waitForMemory(ctx context.Context, taskID, phase string) spawnWaitResult {
 	reserve := memoryReserveMB()
 	expectedMB := expectedSessionMB()
 	minGap := expectedSpawnMinGapSecs()
 	warmupSecs := expectedSpawnWarmupSecs()
 	maxWait := memorySpawnWaitSecs()
+	maxWaitAbsolute := spawnWaitMaxSecs()
 	pollInterval := 5 * time.Second
 
 	// Enforce minimum gap between spawns. This wait is part of the overall
@@ -199,7 +245,7 @@ func waitForMemory(ctx context.Context, taskID, phase string) int64 {
 			spawnTimesMu.Lock()
 			spawnTimes = append(spawnTimes, now)
 			spawnTimesMu.Unlock()
-			return free
+			return spawnWaitResult{FreeMB: free, Elapsed: time.Since(start)}
 		}
 
 		// Prune old spawn times from the tracking list (older than warmupSecs).
@@ -218,15 +264,15 @@ func waitForMemory(ctx context.Context, taskID, phase string) int64 {
 
 		// If sufficient memory, proceed.
 		if sufficientMemory {
+			elapsed := time.Since(start)
 			if deferralLogged {
-				elapsed := time.Since(start).Seconds()
-				log.Printf("session spawn resumed task=%s after %.0fs (free commit %d MB; %s)", taskID, elapsed, free, deferralReason)
+				log.Printf("session spawn resumed task=%s after %.0fs (free commit %d MB; %s)", taskID, elapsed.Seconds(), free, deferralReason)
 			}
 			// Record this spawn time before returning.
 			spawnTimesMu.Lock()
 			spawnTimes = append(spawnTimes, now)
 			spawnTimesMu.Unlock()
-			return free
+			return spawnWaitResult{FreeMB: free, Reason: deferralReason, Elapsed: elapsed}
 		}
 
 		// Memory is insufficient. Log deferral on first check.
@@ -236,14 +282,25 @@ func waitForMemory(ctx context.Context, taskID, phase string) int64 {
 			deferralLogged = true
 		}
 
-		// Check timeout.
-		if time.Since(start) > maxWait {
-			log.Printf("session spawn proceeding after %.0fs wait: free commit still %d MB (timeout)", time.Since(start).Seconds(), free)
+		// Check absolute timeout (spawn-deferred error).
+		elapsed := time.Since(start)
+		if elapsed > maxWaitAbsolute {
+			return spawnWaitResult{
+				FreeMB:  free,
+				Reason:  deferralReason,
+				Elapsed: elapsed,
+				Err:     fmt.Errorf("spawn-deferred: waited %.0fs exceeds limit %s; %s", elapsed.Seconds(), maxWaitAbsolute, deferralReason),
+			}
+		}
+
+		// Check softer timeout (log + proceed).
+		if elapsed > maxWait {
+			log.Printf("session spawn proceeding after %.0fs wait: free commit still %d MB (timeout)", elapsed.Seconds(), free)
 			// Record this spawn time before returning.
 			spawnTimesMu.Lock()
 			spawnTimes = append(spawnTimes, now)
 			spawnTimesMu.Unlock()
-			return free
+			return spawnWaitResult{FreeMB: free, Reason: deferralReason, Elapsed: elapsed}
 		}
 
 		// Wait for next poll or context cancellation.
@@ -257,13 +314,21 @@ func waitForMemory(ctx context.Context, taskID, phase string) int64 {
 			spawnTimesMu.Lock()
 			spawnTimes = append(spawnTimes, now)
 			spawnTimesMu.Unlock()
-			return free
+			return spawnWaitResult{FreeMB: free, Reason: deferralReason, Elapsed: time.Since(start)}
 		case <-ticker.C:
 			// Update the current time for the next iteration.
 			now = timeSinceNanoFn()
 			// Continue polling.
 		}
 	}
+}
+
+// lastNBytes returns the last n bytes of s, or all of s if len(s) <= n.
+func lastNBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
 
 // activityReader wraps an io.Reader and records the wall-clock time of the last
@@ -412,13 +477,31 @@ func (p *claudecodeProvider) RunLoop(
 	// This prevents the spawn loop from starving the box with dozens of sessions.
 	phase := claudeSessionPhase(ctx.Role)
 	taskID := ctx.TaskID
-	waitForMemory(runCtx, taskID, phase)
+	spawnWait := waitForMemory(runCtx, taskID, phase)
+
+	// Check if spawn gate deferral exceeded the hard limit
+	if spawnWait.Err != nil {
+		if ctx.OnError != nil {
+			ctx.OnError("claudecode: " + spawnWait.Err.Error())
+		}
+		return
+	}
+
+	// Log significant spawn waits
+	if spawnWait.Elapsed > 5*time.Second && spawnWait.Reason != "" {
+		log.Printf("session spawn waited %.0fs (%s)", spawnWait.Elapsed.Seconds(), spawnWait.Reason)
+	}
 
 	if err := cmd.Start(); err != nil {
 		if ctx.OnError != nil {
 			ctx.OnError("claudecode: failed to start `claude` (is the CLI installed and logged in?): " + err.Error())
 		}
 		return
+	}
+
+	// Signal that the process has actually started (for idle timer reset in bounded sessions)
+	if ctx.OnProcessStarted != nil {
+		ctx.OnProcessStarted()
 	}
 
 	// Spawn accounting: the data set used to correlate the box's `[supervisor]
@@ -476,7 +559,33 @@ func (p *claudecodeProvider) RunLoop(
 		}
 	}()
 
-	stats := parseClaudeStreamWithStats(ctx, &activityReader{r: stdout, last: &lastActivity}, allToolCalls, finalText, dispatch.Account)
+	// Startup deadline: track if any stream-json event is received. If not within
+	// the startup timeout, kill the process as a startup hang.
+	var firstEventReceived atomic.Bool
+	startupTimeout := claudecodeStartupTimeout()
+	var startupHang atomic.Bool
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-t.C:
+				if firstEventReceived.Load() {
+					// First event received; startup phase passed.
+					return
+				}
+				if time.Since(spawnedAt) > startupTimeout {
+					startupHang.Store(true)
+					cancel() // kills the process via CommandContext
+					return
+				}
+			}
+		}
+	}()
+
+	stats := parseClaudeStreamWithStatsAndFirstEvent(ctx, &activityReader{r: stdout, last: &lastActivity}, allToolCalls, finalText, dispatch.Account, &firstEventReceived)
 	exitStats = stats
 
 	err = cmd.Wait()
@@ -501,11 +610,27 @@ func (p *claudecodeProvider) RunLoop(
 		})
 	}
 
+	stderrTail := lastNBytes(strings.TrimSpace(stderr.String()), 2048)
+	if stderrTail == "" {
+		stderrTail = "<no stderr>"
+	}
+
+	if startupHang.Load() {
+		if ctx.OnError != nil {
+			ctx.OnError(fmt.Sprintf("claudecode: startup-hang: no output for %s; stderr: %s", startupTimeout, stderrTail))
+		}
+		log.Printf("session startup-hang task=%s after %.0fs, stderr tail: %s", taskID, time.Since(spawnedAt).Seconds(), stderrTail)
+		return
+	}
 	if stalled.Load() {
 		if ctx.OnError != nil {
 			ctx.OnError(fmt.Sprintf("claudecode: no output for %s — killed as stalled; orchestrator will retry", idle))
 		}
 		return
+	}
+	// Log stderr for any exit where turns==0 (process exited without producing a result event)
+	if exitStats.NumTurns == 0 && stderrTail != "<no stderr>" {
+		log.Printf("session zero-turn stderr task=%s: %s", taskID, stderrTail)
 	}
 	if err != nil {
 		// A cancelled run (caller cancel) is expected, not an error to surface.
@@ -708,7 +833,17 @@ func parseClaudeStream(ctx *ChatContext, r io.Reader, allToolCalls *[]ToolCall, 
 //
 // account names the Claude account this run used, so the observed limit state is
 // attributed to the right quota pool; empty means the ambient login.
+//
+// firstEvent is an optional pointer to an atomic bool that will be set to true
+// when the first valid stream-json event is successfully parsed. Used by the
+// startup deadline watchdog to detect that the process has begun producing output.
 func parseClaudeStreamWithStats(ctx *ChatContext, r io.Reader, allToolCalls *[]ToolCall, finalText *strings.Builder, account string) claudeRunStats {
+	return parseClaudeStreamWithStatsAndFirstEvent(ctx, r, allToolCalls, finalText, account, nil)
+}
+
+// parseClaudeStreamWithStatsAndFirstEvent is like parseClaudeStreamWithStats but
+// also tracks when the first event has been received via the firstEvent pointer.
+func parseClaudeStreamWithStatsAndFirstEvent(ctx *ChatContext, r io.Reader, allToolCalls *[]ToolCall, finalText *strings.Builder, account string, firstEvent *atomic.Bool) claudeRunStats {
 	var stats claudeRunStats
 	sc := bufio.NewScanner(r)
 	// Event lines can be large (full assistant messages); raise the cap well
@@ -739,6 +874,10 @@ func parseClaudeStreamWithStats(ctx *ChatContext, r io.Reader, allToolCalls *[]T
 		var ev claudeStreamEvent
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			continue // tolerate non-JSON or partial lines
+		}
+		// Signal that the first valid event has been received (for startup deadline watchdog)
+		if firstEvent != nil {
+			firstEvent.Store(true)
 		}
 
 		switch ev.Type {
