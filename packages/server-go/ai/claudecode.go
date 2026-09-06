@@ -27,6 +27,10 @@ var memoryReader func() int64
 // Package-level var so tests can inject a mock. By default, it reads the env var.
 var memorySpawnWaitSecsFn func() time.Duration
 
+// startupTimeoutFn is the injected function to read the startup timeout.
+// Package-level var so tests can inject a mock. By default, it reads the env var.
+var startupTimeoutFn func() time.Duration
+
 // spawnTimes tracks recent spawn times (in nanoseconds since epoch) for admission gating.
 // Protected by spawnTimesMu. Oldest entries are pruned as they age past warmupSecs.
 var spawnTimes []int64
@@ -39,6 +43,7 @@ var timeSinceNanoFn func() int64
 func init() {
 	memoryReader = freeCommitMB
 	memorySpawnWaitSecsFn = memorySpawnWaitSecsEnv
+	startupTimeoutFn = claudecodeStartupTimeoutEnv
 	timeSinceNanoFn = func() int64 { return time.Now().UnixNano() }
 }
 
@@ -55,6 +60,24 @@ func claudecodeIdleTimeout() time.Duration {
 		}
 	}
 	return 180 * time.Second
+}
+
+// claudecodeStartupTimeoutEnv returns the maximum time to wait for the first
+// stream-json event from `claude -p` before killing it as a startup hang.
+// Without this, a CLI that fails to produce any output leaves no diagnostic.
+// Override with ENGINE_CLAUDECODE_STARTUP_TIMEOUT_SEC.
+func claudecodeStartupTimeoutEnv() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("ENGINE_CLAUDECODE_STARTUP_TIMEOUT_SEC")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 90 * time.Second
+}
+
+// claudecodeStartupTimeout returns the startup timeout using the injected function.
+func claudecodeStartupTimeout() time.Duration {
+	return startupTimeoutFn()
 }
 
 // memoryReserveMB returns the minimum free commit memory (in MB) required before
@@ -264,6 +287,14 @@ func waitForMemory(ctx context.Context, taskID, phase string) int64 {
 			// Continue polling.
 		}
 	}
+}
+
+// lastNBytes returns the last n bytes of s, or all of s if len(s) <= n.
+func lastNBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
 
 // activityReader wraps an io.Reader and records the wall-clock time of the last
@@ -476,7 +507,33 @@ func (p *claudecodeProvider) RunLoop(
 		}
 	}()
 
-	stats := parseClaudeStreamWithStats(ctx, &activityReader{r: stdout, last: &lastActivity}, allToolCalls, finalText, dispatch.Account)
+	// Startup deadline: track if any stream-json event is received. If not within
+	// the startup timeout, kill the process as a startup hang.
+	var firstEventReceived atomic.Bool
+	startupTimeout := claudecodeStartupTimeout()
+	var startupHang atomic.Bool
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-t.C:
+				if firstEventReceived.Load() {
+					// First event received; startup phase passed.
+					return
+				}
+				if time.Since(spawnedAt) > startupTimeout {
+					startupHang.Store(true)
+					cancel() // kills the process via CommandContext
+					return
+				}
+			}
+		}
+	}()
+
+	stats := parseClaudeStreamWithStatsAndFirstEvent(ctx, &activityReader{r: stdout, last: &lastActivity}, allToolCalls, finalText, dispatch.Account, &firstEventReceived)
 	exitStats = stats
 
 	err = cmd.Wait()
@@ -501,11 +558,27 @@ func (p *claudecodeProvider) RunLoop(
 		})
 	}
 
+	stderrTail := lastNBytes(strings.TrimSpace(stderr.String()), 2048)
+	if stderrTail == "" {
+		stderrTail = "<no stderr>"
+	}
+
+	if startupHang.Load() {
+		if ctx.OnError != nil {
+			ctx.OnError(fmt.Sprintf("claudecode: startup-hang: no output for %s; stderr: %s", startupTimeout, stderrTail))
+		}
+		log.Printf("session startup-hang task=%s after %.0fs, stderr tail: %s", taskID, time.Since(spawnedAt).Seconds(), stderrTail)
+		return
+	}
 	if stalled.Load() {
 		if ctx.OnError != nil {
 			ctx.OnError(fmt.Sprintf("claudecode: no output for %s — killed as stalled; orchestrator will retry", idle))
 		}
 		return
+	}
+	// Log stderr for any exit where turns==0 (process exited without producing a result event)
+	if exitStats.NumTurns == 0 && stderrTail != "<no stderr>" {
+		log.Printf("session zero-turn stderr task=%s: %s", taskID, stderrTail)
 	}
 	if err != nil {
 		// A cancelled run (caller cancel) is expected, not an error to surface.
@@ -708,7 +781,17 @@ func parseClaudeStream(ctx *ChatContext, r io.Reader, allToolCalls *[]ToolCall, 
 //
 // account names the Claude account this run used, so the observed limit state is
 // attributed to the right quota pool; empty means the ambient login.
+//
+// firstEvent is an optional pointer to an atomic bool that will be set to true
+// when the first valid stream-json event is successfully parsed. Used by the
+// startup deadline watchdog to detect that the process has begun producing output.
 func parseClaudeStreamWithStats(ctx *ChatContext, r io.Reader, allToolCalls *[]ToolCall, finalText *strings.Builder, account string) claudeRunStats {
+	return parseClaudeStreamWithStatsAndFirstEvent(ctx, r, allToolCalls, finalText, account, nil)
+}
+
+// parseClaudeStreamWithStatsAndFirstEvent is like parseClaudeStreamWithStats but
+// also tracks when the first event has been received via the firstEvent pointer.
+func parseClaudeStreamWithStatsAndFirstEvent(ctx *ChatContext, r io.Reader, allToolCalls *[]ToolCall, finalText *strings.Builder, account string, firstEvent *atomic.Bool) claudeRunStats {
 	var stats claudeRunStats
 	sc := bufio.NewScanner(r)
 	// Event lines can be large (full assistant messages); raise the cap well
@@ -739,6 +822,10 @@ func parseClaudeStreamWithStats(ctx *ChatContext, r io.Reader, allToolCalls *[]T
 		var ev claudeStreamEvent
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			continue // tolerate non-JSON or partial lines
+		}
+		// Signal that the first valid event has been received (for startup deadline watchdog)
+		if firstEvent != nil {
+			firstEvent.Store(true)
 		}
 
 		switch ev.Type {
