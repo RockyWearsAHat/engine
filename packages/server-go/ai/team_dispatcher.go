@@ -418,13 +418,14 @@ func (w *TeamWorker) runStep(step *PlanStep, stepIdx int) error {
 		default:
 		}
 
-		// Each builder turn is one `claude -p` session and is held to
-		// sessionBudget. Overrunning it fails the step (and so the team): the
+		// Each builder turn is one `claude -p` session, held to
+		// sessionIdleTimeout and sessionMaxTimeout. Overrunning fails the
+		// step (and so the team): the
 		// outer loop then re-plans and spends an iteration on it, which is the
 		// bounded cost — the unbounded one was a stuck session eating the whole
 		// task wall clock with nothing to show for it.
 		if runBoundedSession(w.cfg, "execute", cc, prompt) {
-			return fmt.Errorf("session budget hit: team %s step %d exceeded %s", w.teamID, stepIdx, sessionBudget)
+			return fmt.Errorf("session budget hit: team %s step %d exceeded its limits (idle %s / max %s)", w.teamID, stepIdx, sessionIdleTimeout, sessionMaxTimeout)
 		}
 
 		// Check if builder called signal_done (would be in the output)
