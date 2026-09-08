@@ -29,9 +29,9 @@ func captureLog(t *testing.T) *bytes.Buffer {
 // scale and restores them afterwards.
 func shortSessionBudget(t *testing.T, budget, grace time.Duration) {
 	t.Helper()
-	prevBudget, prevGrace := sessionBudget, planPhaseHardStopGrace
+	prevGrace := planPhaseHardStopGrace
 	prevIdle, prevMax, prevCheck := sessionIdleTimeout, sessionMaxTimeout, sessionCheckInterval
-	sessionBudget, planPhaseHardStopGrace = budget, grace
+	planPhaseHardStopGrace = grace
 	// Sessions end on idleness now: a silent fake session is cut at `budget`
 	// by the idle limit, and the backstop equals it too. The check interval
 	// must be finer than the budget or a 40 ms ceiling waits 10 s to fire.
@@ -41,7 +41,7 @@ func shortSessionBudget(t *testing.T, budget, grace time.Duration) {
 		sessionCheckInterval = time.Millisecond
 	}
 	t.Cleanup(func() {
-		sessionBudget, planPhaseHardStopGrace = prevBudget, prevGrace
+		planPhaseHardStopGrace = prevGrace
 		sessionIdleTimeout, sessionMaxTimeout, sessionCheckInterval = prevIdle, prevMax, prevCheck
 	})
 }
@@ -344,5 +344,104 @@ func TestSessionExitTelemetry(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A session that is silent because a tool is running is not an idle session.
+//
+// This is the regression test for the failure that stopped the factory for
+// fifteen hours on 2026-09-07. A builder asked to run a test suite emits its
+// tool_use immediately and then says nothing until the suite finishes — on
+// every Rust project here, longer than sessionIdleTimeout. The idle monitor
+// counted that silence as a hang, killed the worker mid-build, and reported
+// it as "no output"; the engine then re-queued the item and the whole thing
+// went round again. The absolute sessionMaxTimeout still bounds a tool that
+// genuinely never returns, so nothing is unbounded.
+func TestSessionCeiling_ToolStillRunningIsNotIdle(t *testing.T) {
+	prevIdle, prevMax, prevCheck := sessionIdleTimeout, sessionMaxTimeout, sessionCheckInterval
+	sessionIdleTimeout, sessionMaxTimeout, sessionCheckInterval = 40*time.Millisecond, 10*time.Second, 5*time.Millisecond
+	t.Cleanup(func() {
+		sessionIdleTimeout, sessionMaxTimeout, sessionCheckInterval = prevIdle, prevMax, prevCheck
+	})
+	killed := recordKills(t, []int{4242})
+
+	cfg := OrchestratorConfig{
+		ProjectPath: t.TempDir(), TaskID: "task-1", TaskMode: true,
+		ChatFn: func(ctx *ChatContext, _ string) {
+			// The build starts...
+			ctx.OnToolCall("Bash", map[string]any{"command": "cargo test"})
+			// ...and produces nothing at all for many idle windows.
+			select {
+			case <-time.After(10 * sessionIdleTimeout):
+			case <-ctx.Cancel:
+				return // killed: the bug is back
+			}
+			ctx.OnToolResult("Bash", "test result: ok. 303 passed", false)
+			ctx.OnChunk("signal_done", false)
+		},
+	}
+	cc := newPhaseChat(cfg, "build")
+	if runBoundedSession(cfg, "execute", cc, "go") {
+		t.Fatal("a session waiting on a running tool was reported as idle")
+	}
+	if got := killed(); len(got) != 0 {
+		t.Fatalf("a session waiting on a running tool was killed: %v", got)
+	}
+	if !strings.Contains(cc.GetOutput(), "signal_done") {
+		t.Fatal("the session was cut off before it finished")
+	}
+}
+
+// The mirror, and it is what keeps the rule above honest: silence with no
+// tool outstanding is still idleness, and still gets killed. Without this,
+// "never idle-kill anything" would satisfy the test above.
+func TestSessionCeiling_SilenceWithNoToolIsStillIdle(t *testing.T) {
+	prevIdle, prevMax, prevCheck := sessionIdleTimeout, sessionMaxTimeout, sessionCheckInterval
+	sessionIdleTimeout, sessionMaxTimeout, sessionCheckInterval = 40*time.Millisecond, 10*time.Second, 5*time.Millisecond
+	t.Cleanup(func() {
+		sessionIdleTimeout, sessionMaxTimeout, sessionCheckInterval = prevIdle, prevMax, prevCheck
+	})
+	recordKills(t, []int{4242})
+
+	cfg := OrchestratorConfig{
+		ProjectPath: t.TempDir(), TaskID: "task-1", TaskMode: true,
+		ChatFn: func(ctx *ChatContext, _ string) {
+			ctx.OnChunk("thinking about it", false)
+			select {
+			case <-time.After(10 * sessionIdleTimeout):
+			case <-ctx.Cancel:
+			}
+		},
+	}
+	cc := newPhaseChat(cfg, "quiet")
+	if !runBoundedSession(cfg, "execute", cc, "go") {
+		t.Fatal("a silent session with no tool running was not idle-killed")
+	}
+}
+
+// A tool that starts and never returns is still bounded — by the absolute
+// ceiling, not the idle one. Without this the fix above would be a way to
+// run forever by opening a tool call and never closing it.
+func TestSessionCeiling_OutstandingToolStillHitsAbsoluteCeiling(t *testing.T) {
+	prevIdle, prevMax, prevCheck := sessionIdleTimeout, sessionMaxTimeout, sessionCheckInterval
+	sessionIdleTimeout, sessionMaxTimeout, sessionCheckInterval = 10*time.Second, 60*time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() {
+		sessionIdleTimeout, sessionMaxTimeout, sessionCheckInterval = prevIdle, prevMax, prevCheck
+	})
+	recordKills(t, []int{4242})
+
+	cfg := OrchestratorConfig{
+		ProjectPath: t.TempDir(), TaskID: "task-1", TaskMode: true,
+		ChatFn: func(ctx *ChatContext, _ string) {
+			ctx.OnToolCall("Bash", map[string]any{"command": "sleep forever"})
+			select {
+			case <-time.After(30 * time.Second):
+			case <-ctx.Cancel:
+			}
+		},
+	}
+	cc := newPhaseChat(cfg, "stuck")
+	if !runBoundedSession(cfg, "execute", cc, "go") {
+		t.Fatal("a tool that never returns was never bounded")
 	}
 }

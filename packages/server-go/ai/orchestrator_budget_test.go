@@ -41,15 +41,6 @@ func TestBudgetDefaults_MaxIterationsItem(t *testing.T) {
 	}
 }
 
-func TestBudgetDefaults_SessionBudget(t *testing.T) {
-	// sessionBudget defaults to 8 minutes (kept for backward compatibility)
-	// DEPRECATED: Use sessionIdleTimeout + sessionMaxTimeout instead.
-	expected := 8 * 60 * time.Second
-	if sessionBudget != expected {
-		t.Errorf("sessionBudget: expected %v, got %v", expected, sessionBudget)
-	}
-}
-
 // ── EventOrchestrator Budget Fields ───────────────────────────────────────────
 
 func TestEventOrchestrator_TaskMode_BudgetInitialization(t *testing.T) {
@@ -569,7 +560,6 @@ func TestBudget_ExportsAreVisible(t *testing.T) {
 	_ = taskWallBudgetItem
 	_ = taskWallBudgetOther
 	_ = maxIterationsItem
-	_ = sessionBudget
 
 	// Verify they have sensible values
 	if planBudgetItem <= 0 {
@@ -583,9 +573,6 @@ func TestBudget_ExportsAreVisible(t *testing.T) {
 	}
 	if maxIterationsItem <= 0 {
 		t.Error("maxIterationsItem must be positive")
-	}
-	if sessionBudget <= 0 {
-		t.Error("sessionBudget must be positive")
 	}
 
 	// Verify reasonable values

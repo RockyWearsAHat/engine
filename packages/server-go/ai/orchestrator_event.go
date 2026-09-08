@@ -97,19 +97,6 @@ var maxIterationsItem = func() int {
 	return 3
 }()
 
-// sessionBudget is the maximum wall-clock time for a single chat session.
-// DEPRECATED: Use sessionIdleTimeout + sessionMaxTimeout instead.
-// Kept for backward compatibility. Default 8 minutes.
-// Overridable via MYEDITOR_SESSION_BUDGET_SECS.
-var sessionBudget = func() time.Duration {
-	if v := strings.TrimSpace(os.Getenv("MYEDITOR_SESSION_BUDGET_SECS")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return time.Duration(n) * time.Second
-		}
-	}
-	return 8 * 60 * time.Second
-}()
-
 // sessionCheckInterval is how often runBoundedSession re-examines idle and
 // absolute timeouts. Var, not const, so tests can shrink it with the timeouts.
 var sessionCheckInterval = 10 * time.Second
@@ -330,8 +317,9 @@ func startEventOrchestrator(cfg OrchestratorConfig) (*EventOrchestrator, error) 
 
 	// Log budget at task start
 	budgetMin := int(eo.taskWallBudget.Minutes())
-	eo.cfg.OnProgress(fmt.Sprintf("budget: plan=%ds session=%ds task=%dm iterations=%d",
-		int(planPhaseTimeout.Seconds()), int(sessionBudget.Seconds()), budgetMin, eo.effectiveIterationCap()))
+	eo.cfg.OnProgress(fmt.Sprintf("budget: plan=%ds session=idle %ds/max %ds task=%dm iterations=%d",
+		int(planPhaseTimeout.Seconds()), int(sessionIdleTimeout.Seconds()),
+		int(sessionMaxTimeout.Seconds()), budgetMin, eo.effectiveIterationCap()))
 
 	// Honour the caller's cancel channel. The event orchestrator had its own
 	// context and ignored cfg.Cancel entirely, so a caller holding the only
@@ -843,7 +831,7 @@ func (eo *EventOrchestrator) phaseValidate() (bool, string) {
 If all tests pass and the project is ready for production, respond with: VALIDATION_PASSED
 Otherwise, describe the failures and what needs to be fixed.`
 
-	// A validate session that outruns sessionBudget is a failed validation,
+	// A validate session that outruns its limits is a failed validation,
 	// not a passed one: whatever it managed to print before being cut off is
 	// carried back as feedback, and the outer loop spends an iteration on the
 	// re-plan exactly as it would for any other failure. Trusting a
@@ -853,8 +841,8 @@ Otherwise, describe the failures and what needs to be fixed.`
 
 	output := cc.GetOutput()
 	if budgetHit {
-		return false, fmt.Sprintf("session budget hit: validate session exceeded %s; output so far: %s",
-			sessionBudget, summarise(output, 300))
+		return false, fmt.Sprintf("session budget hit: validate session exceeded its limits (idle %s / max %s); output so far: %s",
+			sessionIdleTimeout, sessionMaxTimeout, summarise(output, 300))
 	}
 
 	// Check if validation passed
@@ -1021,7 +1009,8 @@ func newChatContextForPhase(projectPath string, sessionID string) *CapturedChat 
 //
 // Session wall-clock ceilings are NOT set here: the plan phase bounds itself to
 // planBudgetItem, and the validate and execute phases go through
-// runBoundedSession, which enforces sessionBudget. Per-session telemetry
+// runBoundedSession, which enforces sessionIdleTimeout and
+// sessionMaxTimeout. Per-session telemetry
 // (turns, duration, tokens) is logged by the claudecode provider on the
 // `session exit` line, where the result event and the real PID both live.
 func newPhaseChat(cfg OrchestratorConfig, sessionID string) *CapturedChat {
@@ -1089,6 +1078,14 @@ func runBoundedSession(cfg OrchestratorConfig, phase string, cc *CapturedChat, p
 	// Track activity time; both output and tool calls update this
 	var activityMu sync.Mutex
 	lastActivity := start
+	// Tools that have started and not yet returned. A builder waiting on
+	// `cargo test` emits its tool_use immediately and then says nothing for
+	// as long as the build takes — which on every Rust project here is longer
+	// than sessionIdleTimeout. Counting that as idle killed the worker mid
+	// build, reported it as a hang, and sent the item back round the loop.
+	// A session with a tool outstanding is working; the absolute
+	// sessionMaxTimeout backstop still catches one that is genuinely stuck.
+	outstandingTools := 0
 
 	// Wrap the callbacks to track activity
 	originalOnChunk := cc.Ctx.OnChunk
@@ -1107,6 +1104,7 @@ func runBoundedSession(cfg OrchestratorConfig, phase string, cc *CapturedChat, p
 	cc.Ctx.OnToolCall = func(name string, input any) {
 		activityMu.Lock()
 		lastActivity = time.Now()
+		outstandingTools++
 		activityMu.Unlock()
 		if originalOnToolCall != nil {
 			originalOnToolCall(name, input)
@@ -1116,6 +1114,9 @@ func runBoundedSession(cfg OrchestratorConfig, phase string, cc *CapturedChat, p
 	cc.Ctx.OnToolResult = func(name string, result any, isError bool) {
 		activityMu.Lock()
 		lastActivity = time.Now()
+		if outstandingTools > 0 {
+			outstandingTools--
+		}
 		activityMu.Unlock()
 		if originalOnToolResult != nil {
 			originalOnToolResult(name, result, isError)
@@ -1144,6 +1145,7 @@ func runBoundedSession(cfg OrchestratorConfig, phase string, cc *CapturedChat, p
 			now := time.Now()
 			activityMu.Lock()
 			timeSinceActivity := now.Sub(lastActivity)
+			toolsRunning := outstandingTools
 			activityMu.Unlock()
 
 			// Check absolute timeout first (always fatal)
@@ -1153,8 +1155,10 @@ func runBoundedSession(cfg OrchestratorConfig, phase string, cc *CapturedChat, p
 				break
 			}
 
-			// Check idle timeout
-			if timeSinceActivity > sessionIdleTimeout {
+			// Check idle timeout. Silence with a tool still running is not
+			// idleness — it is a build, a test suite, a clone. Only the
+			// absolute timeout applies there.
+			if toolsRunning == 0 && timeSinceActivity > sessionIdleTimeout {
 				idleKill = true
 				close(boundedCancel)
 				break
