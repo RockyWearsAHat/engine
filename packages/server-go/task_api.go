@@ -123,6 +123,19 @@ type engineTask struct {
 	once   sync.Once
 }
 
+// readLiveURL reads the live URL from <projectPath>/.engine/live-url.txt.
+// Returns empty string if the file is not present or cannot be read.
+func readLiveURL(projectPath string) string {
+	if projectPath == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(projectPath, ".engine", "live-url.txt"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
 // snapshot renders the task under the read lock. Every field is written by the
 // orchestrator's callbacks on another goroutine while an HTTP handler reads
 // them, so the copy has to be taken here rather than by marshalling the live
@@ -155,6 +168,7 @@ func (t *engineTask) snapshot() map[string]any {
 		"lost":             t.Lost,
 		"sessionPids":      ai.LiveSessionPIDs(t.ID),
 		"liveSessions":     ai.LiveTaskSessionCount(t.ID),
+		"liveUrl":          readLiveURL(t.ProjectPath),
 	}
 	if t.FirstProgressAt != nil {
 		out["firstProgressAt"] = t.FirstProgressAt.UTC().Format(time.RFC3339)
@@ -319,6 +333,7 @@ func (t *engineTask) completionPayload() map[string]any {
 		"coached":          t.Coached,
 		"escalated":        t.Escalated,
 		"error":            t.Err,
+		"liveUrl":          readLiveURL(t.ProjectPath),
 	}
 }
 
