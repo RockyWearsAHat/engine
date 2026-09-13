@@ -369,15 +369,15 @@ func doPostCallback(url string, payload map[string]any) error {
 }
 
 // notifyCallbackFn is the wake POST. Var so tests can capture/mock it.
-// Kept with original signature for test compatibility.
-var notifyCallbackFn = func(url string, payload map[string]any) {
-	doPostCallback(url, payload)
+// Returns an error if delivery fails, nil on success or fire-and-forget.
+var notifyCallbackFn = func(url string, payload map[string]any) error {
+	return doPostCallback(url, payload)
 }
 
 // notifyCallback: fire-and-forget wake POST with the outcome payload. Not a
 // delivery guarantee — GET-by-id stays the truth. Runs synchronously (short
-// timeout); finish() already sits on the task's own goroutine. Attempts delivery
-// and updates task's callback state.
+// timeout); finish() already sits on the task's own goroutine. Calls notifyCallbackFn
+// so tests can mock/capture the wake, and updates task's callback state.
 func notifyCallback(t *engineTask) {
 	url := t.callbackTarget()
 	if url == "" {
@@ -394,7 +394,11 @@ func notifyCallback(t *engineTask) {
 	t.CallbackAttempts++
 	t.mu.Unlock()
 
-	if err := doPostCallback(url, payload); err != nil {
+	// Call notifyCallbackFn synchronously (testable; mocked by tests to capture wakes)
+	err := notifyCallbackFn(url, payload)
+
+	if err != nil {
+		// Delivery failed; keep pending for replay
 		t.mu.Lock()
 		t.CallbackLastError = err.Error()
 		t.mu.Unlock()
@@ -402,12 +406,12 @@ func notifyCallback(t *engineTask) {
 		return
 	}
 
-	// Success: clear pending and set delivered time
+	// After successful synchronous delivery, mark as no longer pending
 	t.mu.Lock()
 	now := time.Now()
 	t.CallbackPending = false
 	t.CallbackDeliveredAt = &now
-	t.CallbackLastError = "" // Clear error on success
+	t.CallbackLastError = ""
 	t.mu.Unlock()
 	tasks.persist()
 }
