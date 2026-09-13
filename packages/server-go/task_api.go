@@ -840,6 +840,11 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role,
 			OnProgress: func(msg string) { t.note("progress", msg) },
 			OnPlanUpdate: func(st *ai.OrchestrationState) {
 				t.setPlan(doneCount(st), len(st.Plan))
+				// Populate gate fields from orchestration state
+				t.mu.Lock()
+				t.GateHash = st.GateHash
+				t.BaseSha = st.BaseSha
+				t.mu.Unlock()
 			},
 			OnError:         func(msg string) { t.note("error", msg) },
 			OnActivity:      t.activity,
@@ -891,11 +896,6 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role,
 
 		if state != nil {
 			t.setPlan(doneCount(state), len(state.Plan))
-			// Populate gate fields from orchestration state
-			t.mu.Lock()
-			t.GateHash = state.GateHash
-			t.BaseSha = state.BaseSha
-			t.mu.Unlock()
 		}
 		switch {
 		case cancelClosed(t.cancel):

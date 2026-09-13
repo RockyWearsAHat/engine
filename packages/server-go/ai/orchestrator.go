@@ -52,7 +52,7 @@ type PlanStep struct {
 	Attempts   int    `json:"attempts"`
 	// CriticRejects counts consecutive diff-critic rejections of this step, so
 	// a critic that keeps objecting cannot stall the step forever.
-	CriticRejects int `json:"criticRejects,omitempty"`
+	CriticRejects int    `json:"criticRejects,omitempty"`
 	// ReviewRejects counts reviewer REJECT verdicts on this step, driving coaching.
 	ReviewRejects int `json:"reviewRejects,omitempty"`
 	// CoachingBrief is the re-written brief after coaching (REJECT attempt 1).
