@@ -331,9 +331,9 @@ func (t *engineTask) completionPayload() map[string]any {
 	}
 }
 
-// notifyCallbackFn is the wake POST. Var so tests capture it.
-// Returns error if delivery failed, nil if successful.
-var notifyCallbackFn = func(url string, payload map[string]any) error {
+// doPostCallback attempts to deliver a callback and returns an error if it fails.
+// Separate from notifyCallbackFn so tests can mock the latter without breaking error handling.
+func doPostCallback(url string, payload map[string]any) error {
 	body, _ := json.Marshal(payload)
 	client := http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
@@ -345,6 +345,12 @@ var notifyCallbackFn = func(url string, payload map[string]any) error {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// notifyCallbackFn is the wake POST. Var so tests can capture/mock it.
+// Kept with original signature for test compatibility.
+var notifyCallbackFn = func(url string, payload map[string]any) {
+	doPostCallback(url, payload)
 }
 
 // notifyCallback: fire-and-forget wake POST with the outcome payload. Not a
@@ -367,7 +373,7 @@ func notifyCallback(t *engineTask) {
 	t.CallbackAttempts++
 	t.mu.Unlock()
 
-	if err := notifyCallbackFn(url, payload); err != nil {
+	if err := doPostCallback(url, payload); err != nil {
 		t.mu.Lock()
 		t.CallbackLastError = err.Error()
 		t.mu.Unlock()
@@ -629,7 +635,7 @@ func replayPendingCallbacks(t *engineTask) {
 			t.CallbackAttempts++
 			t.mu.Unlock()
 
-			if err := notifyCallbackFn(url, payload); err != nil {
+			if err := doPostCallback(url, payload); err != nil {
 				t.mu.Lock()
 				t.CallbackLastError = err.Error()
 				t.mu.Unlock()
