@@ -554,7 +554,7 @@ func (eo *EventOrchestrator) phasePlan() error {
 		// use now.
 		if eo.cfg.TaskMode {
 			if strings.TrimSpace(eo.cfg.RequestedModel) == "" {
-				cc.Ctx.ModelOverride = "haiku"
+				cc.Ctx.ModelOverride = ClampModelTier("haiku")
 			}
 		}
 
@@ -1014,7 +1014,7 @@ func newPhaseChat(cfg OrchestratorConfig, sessionID string) *CapturedChat {
 	// forgot. Result: SARA picked haiku, every phase + every TeamWorker step ran
 	// at env default. One seam for both call sites (planner phases here,
 	// TeamWorker.runStep) so it cannot drift again.
-	cc.Ctx.ModelOverride = cfg.RequestedModel
+	cc.Ctx.ModelOverride = ClampModelTier(cfg.RequestedModel)
 	cc.Ctx.TaskID = cfg.TaskID
 	// Session capture, for the same reason the model pin is here: the serial
 	// path wires this in stageChatContextCreation and the event path is the one

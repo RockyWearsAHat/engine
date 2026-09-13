@@ -937,6 +937,12 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role,
 			}
 		}()
 
+		// Clamp requestedModel to ENGINE_MODEL_CEILING
+		clampedModel := ai.ClampModelTier(requestedModel)
+		if clampedModel != requestedModel && requestedModel != "" {
+			log.Printf("[task %s] model clamped %s→%s", id, requestedModel, clampedModel)
+		}
+
 		cfg := ai.OrchestratorConfig{
 			ProjectPath:     projectPath,
 			Owner:           owner,
@@ -946,7 +952,7 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role,
 			TaskMode:        true,
 			TaskID:          id,
 			PlanSteps:       0, // unknown at dispatch time — see ShouldRunEventOrchestrator comment
-			RequestedModel:  requestedModel,
+			RequestedModel:  clampedModel,
 			RequestedRole:   role,
 			TeamSize:        teamSize,
 			GateID:          gateID,

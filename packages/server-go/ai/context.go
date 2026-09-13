@@ -2575,6 +2575,9 @@ func Chat(ctx *ChatContext, userMessage string) {
 		}
 	}
 
+	// Enforce ENGINE_MODEL_CEILING: clamp model tier if needed
+	model = ClampModelTier(model)
+
 	provider := resolveProvider(explicitProvider, model)
 	if model == "" {
 		ctx.OnError("No model selected — choose a model/team in Preferences or .engine/config.yaml")
