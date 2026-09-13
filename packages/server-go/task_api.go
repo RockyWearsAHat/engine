@@ -98,6 +98,10 @@ type engineTask struct {
 	// gateway knows that word); Lost tells it apart from a real failure.
 	Lost bool `json:"lost"`
 
+	// GateHash and BaseSha are populated from the orchestration state at plan time.
+	GateHash string `json:"gateHash,omitempty"`
+	BaseSha  string `json:"baseSha,omitempty"`
+
 	// ClaudeSessions maps a phase ("plan", "execute") to the Claude Code
 	// session id that phase opened, and LastSessionPhase names the most
 	// recent one. Together they are the handle a restart needs: with them a
@@ -166,6 +170,8 @@ func (t *engineTask) snapshot() map[string]any {
 		"coached":          t.Coached,
 		"escalated":        t.Escalated,
 		"lost":             t.Lost,
+		"gateHash":         t.GateHash,
+		"baseSha":          t.BaseSha,
 		"sessionPids":      ai.LiveSessionPIDs(t.ID),
 		"liveSessions":     ai.LiveTaskSessionCount(t.ID),
 		"liveUrl":          readLiveURL(t.ProjectPath),
@@ -780,7 +786,7 @@ func completeTaskSuccess(t *engineTask) {
 }
 
 // startTask dispatches one unit of work and returns immediately.
-func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role, callbackURL string, teamSize int) *engineTask {
+func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role, callbackURL string, teamSize int, gateID, gateText, gateHash, baseSha string) *engineTask {
 	id := fmt.Sprintf("task-%d-%s", time.Now().UnixNano()/1e6, shortToken())
 	t := &engineTask{
 		ID:          id,
@@ -821,6 +827,10 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role,
 			RequestedModel:  requestedModel,
 			RequestedRole:   role,
 			TeamSize:        teamSize,
+			GateID:          gateID,
+			GateText:        gateText,
+			GateHash:        gateHash,
+			BaseSha:         baseSha,
 			Cancel:          t.cancel,
 			ChatFn:          aiChatFn,
 			OnPhase: func(phase, detail string) {
@@ -881,6 +891,11 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role,
 
 		if state != nil {
 			t.setPlan(doneCount(state), len(state.Plan))
+			// Populate gate fields from orchestration state
+			t.mu.Lock()
+			t.GateHash = state.GateHash
+			t.BaseSha = state.BaseSha
+			t.mu.Unlock()
 		}
 		switch {
 		case cancelClosed(t.cancel):
@@ -1110,6 +1125,14 @@ func registerTaskRoutes(defaultProjectPath string) {
 				// an empty value leaves the caller polling GET-by-id exactly
 				// as it always has.
 				CallbackURL string `json:"callbackUrl"`
+				// GateID is the identifier of the gate this task runs.
+				GateID string `json:"gateId"`
+				// GateText is the full text of the gate, used to compute GateHash.
+				GateText string `json:"gateText"`
+				// GateHash is the sha256 hex of GateText, pre-computed for verification.
+				GateHash string `json:"gateHash"`
+				// BaseSha is the git rev-parse HEAD of the task's worktree at plan time.
+				BaseSha string `json:"baseSha"`
 			}
 			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 				http.Error(w, "bad JSON: "+err.Error(), http.StatusBadRequest)
@@ -1131,7 +1154,7 @@ func registerTaskRoutes(defaultProjectPath string) {
 				return
 			}
 			taskGate.setCeiling(body.AllowedConcurrency)
-			t := startTask(body.Project, body.Brief, body.Owner, body.Repo, body.Key, body.Model, body.Role, body.CallbackURL, body.TeamSize)
+			t := startTask(body.Project, body.Brief, body.Owner, body.Repo, body.Key, body.Model, body.Role, body.CallbackURL, body.TeamSize, body.GateID, body.GateText, body.GateHash, body.BaseSha)
 			writeJSON(w, http.StatusAccepted, t.snapshot())
 
 		default:
