@@ -38,11 +38,12 @@ func freshTaskAPI(t *testing.T) (*http.ServeMux, string, *wakeLog) {
 	origTasks, origPath, origHandle, origRun, origNotify, origCheckpoint := tasks, tasksFilePath, httpHandleFuncFn, runOrchestratorForTaskFn, notifyCallbackFn, checkpointFn
 	tasks = &taskRegistry{tasks: map[string]*engineTask{}, byKey: map[string]string{}}
 	wakes := &wakeLog{}
-	notifyCallbackFn = func(url string, payload map[string]any) {
+	notifyCallbackFn = func(url string, payload map[string]any) error {
 		wakes.mu.Lock()
 		defer wakes.mu.Unlock()
 		payload["_url"] = url
 		wakes.wakes = append(wakes.wakes, payload)
+		return nil // Always succeed in tests
 	}
 	mux := http.NewServeMux()
 	httpHandleFuncFn = mux.HandleFunc
