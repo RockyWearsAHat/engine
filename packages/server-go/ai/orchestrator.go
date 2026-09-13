@@ -52,7 +52,7 @@ type PlanStep struct {
 	Attempts   int    `json:"attempts"`
 	// CriticRejects counts consecutive diff-critic rejections of this step, so
 	// a critic that keeps objecting cannot stall the step forever.
-	CriticRejects int    `json:"criticRejects,omitempty"`
+	CriticRejects int `json:"criticRejects,omitempty"`
 	// ReviewRejects counts reviewer REJECT verdicts on this step, driving coaching.
 	ReviewRejects int `json:"reviewRejects,omitempty"`
 	// CoachingBrief is the re-written brief after coaching (REJECT attempt 1).
@@ -60,6 +60,11 @@ type PlanStep struct {
 	CoachingBrief string `json:"coachingBrief,omitempty"`
 	LastFeedback  string `json:"lastFeedback,omitempty"`
 	UpdatedAt     string `json:"updatedAt,omitempty"`
+	// GateID, GateText, GateHash, BaseSha are populated from the plan state at plan time.
+	GateID   string `json:"gateId,omitempty"`
+	GateText string `json:"gateText,omitempty"`
+	GateHash string `json:"gateHash,omitempty"`
+	BaseSha  string `json:"baseSha,omitempty"`
 }
 
 // OrchestrationState is the persistent project-level orchestration record.
@@ -77,6 +82,12 @@ type OrchestrationState struct {
 	// Written by the builder via .engine/live-url.txt and lifted into state so
 	// the behavioral validator hits the deployed instance instead of localhost.
 	LiveURL string `json:"liveUrl,omitempty"`
+	// GateID, GateText, GateHash, BaseSha are persisted at plan time to track
+	// which gate was executed and what the repository state was when planned.
+	GateID   string `json:"gateId,omitempty"`
+	GateText string `json:"gateText,omitempty"`
+	GateHash string `json:"gateHash,omitempty"`
+	BaseSha  string `json:"baseSha,omitempty"`
 	// Conversational marks a run that the orchestrator routed to a single
 	// interactive chat turn instead of the build pipeline. It is transient —
 	// never persisted — and tells the caller to suppress the build summary.
@@ -197,6 +208,13 @@ type OrchestratorConfig struct {
 	// tasks became 14 concurrent CLI processes. Set TeamSize > 1 only when
 	// the dispatch payload explicitly asks for a team.
 	TeamSize int
+
+	// GateID, GateText, GateHash, BaseSha are persisted at plan time to track
+	// which gate was executed and what the repository state was when planned.
+	GateID   string
+	GateText string
+	GateHash string
+	BaseSha  string
 
 	// Cancel, when closed, stops the orchestrator at the next safe checkpoint.
 	Cancel <-chan struct{}
@@ -651,6 +669,20 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 		return nil, fmt.Errorf("orchestrator: load state: %w", err)
 	}
 
+	// Populate gate fields from config when present
+	if cfg.GateID != "" {
+		state.GateID = cfg.GateID
+	}
+	if cfg.GateText != "" {
+		state.GateText = cfg.GateText
+	}
+	if cfg.GateHash != "" {
+		state.GateHash = cfg.GateHash
+	}
+	if cfg.BaseSha != "" {
+		state.BaseSha = cfg.BaseSha
+	}
+
 	if cfg.TaskMode {
 		// Intake and PRD are how a project decides what it is. This run has been
 		// told what it is. Skipping them saves two full agentic sessions per
@@ -696,6 +728,13 @@ func RunAutonomousProject(cfg OrchestratorConfig) (*OrchestrationState, error) {
 		if err := orchestratorPlanPhase(cfg, state, cancel); err != nil {
 			emitErr(cfg.OnError, fmt.Sprintf("plan phase failed: %v", err))
 			return state, err
+		}
+		// Populate gate fields into each plan step
+		for i := range state.Plan {
+			state.Plan[i].GateID = state.GateID
+			state.Plan[i].GateText = state.GateText
+			state.Plan[i].GateHash = state.GateHash
+			state.Plan[i].BaseSha = state.BaseSha
 		}
 		if err := persistOrchestration(cfg.ProjectPath, state); err != nil {
 			emitErr(cfg.OnError, fmt.Sprintf("persist plan: %v", err))

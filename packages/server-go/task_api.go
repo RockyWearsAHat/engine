@@ -98,6 +98,10 @@ type engineTask struct {
 	// gateway knows that word); Lost tells it apart from a real failure.
 	Lost bool `json:"lost"`
 
+	// GateHash and BaseSha are populated from the orchestration state at plan time.
+	GateHash string `json:"gateHash,omitempty"`
+	BaseSha  string `json:"baseSha,omitempty"`
+
 	// ClaudeSessions maps a phase ("plan", "execute") to the Claude Code
 	// session id that phase opened, and LastSessionPhase names the most
 	// recent one. Together they are the handle a restart needs: with them a
@@ -119,8 +123,27 @@ type engineTask struct {
 	// just lets it stop waiting on BUSY_POLL_MS and ask sooner.
 	CallbackURL string `json:"-"`
 
+	// Callback persistence and replay on restart.
+	CallbackPending     bool       `json:"-"` // Callback not yet delivered
+	CallbackAttempts    int        `json:"-"` // Number of delivery attempts
+	CallbackLastError   string     `json:"-"` // Last error from delivery attempt
+	CallbackDeliveredAt *time.Time `json:"-"` // When callback was successfully delivered
+
 	cancel chan struct{}
 	once   sync.Once
+}
+
+// readLiveURL reads the live URL from <projectPath>/.engine/live-url.txt.
+// Returns empty string if the file is not present or cannot be read.
+func readLiveURL(projectPath string) string {
+	if projectPath == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(projectPath, ".engine", "live-url.txt"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // snapshot renders the task under the read lock. Every field is written by the
@@ -153,8 +176,11 @@ func (t *engineTask) snapshot() map[string]any {
 		"coached":          t.Coached,
 		"escalated":        t.Escalated,
 		"lost":             t.Lost,
+		"gateHash":         t.GateHash,
+		"baseSha":          t.BaseSha,
 		"sessionPids":      ai.LiveSessionPIDs(t.ID),
 		"liveSessions":     ai.LiveTaskSessionCount(t.ID),
+		"liveUrl":          readLiveURL(t.ProjectPath),
 	}
 	if t.FirstProgressAt != nil {
 		out["firstProgressAt"] = t.FirstProgressAt.UTC().Format(time.RFC3339)
@@ -273,9 +299,12 @@ func (t *engineTask) finish(status taskStatus, errMsg string) {
 	t.Status = status
 	t.FinishedAt = &now
 	t.Err = errMsg
+	// Mark callback as pending before attempting delivery
+	t.CallbackPending = true
+	t.CallbackAttempts = 0
 	t.mu.Unlock()
 	tasks.persist()
-	notifyCallback(t.callbackTarget(), t.completionPayload())
+	notifyCallback(t)
 }
 
 // callbackTarget: caller's URL, else SARA's wake port (SARA_ENGINE_WAKE_PORT,
@@ -319,28 +348,72 @@ func (t *engineTask) completionPayload() map[string]any {
 		"coached":          t.Coached,
 		"escalated":        t.Escalated,
 		"error":            t.Err,
+		"liveUrl":          readLiveURL(t.ProjectPath),
 	}
 }
 
-// notifyCallbackFn is the wake POST. Var so tests capture it.
-var notifyCallbackFn = func(url string, payload map[string]any) {
+// doPostCallback attempts to deliver a callback and returns an error if it fails.
+// Separate from notifyCallbackFn so tests can mock the latter without breaking error handling.
+func doPostCallback(url string, payload map[string]any) error {
 	body, _ := json.Marshal(payload)
 	client := http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return
+		return err
 	}
 	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// notifyCallbackFn is the wake POST. Var so tests can capture/mock it.
+// Returns an error if delivery fails, nil on success or fire-and-forget.
+var notifyCallbackFn = func(url string, payload map[string]any) error {
+	return doPostCallback(url, payload)
 }
 
 // notifyCallback: fire-and-forget wake POST with the outcome payload. Not a
 // delivery guarantee — GET-by-id stays the truth. Runs synchronously (short
-// timeout); finish() already sits on the task's own goroutine.
-func notifyCallback(url string, payload map[string]any) {
+// timeout); finish() already sits on the task's own goroutine. Calls notifyCallbackFn
+// so tests can mock/capture the wake, and updates task's callback state.
+func notifyCallback(t *engineTask) {
+	url := t.callbackTarget()
 	if url == "" {
+		t.mu.Lock()
+		t.CallbackPending = false
+		t.mu.Unlock()
+		tasks.persist()
 		return
 	}
-	notifyCallbackFn(url, payload)
+
+	payload := t.completionPayload()
+
+	t.mu.Lock()
+	t.CallbackAttempts++
+	t.mu.Unlock()
+
+	// Call notifyCallbackFn synchronously (testable; mocked by tests to capture wakes)
+	err := notifyCallbackFn(url, payload)
+
+	if err != nil {
+		// Delivery failed; keep pending for replay
+		t.mu.Lock()
+		t.CallbackLastError = err.Error()
+		t.mu.Unlock()
+		tasks.persist()
+		return
+	}
+
+	// After successful synchronous delivery, mark as no longer pending
+	t.mu.Lock()
+	now := time.Now()
+	t.CallbackPending = false
+	t.CallbackDeliveredAt = &now
+	t.CallbackLastError = ""
+	t.mu.Unlock()
+	tasks.persist()
 }
 
 func (t *engineTask) stop() {
@@ -413,6 +486,11 @@ type taskRecord struct {
 	// PIDs before the row is marked failed+lost, so a restart never leaves
 	// them running as orphans holding box memory.
 	SessionPIDs []int `json:"sessionPids,omitempty"`
+	// Callback persistence fields for replay on restart.
+	CallbackPending     bool       `json:"callbackPending,omitempty"`
+	CallbackAttempts    int        `json:"callbackAttempts,omitempty"`
+	CallbackLastError   string     `json:"callbackLastError,omitempty"`
+	CallbackDeliveredAt *time.Time `json:"callbackDeliveredAt,omitempty"`
 }
 
 type tasksFile struct {
@@ -441,7 +519,9 @@ func (t *engineTask) record(key string) taskRecord {
 		Model: t.Model, TokensIn: t.TokensIn, TokensOut: t.TokensOut,
 		SubagentsSpawned: t.SubagentsSpawned, Coached: t.Coached, Escalated: t.Escalated,
 		CallbackURL: t.CallbackURL, Lost: t.Lost, PID: os.Getpid(),
-		SessionPIDs: ai.LiveSessionPIDs(t.ID),
+		SessionPIDs:     ai.LiveSessionPIDs(t.ID),
+		CallbackPending: t.CallbackPending, CallbackAttempts: t.CallbackAttempts,
+		CallbackLastError: t.CallbackLastError, CallbackDeliveredAt: t.CallbackDeliveredAt,
 	}
 }
 
@@ -551,6 +631,56 @@ type pendingRepair struct {
 // repairTaskFn is the injection seam for tests. Bound to repairTask.
 var repairTaskFn = repairTask
 
+// replayPendingCallbacks replays a task's callback with exponential backoff.
+// Bounded to 5 attempts, starting at 2s. Runs in a goroutine so startup is not blocked.
+func replayPendingCallbacks(t *engineTask) {
+	const maxAttempts = 5
+	const initialBackoff = 2 * time.Second
+
+	for {
+		t.mu.RLock()
+		pending := t.CallbackPending
+		attempts := t.CallbackAttempts
+		t.mu.RUnlock()
+
+		if !pending || attempts >= maxAttempts {
+			break
+		}
+
+		// Exponential backoff: 2s, 4s, 8s, 16s, 32s
+		backoff := initialBackoff * time.Duration(1<<uint(attempts))
+		time.Sleep(backoff)
+
+		// Attempt delivery
+		url := t.callbackTarget()
+		if url != "" {
+			payload := t.completionPayload()
+
+			t.mu.Lock()
+			t.CallbackAttempts++
+			t.mu.Unlock()
+
+			if err := doPostCallback(url, payload); err != nil {
+				t.mu.Lock()
+				t.CallbackLastError = err.Error()
+				t.mu.Unlock()
+				tasks.persist()
+				continue
+			}
+
+			// Success
+			t.mu.Lock()
+			now := time.Now()
+			t.CallbackPending = false
+			t.CallbackDeliveredAt = &now
+			t.CallbackLastError = "" // Clear error on success
+			t.mu.Unlock()
+			tasks.persist()
+			break
+		}
+	}
+}
+
 // load reads tasks.json. A row still running is either REPAIRED or lost:
 //
 //   - with a Claude Code session id on file it stays running, moves to phase
@@ -574,6 +704,7 @@ func (r *taskRegistry) load(path string) int {
 	}
 	lost := 0
 	var repairs []pendingRepair
+	var pendingCallbacks []*engineTask
 	r.mu.Lock()
 	for _, rec := range f.Tasks {
 		if _, exists := r.tasks[rec.ID]; exists {
@@ -596,7 +727,13 @@ func (r *taskRegistry) load(path string) int {
 			SubagentsSpawned: rec.SubagentsSpawned, Coached: rec.Coached, Escalated: rec.Escalated,
 			CallbackURL: rec.CallbackURL, Lost: rec.Lost, restored: true,
 			ClaudeSessions: sessions, LastSessionPhase: rec.LastSessionPhase,
+			CallbackPending: rec.CallbackPending, CallbackAttempts: rec.CallbackAttempts,
+			CallbackLastError: rec.CallbackLastError, CallbackDeliveredAt: rec.CallbackDeliveredAt,
 			cancel: make(chan struct{}),
+		}
+		// Track tasks with pending callbacks for replay outside the lock
+		if rec.CallbackPending {
+			pendingCallbacks = append(pendingCallbacks, t)
 		}
 		if t.Status == taskRunning {
 			// The claude.exe/claude session(s) this task spawned survive the
@@ -651,6 +788,12 @@ func (r *taskRegistry) load(path string) int {
 	for _, p := range repairs {
 		go repairTaskFn(p.rec, p.task)
 	}
+
+	// Replay pending callbacks in goroutines, bounded and with exponential backoff.
+	for _, t := range pendingCallbacks {
+		go replayPendingCallbacks(t)
+	}
+
 	return lost
 }
 
@@ -765,7 +908,7 @@ func completeTaskSuccess(t *engineTask) {
 }
 
 // startTask dispatches one unit of work and returns immediately.
-func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role, callbackURL string, teamSize int) *engineTask {
+func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role, callbackURL string, teamSize int, gateID, gateText, gateHash, baseSha string) *engineTask {
 	id := fmt.Sprintf("task-%d-%s", time.Now().UnixNano()/1e6, shortToken())
 	t := &engineTask{
 		ID:          id,
@@ -806,6 +949,10 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role,
 			RequestedModel:  requestedModel,
 			RequestedRole:   role,
 			TeamSize:        teamSize,
+			GateID:          gateID,
+			GateText:        gateText,
+			GateHash:        gateHash,
+			BaseSha:         baseSha,
 			Cancel:          t.cancel,
 			ChatFn:          aiChatFn,
 			OnPhase: func(phase, detail string) {
@@ -815,6 +962,11 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role,
 			OnProgress: func(msg string) { t.note("progress", msg) },
 			OnPlanUpdate: func(st *ai.OrchestrationState) {
 				t.setPlan(doneCount(st), len(st.Plan))
+				// Populate gate fields from orchestration state
+				t.mu.Lock()
+				t.GateHash = st.GateHash
+				t.BaseSha = st.BaseSha
+				t.mu.Unlock()
 			},
 			OnError:         func(msg string) { t.note("error", msg) },
 			OnActivity:      t.activity,
@@ -1095,6 +1247,14 @@ func registerTaskRoutes(defaultProjectPath string) {
 				// an empty value leaves the caller polling GET-by-id exactly
 				// as it always has.
 				CallbackURL string `json:"callbackUrl"`
+				// GateID is the identifier of the gate this task runs.
+				GateID string `json:"gateId"`
+				// GateText is the full text of the gate, used to compute GateHash.
+				GateText string `json:"gateText"`
+				// GateHash is the sha256 hex of GateText, pre-computed for verification.
+				GateHash string `json:"gateHash"`
+				// BaseSha is the git rev-parse HEAD of the task's worktree at plan time.
+				BaseSha string `json:"baseSha"`
 			}
 			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 				http.Error(w, "bad JSON: "+err.Error(), http.StatusBadRequest)
@@ -1116,7 +1276,7 @@ func registerTaskRoutes(defaultProjectPath string) {
 				return
 			}
 			taskGate.setCeiling(body.AllowedConcurrency)
-			t := startTask(body.Project, body.Brief, body.Owner, body.Repo, body.Key, body.Model, body.Role, body.CallbackURL, body.TeamSize)
+			t := startTask(body.Project, body.Brief, body.Owner, body.Repo, body.Key, body.Model, body.Role, body.CallbackURL, body.TeamSize, body.GateID, body.GateText, body.GateHash, body.BaseSha)
 			writeJSON(w, http.StatusAccepted, t.snapshot())
 
 		default:
