@@ -415,8 +415,12 @@ func (p *claudecodeProvider) RunLoop(
 	// Account selection: same binary, different CLAUDE_CONFIG_DIR, different
 	// quota pool. Nil Env inherits the ambient login unchanged, which is exactly
 	// today's behaviour on a single-account machine.
+	// Always scrub PORT from the environment to prevent spawned workers from
+	// hijacking the orchestrator's port when they run processes like npm start.
 	if dispatch.Env != nil {
-		cmd.Env = dispatch.Env
+		cmd.Env = childEnv(dispatch.Env)
+	} else {
+		cmd.Env = childEnv(os.Environ())
 	}
 	cmd.Stdin = strings.NewReader(prompt)
 	setProcGroup(cmd)

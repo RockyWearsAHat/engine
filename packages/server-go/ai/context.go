@@ -1485,7 +1485,7 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 			strings.Contains(ctx.ProjectPath, ".engine/projects/") ||
 			strings.Contains(cwd, "/engine/projects/") ||
 			strings.Contains(ctx.ProjectPath, "/engine/projects/") {
-			env := os.Environ()
+			env := childEnv(os.Environ())
 			env = append(env, "GOWORK=off")
 			cmd.Env = env
 		}
