@@ -260,6 +260,10 @@ type OrchestratorConfig struct {
 	// OnCoach fires when a REJECT retry was coached (brief rewritten) or
 	// escalated a model tier. Slice I fills it; task API reports it.
 	OnCoach func(coached int, escalated bool)
+	// OnSessionExit fires when a Claude Code session exits, with the tokens and
+	// turns it consumed. The task API uses this to immediately credit session
+	// activity to the running task record, rather than deferring until task completion.
+	OnSessionExit func(tokensIn, tokensOut, turns int64)
 }
 
 // RunStats is what one provider run consumed. Exported form of the claude

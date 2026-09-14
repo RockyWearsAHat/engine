@@ -90,6 +90,7 @@ type engineTask struct {
 	Model            string `json:"model,omitempty"`
 	TokensIn         int64  `json:"tokensIn"`
 	TokensOut        int64  `json:"tokensOut"`
+	Turns            int64  `json:"turns"`
 	SubagentsSpawned int    `json:"subagentsSpawned"`
 	Coached          int    `json:"coached"`
 	Escalated        bool   `json:"escalated"`
@@ -172,6 +173,7 @@ func (t *engineTask) snapshot() map[string]any {
 		"model":            t.Model,
 		"tokensIn":         t.TokensIn,
 		"tokensOut":        t.TokensOut,
+		"turns":            t.Turns,
 		"subagentsSpawned": t.SubagentsSpawned,
 		"coached":          t.Coached,
 		"escalated":        t.Escalated,
@@ -293,6 +295,20 @@ func (t *engineTask) setCoach(coached int, escalated bool) {
 	tasks.persist()
 }
 
+// addSessionTokensAndTurns adds a session's token counts and turns to the running task record.
+// Called when a session exits to immediately credit the activity to the task, rather than
+// deferring until task completion. Updates lastTokenAt as well.
+func (t *engineTask) addSessionTokensAndTurns(tokensIn, tokensOut, turns int64) {
+	now := time.Now()
+	t.mu.Lock()
+	t.TokensIn += tokensIn
+	t.TokensOut += tokensOut
+	t.Turns += turns
+	t.LastTokenAt = &now
+	t.mu.Unlock()
+	tasks.persist()
+}
+
 func (t *engineTask) finish(status taskStatus, errMsg string) {
 	t.mu.Lock()
 	now := time.Now()
@@ -344,6 +360,7 @@ func (t *engineTask) completionPayload() map[string]any {
 		"model":            t.Model,
 		"tokensIn":         t.TokensIn,
 		"tokensOut":        t.TokensOut,
+		"turns":            t.Turns,
 		"subagentsSpawned": t.SubagentsSpawned,
 		"coached":          t.Coached,
 		"escalated":        t.Escalated,
@@ -466,6 +483,7 @@ type taskRecord struct {
 	Model            string     `json:"model,omitempty"`
 	TokensIn         int64      `json:"tokensIn"`
 	TokensOut        int64      `json:"tokensOut"`
+	Turns            int64      `json:"turns"`
 	SubagentsSpawned int        `json:"subagentsSpawned"`
 	Coached          int        `json:"coached"`
 	Escalated        bool       `json:"escalated"`
@@ -516,7 +534,7 @@ func (t *engineTask) record(key string) taskRecord {
 		StartedAt: t.StartedAt, FinishedAt: t.FinishedAt, Err: t.Err,
 		StepsDone: t.StepsDone, StepsTotal: t.StepsTotal, Progress: progress,
 		FirstProgressAt: t.FirstProgressAt, LastTokenAt: t.LastTokenAt, LastToolAt: t.LastToolAt,
-		Model: t.Model, TokensIn: t.TokensIn, TokensOut: t.TokensOut,
+		Model: t.Model, TokensIn: t.TokensIn, TokensOut: t.TokensOut, Turns: t.Turns,
 		SubagentsSpawned: t.SubagentsSpawned, Coached: t.Coached, Escalated: t.Escalated,
 		CallbackURL: t.CallbackURL, Lost: t.Lost, PID: os.Getpid(),
 		SessionPIDs:     ai.LiveSessionPIDs(t.ID),
@@ -723,7 +741,7 @@ func (r *taskRegistry) load(path string) int {
 			StartedAt: rec.StartedAt, FinishedAt: rec.FinishedAt, Err: rec.Err,
 			StepsDone: rec.StepsDone, StepsTotal: rec.StepsTotal, Progress: rec.Progress,
 			FirstProgressAt: rec.FirstProgressAt, LastTokenAt: rec.LastTokenAt, LastToolAt: rec.LastToolAt,
-			Model: rec.Model, TokensIn: rec.TokensIn, TokensOut: rec.TokensOut,
+			Model: rec.Model, TokensIn: rec.TokensIn, TokensOut: rec.TokensOut, Turns: rec.Turns,
 			SubagentsSpawned: rec.SubagentsSpawned, Coached: rec.Coached, Escalated: rec.Escalated,
 			CallbackURL: rec.CallbackURL, Lost: rec.Lost, restored: true,
 			ClaudeSessions: sessions, LastSessionPhase: rec.LastSessionPhase,
@@ -979,6 +997,7 @@ func startTask(projectPath, brief, owner, repo, dedupeKey, requestedModel, role,
 			OnRunStats:      t.addRun,
 			OnCoach:         t.setCoach,
 			OnClaudeSession: t.updateClaudeSessions,
+			OnSessionExit:   func(tokensIn, tokensOut, turns int64) { t.addSessionTokensAndTurns(tokensIn, tokensOut, turns) },
 		}
 
 		// One orchestrator per working tree at a time. Task-mode runs edit
@@ -1148,6 +1167,16 @@ func (g *projectGates) acquire(projectPath string, cancel <-chan struct{}) func(
 		return func() { <-slot }
 	case <-cancel:
 		return nil
+	}
+}
+
+// AddSessionTokensAndTurnsToTask adds a session's token counts and turns to a running task.
+// Called from the ai package when a session exits to immediately credit the activity,
+// rather than deferring until the task completes. Updates lastTokenAt as well.
+// Safe to call when the task is not running or doesn't exist — gracefully ignores.
+func AddSessionTokensAndTurnsToTask(taskID string, tokensIn, tokensOut, turns int64) {
+	if t, ok := tasks.get(taskID); ok {
+		t.addSessionTokensAndTurns(tokensIn, tokensOut, turns)
 	}
 }
 

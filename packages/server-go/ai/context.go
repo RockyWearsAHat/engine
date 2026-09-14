@@ -482,6 +482,11 @@ type ChatContext struct {
 	// persists the id, so an engine restart can hand the same conversation back
 	// to the CLI with --resume rather than starting the item over.
 	OnClaudeSession func(sessionID string)
+	// OnSessionExit fires when a Claude Code session exits, with the tokens and
+	// turns it consumed. Nil = nobody asked. Task API uses this to immediately
+	// credit session activity to the running task record, rather than deferring
+	// until task completion.
+	OnSessionExit func(tokensIn, tokensOut, turns int64)
 	// ResumeSessionID, when set, continues that Claude Code session instead of
 	// opening a new one (buildClaudeArgs adds --resume). Empty is a fresh run.
 	ResumeSessionID  string
@@ -640,6 +645,7 @@ func stageChatContextCreation(cfg OrchestratorConfig, sessionID string, role Age
 		OnToolCall:    onToolCall,
 		OnToolResult:  onToolResult,
 		OnRunStats:    cfg.OnRunStats,
+		OnSessionExit: cfg.OnSessionExit,
 		ModelOverride: cfg.RequestedModel,
 	}
 	// The provider reports one bare session id; the phase it belongs to is

@@ -484,6 +484,11 @@ func (p *claudecodeProvider) RunLoop(
 	defer func() {
 		UnregisterSession(taskID, pid)
 		log.Print(sessionExitLogLine(taskID, phase, pid, exitStats, time.Since(spawnedAt)))
+		// Credit this session's activity to the running task immediately, so the
+		// engine sees activity before the task completes.
+		if ctx.OnSessionExit != nil {
+			ctx.OnSessionExit(exitStats.InputTokens, exitStats.OutputTokens, int64(exitStats.NumTurns))
+		}
 	}()
 
 	// Stall watchdog: if the CLI produces no output for idleTimeout, kill it so
