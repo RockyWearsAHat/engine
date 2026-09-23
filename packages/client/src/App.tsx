@@ -1203,7 +1203,9 @@ export default function App() {
     const offClose = wsClient.onClose(() => {
       setConnected(false);
     });
-    const runningViaDevServer = typeof window !== 'undefined' && window.location.host.includes(':5173');
+    const runningViaDevServer = typeof window !== 'undefined'
+      && (window.location.protocol === 'http:' || window.location.protocol === 'https:')
+      && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
     const connectTimer = window.setTimeout(
       () => wsClient.connect(),
       runningViaDevServer ? 900 : 0,

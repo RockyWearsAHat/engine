@@ -47,10 +47,13 @@ type EventsWatcher struct {
 	monitor *RepoMonitor
 
 	mu        sync.Mutex
+	startedAt time.Time
 	etag      string
 	seen      map[string]bool   // full_name → README contained @engine last check
 	processed map[string]bool   // event.ID → already dispatched
 	processedOrder []string     // FIFO of processed IDs (bounded to ~1k)
+	processedIssueComments map[int64]bool
+	processedIssueCommentOrder []int64
 
 	// Injectable for tests.
 	// Injectable for tests.
@@ -66,8 +69,10 @@ func NewEventsWatcher(token string, monitor *RepoMonitor) *EventsWatcher {
 	return &EventsWatcher{
 		token:         token,
 		monitor:       monitor,
+		startedAt:     time.Now().UTC(),
 		seen:          make(map[string]bool),
 		processed:     make(map[string]bool),
+		processedIssueComments: make(map[int64]bool),
 		tickFn:        time.After,
 		loginFn:       defaultEventsLoginFn,
 		listReposFn:   defaultEventsListReposFn,
@@ -80,6 +85,8 @@ func NewEventsWatcher(token string, monitor *RepoMonitor) *EventsWatcher {
 // a long-running watcher session. GitHub's events API returns ~30 events per
 // page; keeping 1024 IDs is well past anything we'd see in one poll burst.
 const maxProcessedEventIDs = 1024
+const maxProcessedIssueCommentIDs = 2048
+const issueCommentFreshnessSkew = 2 * time.Minute
 
 // markEventProcessed atomically reserves an event.ID. Returns false if the ID
 // was already dispatched (so the caller skips the event), true on first sight.
@@ -100,6 +107,47 @@ func (w *EventsWatcher) markEventProcessed(id string) bool {
 		delete(w.processed, oldest)
 	}
 	return true
+}
+
+// markIssueCommentProcessed atomically reserves a comment ID. Returns false if
+// this comment was already dispatched during the current watcher lifetime.
+func (w *EventsWatcher) markIssueCommentProcessed(id int64) bool {
+	if id <= 0 {
+		return true
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.processedIssueComments == nil {
+		w.processedIssueComments = make(map[int64]bool)
+	}
+	if w.processedIssueComments[id] {
+		return false
+	}
+	w.processedIssueComments[id] = true
+	w.processedIssueCommentOrder = append(w.processedIssueCommentOrder, id)
+	if len(w.processedIssueCommentOrder) > maxProcessedIssueCommentIDs {
+		oldest := w.processedIssueCommentOrder[0]
+		w.processedIssueCommentOrder = w.processedIssueCommentOrder[1:]
+		delete(w.processedIssueComments, oldest)
+	}
+	return true
+}
+
+func (w *EventsWatcher) isFreshIssueComment(createdAt string) bool {
+	if strings.TrimSpace(createdAt) == "" {
+		return true
+	}
+	w.mu.Lock()
+	startedAt := w.startedAt
+	w.mu.Unlock()
+	if startedAt.IsZero() {
+		return true
+	}
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(createdAt))
+	if err != nil {
+		return true
+	}
+	return !parsed.Before(startedAt.Add(-issueCommentFreshnessSkew))
 }
 
 // ghCLITokenFn is injectable for tests.
@@ -468,7 +516,9 @@ func (w *EventsWatcher) dispatchIssueCommentEvent(fullName string, payload json.
 		Action  string `json:"action"`
 		Issue   json.RawMessage `json:"issue"`
 		Comment struct {
+			ID int64 `json:"id"`
 			Body string `json:"body"`
+			CreatedAt string `json:"created_at"`
 			User struct {
 				Login string `json:"login"`
 			} `json:"user"`
@@ -479,6 +529,12 @@ func (w *EventsWatcher) dispatchIssueCommentEvent(fullName string, payload json.
 		return
 	}
 	if p.Action != "created" {
+		return
+	}
+	if !w.markIssueCommentProcessed(p.Comment.ID) {
+		return
+	}
+	if !w.isFreshIssueComment(p.Comment.CreatedAt) {
 		return
 	}
 	// Don't react to our own comments — that creates an infinite feedback loop

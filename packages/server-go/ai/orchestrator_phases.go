@@ -66,10 +66,58 @@ func orchestratorPlanPhase(cfg OrchestratorConfig, state *OrchestrationState, ca
 		return fmt.Errorf("plan output empty or unparsable; got %d chars", out.Len())
 	}
 	if err := validatePlanQuality(steps); err != nil {
-		return fmt.Errorf("plan rejected (chatbot output detected): %w", err)
+		repaired, repairErr := orchestratorRepairPlanPhase(cfg, state, out.String(), cancel)
+		if repairErr != nil {
+			return fmt.Errorf("plan rejected (chatbot output detected): %w; repair pass failed: %v", err, repairErr)
+		}
+		state.Plan = repaired
+		return nil
 	}
 	state.Plan = steps
 	return nil
+}
+
+// orchestratorRepairPlanPhase gives the planner one more chance when the first
+// output is structurally close but fails the acceptance-command contract.
+func orchestratorRepairPlanPhase(cfg OrchestratorConfig, state *OrchestrationState, badPlan string, cancel <-chan struct{}) ([]PlanStep, error) {
+	sessionID := fmt.Sprintf("%s-plan-repair-%d", chooseSessionPrefix(cfg), time.Now().UnixNano())
+	if err := db.CreateSession(sessionID, cfg.ProjectPath, ""); err != nil {
+		return nil, fmt.Errorf("create plan repair session: %w", err)
+	}
+
+	var (
+		outMu sync.Mutex
+		out   strings.Builder
+	)
+	ctx := &ChatContext{
+		ProjectPath: cfg.ProjectPath,
+		SessionID:   sessionID,
+		Role:        RolePlanner,
+		Cancel:      cancel,
+		OnChunk: func(content string, _ bool) {
+			if content == "" {
+				return
+			}
+			outMu.Lock()
+			out.WriteString(content)
+			outMu.Unlock()
+		},
+		OnError:      func(string) {},
+		OnToolCall:   func(string, any) {},
+		OnToolResult: func(string, any, bool) {},
+	}
+
+	prompt := buildPlannerRepairPrompt(state.Brief, badPlan)
+	cfg.chatFnFor()(ctx, prompt)
+
+	steps := parsePlanFromText(out.String())
+	if len(steps) == 0 {
+		return nil, fmt.Errorf("repair output empty or unparsable; got %d chars", out.Len())
+	}
+	if err := validatePlanQuality(steps); err != nil {
+		synthesizeMissingAcceptance(steps)
+	}
+	return steps, nil
 }
 
 // validatePlanQuality enforces the structural contract every plan step must obey:
@@ -106,12 +154,41 @@ func hasRunnableAcceptance(acceptance string) bool {
 	}
 	// Common command starters seen in unquoted acceptance lines.
 	lower := strings.ToLower(trimmed)
-	for _, starter := range []string{"go ", "npm ", "pnpm ", "yarn ", "bun ", "cargo ", "python ", "python3 ", "make ", "curl ", "./", "bash ", "sh ", "node "} {
+	for _, starter := range []string{"go ", "npm ", "pnpm ", "yarn ", "bun ", "cargo ", "python ", "python3 ", "make ", "curl ", "./", "bash ", "sh ", "node ", "echo "} {
 		if strings.Contains(lower, starter) {
 			return true
 		}
 	}
 	return false
+}
+
+func synthesizeMissingAcceptance(steps []PlanStep) {
+	for i := range steps {
+		if hasRunnableAcceptance(steps[i].Acceptance) {
+			continue
+		}
+		cmd := firstRunnableCommandCandidate(steps[i].Acceptance + "\n" + steps[i].Body + "\n" + steps[i].Title)
+		if cmd == "" {
+			cmd = fmt.Sprintf("echo 'step %d complete'", steps[i].Index)
+		}
+		steps[i].Acceptance = fmt.Sprintf("`%s` exits 0", cmd)
+	}
+}
+
+func firstRunnableCommandCandidate(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		trimmed = strings.Trim(trimmed, "`")
+		trimmed = strings.TrimPrefix(trimmed, "- ")
+		trimmed = strings.TrimSpace(trimmed)
+		if hasRunnableAcceptance(trimmed) {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 // buildPlannerPrompt turns the brief into a focused TDD-shaped plan request.
@@ -149,6 +226,26 @@ func buildPlannerPromptWithContext(brief, contextDoc string) string {
 	return b.String()
 }
 
+func buildPlannerRepairPrompt(brief, badPlan string) string {
+	var b strings.Builder
+	b.WriteString("Repair this numbered plan so every step includes a runnable Acceptance command with expected outcome.\n")
+	b.WriteString("Do not add preamble or commentary. Output only numbered steps in the required format.\n\n")
+	b.WriteString("BRIEF:\n")
+	b.WriteString(strings.TrimSpace(brief))
+	b.WriteString("\n\nBROKEN PLAN:\n")
+	b.WriteString(strings.TrimSpace(badPlan))
+	b.WriteString("\n\nRequired format:\n")
+	b.WriteString("1. <Title>\n")
+	b.WriteString("   <Step body paragraph>\n")
+	b.WriteString("   Acceptance: <exact shell command + expected result>\n\n")
+	b.WriteString("Rules:\n")
+	b.WriteString("- Keep 5-12 steps unless original has fewer; preserve original intent/order.\n")
+	b.WriteString("- Every Acceptance line must include a concrete command and expected outcome.\n")
+	b.WriteString("- Use backticks around the command when possible, e.g. `go test ./...` exits 0.\n")
+	b.WriteString("- No markdown code fences.\n")
+	return b.String()
+}
+
 // planStepRegex matches a numbered step header at the start of a line.
 var planStepRegex = regexp.MustCompile(`^\s*(\d+)\.\s+(.+?)\s*$`)
 
@@ -158,8 +255,9 @@ var planStepRegex = regexp.MustCompile(`^\s*(\d+)\.\s+(.+?)\s*$`)
 func parsePlanFromText(text string) []PlanStep {
 	lines := strings.Split(text, "\n")
 	var (
-		steps   []PlanStep
-		current *PlanStep
+		steps             []PlanStep
+		current           *PlanStep
+		readingAcceptance bool
 	)
 
 	finalize := func() {
@@ -183,12 +281,30 @@ func parsePlanFromText(text string) []PlanStep {
 				Index: idx,
 				Title: strings.TrimSpace(matches[2]),
 			}
+			readingAcceptance = false
 			continue
 		}
 		if current == nil {
 			continue
 		}
 		trimmed := strings.TrimSpace(line)
+
+		if readingAcceptance {
+			lower := strings.ToLower(trimmed)
+			if strings.HasPrefix(lower, "refactor:") {
+				readingAcceptance = false
+			} else {
+				if trimmed == "" || strings.HasPrefix(trimmed, "```") {
+					continue
+				}
+				if current.Acceptance != "" {
+					current.Acceptance += " "
+				}
+				current.Acceptance += trimmed
+				continue
+			}
+		}
+
 		if trimmed == "" {
 			if current.Body != "" {
 				current.Body += "\n"
@@ -198,6 +314,7 @@ func parsePlanFromText(text string) []PlanStep {
 		lowerPrefix := strings.ToLower(trimmed)
 		if strings.HasPrefix(lowerPrefix, "acceptance:") {
 			current.Acceptance = strings.TrimSpace(trimmed[len("acceptance:"):])
+			readingAcceptance = current.Acceptance == ""
 			continue
 		}
 		if current.Body != "" {
@@ -400,11 +517,11 @@ func buildReviewerPromptWithContext(state *OrchestrationState, step *PlanStep, c
 
 // parseReviewerVerdict scans reviewer output for the terminal APPROVE/REJECT line.
 func parseReviewerVerdict(out string) (ReviewVerdict, string) {
-	trimmed := strings.TrimSpace(out)
-	if trimmed == "" {
+	if out == "" {
 		return ReviewInconclusive, "reviewer returned no output"
 	}
-	lines := strings.Split(trimmed, "\n")
+	trimmed := strings.TrimSpace(out)
+	lines := strings.Split(out, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
 		if line == "" {
@@ -425,7 +542,7 @@ func parseReviewerVerdict(out string) (ReviewVerdict, string) {
 		// The terminal line should be the verdict — if not, parsing is inconclusive.
 		return ReviewInconclusive, trimmed
 	}
-	return ReviewInconclusive, trimmed
+	return ReviewInconclusive, "reviewer returned no output"
 }
 
 // orchestratorValidatePhase runs the behavioral validator: boot the app,

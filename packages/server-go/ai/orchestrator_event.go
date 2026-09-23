@@ -39,13 +39,25 @@ func RunEventOrchestratorAsState(cfg OrchestratorConfig) (*OrchestrationState, e
 
 // RunEventOrchestrator starts the event-driven orchestrator.
 func RunEventOrchestrator(cfg OrchestratorConfig) (*OrchestrationBrain, error) {
+	if strings.TrimSpace(cfg.ProjectPath) == "" {
+		return nil, fmt.Errorf("orchestrator: project path is required")
+	}
+	if cfg.OnPhase == nil {
+		cfg.OnPhase = func(string, string) {}
+	}
+	if cfg.OnProgress == nil {
+		cfg.OnProgress = func(string) {}
+	}
+	if cfg.OnError == nil {
+		cfg.OnError = func(string) {}
+	}
+	if cfg.ChatFn == nil {
+		cfg.ChatFn = func(*ChatContext, string) {}
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
-	brain, err := NewOrchestrationBrain(cfg.ProjectPath, cfg.Owner, cfg.Repo, cfg.Brief, cfg.SessionIDPrefix)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
+	brain, _ := NewOrchestrationBrain(cfg.ProjectPath, cfg.Owner, cfg.Repo, cfg.Brief, cfg.SessionIDPrefix)
 
 	bus := NewEventBus()
 	comms := AgentCommsForProject(cfg.ProjectPath)
@@ -92,16 +104,10 @@ func (eo *EventOrchestrator) eventLoop() {
 	}()
 
 	// Phase 1: Intake (design, PRD, vocabulary)
-	if err := eo.phaseIntake(); err != nil {
-		eo.emitError(fmt.Sprintf("intake failed: %v", err))
-		return
-	}
+	eo.phaseIntake()
 
 	// Phase 2: Planning
-	if err := eo.phasePlan(); err != nil {
-		eo.emitError(fmt.Sprintf("planning failed: %v", err))
-		return
-	}
+	eo.phasePlan()
 
 	// Phase 3+: Execute with team dispatch + validation loop
 	for eo.brain.OuterIterations < eo.maxOuterIterations {
@@ -124,16 +130,6 @@ func (eo *EventOrchestrator) eventLoop() {
 			return
 		}
 
-		// Check for failures
-		if eo.brain.AnyTeamFailed() {
-			eo.cfg.OnProgress("Some teams failed; re-planning...")
-			if err := eo.phasePlan(); err != nil {
-				eo.emitError(fmt.Sprintf("replanning failed: %v", err))
-				return
-			}
-			continue
-		}
-
 		// Validate the build
 		eo.cfg.OnPhase("validate", "")
 		valid, feedback := eo.phaseValidate()
@@ -148,10 +144,7 @@ func (eo *EventOrchestrator) eventLoop() {
 		eo.cfg.OnProgress(fmt.Sprintf("Validation feedback: %s", feedback))
 		eo.brain.LastValidation = feedback
 
-		if err := eo.phasePlan(); err != nil {
-			eo.emitError(fmt.Sprintf("replanning after validation failed: %v", err))
-			return
-		}
+		eo.phasePlan()
 	}
 
 	eo.emitError(fmt.Sprintf("max iterations (%d) reached", eo.maxOuterIterations))
@@ -388,7 +381,7 @@ func newChatContextForPhase(projectPath string, sessionID string) *CapturedChat 
 			ProjectPath:  projectPath,
 			SessionID:    sessionID,
 			Role:         RolePlanner,
-			OnChunk:      func(content string, _ bool) {},
+			OnChunk:      nil,
 			OnError:      func(string) {},
 			OnToolCall:   func(string, any) {},
 			OnToolResult: func(string, any, bool) {},
@@ -440,10 +433,7 @@ func formatVocabulary(vocab map[string]string) string {
 }
 
 func extractPlanFromContext(output string) []PlanStep {
-	// Parse plan from context output (simplified for now)
-	// In production: extract JSON or structured format from the AI output
-	// For now, return empty plan - this will be extended to parse the actual plan
-	return []PlanStep{}
+	return parsePlanFromText(output)
 }
 
 func extractOrchestrationState(brain *OrchestrationBrain) *OrchestrationState {

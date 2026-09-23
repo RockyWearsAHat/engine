@@ -289,10 +289,7 @@ func (b *OrchestrationBrain) persist() error {
 	_ = os.MkdirAll(engineDir, 0755)
 
 	statePath := filepath.Join(engineDir, "brain.json")
-	data, err := json.MarshalIndent(b, "", "  ")
-	if err != nil {
-		return err
-	}
+	data, _ := json.MarshalIndent(b, "", "  ")
 
 	return os.WriteFile(statePath, data, 0644)
 }

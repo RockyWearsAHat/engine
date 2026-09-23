@@ -18,13 +18,30 @@ func TestResolveLocalFirstRouting_LightRoleRoutesLocal(t *testing.T) {
 	prev := localFirstEnabledFn
 	localFirstEnabledFn = func() bool { return true }
 	t.Cleanup(func() { localFirstEnabledFn = prev })
+	t.Setenv("ENGINE_OLLAMA_MODEL", "qwen2.5:7b")
 
 	provider, model := ResolveLocalFirstRouting(RolePlanner)
 	if provider != "ollama" {
 		t.Errorf("provider = %q, want ollama", provider)
 	}
-	if model == "" {
-		t.Error("model should be set")
+	if model != "qwen2.5:7b" {
+		t.Errorf("model = %q, want qwen2.5:7b", model)
+	}
+}
+
+func TestResolveLocalFirstRouting_LightRoleRoutesLlamaCpp(t *testing.T) {
+	prev := localFirstEnabledFn
+	localFirstEnabledFn = func() bool { return true }
+	t.Cleanup(func() { localFirstEnabledFn = prev })
+	t.Setenv("ENGINE_OLLAMA_MODEL", "")
+	t.Setenv("ENGINE_LLAMACPP_MODEL", "llama-cpp-small")
+
+	provider, model := ResolveLocalFirstRouting(RolePlanner)
+	if provider != "llamacpp" {
+		t.Fatalf("provider = %q, want llamacpp", provider)
+	}
+	if model != "llama-cpp-small" {
+		t.Fatalf("model = %q, want llama-cpp-small", model)
 	}
 }
 
@@ -54,19 +71,18 @@ func TestResolveLocalFirstRouting_UnknownRoleDefers(t *testing.T) {
 	}
 }
 
-func TestResolveLocalFirstRouting_DefaultModelFallback(t *testing.T) {
+func TestResolveLocalFirstRouting_NoModelConfiguredDefers(t *testing.T) {
 	prevEnabled := localFirstEnabledFn
 	localFirstEnabledFn = func() bool { return true }
 	t.Cleanup(func() { localFirstEnabledFn = prevEnabled })
 
 	t.Setenv("ENGINE_OLLAMA_MODEL", "")
-	t.Setenv("OLLAMA_BASE_URL", "http://127.0.0.1:1")
 
 	provider, model := ResolveLocalFirstRouting(RolePlanner)
-	if provider != "ollama" {
-		t.Fatalf("provider = %q, want ollama", provider)
+	if provider != "" {
+		t.Fatalf("provider = %q, want empty", provider)
 	}
-	if model != defaultOllamaModel {
-		t.Fatalf("model = %q, want default %q", model, defaultOllamaModel)
+	if model != "" {
+		t.Fatalf("model = %q, want empty", model)
 	}
 }

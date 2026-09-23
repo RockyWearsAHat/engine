@@ -23,12 +23,12 @@ import (
 // ─── stub Discord bridge ──────────────────────────────────────────────────────
 
 type stubDiscordBridge struct {
-	cfg           discord.Config
-	reloadErr     error
-	searchHits    []db.DiscordSearchHit
-	searchErr     error
-	recentRows    []db.DiscordMessage
-	recentErr     error
+	cfg        discord.Config
+	reloadErr  error
+	searchHits []db.DiscordSearchHit
+	searchErr  error
+	recentRows []db.DiscordMessage
+	recentErr  error
 }
 
 func (s *stubDiscordBridge) CurrentConfig() discord.Config { return s.cfg }
@@ -39,7 +39,7 @@ func (s *stubDiscordBridge) SearchHistory(_, _, _ string, _ int) ([]db.DiscordSe
 func (s *stubDiscordBridge) RecentHistory(_, _, _ string, _ int) ([]db.DiscordMessage, error) {
 	return s.recentRows, s.recentErr
 }
-func (s *stubDiscordBridge) SendDMToOwner(_ string) error     { return nil }
+func (s *stubDiscordBridge) SendDMToOwner(_ string) error      { return nil }
 func (s *stubDiscordBridge) NotifyProjectProgress(_, _ string) {}
 
 // ─── stub HTTP transport ──────────────────────────────────────────────────────
@@ -111,7 +111,6 @@ func TestHandler_DiscordHistorySearch_NilBridge(t *testing.T) {
 func TestHandler_DiscordHistorySearch_WithBridge_Success(t *testing.T) {
 	stub := &stubDiscordBridge{
 		searchHits: []db.DiscordSearchHit{{DiscordMessage: db.DiscordMessage{ID: "m1", Content: "cave AI"}}},
-
 	}
 	SetDiscordBridge(stub)
 	defer SetDiscordBridge(nil)
@@ -373,7 +372,7 @@ func TestHandler_GitHubIssues_MockHTTP_Success(t *testing.T) {
 	wsHTTPClient = &http.Client{
 		Transport: &fixedResponseTransport{
 			statusCode: 200,
-			body: `[{"number":1,"title":"bug","body":"desc","html_url":"http://gh.com/1","state":"open","user":{"login":"dev"},"labels":[],"created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z","pull_request":null}]`,
+			body:       `[{"number":1,"title":"bug","body":"desc","html_url":"http://gh.com/1","state":"open","user":{"login":"dev"},"labels":[],"created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z","pull_request":null}]`,
 		},
 	}
 	defer func() { wsHTTPClient = origClient }()
@@ -1161,13 +1160,57 @@ func TestHandler_EngineTeamSet_Success(t *testing.T) {
 	projectDir := setupWSProject(t)
 	conn, cleanup := openWSTestConnection(t, projectDir)
 	defer cleanup()
+
+	t.Setenv("ENGINE_MODEL_PROVIDER", "")
+	t.Setenv("ENGINE_MODEL", "")
+
+	engineDir := projectDir + "/.engine"
+	if err := os.MkdirAll(engineDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	configYAML := "teams:\n  fast:\n    orchestrator:\n      model: \"ollama:llama3\"\n"
+	if err := os.WriteFile(engineDir+"/config.yaml", []byte(configYAML), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	writeWSMessage(t, conn, map[string]any{
+		"type": "project.open",
+		"path": projectDir,
+	})
+	readWSMessageOfType(t, conn, "session.created")
+
 	writeWSMessage(t, conn, map[string]any{
 		"type":     "engine.team.set",
 		"team":     "fast",
-		"provider": "ollama",
-		"model":    "llama3",
+		"provider": "openai",
+		"model":    "ignore-me",
 	})
 	readWSMessageOfType(t, conn, "engine.team.updated")
+
+	if got := os.Getenv("ENGINE_MODEL_PROVIDER"); got != "ollama" {
+		t.Fatalf("expected ENGINE_MODEL_PROVIDER ollama, got %q", got)
+	}
+	if got := os.Getenv("ENGINE_MODEL"); got != "llama3" {
+		t.Fatalf("expected ENGINE_MODEL llama3, got %q", got)
+	}
+}
+
+func TestHandler_EngineTeamSet_UnknownTeamConfigReturnsError(t *testing.T) {
+	projectDir := setupWSProject(t)
+	conn, cleanup := openWSTestConnection(t, projectDir)
+	defer cleanup()
+
+	writeWSMessage(t, conn, map[string]any{
+		"type": "project.open",
+		"path": projectDir,
+	})
+	readWSMessageOfType(t, conn, "session.created")
+
+	writeWSMessage(t, conn, map[string]any{
+		"type": "engine.team.set",
+		"team": "fast",
+	})
+	readWSMessageOfType(t, conn, "error")
 }
 
 func TestHandler_EngineTeamSet_ResolveFromConfigWhenProviderAndModelMissing(t *testing.T) {

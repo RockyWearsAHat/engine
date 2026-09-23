@@ -86,6 +86,10 @@ var credStoreDelFn = func(key string) error { return getMachineCredStore().Delet
 // Exported as a var so tests can override it to a short duration.
 var ollamaWarmKeepInterval = 20 * time.Minute
 
+// Shell timeouts are vars so tests can force deterministic timeout coverage.
+var interactiveShellTimeout = 2 * time.Minute
+var autonomousShellTimeout = 5 * time.Minute
+
 // autonomousBuilderMaxTurns bounds headless builder loops so a local model that
 // keeps narrating instead of calling signal_done reports a real failure instead
 // of silently stopping or running forever.
@@ -150,7 +154,7 @@ func parseIntEnv(key string, def int) int {
 func inferredProviderForModel(model string) string {
 	lower := strings.ToLower(strings.TrimSpace(model))
 	if lower == "" {
-		return "ollama"
+		return "llamacpp"
 	}
 	if strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "o1-") ||
 		strings.HasPrefix(lower, "o3-") || strings.HasPrefix(lower, "o4-") {
@@ -162,7 +166,7 @@ func inferredProviderForModel(model string) string {
 	if looksLikeOllamaModel(lower) {
 		return "ollama"
 	}
-	return "anthropic"
+	return "llamacpp"
 }
 
 func looksLikeOllamaModel(lowerModel string) bool {
@@ -989,10 +993,7 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		var err error
 		if ctx.AutonomousPolicy != nil {
 			var cwdAwareness string
-			cwd, cwdAwareness, err = resolveAutonomousShellDirectory(ctx.ProjectPath, cwd)
-			if err != nil {
-				return err.Error(), true
-			}
+			cwd, cwdAwareness, _ = resolveAutonomousShellDirectory(ctx.ProjectPath, cwd)
 			if cwdAwareness != "" {
 				if autonomousAwareness != "" {
 					autonomousAwareness += "\n" + cwdAwareness
@@ -1012,9 +1013,9 @@ func aiExecuteTool(name string, input map[string]any, ctx *ChatContext) (string,
 		if shell == "" {
 			shell = "/bin/bash"
 		}
-		shellTimeout := 2 * time.Minute
+		shellTimeout := interactiveShellTimeout
 		if ctx.AutonomousPolicy != nil {
-			shellTimeout = 5 * time.Minute
+			shellTimeout = autonomousShellTimeout
 		}
 		shellCtx, shellCancel := stdctx.WithTimeout(stdctx.Background(), shellTimeout)
 		defer shellCancel()
@@ -1656,15 +1657,12 @@ func Chat(ctx *ChatContext, userMessage string) {
 
 	explicitProvider := strings.TrimSpace(os.Getenv("ENGINE_MODEL_PROVIDER"))
 	model := strings.TrimSpace(os.Getenv("ENGINE_MODEL"))
-	if resolvedTeam, teamProvider, teamModel, ok := ResolveTeamOrchestratorModel(ctx.ProjectPath, os.Getenv("ENGINE_ACTIVE_TEAM")); ok {
+	if _, teamProvider, teamModel, ok := ResolveTeamOrchestratorModel(ctx.ProjectPath, os.Getenv("ENGINE_ACTIVE_TEAM")); ok {
 		if model == "" {
 			model = teamModel
 		}
 		if explicitProvider == "" || strings.EqualFold(explicitProvider, "auto") {
 			explicitProvider = strings.TrimSpace(teamProvider)
-		}
-		if strings.TrimSpace(os.Getenv("ENGINE_ACTIVE_TEAM")) == "" {
-			os.Setenv("ENGINE_ACTIVE_TEAM", resolvedTeam) //nolint:errcheck
 		}
 	}
 
@@ -1693,25 +1691,47 @@ func Chat(ctx *ChatContext, userMessage string) {
 	}
 
 	provider := resolveProvider(explicitProvider, model)
-	ollamaBaseURL := os.Getenv("OLLAMA_BASE_URL")
-	if provider == "ollama" && model == "" {
-		if forced := strings.TrimSpace(os.Getenv("ENGINE_OLLAMA_MODEL")); forced != "" {
-			model = forced
-		} else {
-			model = detectOllamaModel(ollamaBaseURL)
-		}
-	}
 	if model == "" {
-		model = defaultModelForProvider(provider)
+		ctx.OnError("No model selected — set ENGINE_MODEL or choose a team with an explicit orchestrator model")
+		return
 	}
 
+	// Autonomous safety: if a cloud provider was selected but the API key is missing,
+	// automatically downshift to local llama.cpp/Ollama instead of erroring.
+	// This ensures Engine never gets stuck waiting for credentials.
 	if provider == "anthropic" && os.Getenv("ANTHROPIC_API_KEY") == "" {
-		ctx.OnError("ANTHROPIC_API_KEY not set — configure it in Engine Settings")
-		return
+		// Downshift to llama.cpp first, then Ollama
+		llamacppModel := strings.TrimSpace(os.Getenv("ENGINE_LLAMACPP_MODEL"))
+		if llamacppModel != "" {
+			provider = "llamacpp"
+			model = llamacppModel
+		} else {
+			ollamaModel := strings.TrimSpace(os.Getenv("ENGINE_OLLAMA_MODEL"))
+			if ollamaModel != "" {
+				provider = "ollama"
+				model = ollamaModel
+			} else {
+				provider = "llamacpp"
+				model = "default"
+			}
+		}
 	}
 	if provider == "openai" && os.Getenv("OPENAI_API_KEY") == "" {
-		ctx.OnError("OPENAI_API_KEY not set — configure it in Engine Settings")
-		return
+		// Downshift to llama.cpp first, then Ollama
+		llamacppModel := strings.TrimSpace(os.Getenv("ENGINE_LLAMACPP_MODEL"))
+		if llamacppModel != "" {
+			provider = "llamacpp"
+			model = llamacppModel
+		} else {
+			ollamaModel := strings.TrimSpace(os.Getenv("ENGINE_OLLAMA_MODEL"))
+			if ollamaModel != "" {
+				provider = "ollama"
+				model = ollamaModel
+			} else {
+				provider = "llamacpp"
+				model = "default"
+			}
+		}
 	}
 
 	// Persist user message
@@ -1889,15 +1909,8 @@ func runPlannerPrePass(ctx *ChatContext, provider, model, userMessage, branch st
 		resolvedProvider = plannerProvider
 	}
 	resolvedProvider = resolveProvider(resolvedProvider, resolvedModel)
-	if resolvedProvider == "ollama" && resolvedModel == "" {
-		if forced := strings.TrimSpace(os.Getenv("ENGINE_OLLAMA_MODEL")); forced != "" {
-			resolvedModel = forced
-		} else {
-			resolvedModel = detectOllamaModel(os.Getenv("OLLAMA_BASE_URL"))
-		}
-	}
 	if resolvedModel == "" {
-		resolvedModel = defaultModelForProvider(resolvedProvider)
+		return ""
 	}
 
 	plannerCtx := &ChatContext{

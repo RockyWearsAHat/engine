@@ -30,6 +30,7 @@ const startTimeMs = Date.now();
 
 let projectProfile = null;
 const profileCachePath = path.join(repoRoot, '.cache', 'project-profile.json');
+const engineWebPort = Number.parseInt(process.env.ENGINE_WEB_PORT ?? '24445', 10);
 try {
   const raw = fs.readFileSync(profileCachePath, 'utf8');
   projectProfile = JSON.parse(raw);
@@ -59,8 +60,8 @@ function inferProfileFromWorkspace() {
       verification: {
         usesPlaywright: true,
         startCmd: hasClientDir ? 'pnpm --filter @engine/client dev' : (rootPkg?.scripts?.dev ? 'pnpm dev' : 'pnpm start'),
-        checkURL: 'http://localhost:5173',
-        port: 5173,
+        checkURL: `http://localhost:${engineWebPort}`,
+        port: engineWebPort,
         checkCmds: [],
       },
     };
@@ -111,8 +112,8 @@ if (!projectProfile) {
 // Derive client URL and whether Playwright should run from the profile.
 function resolveVerification() {
   if (!projectProfile) {
-    // Engine-own fallback: port 5173 Vite dev server, Playwright check.
-    return { usesPlaywright: true, clientUrl: `http://localhost:5173`, startFilter: '@engine/client' };
+    // Engine-own fallback: port 24445 Vite dev server, Playwright check.
+    return { usesPlaywright: true, clientUrl: `http://localhost:${engineWebPort}`, startFilter: '@engine/client' };
   }
   const v = projectProfile.verification ?? {};
   const port = v.port || 3000;

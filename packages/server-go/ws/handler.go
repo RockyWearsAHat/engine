@@ -270,7 +270,6 @@ func newConn(ws *websocket.Conn, projectPath string) *conn {
 	}
 }
 
-
 // send marshals and writes a message to the WebSocket client (thread-safe).
 // Returns silently if the connection has already been closed.
 func (c *conn) send(v any) {
@@ -903,7 +902,6 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 		_ = json.Unmarshal(raw, &msg)
 		c.handleDiscordHistoryRecent(msg.ProjectPath, msg.ThreadID, msg.Since, msg.Limit)
 
-
 	// ── Remote pairing ─────────────────────────────────────────────────────────────────────────────
 
 	case "remote.pair.code.generate":
@@ -1050,15 +1048,24 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			c.sendErr("Bad payload", "BAD_PAYLOAD")
 			return
 		}
-		if strings.TrimSpace(msg.Team) != "" && (strings.TrimSpace(msg.Provider) == "" || strings.TrimSpace(msg.Model) == "") {
-			_, resolvedProvider, resolvedModel, ok := ai.ResolveTeamOrchestratorModel(projectPath, msg.Team)
-			if ok {
-				if strings.TrimSpace(msg.Provider) == "" {
-					msg.Provider = resolvedProvider
-				}
-				if strings.TrimSpace(msg.Model) == "" {
-					msg.Model = resolvedModel
-				}
+		teamName := strings.TrimSpace(msg.Team)
+		if teamName != "" {
+			_, resolvedProvider, resolvedModel, ok := ai.ResolveTeamOrchestratorModel(projectPath, teamName)
+			if !ok {
+				c.sendErr("Unknown team or missing orchestrator model in .engine/config.yaml", "TEAM_CONFIG_ERROR")
+				return
+			}
+			// Server is authoritative: selecting a team must apply that team's
+			// orchestrator runtime, not a caller-provided provider/model pair.
+			msg.Provider = resolvedProvider
+			msg.Model = resolvedModel
+		}
+		if teamName == "" {
+			hasProvider := strings.TrimSpace(msg.Provider) != ""
+			hasModel := strings.TrimSpace(msg.Model) != ""
+			if hasProvider != hasModel {
+				c.sendErr("provider and model must be set together when team is omitted", "BAD_PAYLOAD")
+				return
 			}
 		}
 		if strings.TrimSpace(msg.Provider) != "" {
@@ -1074,7 +1081,6 @@ func (c *conn) dispatch(msgType string, raw []byte) {
 			"type": "engine.team.updated",
 			"team": msg.Team,
 		})
-
 
 	// ── Test Observer ─────────────────────────────────────────────────────────
 
@@ -1426,9 +1432,9 @@ func fetchGitHubIssues(owner, repo string) ([]githubIssue, error) {
 			Name  string `json:"name"`
 			Color string `json:"color"`
 		} `json:"labels"`
-		CreatedAt   string      `json:"created_at"`
-		UpdatedAt   string      `json:"updated_at"`
-		PullRequest any `json:"pull_request"`
+		CreatedAt   string `json:"created_at"`
+		UpdatedAt   string `json:"updated_at"`
+		PullRequest any    `json:"pull_request"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, err

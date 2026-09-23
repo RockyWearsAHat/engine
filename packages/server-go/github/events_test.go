@@ -19,8 +19,10 @@ func makeWatcher(monitor *RepoMonitor) *EventsWatcher {
 	return &EventsWatcher{
 		token:   "test",
 		monitor: monitor,
+		startedAt: time.Now().UTC(),
 		seen:    map[string]bool{},
 		processed: map[string]bool{},
+		processedIssueComments: map[int64]bool{},
 		tickFn:  func(_ time.Duration) <-chan time.Time { ch := make(chan time.Time, 1); ch <- time.Now(); return ch },
 		loginFn: func(_ string) (string, error) { return "testuser", nil },
 		listReposFn: func(_ string, _ int) ([]UserRepo, error) {
@@ -1034,5 +1036,79 @@ func TestEventsWatcher_DispatchIssueCommentEvent_SelfComment_Skips(t *testing.T)
 	makeWatcher(monitor).dispatchIssueCommentEvent("alice/myrepo", json.RawMessage(`{"action":"created","issue":{"number":1},"comment":{"body":"x","user":{"login":"engine-bot"}}}`))
 	if fired {
 		t.Fatal("expected no dispatch for self-authored comment")
+	}
+}
+
+func TestEventsWatcher_DispatchIssueCommentEvent_DedupesCommentID(t *testing.T) {
+	monitor := NewRepoMonitor()
+	fired := 0
+	monitor.OnIssueComment = func(_ json.RawMessage) { fired++ }
+
+	w := makeWatcher(monitor)
+	payload := json.RawMessage(`{"action":"created","issue":{"number":1},"comment":{"id":98765,"body":"@engine look","created_at":"2099-01-01T00:00:00Z","user":{"login":"alice"}}}`)
+	w.dispatchIssueCommentEvent("alice/myrepo", payload)
+	w.dispatchIssueCommentEvent("alice/myrepo", payload)
+
+	if fired != 1 {
+		t.Fatalf("expected exactly one dispatch for duplicate comment id, got %d", fired)
+	}
+}
+
+func TestEventsWatcher_DispatchIssueCommentEvent_StaleCommentSkipped(t *testing.T) {
+	monitor := NewRepoMonitor()
+	fired := 0
+	monitor.OnIssueComment = func(_ json.RawMessage) { fired++ }
+
+	w := makeWatcher(monitor)
+	w.startedAt = time.Now().UTC()
+	payload := json.RawMessage(`{"action":"created","issue":{"number":1},"comment":{"id":1234,"body":"@engine old","created_at":"2000-01-01T00:00:00Z","user":{"login":"alice"}}}`)
+	w.dispatchIssueCommentEvent("alice/myrepo", payload)
+
+	if fired != 0 {
+		t.Fatalf("expected stale comment to be skipped, got %d dispatches", fired)
+	}
+}
+
+func TestEventsWatcher_MarkIssueCommentProcessed_ZeroIDAndLazyInit(t *testing.T) {
+	w := &EventsWatcher{}
+	if !w.markIssueCommentProcessed(0) {
+		t.Fatal("expected zero comment ID to be accepted")
+	}
+	if !w.markIssueCommentProcessed(123) {
+		t.Fatal("expected first non-zero comment ID to be accepted")
+	}
+	if w.processedIssueComments == nil || !w.processedIssueComments[123] {
+		t.Fatalf("expected lazy map init to store comment ID, got %#v", w.processedIssueComments)
+	}
+}
+
+func TestEventsWatcher_MarkIssueCommentProcessed_EvictsOldestWhenFull(t *testing.T) {
+	w := &EventsWatcher{
+		processedIssueComments: make(map[int64]bool),
+	}
+	for i := 0; i < maxProcessedIssueCommentIDs; i++ {
+		id := int64(i + 1)
+		w.processedIssueComments[id] = true
+		w.processedIssueCommentOrder = append(w.processedIssueCommentOrder, id)
+	}
+	if !w.markIssueCommentProcessed(999999) {
+		t.Fatal("expected new comment ID to be accepted")
+	}
+	if w.processedIssueComments[1] {
+		t.Fatal("expected oldest comment ID to be evicted")
+	}
+	if !w.processedIssueComments[999999] {
+		t.Fatal("expected newest comment ID to be retained")
+	}
+}
+
+func TestEventsWatcher_IsFreshIssueComment_ZeroStartAndBadTimestamp(t *testing.T) {
+	w := &EventsWatcher{}
+	if !w.isFreshIssueComment("2000-01-01T00:00:00Z") {
+		t.Fatal("expected zero startedAt to treat comment as fresh")
+	}
+	w.startedAt = time.Now().UTC()
+	if !w.isFreshIssueComment("not-a-timestamp") {
+		t.Fatal("expected invalid timestamp to be treated as fresh")
 	}
 }

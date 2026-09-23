@@ -847,12 +847,18 @@ export default function PreferencesPanel() {
                   style={inputStyle}
                 >
                   <option value="auto">Auto</option>
-                  <option value="anthropic">Anthropic</option>
-                  <option value="openai">OpenAI</option>
+                  {anthropicInput && <option value="anthropic">Anthropic</option>}
+                  {openaiInput && <option value="openai">OpenAI</option>}
                   <option value="ollama">Ollama</option>
                   <option value="llamacpp">llama.cpp</option>
+                  {!anthropicInput && !openaiInput && (
+                    <option value="anthropic" disabled title="Set ANTHROPIC_API_KEY to enable">Anthropic (no key)</option>
+                  )}
+                  {!anthropicInput && !openaiInput && (
+                    <option value="openai" disabled title="Set OPENAI_API_KEY to enable">OpenAI (no key)</option>
+                  )}
                 </select>
-                <span className="preferences-muted">Auto now infers Ollama for local model names like gemma, llama, qwen, and tagged models such as gemma4:31b.</span>
+                <span className="preferences-muted">Auto now infers Ollama for local model names like gemma, llama, qwen, and tagged models such as gemma4:31b. Cloud providers (Anthropic, OpenAI) require valid API keys.</span>
               </label>
               <label className="preferences-field">
                 <span className="preferences-label">Preferred model</span>

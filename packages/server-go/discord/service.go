@@ -84,6 +84,7 @@ var guildLeaveFn = func(dg *discordgo.Session, guildID string) error {
 type Service struct {
 	cfg             Config
 	project         string
+	lifecycleMu     sync.Mutex
 	dg              *discordgo.Session
 	stateMu         sync.RWMutex
 	state           persistedState
@@ -244,13 +245,30 @@ func NewService(cfg Config, projectPath string) (*Service, error) {
 
 // Start opens the Discord gateway and registers handlers.
 func (s *Service) Start() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+
 	if !s.cfg.Enabled {
 		return nil
+	}
+	if s.dg != nil {
+		// Already connected for this process; do not reopen the gateway.
+		return nil
+	}
+
+	// Validate token format before attempting connection. Discord bot tokens have
+	// a minimum length. Attempting to connect with invalid tokens causes aggressive
+	// reconnection loops that can trigger API rate limiting.
+	if len(s.cfg.BotToken) < 50 {
+		return fmt.Errorf("discord bot token is too short (expected ~70 chars, got %d)", len(s.cfg.BotToken))
 	}
 
 	dg, _ := discordgo.New("Bot " + s.cfg.BotToken)
 
 	dg.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentMessageContent
+	// Disable automatic reconnection to prevent aggressive retry loops on invalid tokens.
+	// We handle reconnection manually via Reload() if needed.
+	dg.ShouldReconnectOnError = false
 	dg.AddHandler(s.onReady)
 	dg.AddHandler(s.onMessage)
 
@@ -267,10 +285,15 @@ func (s *Service) Start() error {
 
 // Close shuts down the Discord session.
 func (s *Service) Close() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+
 	if s.dg == nil {
 		return nil
 	}
-	return s.dg.Close()
+	err := s.dg.Close()
+	s.dg = nil
+	return err
 }
 
 // LeaveGuild forces the bot to leave a guild. If guildID is empty it falls
@@ -1941,15 +1964,73 @@ func Validate(cfg Config) ValidationResult {
 // Reload swaps in a new configuration and reopens the gateway if needed.
 // Callers must hold no references to the prior session.
 func (s *Service) Reload(cfg Config) error {
-	_ = s.Close()
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+
+	if sameConfig(s.cfg, cfg) {
+		// No runtime/config drift, keep current gateway session untouched.
+		s.cfg = cfg
+		return nil
+	}
+
+	if s.dg != nil {
+		_ = s.dg.Close()
+		s.dg = nil
+	}
 	s.cfg = cfg
 	if cfg.Enabled {
 		if err := s.loadState(); err != nil {
 			return err
 		}
-		return s.Start()
+
+		// Inline Start() logic while holding lifecycle lock to prevent concurrent
+		// reload/start races from creating repeated gateway sessions.
+		if len(s.cfg.BotToken) < 50 {
+			return fmt.Errorf("discord bot token is too short (expected ~70 chars, got %d)", len(s.cfg.BotToken))
+		}
+
+		dg, _ := discordgo.New("Bot " + s.cfg.BotToken)
+		dg.Identify.Intents = discordgo.IntentsGuilds | discordgo.IntentsGuildMessages | discordgo.IntentMessageContent
+		dg.ShouldReconnectOnError = false
+		dg.AddHandler(s.onReady)
+		dg.AddHandler(s.onMessage)
+
+		s.dg = dg
+		if err := dg.Open(); err != nil {
+			s.dg = nil
+			return fmt.Errorf("discord open: %w", err)
+		}
+		log.Printf("[engine-discord] connected (guild=%s, prefix=%s)", s.cfg.GuildID, s.cfg.CommandPrefix)
+		return nil
 	}
 	return nil
+}
+
+func sameConfig(a, b Config) bool {
+	if a.Enabled != b.Enabled {
+		return false
+	}
+	if strings.TrimSpace(a.BotToken) != strings.TrimSpace(b.BotToken) {
+		return false
+	}
+	if strings.TrimSpace(a.GuildID) != strings.TrimSpace(b.GuildID) {
+		return false
+	}
+	if strings.TrimSpace(a.CommandPrefix) != strings.TrimSpace(b.CommandPrefix) {
+		return false
+	}
+	if strings.TrimSpace(a.ControlChannelName) != strings.TrimSpace(b.ControlChannelName) {
+		return false
+	}
+	if len(a.AllowedUsers) != len(b.AllowedUsers) {
+		return false
+	}
+	for id := range a.AllowedUsers {
+		if !b.AllowedUsers[id] {
+			return false
+		}
+	}
+	return true
 }
 
 // SearchHistory is the public entry for WS/agent callers. It enforces bounded
