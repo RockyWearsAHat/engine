@@ -1,0 +1,211 @@
+{
+  "ProjectPath": "/Users/alexwaldmann/Desktop/MyEditor",
+  "Owner": "",
+  "Repo": "",
+  "Brief": "You are preparing the project at /Users/alexwaldmann/Desktop/MyEditor for autonomous work. Before SARA starts dispatching worklist items to you and others, verify and document:\n\n1. **Environment**: The project builds and runs cleanly in isolation. Check PATH, credentials (.env if needed), system dependencies, installed packages.\n2. **Credentials \u0026 Secrets**: Any API keys, GitHub tokens, or credentials needed are in place and working. Verify with a quick test if possible.\n3. **Build System**: The build (npm install, cargo build, poetry install, etc.) completes without errors. Document the build command.\n4. **Test Suite**: Run the existing test suite if one exists. Fix any pre-existing failures (they block detection of new breakage).\n5. **Development Setup**: Editor config, linters, formatters, git hooks all working. Commit setup changes if any were needed.\n6. **Documentation**: index.dx or README clearly states:\n   - How to build and test this project\n   - Where to find the actual code entry points\n   - What the main moving parts are\n   - Any project-specific rules or conventions\n\nDo not implement features or fix bugs — setup is verification only. If something is broken or unclear, fix it enough that the next worker gets a clean slate. Commit your work (or note what you could not fix). When done, say \"Setup complete\" to mark this project ready.",
+  "requirements": {
+    "prd": "",
+    "design": "",
+    "module_index": "# Module Index — updated 2026-08-25\n\n| Path | Purpose | Public Interface | Critical | Notes |\n|---|---|---|---|---|\n| packages/server-go (root) | HTTP/WS entrypoint wiring: routes, autonomous repo scaffolding, Discord/GitHub bootstrap | main(), run(), /ws, /health, /quota, /quota/rate, /webhook/github | yes | main.go is a large init/wiring god-file; shallow route handlers inline business logic |\n| packages/server-go/task_api.go (task_api.go) | In-memory task registry and REST surface for starting/cancelling/listing autonomous build tasks | engineTask, taskRegistry, startTask, /task, /task/cancel, /levers | yes | Task state lives only in-memory (no persistence layer) — leaky coupling to db/ai packages |\n| packages/server-go/ai | Orchestrator brain: intake→plan→execute→review→validate pipeline, providers, teams, quota-aware routing, memory/critic loop | NewHandle, OrchestratorHandle.{Stop,Pause,Resume,Redirect}, RunAutonomousProject, OrchestratorConfig, roles/team_dispatcher, provider.go | yes | Largest module by far (~70 files); orchestrator.go/orchestrator_*.go split is wide but still tightly coupled — candidate for sub-package boundaries (intake, gates, dispatch) |\n| packages/server-go/db | SQLite persistence: sessions, messages, learning events, memory ledger/residuals, usage dashboard, Discord message log | Open/New (db.go), Session, Message, LearningEvent, MemoryLedgerEvent, MemoryResidualNode/Edge, ProjectProfile, DiscordMessage | yes | Persistence layer; db.go is large and mixes many unrelated record types in one file |\n| packages/server-go/quota | Multi-account Claude subscription quota tracking, efficiency ledger, model-config recommendation | Registry, Account, Identity, Ledger, NewLedger, Ledger.{Record,Stat,Recommend,Report}, Candidates, Plan.Apply | yes | Recent commit history shows active correctness work on quota-reading attribution (single-run responsibility) — watch for regressions here |\n| packages/server-go/github | GitHub REST/OAuth client, repo event monitor/dedup, Projects V2 engagement, device-code identity | Client, NewClient(WithToken), Issue/PR/Comment types, EventsWatcher, RepoMonitor, ProfilePoller, webhook.go | yes | github.go and service files carry both API client and business logic (identity, engagement) — could split client vs. policy |\n| packages/server-go/discord | Discord bot: control commands, issue bridge to GitHub, session-bound project bindings | NewService, Service, Config, ProjectBinding, ValidationResult | yes | service.go is 2000+ lines — single file owns config, bridge, validation, commands; deepen/split candidate |\n| packages/server-go/mesh | LAN/local model mesh: inference request routing, exec, health across peer nodes | NewServer, NewClient, InferenceRequest/Response, Config, Peer, ExecRequest/Response | no | — |\n| packages/server-go/remote | Remote pairing/auth server for desktop↔server connections (TLS, keychain-backed tokens) | NewServer, NewAuthManager, NewPairingManager, NewKeychainStore, /pair, /refresh | yes | Handles auth tokens/keychain — security-sensitive; keep in sync with vpn/ trust model |\n| packages/server-go/vpn | Peer-to-peer VPN tunnel: identity, trust store, pairing/device revoke | LoadOrCreateIdentity, NewTrustStore, TrustStore.{AddDevice,RemoveDevice,IsTrusted}, NewTunnel, Tunnel.RegisterRoutes | yes | Overlaps conceptually with remote/ auth — two separate trust mechanisms, worth documenting the boundary |\n| packages/server-go/ws | WebSocket hub: per-connection protocol handler, offline message queue, Discord/llama-fleet bridges | NewHub, Hub.ServeWS, OfflineQueue | yes | handler.go is very large (2000+ lines) — the leakiest module in the tree, mixes protocol parsing with feature logic |\n| packages/server-go/fs | Filesystem read/write/tree/search helpers used by editor and orchestrator | ReadFile, WriteFile, GetTree, SearchFiles, SearchMatches, DetectLanguage | no | — |\n| packages/server-go/git | Git CLI wrapper: status/diff/log/commit/branch/worktree operations | GetStatus, GetDiff, GetLog, Commit, CreateWorktree, ListWorktrees, ResolveGitHubRepo, RunGit | no | — |\n| packages/server-go/workspace | Multi-repo registry and task auto-detection (npm/cargo/go scripts) | LoadRegistry, AddToRegistry, RemoveFromRegistry, DetectTasks | no | — |\n| packages/server-go/quality | Static code-quality scanner: duplication, complexity, doc-coverage, dead-code heuristics | ScanProject, ScanProjectWithProgress, RefreshProjectIndex, Report, Issue | no | report.go is a 2000+ line monolith covering parsing, indexing, and a dozen rule checks — prime deepening target |\n| packages/server-go/terminal | PTY/terminal session manager (platform-split: unix vs windows) | NewManager, Manager, Terminal | no | — |\n| packages/server-go/runtimecfg | Per-project runtime settings load/patch (JSON on disk) | Load, Apply, Settings, Patch | no | — |\n| packages/server-go/cmd/enginedemo | Manual CLI harness to exercise the full autonomous orchestrator end-to-end against a real provider | main() (env-var driven) | no | Dev/debug tool, not part of the served app |\n| packages/client/src | Editor React app: file tree, editor, terminal, AI chat, agent panel, WS bridge to server | App, bridge, useStore, wsClient, WSClient | no | store/index.ts is a single large Zustand store backing most panels — fine for now but growing |\n| packages/client/src/ws/client.ts | Typed WebSocket client wrapping the server protocol for the React app | WSClient, wsClient, RemoteConfig | no | — |\n| packages/client/src/store | Global app state (open files, chat messages, tool-call display, UI state) | useStore, ChatMessage, OpenFile, ToolCallDisplay | no | — |\n| packages/shared/src | Shared TS types between client and (conceptually) server contracts | Session, Message, ToolCall, FileNode, FileContent, ApprovalRequest, SearchResult | no | Types are hand-duplicated against Go structs (no codegen) — drift risk between db.go and index.ts |\n| packages/desktop-tauri/src-tauri | Tauri desktop shell wrapping the client + Go server as a native app | Rust `main`, tauri commands (src/) | no | Not scanned in depth this pass — thin wrapper, low risk |\n| scripts | Build/dev/CI automation: Go build, llama-fleet router, coverage, completion gates, Obsidian sync | build-go.mjs, llama-fleet.sh, llama-router.mjs, coverage-all.mjs, verify-build.sh | no | Automation, not shipped code |"
+  },
+  "plan": [
+    {
+      "index": 1,
+      "title": "**Go module and core import verification**",
+      "body": "packages/server-go/go.mod + create packages/server-go/core_test.go with TestCorePackages\nTest that orchestrator, db, quota, github, discord packages import cleanly and core handle initializes. Fail if any circular imports or missing dependencies in go.mod. Fix by adding missing requires or resolving cycles.",
+      "acceptance": "`go test ./packages/server-go -run TestCorePackages -v` passes",
+      "done": false,
+      "attempts": 0,
+      "updatedAt": "2026-08-30T02:02:39Z"
+    },
+    {
+      "index": 2,
+      "title": "**Shared TypeScript types scaffold and compilation**",
+      "body": "packages/shared/package.json + packages/shared/tsconfig.json + packages/shared/src/index.ts\nVerify tsconfig, run TypeScript compiler on shared types (Session, Message, ToolCall, FileNode, etc.), fix any TS errors blocking client/server type contracts.",
+      "acceptance": "`cd packages/shared \u0026\u0026 npm ci \u0026\u0026 npm run tsc --noEmit` exits 0",
+      "done": false,
+      "attempts": 0,
+      "updatedAt": "2026-08-30T02:02:39Z"
+    },
+    {
+      "index": 3,
+      "title": "**Client React app package build**",
+      "body": "packages/client/package.json + packages/client/tsconfig.json\nInstall client dependencies, verify React build script compiles src/, output dist/ or build/ artifact.",
+      "acceptance": "`cd packages/client \u0026\u0026 npm ci \u0026\u0026 npm run build` completes, artifact generated",
+      "done": false,
+      "attempts": 0,
+      "updatedAt": "2026-08-30T02:02:39Z"
+    },
+    {
+      "index": 4,
+      "title": "**Tauri desktop app Rust scaffold**",
+      "body": "packages/desktop-tauri/src-tauri/Cargo.toml\nVerify cargo check passes, Rust toolchain (rustc --version) available, no blocking build errors.",
+      "acceptance": "`cd packages/desktop-tauri/src-tauri \u0026\u0026 cargo check` exits 0",
+      "done": false,
+      "attempts": 0,
+      "updatedAt": "2026-08-30T02:02:39Z"
+    },
+    {
+      "index": 5,
+      "title": "**Environment and secrets documentation**",
+      "body": ".env.example (create if missing) + packages/server-go/main.go (env setup code)\nDocument required keys: GITHUB_TOKEN, DISCORD_TOKEN, ANTHROPIC_API_KEY, PORT, ENGINE_PORT. Ensure .env not in git. Add .gitignore entry.",
+      "acceptance": "`grep -c \"GITHUB_TOKEN\\|DISCORD_TOKEN\\|ANTHROPIC_API_KEY\" .env.example` is ≥3, `git ls-files .env` is empty",
+      "done": false,
+      "attempts": 0,
+      "updatedAt": "2026-08-30T02:02:39Z"
+    },
+    {
+      "index": 6,
+      "title": "**Go test suite execution**",
+      "body": "packages/server-go/*_test.go (all existing tests)\nRun full test suite, identify and fix pre-existing failures unrelated to setup.",
+      "acceptance": "`go test ./packages/server-go/... -v 2\u003e\u00261 | tail -5` shows passing count, no failures",
+      "done": false,
+      "attempts": 0,
+      "updatedAt": "2026-08-30T02:02:39Z"
+    },
+    {
+      "index": 7,
+      "title": "**Go build compilation**",
+      "body": "packages/server-go/cmd/engine-server/main.go (or equivalent entry)\nCompile server binary, output to bin/, verify no linker errors.",
+      "acceptance": "`go build -o bin/engine-server ./packages/server-go/cmd/engine-server \u0026\u0026 file bin/engine-server | grep executable` succeeds",
+      "done": false,
+      "attempts": 0,
+      "updatedAt": "2026-08-30T02:02:39Z"
+    },
+    {
+      "index": 8,
+      "title": "**Linter and formatter pass**",
+      "body": "packages/server-go (all .go) + packages/client/src (all .ts/.tsx)\nRun golangci-lint on Go, eslint/prettier on TypeScript, fix pre-existing violations.",
+      "acceptance": "`golangci-lint run ./packages/server-go/... 2\u003e\u00261 | grep -c \"error\"` is 0, client lint exits 0",
+      "done": false,
+      "attempts": 0,
+      "updatedAt": "2026-08-30T02:02:39Z"
+    },
+    {
+      "index": 9,
+      "title": "**Git hooks and pre-commit setup**",
+      "body": ".git/hooks or .husky/ + package.json (if using husky)\nVerify pre-commit hook installed, runs linters/tests before commit.",
+      "acceptance": "`git hook list | grep pre-commit` shows hook installed, `git commit --allow-empty -m test` triggers hook",
+      "done": false,
+      "attempts": 0,
+      "updatedAt": "2026-08-30T02:02:39Z"
+    },
+    {
+      "index": 10,
+      "title": "**Full end-to-end local boot and integration**",
+      "body": "packages/server-go/cmd/engine-server/main.go + packages/client/src/App.tsx\nStart server (go run or bin/engine-server), client connects via WS, /health endpoint responds 200, no panics in logs.",
+      "acceptance": "`go run ./packages/server-go/cmd/engine-server \u0026` \u0026\u0026 `sleep 2 \u0026\u0026 curl http://localhost:5173/health` returns 200 OK",
+      "done": false,
+      "attempts": 0,
+      "updatedAt": "2026-08-30T02:02:39Z"
+    },
+    {
+      "index": 11,
+      "title": "**Tauri desktop app native build and launch**",
+      "body": "packages/desktop-tauri/src-tauri/Cargo.toml + packages/desktop-tauri/src-tauri/src/main.rs\nBuild Tauri app (npm run tauri build), verify .dmg/.exe/.AppImage artifact generated, app launches without crash.",
+      "acceptance": "`cd packages/desktop-tauri \u0026\u0026 npm run tauri build` completes, `ls dist/ | grep -E \"dmg|exe|AppImage\"` shows artifact",
+      "done": false,
+      "attempts": 0,
+      "updatedAt": "2026-08-30T02:02:39Z"
+    },
+    {
+      "index": 12,
+      "title": "**Deploy server to staging and document live URL**",
+      "body": "packages/server-go (full project) + Dockerfile or fly.toml (create if missing)\nBuild and push server to Fly.io/Railway/Cloud Run, verify /health responds over public endpoint, document URL in .engine/live-url.txt.",
+      "acceptance": "`curl -sf https://engine-staging.fly.dev/health` returns 200, `cat .engine/live-url.txt` shows valid HTTPS URL",
+      "done": false,
+      "attempts": 0,
+      "updatedAt": "2026-08-30T02:02:39Z"
+    }
+  ],
+  "teams": {
+    "team-api-6": {
+      "id": "team-api-6",
+      "role": "api",
+      "assigned_steps": [
+        11
+      ],
+      "status": "running",
+      "depends_on": null,
+      "started_at": "2026-08-29T20:02:39.411409-06:00",
+      "completed_at": "0001-01-01T00:00:00Z"
+    },
+    "team-frontend-1": {
+      "id": "team-frontend-1",
+      "role": "frontend",
+      "assigned_steps": [
+        2
+      ],
+      "status": "running",
+      "depends_on": null,
+      "started_at": "2026-08-29T20:02:39.388794-06:00",
+      "completed_at": "0001-01-01T00:00:00Z"
+    },
+    "team-frontend-3": {
+      "id": "team-frontend-3",
+      "role": "frontend",
+      "assigned_steps": [
+        5,
+        6
+      ],
+      "status": "running",
+      "depends_on": null,
+      "started_at": "2026-08-29T20:02:39.398025-06:00",
+      "completed_at": "0001-01-01T00:00:00Z"
+    },
+    "team-frontend-5": {
+      "id": "team-frontend-5",
+      "role": "frontend",
+      "assigned_steps": [
+        10
+      ],
+      "status": "running",
+      "depends_on": null,
+      "started_at": "2026-08-29T20:02:39.407477-06:00",
+      "completed_at": "0001-01-01T00:00:00Z"
+    },
+    "team-general-0": {
+      "id": "team-general-0",
+      "role": "general",
+      "assigned_steps": [
+        0,
+        1
+      ],
+      "status": "running",
+      "depends_on": null,
+      "started_at": "2026-08-29T20:02:39.384561-06:00",
+      "completed_at": "0001-01-01T00:00:00Z"
+    },
+    "team-general-2": {
+      "id": "team-general-2",
+      "role": "general",
+      "assigned_steps": [
+        3,
+        4
+      ],
+      "status": "running",
+      "depends_on": null,
+      "started_at": "2026-08-29T20:02:39.392793-06:00",
+      "completed_at": "0001-01-01T00:00:00Z"
+    },
+    "team-general-4": {
+      "id": "team-general-4",
+      "role": "general",
+      "assigned_steps": [
+        7,
+        8,
+        9
+      ],
+      "status": "running",
+      "depends_on": null,
+      "started_at": "2026-08-29T20:02:39.403428-06:00",
+      "completed_at": "0001-01-01T00:00:00Z"
+    }
+  },
+  "outer_iterations": 1,
+  "started_at": "2026-08-29T20:01:35.873997-06:00",
+  "updated_at": "2026-08-29T20:02:39.411409-06:00",
+  "completed_at": "0001-01-01T00:00:00Z",
+  "session_id_prefix": "task-1788055295865-4f28",
+  "state_slug": "task-1788055295865-4f28"
+}

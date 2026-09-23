@@ -1,0 +1,17 @@
+You are currently using your subscription to power your Claude Code usage
+
+Current session: 35% used · resets Sep 4, 7pm (America/Denver)
+Current week (all models): 7% used · resets Sep 5, 3pm (America/Denver)
+Current week (Fable): 4% used · resets Sep 5, 3pm (America/Denver)
+
+What's contributing to your limits usage?
+Approximate, based on local sessions on this machine — does not include other devices or claude.ai. Behaviors are independent characteristics, not a breakdown.
+
+Last 24h · 29108 requests · 1308 sessions
+  99% of your usage was while 4+ sessions ran in parallel
+  Top MCP servers: dx 4%
+
+Last 7d · 70105 requests · 2209 sessions
+  87% of your usage was while 4+ sessions ran in parallel
+  Top skills: /run 1%
+  Top MCP servers: dx 1%

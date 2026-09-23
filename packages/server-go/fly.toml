@@ -1,0 +1,40 @@
+# Fly.io configuration for Engine server
+app = "engine-staging"
+primary_region = "sjc"
+
+[build]
+dockerfile = "Dockerfile"
+
+[env]
+PROJECT_PATH = "/app/projects"
+PORT = "8080"
+
+[[services]]
+internal_port = 8080
+protocol = "tcp"
+min_machines_running = 1
+
+[[services.ports]]
+port = 80
+handlers = ["http"]
+force_https = true
+
+[[services.ports]]
+port = 443
+handlers = ["tls", "http"]
+
+[services.http_checks]
+enabled = true
+interval = 10000
+timeout = 2000
+grace_period = "5s"
+method = "get"
+path = "/health"
+protocol = "http"
+tls_skip_verify = false
+headers = {}
+
+[[vm]]
+cpu_kind = "shared"
+cpus = 1
+memory_mb = 512
