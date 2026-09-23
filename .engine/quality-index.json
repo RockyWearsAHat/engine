@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "projectPath": "/Users/alexwaldmann/Desktop/MyEditor",
-  "updatedAt": "2026-06-03T06:35:51Z",
+  "projectPath": "/Users/alexwaldmann/.engine/worktrees/1780468793586981000/MyEditor",
+  "updatedAt": "2026-06-03T06:39:54Z",
   "files": {
     "packages/client/postcss.config.js": {
       "path": "packages/client/postcss.config.js",
-      "modTimeUnixNano": 1775251994266996538,
+      "modTimeUnixNano": 1780468793681538080,
       "size": 81,
       "baseName": "postcss.config",
       "isTest": false,
@@ -22,7 +22,7 @@
     },
     "packages/client/src/App.tsx": {
       "path": "packages/client/src/App.tsx",
-      "modTimeUnixNano": 1780468387227534606,
+      "modTimeUnixNano": 1780468793681805541,
       "size": 84543,
       "baseName": "app",
       "isTest": false,
@@ -10141,7 +10141,7 @@
     },
     "packages/client/src/bridge.ts": {
       "path": "packages/client/src/bridge.ts",
-      "modTimeUnixNano": 1780453141430738400,
+      "modTimeUnixNano": 1780468793681929209,
       "size": 15471,
       "baseName": "bridge",
       "isTest": false,
@@ -12109,7 +12109,7 @@
     },
     "packages/client/src/components/AI/AIChat.tsx": {
       "path": "packages/client/src/components/AI/AIChat.tsx",
-      "modTimeUnixNano": 1780465477820831422,
+      "modTimeUnixNano": 1780468793682141169,
       "size": 18625,
       "baseName": "aichat",
       "isTest": false,
@@ -14289,7 +14289,7 @@
     },
     "packages/client/src/components/AgentPanel/AgentPanel.tsx": {
       "path": "packages/client/src/components/AgentPanel/AgentPanel.tsx",
-      "modTimeUnixNano": 1777042043720077633,
+      "modTimeUnixNano": 1780468793682279003,
       "size": 8830,
       "baseName": "agentpanel",
       "isTest": false,
@@ -15313,7 +15313,7 @@
     },
     "packages/client/src/components/CommandPalette/CommandPalette.tsx": {
       "path": "packages/client/src/components/CommandPalette/CommandPalette.tsx",
-      "modTimeUnixNano": 1775375446784767639,
+      "modTimeUnixNano": 1780468793682390462,
       "size": 7272,
       "baseName": "commandpalette",
       "isTest": false,
@@ -16281,7 +16281,7 @@
     },
     "packages/client/src/components/Connections/MachineConnectionsPanel.tsx": {
       "path": "packages/client/src/components/Connections/MachineConnectionsPanel.tsx",
-      "modTimeUnixNano": 1777079362406538730,
+      "modTimeUnixNano": 1780468793682523630,
       "size": 11702,
       "baseName": "machineconnectionspanel",
       "isTest": false,
@@ -17775,7 +17775,7 @@
     },
     "packages/client/src/components/Editor/Editor.tsx": {
       "path": "packages/client/src/components/Editor/Editor.tsx",
-      "modTimeUnixNano": 1777042043765801003,
+      "modTimeUnixNano": 1780468793682670590,
       "size": 41465,
       "baseName": "editor",
       "isTest": false,
@@ -22080,7 +22080,7 @@
     },
     "packages/client/src/components/Editor/MarkdownPreview.tsx": {
       "path": "packages/client/src/components/Editor/MarkdownPreview.tsx",
-      "modTimeUnixNano": 1775375446785829393,
+      "modTimeUnixNano": 1780468793682746507,
       "size": 2201,
       "baseName": "markdownpreview",
       "isTest": false,
@@ -22445,7 +22445,7 @@
     },
     "packages/client/src/components/Editor/SyntacticalPreview.tsx": {
       "path": "packages/client/src/components/Editor/SyntacticalPreview.tsx",
-      "modTimeUnixNano": 1777012616727568082,
+      "modTimeUnixNano": 1780468793682818591,
       "size": 5893,
       "baseName": "syntacticalpreview",
       "isTest": false,
@@ -23329,7 +23329,7 @@
     },
     "packages/client/src/components/Editor/editorBuffer.ts": {
       "path": "packages/client/src/components/Editor/editorBuffer.ts",
-      "modTimeUnixNano": 1775430549995957089,
+      "modTimeUnixNano": 1780468793682889008,
       "size": 1803,
       "baseName": "editorbuffer",
       "isTest": false,
@@ -23664,7 +23664,7 @@
     },
     "packages/client/src/components/Editor/editorSyntax.ts": {
       "path": "packages/client/src/components/Editor/editorSyntax.ts",
-      "modTimeUnixNano": 1777042043720032342,
+      "modTimeUnixNano": 1780468793682955925,
       "size": 2248,
       "baseName": "editorsyntax",
       "isTest": false,
@@ -24050,7 +24050,7 @@
     },
     "packages/client/src/components/FileTree/FileTree.tsx": {
       "path": "packages/client/src/components/FileTree/FileTree.tsx",
-      "modTimeUnixNano": 1780465477777952254,
+      "modTimeUnixNano": 1780468793683177886,
       "size": 53330,
       "baseName": "filetree",
       "isTest": false,
@@ -29604,7 +29604,7 @@
     },
     "packages/client/src/components/FileTree/folderUtils.ts": {
       "path": "packages/client/src/components/FileTree/folderUtils.ts",
-      "modTimeUnixNano": 1775388432902875046,
+      "modTimeUnixNano": 1780468793683268595,
       "size": 12945,
       "baseName": "folderutils",
       "isTest": false,
@@ -30884,7 +30884,7 @@
     },
     "packages/client/src/components/Preferences/PreferencesPanel.tsx": {
       "path": "packages/client/src/components/Preferences/PreferencesPanel.tsx",
-      "modTimeUnixNano": 1780465477777527962,
+      "modTimeUnixNano": 1780468793683494596,
       "size": 52278,
       "baseName": "preferencespanel",
       "isTest": false,
@@ -36387,7 +36387,7 @@
     },
     "packages/client/src/components/Preferences/TeamSelector.tsx": {
       "path": "packages/client/src/components/Preferences/TeamSelector.tsx",
-      "modTimeUnixNano": 1776999099540448029,
+      "modTimeUnixNano": 1780468793683601514,
       "size": 11925,
       "baseName": "teamselector",
       "isTest": false,
@@ -37963,7 +37963,7 @@
     },
     "packages/client/src/components/Quality/QualityPanel.tsx": {
       "path": "packages/client/src/components/Quality/QualityPanel.tsx",
-      "modTimeUnixNano": 1780468549123640732,
+      "modTimeUnixNano": 1780468793683758932,
       "size": 5030,
       "baseName": "qualitypanel",
       "isTest": false,
@@ -38570,7 +38570,7 @@
     },
     "packages/client/src/components/StatusBar/StatusBar.tsx": {
       "path": "packages/client/src/components/StatusBar/StatusBar.tsx",
-      "modTimeUnixNano": 1775425098702995808,
+      "modTimeUnixNano": 1780468793683876850,
       "size": 6653,
       "baseName": "statusbar",
       "isTest": false,
@@ -39365,7 +39365,7 @@
     },
     "packages/client/src/components/Terminal/Terminal.tsx": {
       "path": "packages/client/src/components/Terminal/Terminal.tsx",
-      "modTimeUnixNano": 1777238201576746494,
+      "modTimeUnixNano": 1780468793684027476,
       "size": 6211,
       "baseName": "terminal",
       "isTest": false,
@@ -40232,7 +40232,7 @@
     },
     "packages/client/src/components/Usage/UsageDashboard.tsx": {
       "path": "packages/client/src/components/Usage/UsageDashboard.tsx",
-      "modTimeUnixNano": 1777221824855717530,
+      "modTimeUnixNano": 1780468793684149269,
       "size": 18111,
       "baseName": "usagedashboard",
       "isTest": false,
@@ -42490,7 +42490,7 @@
     },
     "packages/client/src/connectionProfiles.ts": {
       "path": "packages/client/src/connectionProfiles.ts",
-      "modTimeUnixNano": 1777042043725223628,
+      "modTimeUnixNano": 1780468793684236311,
       "size": 5226,
       "baseName": "connectionprofiles",
       "isTest": false,
@@ -43216,7 +43216,7 @@
     },
     "packages/client/src/editorEvents.ts": {
       "path": "packages/client/src/editorEvents.ts",
-      "modTimeUnixNano": 1775375446787881192,
+      "modTimeUnixNano": 1780468793684298061,
       "size": 715,
       "baseName": "editorevents",
       "isTest": false,
@@ -43331,7 +43331,7 @@
     },
     "packages/client/src/editorPreferences.ts": {
       "path": "packages/client/src/editorPreferences.ts",
-      "modTimeUnixNano": 1775424967830905340,
+      "modTimeUnixNano": 1780468793684366229,
       "size": 2492,
       "baseName": "editorpreferences",
       "isTest": false,
@@ -43592,7 +43592,7 @@
     },
     "packages/client/src/main.tsx": {
       "path": "packages/client/src/main.tsx",
-      "modTimeUnixNano": 1777012616728599959,
+      "modTimeUnixNano": 1780468793684645064,
       "size": 262,
       "baseName": "main",
       "isTest": false,
@@ -43633,7 +43633,7 @@
     },
     "packages/client/src/store/index.ts": {
       "path": "packages/client/src/store/index.ts",
-      "modTimeUnixNano": 1780468387228686032,
+      "modTimeUnixNano": 1780468793684810983,
       "size": 16793,
       "baseName": "index",
       "isTest": false,
@@ -45917,7 +45917,7 @@
     },
     "packages/client/src/test/agentpanel-branches.test.tsx": {
       "path": "packages/client/src/test/agentpanel-branches.test.tsx",
-      "modTimeUnixNano": 1777047351545314489,
+      "modTimeUnixNano": 1780468793684927609,
       "size": 4713,
       "baseName": "agentpanel-branches.test",
       "isTest": true,
@@ -46507,7 +46507,7 @@
     },
     "packages/client/src/test/agentpanel.test.tsx": {
       "path": "packages/client/src/test/agentpanel.test.tsx",
-      "modTimeUnixNano": 1777047351530738376,
+      "modTimeUnixNano": 1780468793685009234,
       "size": 5828,
       "baseName": "agentpanel.test",
       "isTest": true,
@@ -47300,7 +47300,7 @@
     },
     "packages/client/src/test/ai-chat.test.tsx": {
       "path": "packages/client/src/test/ai-chat.test.tsx",
-      "modTimeUnixNano": 1780465477811799930,
+      "modTimeUnixNano": 1780468793685135610,
       "size": 17642,
       "baseName": "ai-chat.test",
       "isTest": true,
@@ -49491,7 +49491,7 @@
     },
     "packages/client/src/test/app-ws-lifecycle.test.tsx": {
       "path": "packages/client/src/test/app-ws-lifecycle.test.tsx",
-      "modTimeUnixNano": 1780464982890692715,
+      "modTimeUnixNano": 1780468793685258361,
       "size": 7322,
       "baseName": "app-ws-lifecycle.test",
       "isTest": true,
@@ -50506,7 +50506,7 @@
     },
     "packages/client/src/test/bridge.test.ts": {
       "path": "packages/client/src/test/bridge.test.ts",
-      "modTimeUnixNano": 1777222092416577592,
+      "modTimeUnixNano": 1780468793685339570,
       "size": 23580,
       "baseName": "bridge.test",
       "isTest": true,
@@ -52621,7 +52621,7 @@
     },
     "packages/client/src/test/commandpalette.test.tsx": {
       "path": "packages/client/src/test/commandpalette.test.tsx",
-      "modTimeUnixNano": 1777042043761733049,
+      "modTimeUnixNano": 1780468793685429821,
       "size": 9550,
       "baseName": "commandpalette.test",
       "isTest": true,
@@ -53873,7 +53873,7 @@
     },
     "packages/client/src/test/component-renders.test.tsx": {
       "path": "packages/client/src/test/component-renders.test.tsx",
-      "modTimeUnixNano": 1776956877299525426,
+      "modTimeUnixNano": 1780468793685503030,
       "size": 5242,
       "baseName": "component-renders.test",
       "isTest": true,
@@ -54451,7 +54451,7 @@
     },
     "packages/client/src/test/connectionProfiles.test.ts": {
       "path": "packages/client/src/test/connectionProfiles.test.ts",
-      "modTimeUnixNano": 1777042043725218419,
+      "modTimeUnixNano": 1780468793685586822,
       "size": 11999,
       "baseName": "connectionprofiles.test",
       "isTest": true,
@@ -55694,7 +55694,7 @@
     },
     "packages/client/src/test/editor-buffer.test.ts": {
       "path": "packages/client/src/test/editor-buffer.test.ts",
-      "modTimeUnixNano": 1777012616729518502,
+      "modTimeUnixNano": 1780468793685651740,
       "size": 2029,
       "baseName": "editor-buffer.test",
       "isTest": true,
@@ -55935,7 +55935,7 @@
     },
     "packages/client/src/test/editor.test.tsx": {
       "path": "packages/client/src/test/editor.test.tsx",
-      "modTimeUnixNano": 1777011422078360128,
+      "modTimeUnixNano": 1780468793685732740,
       "size": 22676,
       "baseName": "editor.test",
       "isTest": true,
@@ -58396,7 +58396,7 @@
     },
     "packages/client/src/test/editorPreferences.test.ts": {
       "path": "packages/client/src/test/editorPreferences.test.ts",
-      "modTimeUnixNano": 1777012616729669627,
+      "modTimeUnixNano": 1780468793685817949,
       "size": 4986,
       "baseName": "editorpreferences.test",
       "isTest": true,
@@ -58907,7 +58907,7 @@
     },
     "packages/client/src/test/editorSyntax.test.ts": {
       "path": "packages/client/src/test/editorSyntax.test.ts",
-      "modTimeUnixNano": 1777012616729815419,
+      "modTimeUnixNano": 1780468793685885700,
       "size": 5644,
       "baseName": "editorsyntax.test",
       "isTest": true,
@@ -59543,7 +59543,7 @@
     },
     "packages/client/src/test/filetree.test.tsx": {
       "path": "packages/client/src/test/filetree.test.tsx",
-      "modTimeUnixNano": 1780465477811770639,
+      "modTimeUnixNano": 1780468793686014117,
       "size": 20020,
       "baseName": "filetree.test",
       "isTest": true,
@@ -62191,7 +62191,7 @@
     },
     "packages/client/src/test/folderUtils-advanced.test.ts": {
       "path": "packages/client/src/test/folderUtils-advanced.test.ts",
-      "modTimeUnixNano": 1777012616729962877,
+      "modTimeUnixNano": 1780468793686102451,
       "size": 12849,
       "baseName": "folderutils-advanced.test",
       "isTest": true,
@@ -63385,7 +63385,7 @@
     },
     "packages/client/src/test/integration.test.ts": {
       "path": "packages/client/src/test/integration.test.ts",
-      "modTimeUnixNano": 1777012616730110377,
+      "modTimeUnixNano": 1780468793686189952,
       "size": 14042,
       "baseName": "integration.test",
       "isTest": true,
@@ -65087,7 +65087,7 @@
     },
     "packages/client/src/test/machine-connections-panel.test.tsx": {
       "path": "packages/client/src/test/machine-connections-panel.test.tsx",
-      "modTimeUnixNano": 1777079362407324527,
+      "modTimeUnixNano": 1780468793686272578,
       "size": 11707,
       "baseName": "machine-connections-panel.test",
       "isTest": true,
@@ -66284,7 +66284,7 @@
     },
     "packages/client/src/test/markdown-previews.test.tsx": {
       "path": "packages/client/src/test/markdown-previews.test.tsx",
-      "modTimeUnixNano": 1777011422078327337,
+      "modTimeUnixNano": 1780468793686340704,
       "size": 5884,
       "baseName": "markdown-previews.test",
       "isTest": true,
@@ -66910,7 +66910,7 @@
     },
     "packages/client/src/test/permissions.test.ts": {
       "path": "packages/client/src/test/permissions.test.ts",
-      "modTimeUnixNano": 1777178872886797421,
+      "modTimeUnixNano": 1780468793686406121,
       "size": 5481,
       "baseName": "permissions.test",
       "isTest": true,
@@ -67524,7 +67524,7 @@
     },
     "packages/client/src/test/preferences.test.tsx": {
       "path": "packages/client/src/test/preferences.test.tsx",
-      "modTimeUnixNano": 1780465477777557504,
+      "modTimeUnixNano": 1780468793686563372,
       "size": 48925,
       "baseName": "preferences.test",
       "isTest": true,
@@ -72459,7 +72459,7 @@
     },
     "packages/client/src/test/quality-panel.test.tsx": {
       "path": "packages/client/src/test/quality-panel.test.tsx",
-      "modTimeUnixNano": 1780468549123651524,
+      "modTimeUnixNano": 1780468793686686915,
       "size": 3179,
       "baseName": "quality-panel.test",
       "isTest": true,
@@ -72940,7 +72940,7 @@
     },
     "packages/client/src/test/real-code.test.ts": {
       "path": "packages/client/src/test/real-code.test.ts",
-      "modTimeUnixNano": 1777042043751246851,
+      "modTimeUnixNano": 1780468793686773916,
       "size": 28133,
       "baseName": "real-code.test",
       "isTest": true,
@@ -75814,7 +75814,7 @@
     },
     "packages/client/src/test/setup.ts": {
       "path": "packages/client/src/test/setup.ts",
-      "modTimeUnixNano": 1777012616730568336,
+      "modTimeUnixNano": 1780468793686845541,
       "size": 1436,
       "baseName": "setup",
       "isTest": true,
@@ -76046,7 +76046,7 @@
     },
     "packages/client/src/test/statusbar-branches.test.tsx": {
       "path": "packages/client/src/test/statusbar-branches.test.tsx",
-      "modTimeUnixNano": 1777042043719637425,
+      "modTimeUnixNano": 1780468793686913917,
       "size": 4207,
       "baseName": "statusbar-branches.test",
       "isTest": true,
@@ -76660,7 +76660,7 @@
     },
     "packages/client/src/test/statusbar.test.tsx": {
       "path": "packages/client/src/test/statusbar.test.tsx",
-      "modTimeUnixNano": 1777011422078320795,
+      "modTimeUnixNano": 1780468793686987750,
       "size": 5639,
       "baseName": "statusbar.test",
       "isTest": true,
@@ -77488,7 +77488,7 @@
     },
     "packages/client/src/test/store-agent.test.ts": {
       "path": "packages/client/src/test/store-agent.test.ts",
-      "modTimeUnixNano": 1777012616730709545,
+      "modTimeUnixNano": 1780468793687075959,
       "size": 12287,
       "baseName": "store-agent.test",
       "isTest": true,
@@ -78791,7 +78791,7 @@
     },
     "packages/client/src/test/store-chat.test.ts": {
       "path": "packages/client/src/test/store-chat.test.ts",
-      "modTimeUnixNano": 1777012616730837753,
+      "modTimeUnixNano": 1780468793687148002,
       "size": 3284,
       "baseName": "store-chat.test",
       "isTest": true,
@@ -79180,7 +79180,7 @@
     },
     "packages/client/src/test/store-open-files.test.ts": {
       "path": "packages/client/src/test/store-open-files.test.ts",
-      "modTimeUnixNano": 1777012616730992045,
+      "modTimeUnixNano": 1780468793687209336,
       "size": 3013,
       "baseName": "store-open-files.test",
       "isTest": true,
@@ -79489,7 +79489,7 @@
     },
     "packages/client/src/test/store-project.test.ts": {
       "path": "packages/client/src/test/store-project.test.ts",
-      "modTimeUnixNano": 1777012616731151962,
+      "modTimeUnixNano": 1780468793687291295,
       "size": 11505,
       "baseName": "store-project.test",
       "isTest": true,
@@ -80665,7 +80665,7 @@
     },
     "packages/client/src/test/store.test.ts": {
       "path": "packages/client/src/test/store.test.ts",
-      "modTimeUnixNano": 1777257143652966125,
+      "modTimeUnixNano": 1780468793687419962,
       "size": 26695,
       "baseName": "store.test",
       "isTest": true,
@@ -83195,7 +83195,7 @@
     },
     "packages/client/src/test/teamselector.test.tsx": {
       "path": "packages/client/src/test/teamselector.test.tsx",
-      "modTimeUnixNano": 1777042043761703424,
+      "modTimeUnixNano": 1780468793687509630,
       "size": 17672,
       "baseName": "teamselector.test",
       "isTest": true,
@@ -85440,7 +85440,7 @@
     },
     "packages/client/src/test/terminal.test.tsx": {
       "path": "packages/client/src/test/terminal.test.tsx",
-      "modTimeUnixNano": 1777042043719638133,
+      "modTimeUnixNano": 1780468793687589505,
       "size": 7568,
       "baseName": "terminal.test",
       "isTest": true,
@@ -86414,7 +86414,7 @@
     },
     "packages/client/src/test/unit.test.ts": {
       "path": "packages/client/src/test/unit.test.ts",
-      "modTimeUnixNano": 1777012616731473088,
+      "modTimeUnixNano": 1780468793687673215,
       "size": 12851,
       "baseName": "unit.test",
       "isTest": true,
@@ -87908,7 +87908,7 @@
     },
     "packages/client/src/test/usage-dashboard.test.tsx": {
       "path": "packages/client/src/test/usage-dashboard.test.tsx",
-      "modTimeUnixNano": 1777221824855734280,
+      "modTimeUnixNano": 1780468793687747007,
       "size": 15407,
       "baseName": "usage-dashboard.test",
       "isTest": true,
@@ -89944,7 +89944,7 @@
     },
     "packages/client/src/test/utils.test.ts": {
       "path": "packages/client/src/test/utils.test.ts",
-      "modTimeUnixNano": 1777012616731608421,
+      "modTimeUnixNano": 1780468793687819966,
       "size": 2755,
       "baseName": "utils.test",
       "isTest": true,
@@ -90297,7 +90297,7 @@
     },
     "packages/client/src/test/working-behaviors-contract.test.ts": {
       "path": "packages/client/src/test/working-behaviors-contract.test.ts",
-      "modTimeUnixNano": 1777223107850054831,
+      "modTimeUnixNano": 1780468793687884175,
       "size": 1584,
       "baseName": "working-behaviors-contract.test",
       "isTest": true,
@@ -90507,7 +90507,7 @@
     },
     "packages/client/src/test/ws-client.test.ts": {
       "path": "packages/client/src/test/ws-client.test.ts",
-      "modTimeUnixNano": 1777238201572253179,
+      "modTimeUnixNano": 1780468793688027509,
       "size": 40587,
       "baseName": "ws-client.test",
       "isTest": true,
@@ -94294,7 +94294,7 @@
     },
     "packages/client/src/utils.ts": {
       "path": "packages/client/src/utils.ts",
-      "modTimeUnixNano": 1777042043719999467,
+      "modTimeUnixNano": 1780468793688102010,
       "size": 568,
       "baseName": "utils",
       "isTest": false,
@@ -94390,7 +94390,7 @@
     },
     "packages/client/src/ws/client.ts": {
       "path": "packages/client/src/ws/client.ts",
-      "modTimeUnixNano": 1777238201572234637,
+      "modTimeUnixNano": 1780468793688270011,
       "size": 10671,
       "baseName": "client",
       "isTest": false,
@@ -95944,7 +95944,7 @@
     },
     "packages/client/tailwind.config.ts": {
       "path": "packages/client/tailwind.config.ts",
-      "modTimeUnixNano": 1775259539956824383,
+      "modTimeUnixNano": 1780468793688336720,
       "size": 703,
       "baseName": "tailwind.config",
       "isTest": false,
@@ -96081,7 +96081,7 @@
     },
     "packages/client/vite.config.ts": {
       "path": "packages/client/vite.config.ts",
-      "modTimeUnixNano": 1779253950782874157,
+      "modTimeUnixNano": 1780468793688495055,
       "size": 526,
       "baseName": "vite.config",
       "isTest": false,
@@ -96173,7 +96173,7 @@
     },
     "packages/client/vitest.config.ts": {
       "path": "packages/client/vitest.config.ts",
-      "modTimeUnixNano": 1777228709257869631,
+      "modTimeUnixNano": 1780468793688562222,
       "size": 886,
       "baseName": "vitest.config",
       "isTest": false,
@@ -96350,7 +96350,7 @@
     },
     "packages/desktop-tauri/src-tauri/build.rs": {
       "path": "packages/desktop-tauri/src-tauri/build.rs",
-      "modTimeUnixNano": 1775259539957525183,
+      "modTimeUnixNano": 1780468793688904475,
       "size": 39,
       "baseName": "build",
       "isTest": false,
@@ -96366,7 +96366,7 @@
     },
     "packages/desktop-tauri/src-tauri/src/config.rs": {
       "path": "packages/desktop-tauri/src-tauri/src/config.rs",
-      "modTimeUnixNano": 1777302043701285136,
+      "modTimeUnixNano": 1780468793690602906,
       "size": 11468,
       "baseName": "config",
       "isTest": false,
@@ -97561,7 +97561,7 @@
     },
     "packages/desktop-tauri/src-tauri/src/lib.rs": {
       "path": "packages/desktop-tauri/src-tauri/src/lib.rs",
-      "modTimeUnixNano": 1777409082483500222,
+      "modTimeUnixNano": 1780468793690769948,
       "size": 53449,
       "baseName": "lib",
       "isTest": false,
@@ -103930,7 +103930,7 @@
     },
     "packages/desktop-tauri/src-tauri/src/main.rs": {
       "path": "packages/desktop-tauri/src-tauri/src/main.rs",
-      "modTimeUnixNano": 1775265437172195718,
+      "modTimeUnixNano": 1780468793690839324,
       "size": 164,
       "baseName": "main",
       "isTest": false,
@@ -103960,7 +103960,7 @@
     },
     "packages/server-go/ai/agent_comms.go": {
       "path": "packages/server-go/ai/agent_comms.go",
-      "modTimeUnixNano": 1780463828933861836,
+      "modTimeUnixNano": 1780468793691481496,
       "size": 14550,
       "baseName": "agent_comms",
       "isTest": false,
@@ -105797,7 +105797,7 @@
     },
     "packages/server-go/ai/agent_comms_test.go": {
       "path": "packages/server-go/ai/agent_comms_test.go",
-      "modTimeUnixNano": 1780460709143061252,
+      "modTimeUnixNano": 1780468793691591747,
       "size": 8943,
       "baseName": "agent_comms_test",
       "isTest": true,
@@ -106807,7 +106807,7 @@
     },
     "packages/server-go/ai/autonomy_handoff.go": {
       "path": "packages/server-go/ai/autonomy_handoff.go",
-      "modTimeUnixNano": 1777249306865616744,
+      "modTimeUnixNano": 1780468793691693373,
       "size": 6734,
       "baseName": "autonomy_handoff",
       "isTest": false,
@@ -107677,7 +107677,7 @@
     },
     "packages/server-go/ai/autonomy_handoff_test.go": {
       "path": "packages/server-go/ai/autonomy_handoff_test.go",
-      "modTimeUnixNano": 1777249306886812036,
+      "modTimeUnixNano": 1780468793691792082,
       "size": 7144,
       "baseName": "autonomy_handoff_test",
       "isTest": true,
@@ -108583,7 +108583,7 @@
     },
     "packages/server-go/ai/classifier.go": {
       "path": "packages/server-go/ai/classifier.go",
-      "modTimeUnixNano": 1777244166305885873,
+      "modTimeUnixNano": 1780468793691889875,
       "size": 2970,
       "baseName": "classifier",
       "isTest": false,
@@ -109045,7 +109045,7 @@
     },
     "packages/server-go/ai/classifier_test.go": {
       "path": "packages/server-go/ai/classifier_test.go",
-      "modTimeUnixNano": 1777244166311197344,
+      "modTimeUnixNano": 1780468793691982209,
       "size": 4183,
       "baseName": "classifier_test",
       "isTest": true,
@@ -109641,7 +109641,7 @@
     },
     "packages/server-go/ai/completion_gate.go": {
       "path": "packages/server-go/ai/completion_gate.go",
-      "modTimeUnixNano": 1777248582934106695,
+      "modTimeUnixNano": 1780468793692080168,
       "size": 5575,
       "baseName": "completion_gate",
       "isTest": false,
@@ -110399,7 +110399,7 @@
     },
     "packages/server-go/ai/completion_gate_test.go": {
       "path": "packages/server-go/ai/completion_gate_test.go",
-      "modTimeUnixNano": 1777248582934120153,
+      "modTimeUnixNano": 1780468793692180669,
       "size": 12508,
       "baseName": "completion_gate_test",
       "isTest": true,
@@ -111983,7 +111983,7 @@
     },
     "packages/server-go/ai/context.go": {
       "path": "packages/server-go/ai/context.go",
-      "modTimeUnixNano": 1780465477836531907,
+      "modTimeUnixNano": 1780468793692454546,
       "size": 107623,
       "baseName": "context",
       "isTest": false,
@@ -125678,7 +125678,7 @@
     },
     "packages/server-go/ai/context_coverage_test.go": {
       "path": "packages/server-go/ai/context_coverage_test.go",
-      "modTimeUnixNano": 1779234525469855265,
+      "modTimeUnixNano": 1780468793692577505,
       "size": 9550,
       "baseName": "context_coverage_test",
       "isTest": true,
@@ -126970,7 +126970,7 @@
     },
     "packages/server-go/ai/context_env_extra_test.go": {
       "path": "packages/server-go/ai/context_env_extra_test.go",
-      "modTimeUnixNano": 1779171700249156919,
+      "modTimeUnixNano": 1780468793692671506,
       "size": 2108,
       "baseName": "context_env_extra_test",
       "isTest": true,
@@ -127233,7 +127233,7 @@
     },
     "packages/server-go/ai/context_extra_test.go": {
       "path": "packages/server-go/ai/context_extra_test.go",
-      "modTimeUnixNano": 1780465477845703607,
+      "modTimeUnixNano": 1780468793692984425,
       "size": 178291,
       "baseName": "context_extra_test",
       "isTest": true,
@@ -147526,7 +147526,7 @@
     },
     "packages/server-go/ai/context_profile_test.go": {
       "path": "packages/server-go/ai/context_profile_test.go",
-      "modTimeUnixNano": 1777249306886755952,
+      "modTimeUnixNano": 1780468793693095343,
       "size": 6066,
       "baseName": "context_profile_test",
       "isTest": true,
@@ -148487,7 +148487,7 @@
     },
     "packages/server-go/ai/coverage_100_extra_test.go": {
       "path": "packages/server-go/ai/coverage_100_extra_test.go",
-      "modTimeUnixNano": 1779234525469845598,
+      "modTimeUnixNano": 1780468793693217886,
       "size": 25907,
       "baseName": "coverage_100_extra_test",
       "isTest": true,
@@ -152133,7 +152133,7 @@
     },
     "packages/server-go/ai/critic.go": {
       "path": "packages/server-go/ai/critic.go",
-      "modTimeUnixNano": 1777244166321933371,
+      "modTimeUnixNano": 1780468793693329012,
       "size": 4772,
       "baseName": "critic",
       "isTest": false,
@@ -152824,7 +152824,7 @@
     },
     "packages/server-go/ai/critic_test.go": {
       "path": "packages/server-go/ai/critic_test.go",
-      "modTimeUnixNano": 1777428292482573471,
+      "modTimeUnixNano": 1780468793693440638,
       "size": 8894,
       "baseName": "critic_test",
       "isTest": true,
@@ -153927,7 +153927,7 @@
     },
     "packages/server-go/ai/event.go": {
       "path": "packages/server-go/ai/event.go",
-      "modTimeUnixNano": 1778540402378252779,
+      "modTimeUnixNano": 1780468793693537221,
       "size": 2727,
       "baseName": "event",
       "isTest": false,
@@ -154388,7 +154388,7 @@
     },
     "packages/server-go/ai/event_close_test.go": {
       "path": "packages/server-go/ai/event_close_test.go",
-      "modTimeUnixNano": 1779166758543632651,
+      "modTimeUnixNano": 1780468793693627514,
       "size": 577,
       "baseName": "event_close_test",
       "isTest": true,
@@ -154505,7 +154505,7 @@
     },
     "packages/server-go/ai/execute_publish_gate_test.go": {
       "path": "packages/server-go/ai/execute_publish_gate_test.go",
-      "modTimeUnixNano": 1777249306886833411,
+      "modTimeUnixNano": 1780468793693727640,
       "size": 570,
       "baseName": "execute_publish_gate_test",
       "isTest": true,
@@ -154611,7 +154611,7 @@
     },
     "packages/server-go/ai/export_test.go": {
       "path": "packages/server-go/ai/export_test.go",
-      "modTimeUnixNano": 1779166758608590825,
+      "modTimeUnixNano": 1780468793693823724,
       "size": 342,
       "baseName": "export_test",
       "isTest": true,
@@ -154660,7 +154660,7 @@
     },
     "packages/server-go/ai/formatter.go": {
       "path": "packages/server-go/ai/formatter.go",
-      "modTimeUnixNano": 1777244166348653269,
+      "modTimeUnixNano": 1780468793693921600,
       "size": 2017,
       "baseName": "formatter",
       "isTest": false,
@@ -154996,7 +154996,7 @@
     },
     "packages/server-go/ai/formatter_test.go": {
       "path": "packages/server-go/ai/formatter_test.go",
-      "modTimeUnixNano": 1777244166348623352,
+      "modTimeUnixNano": 1780468793694017475,
       "size": 4232,
       "baseName": "formatter_test",
       "isTest": true,
@@ -155558,7 +155558,7 @@
     },
     "packages/server-go/ai/harness.go": {
       "path": "packages/server-go/ai/harness.go",
-      "modTimeUnixNano": 1777239001354038347,
+      "modTimeUnixNano": 1780468793694138352,
       "size": 11356,
       "baseName": "harness",
       "isTest": false,
@@ -157053,7 +157053,7 @@
     },
     "packages/server-go/ai/harness_test.go": {
       "path": "packages/server-go/ai/harness_test.go",
-      "modTimeUnixNano": 1777239001367565250,
+      "modTimeUnixNano": 1780468793694211936,
       "size": 15248,
       "baseName": "harness_test",
       "isTest": true,
@@ -159187,7 +159187,7 @@
     },
     "packages/server-go/ai/history_context.go": {
       "path": "packages/server-go/ai/history_context.go",
-      "modTimeUnixNano": 1777244166342951211,
+      "modTimeUnixNano": 1780468793694336145,
       "size": 27177,
       "baseName": "history_context",
       "isTest": false,
@@ -163252,7 +163252,7 @@
     },
     "packages/server-go/ai/history_context_test.go": {
       "path": "packages/server-go/ai/history_context_test.go",
-      "modTimeUnixNano": 1777244166348714936,
+      "modTimeUnixNano": 1780468793694494063,
       "size": 43078,
       "baseName": "history_context_test",
       "isTest": true,
@@ -168182,7 +168182,7 @@
     },
     "packages/server-go/ai/intake.go": {
       "path": "packages/server-go/ai/intake.go",
-      "modTimeUnixNano": 1777249306865628161,
+      "modTimeUnixNano": 1780468793694619814,
       "size": 15983,
       "baseName": "intake",
       "isTest": false,
@@ -170201,7 +170201,7 @@
     },
     "packages/server-go/ai/intake_test.go": {
       "path": "packages/server-go/ai/intake_test.go",
-      "modTimeUnixNano": 1777249306886758202,
+      "modTimeUnixNano": 1780468793694730773,
       "size": 16365,
       "baseName": "intake_test",
       "isTest": true,
@@ -172455,7 +172455,7 @@
     },
     "packages/server-go/ai/lead_planner.go": {
       "path": "packages/server-go/ai/lead_planner.go",
-      "modTimeUnixNano": 1779229034266473803,
+      "modTimeUnixNano": 1780468793694833899,
       "size": 6995,
       "baseName": "lead_planner",
       "isTest": false,
@@ -173400,7 +173400,7 @@
     },
     "packages/server-go/ai/lead_planner_test.go": {
       "path": "packages/server-go/ai/lead_planner_test.go",
-      "modTimeUnixNano": 1779234525470057142,
+      "modTimeUnixNano": 1780468793694960442,
       "size": 8701,
       "baseName": "lead_planner_test",
       "isTest": true,
@@ -174686,7 +174686,7 @@
     },
     "packages/server-go/ai/memory_os.go": {
       "path": "packages/server-go/ai/memory_os.go",
-      "modTimeUnixNano": 1780463822594407454,
+      "modTimeUnixNano": 1780468793695095193,
       "size": 11615,
       "baseName": "memory_os",
       "isTest": false,
@@ -176538,7 +176538,7 @@
     },
     "packages/server-go/ai/memory_os_test.go": {
       "path": "packages/server-go/ai/memory_os_test.go",
-      "modTimeUnixNano": 1780463822594427120,
+      "modTimeUnixNano": 1780468793695214027,
       "size": 2851,
       "baseName": "memory_os_test",
       "isTest": true,
@@ -176917,7 +176917,7 @@
     },
     "packages/server-go/ai/mesh_inference.go": {
       "path": "packages/server-go/ai/mesh_inference.go",
-      "modTimeUnixNano": 1778532228431245020,
+      "modTimeUnixNano": 1780468793695336695,
       "size": 3780,
       "baseName": "mesh_inference",
       "isTest": false,
@@ -177464,7 +177464,7 @@
     },
     "packages/server-go/ai/mesh_inference_extra_test.go": {
       "path": "packages/server-go/ai/mesh_inference_extra_test.go",
-      "modTimeUnixNano": 1779174433504005234,
+      "modTimeUnixNano": 1780468793695469946,
       "size": 9927,
       "baseName": "mesh_inference_extra_test",
       "isTest": true,
@@ -178856,7 +178856,7 @@
     },
     "packages/server-go/ai/mesh_tool.go": {
       "path": "packages/server-go/ai/mesh_tool.go",
-      "modTimeUnixNano": 1778530170817401215,
+      "modTimeUnixNano": 1780468793695602780,
       "size": 3182,
       "baseName": "mesh_tool",
       "isTest": false,
@@ -179376,7 +179376,7 @@
     },
     "packages/server-go/ai/mesh_tool_extra_test.go": {
       "path": "packages/server-go/ai/mesh_tool_extra_test.go",
-      "modTimeUnixNano": 1779174433509888327,
+      "modTimeUnixNano": 1780468793695738531,
       "size": 7728,
       "baseName": "mesh_tool_extra_test",
       "isTest": true,
@@ -180618,7 +180618,7 @@
     },
     "packages/server-go/ai/ollama_chat_test.go": {
       "path": "packages/server-go/ai/ollama_chat_test.go",
-      "modTimeUnixNano": 1779217932203054626,
+      "modTimeUnixNano": 1780468793695884866,
       "size": 15388,
       "baseName": "ollama_chat_test",
       "isTest": true,
@@ -182481,7 +182481,7 @@
     },
     "packages/server-go/ai/orchestrator.go": {
       "path": "packages/server-go/ai/orchestrator.go",
-      "modTimeUnixNano": 1780463926515685692,
+      "modTimeUnixNano": 1780468793696047284,
       "size": 25346,
       "baseName": "orchestrator",
       "isTest": false,
@@ -185596,7 +185596,7 @@
     },
     "packages/server-go/ai/orchestrator_brain.go": {
       "path": "packages/server-go/ai/orchestrator_brain.go",
-      "modTimeUnixNano": 1780437758230851028,
+      "modTimeUnixNano": 1780468793696187410,
       "size": 8067,
       "baseName": "orchestrator_brain",
       "isTest": false,
@@ -186891,7 +186891,7 @@
     },
     "packages/server-go/ai/orchestrator_brain_extra_test.go": {
       "path": "packages/server-go/ai/orchestrator_brain_extra_test.go",
-      "modTimeUnixNano": 1780437758230842612,
+      "modTimeUnixNano": 1780468793696331203,
       "size": 8847,
       "baseName": "orchestrator_brain_extra_test",
       "isTest": true,
@@ -188079,7 +188079,7 @@
     },
     "packages/server-go/ai/orchestrator_docs.go": {
       "path": "packages/server-go/ai/orchestrator_docs.go",
-      "modTimeUnixNano": 1778533027521426731,
+      "modTimeUnixNano": 1780468793696481496,
       "size": 4268,
       "baseName": "orchestrator_docs",
       "isTest": false,
@@ -188632,7 +188632,7 @@
     },
     "packages/server-go/ai/orchestrator_docs_extra_test.go": {
       "path": "packages/server-go/ai/orchestrator_docs_extra_test.go",
-      "modTimeUnixNano": 1779166758543661526,
+      "modTimeUnixNano": 1780468793696611955,
       "size": 1575,
       "baseName": "orchestrator_docs_extra_test",
       "isTest": true,
@@ -188931,7 +188931,7 @@
     },
     "packages/server-go/ai/orchestrator_docs_test.go": {
       "path": "packages/server-go/ai/orchestrator_docs_test.go",
-      "modTimeUnixNano": 1778533515726823118,
+      "modTimeUnixNano": 1780468793696744123,
       "size": 5184,
       "baseName": "orchestrator_docs_test",
       "isTest": true,
@@ -189750,7 +189750,7 @@
     },
     "packages/server-go/ai/orchestrator_event.go": {
       "path": "packages/server-go/ai/orchestrator_event.go",
-      "modTimeUnixNano": 1779234525469409760,
+      "modTimeUnixNano": 1780468793696888583,
       "size": 13221,
       "baseName": "orchestrator_event",
       "isTest": false,
@@ -191581,7 +191581,7 @@
     },
     "packages/server-go/ai/orchestrator_event_extra_test.go": {
       "path": "packages/server-go/ai/orchestrator_event_extra_test.go",
-      "modTimeUnixNano": 1779216023550943991,
+      "modTimeUnixNano": 1780468793697053834,
       "size": 30546,
       "baseName": "orchestrator_event_extra_test",
       "isTest": true,
@@ -195757,7 +195757,7 @@
     },
     "packages/server-go/ai/orchestrator_gap_extra_test.go": {
       "path": "packages/server-go/ai/orchestrator_gap_extra_test.go",
-      "modTimeUnixNano": 1779249801599409882,
+      "modTimeUnixNano": 1780468793697222752,
       "size": 24970,
       "baseName": "orchestrator_gap_extra_test",
       "isTest": true,
@@ -199060,7 +199060,7 @@
     },
     "packages/server-go/ai/orchestrator_intake.go": {
       "path": "packages/server-go/ai/orchestrator_intake.go",
-      "modTimeUnixNano": 1778533415801072459,
+      "modTimeUnixNano": 1780468793697374128,
       "size": 9294,
       "baseName": "orchestrator_intake",
       "isTest": false,
@@ -200311,7 +200311,7 @@
     },
     "packages/server-go/ai/orchestrator_intake_extra_test.go": {
       "path": "packages/server-go/ai/orchestrator_intake_extra_test.go",
-      "modTimeUnixNano": 1779166758543704985,
+      "modTimeUnixNano": 1780468793697497671,
       "size": 6923,
       "baseName": "orchestrator_intake_extra_test",
       "isTest": true,
@@ -201264,7 +201264,7 @@
     },
     "packages/server-go/ai/orchestrator_intake_test.go": {
       "path": "packages/server-go/ai/orchestrator_intake_test.go",
-      "modTimeUnixNano": 1778532288597491970,
+      "modTimeUnixNano": 1780468793697625130,
       "size": 3611,
       "baseName": "orchestrator_intake_test",
       "isTest": true,
@@ -201818,7 +201818,7 @@
     },
     "packages/server-go/ai/orchestrator_phases.go": {
       "path": "packages/server-go/ai/orchestrator_phases.go",
-      "modTimeUnixNano": 1779250306623028221,
+      "modTimeUnixNano": 1780468793697792049,
       "size": 26842,
       "baseName": "orchestrator_phases",
       "isTest": false,
@@ -204853,7 +204853,7 @@
     },
     "packages/server-go/ai/orchestrator_phases_extra_test.go": {
       "path": "packages/server-go/ai/orchestrator_phases_extra_test.go",
-      "modTimeUnixNano": 1779254466408215065,
+      "modTimeUnixNano": 1780468793697940925,
       "size": 15201,
       "baseName": "orchestrator_phases_extra_test",
       "isTest": true,
@@ -206831,7 +206831,7 @@
     },
     "packages/server-go/ai/orchestrator_plan_test.go": {
       "path": "packages/server-go/ai/orchestrator_plan_test.go",
-      "modTimeUnixNano": 1779250101051170219,
+      "modTimeUnixNano": 1780468793698060176,
       "size": 3544,
       "baseName": "orchestrator_plan_test",
       "isTest": true,
@@ -207365,7 +207365,7 @@
     },
     "packages/server-go/ai/orchestrator_run_extra_test.go": {
       "path": "packages/server-go/ai/orchestrator_run_extra_test.go",
-      "modTimeUnixNano": 1779219129375145466,
+      "modTimeUnixNano": 1780468793698186802,
       "size": 12477,
       "baseName": "orchestrator_run_extra_test",
       "isTest": true,
@@ -209119,7 +209119,7 @@
     },
     "packages/server-go/ai/orchestrator_state_extra_test.go": {
       "path": "packages/server-go/ai/orchestrator_state_extra_test.go",
-      "modTimeUnixNano": 1779171700264254904,
+      "modTimeUnixNano": 1780468793698312761,
       "size": 2634,
       "baseName": "orchestrator_state_extra_test",
       "isTest": true,
@@ -209496,7 +209496,7 @@
     },
     "packages/server-go/ai/orchestrator_test.go": {
       "path": "packages/server-go/ai/orchestrator_test.go",
-      "modTimeUnixNano": 1779250315865602115,
+      "modTimeUnixNano": 1780468793698465846,
       "size": 12232,
       "baseName": "orchestrator_test",
       "isTest": true,
@@ -211448,7 +211448,7 @@
     },
     "packages/server-go/ai/orchestrator_triage.go": {
       "path": "packages/server-go/ai/orchestrator_triage.go",
-      "modTimeUnixNano": 1780465290451593268,
+      "modTimeUnixNano": 1780468793698603430,
       "size": 5673,
       "baseName": "orchestrator_triage",
       "isTest": false,
@@ -212229,7 +212229,7 @@
     },
     "packages/server-go/ai/orchestrator_utils_extra_test.go": {
       "path": "packages/server-go/ai/orchestrator_utils_extra_test.go",
-      "modTimeUnixNano": 1779234525484598312,
+      "modTimeUnixNano": 1780468793698751140,
       "size": 9320,
       "baseName": "orchestrator_utils_extra_test",
       "isTest": true,
@@ -213614,7 +213614,7 @@
     },
     "packages/server-go/ai/os_cmds_darwin.go": {
       "path": "packages/server-go/ai/os_cmds_darwin.go",
-      "modTimeUnixNano": 1777409082520966407,
+      "modTimeUnixNano": 1780468793698871516,
       "size": 2132,
       "baseName": "os_cmds_darwin",
       "isTest": false,
@@ -213915,7 +213915,7 @@
     },
     "packages/server-go/ai/os_cmds_darwin_test.go": {
       "path": "packages/server-go/ai/os_cmds_darwin_test.go",
-      "modTimeUnixNano": 1777409082520257823,
+      "modTimeUnixNano": 1780468793698983683,
       "size": 2672,
       "baseName": "os_cmds_darwin_test",
       "isTest": true,
@@ -214298,7 +214298,7 @@
     },
     "packages/server-go/ai/os_cmds_linux.go": {
       "path": "packages/server-go/ai/os_cmds_linux.go",
-      "modTimeUnixNano": 1777239001358122493,
+      "modTimeUnixNano": 1780468793699057851,
       "size": 1412,
       "baseName": "os_cmds_linux",
       "isTest": false,
@@ -214509,7 +214509,7 @@
     },
     "packages/server-go/ai/os_cmds_other.go": {
       "path": "packages/server-go/ai/os_cmds_other.go",
-      "modTimeUnixNano": 1777239001367788793,
+      "modTimeUnixNano": 1780468793699127268,
       "size": 916,
       "baseName": "os_cmds_other",
       "isTest": false,
@@ -214633,7 +214633,7 @@
     },
     "packages/server-go/ai/project_tools.go": {
       "path": "packages/server-go/ai/project_tools.go",
-      "modTimeUnixNano": 1777249306866253288,
+      "modTimeUnixNano": 1780468793699235769,
       "size": 4446,
       "baseName": "project_tools",
       "isTest": false,
@@ -215331,7 +215331,7 @@
     },
     "packages/server-go/ai/project_tools_test.go": {
       "path": "packages/server-go/ai/project_tools_test.go",
-      "modTimeUnixNano": 1777249306886795911,
+      "modTimeUnixNano": 1780468793699361562,
       "size": 19738,
       "baseName": "project_tools_test",
       "isTest": true,
@@ -218167,7 +218167,7 @@
     },
     "packages/server-go/ai/provider.go": {
       "path": "packages/server-go/ai/provider.go",
-      "modTimeUnixNano": 1778535710821176195,
+      "modTimeUnixNano": 1780468793699489729,
       "size": 4804,
       "baseName": "provider",
       "isTest": false,
@@ -218737,7 +218737,7 @@
     },
     "packages/server-go/ai/provider_test.go": {
       "path": "packages/server-go/ai/provider_test.go",
-      "modTimeUnixNano": 1779234525459775647,
+      "modTimeUnixNano": 1780468793699610147,
       "size": 13069,
       "baseName": "provider_test",
       "isTest": true,
@@ -220411,7 +220411,7 @@
     },
     "packages/server-go/ai/repair_loop.go": {
       "path": "packages/server-go/ai/repair_loop.go",
-      "modTimeUnixNano": 1777244166311217928,
+      "modTimeUnixNano": 1780468793699719856,
       "size": 5182,
       "baseName": "repair_loop",
       "isTest": false,
@@ -221150,7 +221150,7 @@
     },
     "packages/server-go/ai/repair_loop_test.go": {
       "path": "packages/server-go/ai/repair_loop_test.go",
-      "modTimeUnixNano": 1777244166311236928,
+      "modTimeUnixNano": 1780468793699840232,
       "size": 5761,
       "baseName": "repair_loop_test",
       "isTest": true,
@@ -221902,7 +221902,7 @@
     },
     "packages/server-go/ai/role_routing.go": {
       "path": "packages/server-go/ai/role_routing.go",
-      "modTimeUnixNano": 1779230494088000991,
+      "modTimeUnixNano": 1780468793699955316,
       "size": 3297,
       "baseName": "role_routing",
       "isTest": false,
@@ -222274,7 +222274,7 @@
     },
     "packages/server-go/ai/role_routing_test.go": {
       "path": "packages/server-go/ai/role_routing_test.go",
-      "modTimeUnixNano": 1779234525470145643,
+      "modTimeUnixNano": 1780468793700063484,
       "size": 2931,
       "baseName": "role_routing_test",
       "isTest": true,
@@ -222647,7 +222647,7 @@
     },
     "packages/server-go/ai/roles.go": {
       "path": "packages/server-go/ai/roles.go",
-      "modTimeUnixNano": 1780463828933808544,
+      "modTimeUnixNano": 1780468793700228277,
       "size": 24981,
       "baseName": "roles",
       "isTest": false,
@@ -224989,7 +224989,7 @@
     },
     "packages/server-go/ai/roles_test.go": {
       "path": "packages/server-go/ai/roles_test.go",
-      "modTimeUnixNano": 1780460709143036293,
+      "modTimeUnixNano": 1780468793700376612,
       "size": 10945,
       "baseName": "roles_test",
       "isTest": true,
@@ -226373,7 +226373,7 @@
     },
     "packages/server-go/ai/safety.go": {
       "path": "packages/server-go/ai/safety.go",
-      "modTimeUnixNano": 1778544129176369132,
+      "modTimeUnixNano": 1780468793700491529,
       "size": 5848,
       "baseName": "safety",
       "isTest": false,
@@ -227166,7 +227166,7 @@
     },
     "packages/server-go/ai/safety_test.go": {
       "path": "packages/server-go/ai/safety_test.go",
-      "modTimeUnixNano": 1777428292429029468,
+      "modTimeUnixNano": 1780468793700617864,
       "size": 11247,
       "baseName": "safety_test",
       "isTest": true,
@@ -228899,7 +228899,7 @@
     },
     "packages/server-go/ai/secret_scan.go": {
       "path": "packages/server-go/ai/secret_scan.go",
-      "modTimeUnixNano": 1777239001362154264,
+      "modTimeUnixNano": 1780468793700696073,
       "size": 4374,
       "baseName": "secret_scan",
       "isTest": false,
@@ -229475,7 +229475,7 @@
     },
     "packages/server-go/ai/secret_scan_test.go": {
       "path": "packages/server-go/ai/secret_scan_test.go",
-      "modTimeUnixNano": 1777239001365723199,
+      "modTimeUnixNano": 1780468793700782323,
       "size": 3062,
       "baseName": "secret_scan_test",
       "isTest": true,
@@ -230031,7 +230031,7 @@
     },
     "packages/server-go/ai/session_summary.go": {
       "path": "packages/server-go/ai/session_summary.go",
-      "modTimeUnixNano": 1777239001353516386,
+      "modTimeUnixNano": 1780468793700928908,
       "size": 10624,
       "baseName": "session_summary",
       "isTest": false,
@@ -231501,7 +231501,7 @@
     },
     "packages/server-go/ai/session_summary_test.go": {
       "path": "packages/server-go/ai/session_summary_test.go",
-      "modTimeUnixNano": 1777239001358708705,
+      "modTimeUnixNano": 1780468793701049867,
       "size": 15049,
       "baseName": "session_summary_test",
       "isTest": true,
@@ -233482,7 +233482,7 @@
     },
     "packages/server-go/ai/team_config.go": {
       "path": "packages/server-go/ai/team_config.go",
-      "modTimeUnixNano": 1780290872488859349,
+      "modTimeUnixNano": 1780468793701175785,
       "size": 9142,
       "baseName": "team_config",
       "isTest": false,
@@ -234653,7 +234653,7 @@
     },
     "packages/server-go/ai/team_config_test.go": {
       "path": "packages/server-go/ai/team_config_test.go",
-      "modTimeUnixNano": 1780290872494216755,
+      "modTimeUnixNano": 1780468793701306703,
       "size": 17128,
       "baseName": "team_config_test",
       "isTest": true,
@@ -236967,7 +236967,7 @@
     },
     "packages/server-go/ai/team_dispatcher.go": {
       "path": "packages/server-go/ai/team_dispatcher.go",
-      "modTimeUnixNano": 1780460709143050377,
+      "modTimeUnixNano": 1780468793701436287,
       "size": 6623,
       "baseName": "team_dispatcher",
       "isTest": false,
@@ -238160,7 +238160,7 @@
     },
     "packages/server-go/ai/team_dispatcher_test.go": {
       "path": "packages/server-go/ai/team_dispatcher_test.go",
-      "modTimeUnixNano": 1779148850775196059,
+      "modTimeUnixNano": 1780468793701548996,
       "size": 6098,
       "baseName": "team_dispatcher_test",
       "isTest": true,
@@ -239059,7 +239059,7 @@
     },
     "packages/server-go/ai/test_loop.go": {
       "path": "packages/server-go/ai/test_loop.go",
-      "modTimeUnixNano": 1777239001367158373,
+      "modTimeUnixNano": 1780468793701671039,
       "size": 6681,
       "baseName": "test_loop",
       "isTest": true,
@@ -240087,7 +240087,7 @@
     },
     "packages/server-go/ai/test_loop_test.go": {
       "path": "packages/server-go/ai/test_loop_test.go",
-      "modTimeUnixNano": 1777239001355654314,
+      "modTimeUnixNano": 1780468793701790040,
       "size": 14470,
       "baseName": "test_loop_test",
       "isTest": true,
@@ -241954,7 +241954,7 @@
     },
     "packages/server-go/ai/test_orchestrator.go": {
       "path": "packages/server-go/ai/test_orchestrator.go",
-      "modTimeUnixNano": 1777239001357119697,
+      "modTimeUnixNano": 1780468793701887416,
       "size": 14597,
       "baseName": "test_orchestrator",
       "isTest": true,
@@ -243880,7 +243880,7 @@
     },
     "packages/server-go/ai/test_orchestrator_test.go": {
       "path": "packages/server-go/ai/test_orchestrator_test.go",
-      "modTimeUnixNano": 1777239001356146025,
+      "modTimeUnixNano": 1780468793701979958,
       "size": 9743,
       "baseName": "test_orchestrator_test",
       "isTest": true,
@@ -245428,7 +245428,7 @@
     },
     "packages/server-go/ai/tool_call_parser.go": {
       "path": "packages/server-go/ai/tool_call_parser.go",
-      "modTimeUnixNano": 1778535588728402991,
+      "modTimeUnixNano": 1780468793702104959,
       "size": 6771,
       "baseName": "tool_call_parser",
       "isTest": false,
@@ -246196,7 +246196,7 @@
     },
     "packages/server-go/ai/tool_call_parser_test.go": {
       "path": "packages/server-go/ai/tool_call_parser_test.go",
-      "modTimeUnixNano": 1779174433504023483,
+      "modTimeUnixNano": 1780468793702243044,
       "size": 13532,
       "baseName": "tool_call_parser_test",
       "isTest": true,
@@ -247964,7 +247964,7 @@
     },
     "packages/server-go/ai/working_state.go": {
       "path": "packages/server-go/ai/working_state.go",
-      "modTimeUnixNano": 1777244166284322111,
+      "modTimeUnixNano": 1780468793702371545,
       "size": 3349,
       "baseName": "working_state",
       "isTest": false,
@@ -248498,7 +248498,7 @@
     },
     "packages/server-go/ai/working_state_test.go": {
       "path": "packages/server-go/ai/working_state_test.go",
-      "modTimeUnixNano": 1777244166300387400,
+      "modTimeUnixNano": 1780468793702497879,
       "size": 7690,
       "baseName": "working_state_test",
       "isTest": true,
@@ -249492,7 +249492,7 @@
     },
     "packages/server-go/ai/worktree_session.go": {
       "path": "packages/server-go/ai/worktree_session.go",
-      "modTimeUnixNano": 1777239001351531584,
+      "modTimeUnixNano": 1780468793702582005,
       "size": 3013,
       "baseName": "worktree_session",
       "isTest": false,
@@ -249909,7 +249909,7 @@
     },
     "packages/server-go/ai/worktree_session_test.go": {
       "path": "packages/server-go/ai/worktree_session_test.go",
-      "modTimeUnixNano": 1777239001357717825,
+      "modTimeUnixNano": 1780468793702675047,
       "size": 11462,
       "baseName": "worktree_session_test",
       "isTest": true,
@@ -251337,7 +251337,7 @@
     },
     "packages/server-go/db/attention_residuals.go": {
       "path": "packages/server-go/db/attention_residuals.go",
-      "modTimeUnixNano": 1777239001381810240,
+      "modTimeUnixNano": 1780468793702799757,
       "size": 2561,
       "baseName": "attention_residuals",
       "isTest": false,
@@ -251855,7 +251855,7 @@
     },
     "packages/server-go/db/coverage_extra_test.go": {
       "path": "packages/server-go/db/coverage_extra_test.go",
-      "modTimeUnixNano": 1777244166348824896,
+      "modTimeUnixNano": 1780468793702937008,
       "size": 16867,
       "baseName": "coverage_extra_test",
       "isTest": true,
@@ -253795,7 +253795,7 @@
     },
     "packages/server-go/db/db.go": {
       "path": "packages/server-go/db/db.go",
-      "modTimeUnixNano": 1780463822594433496,
+      "modTimeUnixNano": 1780468793703106218,
       "size": 37462,
       "baseName": "db",
       "isTest": false,
@@ -258748,7 +258748,7 @@
     },
     "packages/server-go/db/db_test.go": {
       "path": "packages/server-go/db/db_test.go",
-      "modTimeUnixNano": 1777428292446952275,
+      "modTimeUnixNano": 1780468793703246260,
       "size": 25516,
       "baseName": "db_test",
       "isTest": true,
@@ -262629,7 +262629,7 @@
     },
     "packages/server-go/db/discord.go": {
       "path": "packages/server-go/db/discord.go",
-      "modTimeUnixNano": 1777239001380948278,
+      "modTimeUnixNano": 1780468793703338428,
       "size": 6926,
       "baseName": "discord",
       "isTest": false,
@@ -263637,7 +263637,7 @@
     },
     "packages/server-go/db/memory_os_test.go": {
       "path": "packages/server-go/db/memory_os_test.go",
-      "modTimeUnixNano": 1780463822594418787,
+      "modTimeUnixNano": 1780468793703450304,
       "size": 3064,
       "baseName": "memory_os_test",
       "isTest": true,
@@ -264088,7 +264088,7 @@
     },
     "packages/server-go/db/project_direction.go": {
       "path": "packages/server-go/db/project_direction.go",
-      "modTimeUnixNano": 1777239001374562453,
+      "modTimeUnixNano": 1780468793703520554,
       "size": 820,
       "baseName": "project_direction",
       "isTest": false,
@@ -264267,7 +264267,7 @@
     },
     "packages/server-go/db/project_history.go": {
       "path": "packages/server-go/db/project_history.go",
-      "modTimeUnixNano": 1777239001382046075,
+      "modTimeUnixNano": 1780468793703597805,
       "size": 5207,
       "baseName": "project_history",
       "isTest": false,
@@ -265193,7 +265193,7 @@
     },
     "packages/server-go/db/project_profile.go": {
       "path": "packages/server-go/db/project_profile.go",
-      "modTimeUnixNano": 1777248582929406218,
+      "modTimeUnixNano": 1780468793703701181,
       "size": 1176,
       "baseName": "project_profile",
       "isTest": false,
@@ -265415,7 +265415,7 @@
     },
     "packages/server-go/db/project_profile_test.go": {
       "path": "packages/server-go/db/project_profile_test.go",
-      "modTimeUnixNano": 1777248582934056028,
+      "modTimeUnixNano": 1780468793703810807,
       "size": 2804,
       "baseName": "project_profile_test",
       "isTest": true,
@@ -265892,7 +265892,7 @@
     },
     "packages/server-go/db/usage_dashboard.go": {
       "path": "packages/server-go/db/usage_dashboard.go",
-      "modTimeUnixNano": 1777428292441739580,
+      "modTimeUnixNano": 1780468793703935974,
       "size": 9774,
       "baseName": "usage_dashboard",
       "isTest": false,
@@ -267282,7 +267282,7 @@
     },
     "packages/server-go/db/usage_dashboard_test.go": {
       "path": "packages/server-go/db/usage_dashboard_test.go",
-      "modTimeUnixNano": 1777428292473026711,
+      "modTimeUnixNano": 1780468793704058559,
       "size": 14446,
       "baseName": "usage_dashboard_test",
       "isTest": true,
@@ -268844,7 +268844,7 @@
     },
     "packages/server-go/discord/control.go": {
       "path": "packages/server-go/discord/control.go",
-      "modTimeUnixNano": 1778529872921548833,
+      "modTimeUnixNano": 1780468793704212893,
       "size": 4008,
       "baseName": "control",
       "isTest": false,
@@ -269390,7 +269390,7 @@
     },
     "packages/server-go/discord/control_gaps_test.go": {
       "path": "packages/server-go/discord/control_gaps_test.go",
-      "modTimeUnixNano": 1779171700249280711,
+      "modTimeUnixNano": 1780468793704317603,
       "size": 6052,
       "baseName": "control_gaps_test",
       "isTest": true,
@@ -270160,7 +270160,7 @@
     },
     "packages/server-go/discord/control_test.go": {
       "path": "packages/server-go/discord/control_test.go",
-      "modTimeUnixNano": 1778531427214850157,
+      "modTimeUnixNano": 1780468793704415854,
       "size": 5266,
       "baseName": "control_test",
       "isTest": true,
@@ -270863,7 +270863,7 @@
     },
     "packages/server-go/discord/github_bridge.go": {
       "path": "packages/server-go/discord/github_bridge.go",
-      "modTimeUnixNano": 1779171700263096607,
+      "modTimeUnixNano": 1780468793704510229,
       "size": 1574,
       "baseName": "github_bridge",
       "isTest": false,
@@ -271088,7 +271088,7 @@
     },
     "packages/server-go/discord/github_bridge_extra_test.go": {
       "path": "packages/server-go/discord/github_bridge_extra_test.go",
-      "modTimeUnixNano": 1779171700249339419,
+      "modTimeUnixNano": 1780468793704607688,
       "size": 6014,
       "baseName": "github_bridge_extra_test",
       "isTest": true,
@@ -271951,7 +271951,7 @@
     },
     "packages/server-go/discord/issues_identity_test.go": {
       "path": "packages/server-go/discord/issues_identity_test.go",
-      "modTimeUnixNano": 1779166758538261741,
+      "modTimeUnixNano": 1780468793704705106,
       "size": 3019,
       "baseName": "issues_identity_test",
       "isTest": true,
@@ -272403,7 +272403,7 @@
     },
     "packages/server-go/discord/service.go": {
       "path": "packages/server-go/discord/service.go",
-      "modTimeUnixNano": 1780465554747032763,
+      "modTimeUnixNano": 1780468793704908566,
       "size": 63316,
       "baseName": "service",
       "isTest": false,
@@ -281241,7 +281241,7 @@
     },
     "packages/server-go/discord/service_bridge_test.go": {
       "path": "packages/server-go/discord/service_bridge_test.go",
-      "modTimeUnixNano": 1780465882134420894,
+      "modTimeUnixNano": 1780468793705166568,
       "size": 109528,
       "baseName": "service_bridge_test",
       "isTest": true,
@@ -293348,7 +293348,7 @@
     },
     "packages/server-go/discord/service_coverage_test.go": {
       "path": "packages/server-go/discord/service_coverage_test.go",
-      "modTimeUnixNano": 1780465882134068603,
+      "modTimeUnixNano": 1780468793705309861,
       "size": 24369,
       "baseName": "service_coverage_test",
       "isTest": true,
@@ -296111,7 +296111,7 @@
     },
     "packages/server-go/discord/service_extra_test.go": {
       "path": "packages/server-go/discord/service_extra_test.go",
-      "modTimeUnixNano": 1777333864290645606,
+      "modTimeUnixNano": 1780468793705440820,
       "size": 30783,
       "baseName": "service_extra_test",
       "isTest": true,
@@ -299904,7 +299904,7 @@
     },
     "packages/server-go/discord/service_issues_extra_test.go": {
       "path": "packages/server-go/discord/service_issues_extra_test.go",
-      "modTimeUnixNano": 1779174433517587327,
+      "modTimeUnixNano": 1780468793705561113,
       "size": 14787,
       "baseName": "service_issues_extra_test",
       "isTest": true,
@@ -301827,7 +301827,7 @@
     },
     "packages/server-go/discord/service_onmessage_extra_test.go": {
       "path": "packages/server-go/discord/service_onmessage_extra_test.go",
-      "modTimeUnixNano": 1779174433518210907,
+      "modTimeUnixNano": 1780468793705662281,
       "size": 3497,
       "baseName": "service_onmessage_extra_test",
       "isTest": true,
@@ -302270,7 +302270,7 @@
     },
     "packages/server-go/discord/service_test.go": {
       "path": "packages/server-go/discord/service_test.go",
-      "modTimeUnixNano": 1777428292437689308,
+      "modTimeUnixNano": 1780468793705797198,
       "size": 37614,
       "baseName": "service_test",
       "isTest": true,
@@ -308058,7 +308058,7 @@
     },
     "packages/server-go/fs/fs.go": {
       "path": "packages/server-go/fs/fs.go",
-      "modTimeUnixNano": 1777239001383013497,
+      "modTimeUnixNano": 1780468793705917866,
       "size": 7116,
       "baseName": "fs",
       "isTest": false,
@@ -309251,7 +309251,7 @@
     },
     "packages/server-go/fs/fs_test.go": {
       "path": "packages/server-go/fs/fs_test.go",
-      "modTimeUnixNano": 1777239001382721579,
+      "modTimeUnixNano": 1780468793705998908,
       "size": 12066,
       "baseName": "fs_test",
       "isTest": true,
@@ -311114,7 +311114,7 @@
     },
     "packages/server-go/git/git.go": {
       "path": "packages/server-go/git/git.go",
-      "modTimeUnixNano": 1777409082502532086,
+      "modTimeUnixNano": 1780468793706150159,
       "size": 10917,
       "baseName": "git",
       "isTest": false,
@@ -312741,7 +312741,7 @@
     },
     "packages/server-go/git/git_test.go": {
       "path": "packages/server-go/git/git_test.go",
-      "modTimeUnixNano": 1777239203691072902,
+      "modTimeUnixNano": 1780468793706274202,
       "size": 30091,
       "baseName": "git_test",
       "isTest": true,
@@ -316900,7 +316900,7 @@
     },
     "packages/server-go/git/github_test.go": {
       "path": "packages/server-go/git/github_test.go",
-      "modTimeUnixNano": 1777239001384522505,
+      "modTimeUnixNano": 1780468793706342620,
       "size": 1338,
       "baseName": "github_test",
       "isTest": true,
@@ -317142,7 +317142,7 @@
     },
     "packages/server-go/github/client_extra_test.go": {
       "path": "packages/server-go/github/client_extra_test.go",
-      "modTimeUnixNano": 1779166758528671044,
+      "modTimeUnixNano": 1780468793706470954,
       "size": 2921,
       "baseName": "client_extra_test",
       "isTest": true,
@@ -317632,7 +317632,7 @@
     },
     "packages/server-go/github/engagement.go": {
       "path": "packages/server-go/github/engagement.go",
-      "modTimeUnixNano": 1778541232232584250,
+      "modTimeUnixNano": 1780468793706573871,
       "size": 6427,
       "baseName": "engagement",
       "isTest": false,
@@ -318619,7 +318619,7 @@
     },
     "packages/server-go/github/engagement_extra_test.go": {
       "path": "packages/server-go/github/engagement_extra_test.go",
-      "modTimeUnixNano": 1779166758528675377,
+      "modTimeUnixNano": 1780468793706666747,
       "size": 1856,
       "baseName": "engagement_extra_test",
       "isTest": true,
@@ -318949,7 +318949,7 @@
     },
     "packages/server-go/github/engagement_test.go": {
       "path": "packages/server-go/github/engagement_test.go",
-      "modTimeUnixNano": 1778541380837049915,
+      "modTimeUnixNano": 1780468793706760790,
       "size": 4591,
       "baseName": "engagement_test",
       "isTest": true,
@@ -319621,7 +319621,7 @@
     },
     "packages/server-go/github/events.go": {
       "path": "packages/server-go/github/events.go",
-      "modTimeUnixNano": 1779234525430356429,
+      "modTimeUnixNano": 1780468793706878624,
       "size": 17508,
       "baseName": "events",
       "isTest": false,
@@ -322041,7 +322041,7 @@
     },
     "packages/server-go/github/events_dedupe_test.go": {
       "path": "packages/server-go/github/events_dedupe_test.go",
-      "modTimeUnixNano": 1779166758537599534,
+      "modTimeUnixNano": 1780468793706980208,
       "size": 813,
       "baseName": "events_dedupe_test",
       "isTest": true,
@@ -322194,7 +322194,7 @@
     },
     "packages/server-go/github/events_test.go": {
       "path": "packages/server-go/github/events_test.go",
-      "modTimeUnixNano": 1779234525454744880,
+      "modTimeUnixNano": 1780468793707110459,
       "size": 34736,
       "baseName": "events_test",
       "isTest": true,
@@ -326646,7 +326646,7 @@
     },
     "packages/server-go/github/feedback.go": {
       "path": "packages/server-go/github/feedback.go",
-      "modTimeUnixNano": 1778529801352790681,
+      "modTimeUnixNano": 1780468793707216502,
       "size": 3728,
       "baseName": "feedback",
       "isTest": false,
@@ -327221,7 +327221,7 @@
     },
     "packages/server-go/github/feedback_test.go": {
       "path": "packages/server-go/github/feedback_test.go",
-      "modTimeUnixNano": 1779166758631415799,
+      "modTimeUnixNano": 1780468793707312044,
       "size": 4792,
       "baseName": "feedback_test",
       "isTest": true,
@@ -327991,7 +327991,7 @@
     },
     "packages/server-go/github/github.go": {
       "path": "packages/server-go/github/github.go",
-      "modTimeUnixNano": 1779166758631406299,
+      "modTimeUnixNano": 1780468793707424212,
       "size": 10862,
       "baseName": "github",
       "isTest": false,
@@ -329654,7 +329654,7 @@
     },
     "packages/server-go/github/github_gaps_test.go": {
       "path": "packages/server-go/github/github_gaps_test.go",
-      "modTimeUnixNano": 1779166758605076121,
+      "modTimeUnixNano": 1780468793707527588,
       "size": 13555,
       "baseName": "github_gaps_test",
       "isTest": true,
@@ -331446,7 +331446,7 @@
     },
     "packages/server-go/github/github_test.go": {
       "path": "packages/server-go/github/github_test.go",
-      "modTimeUnixNano": 1777345336656564968,
+      "modTimeUnixNano": 1780468793707663964,
       "size": 42905,
       "baseName": "github_test",
       "isTest": true,
@@ -337490,7 +337490,7 @@
     },
     "packages/server-go/github/identity.go": {
       "path": "packages/server-go/github/identity.go",
-      "modTimeUnixNano": 1778540993901371618,
+      "modTimeUnixNano": 1780468793707774256,
       "size": 5338,
       "baseName": "identity",
       "isTest": false,
@@ -338304,7 +338304,7 @@
     },
     "packages/server-go/github/identity_test.go": {
       "path": "packages/server-go/github/identity_test.go",
-      "modTimeUnixNano": 1779166758631417924,
+      "modTimeUnixNano": 1780468793707870007,
       "size": 6167,
       "baseName": "identity_test",
       "isTest": true,
@@ -339321,7 +339321,7 @@
     },
     "packages/server-go/github/monitor.go": {
       "path": "packages/server-go/github/monitor.go",
-      "modTimeUnixNano": 1777257143678117370,
+      "modTimeUnixNano": 1780468793707984633,
       "size": 8748,
       "baseName": "monitor",
       "isTest": false,
@@ -340663,7 +340663,7 @@
     },
     "packages/server-go/github/oauth.go": {
       "path": "packages/server-go/github/oauth.go",
-      "modTimeUnixNano": 1777345336656560260,
+      "modTimeUnixNano": 1780468793708083592,
       "size": 6735,
       "baseName": "oauth",
       "isTest": false,
@@ -341599,7 +341599,7 @@
     },
     "packages/server-go/github/oauth_test.go": {
       "path": "packages/server-go/github/oauth_test.go",
-      "modTimeUnixNano": 1777345336656581426,
+      "modTimeUnixNano": 1780468793708185676,
       "size": 13264,
       "baseName": "oauth_test",
       "isTest": true,
@@ -343282,7 +343282,7 @@
     },
     "packages/server-go/github/projects.go": {
       "path": "packages/server-go/github/projects.go",
-      "modTimeUnixNano": 1778541042460445148,
+      "modTimeUnixNano": 1780468793708299427,
       "size": 8323,
       "baseName": "projects",
       "isTest": false,
@@ -344554,7 +344554,7 @@
     },
     "packages/server-go/github/projects_test.go": {
       "path": "packages/server-go/github/projects_test.go",
-      "modTimeUnixNano": 1779166758524232383,
+      "modTimeUnixNano": 1780468793708408137,
       "size": 17099,
       "baseName": "projects_test",
       "isTest": true,
@@ -346603,7 +346603,7 @@
     },
     "packages/server-go/github/webhook.go": {
       "path": "packages/server-go/github/webhook.go",
-      "modTimeUnixNano": 1779234525430330803,
+      "modTimeUnixNano": 1780468793708514888,
       "size": 6889,
       "baseName": "webhook",
       "isTest": false,
@@ -347636,7 +347636,7 @@
     },
     "packages/server-go/main.go": {
       "path": "packages/server-go/main.go",
-      "modTimeUnixNano": 1779254623760489081,
+      "modTimeUnixNano": 1780468793708818348,
       "size": 47845,
       "baseName": "main",
       "isTest": false,
@@ -353231,7 +353231,7 @@
     },
     "packages/server-go/main_extra_test.go": {
       "path": "packages/server-go/main_extra_test.go",
-      "modTimeUnixNano": 1779174433518211074,
+      "modTimeUnixNano": 1780468793708948849,
       "size": 10139,
       "baseName": "main_extra_test",
       "isTest": true,
@@ -354775,7 +354775,7 @@
     },
     "packages/server-go/main_test.go": {
       "path": "packages/server-go/main_test.go",
-      "modTimeUnixNano": 1779254555583598027,
+      "modTimeUnixNano": 1780468793709185268,
       "size": 116102,
       "baseName": "main_test",
       "isTest": true,
@@ -367304,7 +367304,7 @@
     },
     "packages/server-go/mesh/client.go": {
       "path": "packages/server-go/mesh/client.go",
-      "modTimeUnixNano": 1779166758631445257,
+      "modTimeUnixNano": 1780468793709334686,
       "size": 3774,
       "baseName": "client",
       "isTest": false,
@@ -367875,7 +367875,7 @@
     },
     "packages/server-go/mesh/client_server_extra_test.go": {
       "path": "packages/server-go/mesh/client_server_extra_test.go",
-      "modTimeUnixNano": 1779166758537613700,
+      "modTimeUnixNano": 1780468793709431353,
       "size": 3658,
       "baseName": "client_server_extra_test",
       "isTest": true,
@@ -368453,7 +368453,7 @@
     },
     "packages/server-go/mesh/config.go": {
       "path": "packages/server-go/mesh/config.go",
-      "modTimeUnixNano": 1779166758631583673,
+      "modTimeUnixNano": 1780468793709526313,
       "size": 4116,
       "baseName": "config",
       "isTest": false,
@@ -369048,7 +369048,7 @@
     },
     "packages/server-go/mesh/inference.go": {
       "path": "packages/server-go/mesh/inference.go",
-      "modTimeUnixNano": 1778532184513120558,
+      "modTimeUnixNano": 1780468793709623063,
       "size": 4045,
       "baseName": "inference",
       "isTest": false,
@@ -369633,7 +369633,7 @@
     },
     "packages/server-go/mesh/inference_test.go": {
       "path": "packages/server-go/mesh/inference_test.go",
-      "modTimeUnixNano": 1778532262400917370,
+      "modTimeUnixNano": 1780468793709715731,
       "size": 3548,
       "baseName": "inference_test",
       "isTest": true,
@@ -370195,7 +370195,7 @@
     },
     "packages/server-go/mesh/mesh_gaps_test.go": {
       "path": "packages/server-go/mesh/mesh_gaps_test.go",
-      "modTimeUnixNano": 1779166758543735443,
+      "modTimeUnixNano": 1780468793709826148,
       "size": 17115,
       "baseName": "mesh_gaps_test",
       "isTest": true,
@@ -372550,7 +372550,7 @@
     },
     "packages/server-go/mesh/mesh_more_gaps_test.go": {
       "path": "packages/server-go/mesh/mesh_more_gaps_test.go",
-      "modTimeUnixNano": 1779166758631437715,
+      "modTimeUnixNano": 1780468793709928941,
       "size": 5014,
       "baseName": "mesh_more_gaps_test",
       "isTest": true,
@@ -373315,7 +373315,7 @@
     },
     "packages/server-go/mesh/mesh_test.go": {
       "path": "packages/server-go/mesh/mesh_test.go",
-      "modTimeUnixNano": 1778531349687562293,
+      "modTimeUnixNano": 1780468793710024817,
       "size": 6026,
       "baseName": "mesh_test",
       "isTest": true,
@@ -374348,7 +374348,7 @@
     },
     "packages/server-go/mesh/server.go": {
       "path": "packages/server-go/mesh/server.go",
-      "modTimeUnixNano": 1778532166271019823,
+      "modTimeUnixNano": 1780468793710122859,
       "size": 6602,
       "baseName": "server",
       "isTest": false,
@@ -375441,7 +375441,7 @@
     },
     "packages/server-go/mesh/sig.go": {
       "path": "packages/server-go/mesh/sig.go",
-      "modTimeUnixNano": 1778529916384790572,
+      "modTimeUnixNano": 1780468793710218277,
       "size": 2053,
       "baseName": "sig",
       "isTest": false,
@@ -375759,7 +375759,7 @@
     },
     "packages/server-go/quality/report.go": {
       "path": "packages/server-go/quality/report.go",
-      "modTimeUnixNano": 1780468387234278995,
+      "modTimeUnixNano": 1780468793710390028,
       "size": 24017,
       "baseName": "report",
       "isTest": false,
@@ -379420,7 +379420,7 @@
     },
     "packages/server-go/quality/report_test.go": {
       "path": "packages/server-go/quality/report_test.go",
-      "modTimeUnixNano": 1780468387239410829,
+      "modTimeUnixNano": 1780468793710523362,
       "size": 8407,
       "baseName": "report_test",
       "isTest": true,
@@ -380651,7 +380651,7 @@
     },
     "packages/server-go/remote/auth.go": {
       "path": "packages/server-go/remote/auth.go",
-      "modTimeUnixNano": 1777239001391977501,
+      "modTimeUnixNano": 1780468793710622655,
       "size": 4659,
       "baseName": "auth",
       "isTest": false,
@@ -381407,7 +381407,7 @@
     },
     "packages/server-go/remote/auth_test.go": {
       "path": "packages/server-go/remote/auth_test.go",
-      "modTimeUnixNano": 1777239001391556082,
+      "modTimeUnixNano": 1780468793710688739,
       "size": 8105,
       "baseName": "auth_test",
       "isTest": true,
@@ -382863,7 +382863,7 @@
     },
     "packages/server-go/remote/coverage_test.go": {
       "path": "packages/server-go/remote/coverage_test.go",
-      "modTimeUnixNano": 1777239001392627130,
+      "modTimeUnixNano": 1780468793710790448,
       "size": 14378,
       "baseName": "coverage_test",
       "isTest": true,
@@ -384867,7 +384867,7 @@
     },
     "packages/server-go/remote/keychain.go": {
       "path": "packages/server-go/remote/keychain.go",
-      "modTimeUnixNano": 1777239001393036965,
+      "modTimeUnixNano": 1780468793710853657,
       "size": 5440,
       "baseName": "keychain",
       "isTest": false,
@@ -385781,7 +385781,7 @@
     },
     "packages/server-go/remote/keychain_darwin.go": {
       "path": "packages/server-go/remote/keychain_darwin.go",
-      "modTimeUnixNano": 1777239001392252003,
+      "modTimeUnixNano": 1780468793710910949,
       "size": 811,
       "baseName": "keychain_darwin",
       "isTest": false,
@@ -385953,7 +385953,7 @@
     },
     "packages/server-go/remote/keychain_other.go": {
       "path": "packages/server-go/remote/keychain_other.go",
-      "modTimeUnixNano": 1777239001393335008,
+      "modTimeUnixNano": 1780468793710966366,
       "size": 614,
       "baseName": "keychain_other",
       "isTest": false,
@@ -386041,7 +386041,7 @@
     },
     "packages/server-go/remote/keychain_test.go": {
       "path": "packages/server-go/remote/keychain_test.go",
-      "modTimeUnixNano": 1777239001394682974,
+      "modTimeUnixNano": 1780468793711028450,
       "size": 6138,
       "baseName": "keychain_test",
       "isTest": true,
@@ -387093,7 +387093,7 @@
     },
     "packages/server-go/remote/keychain_windows.go": {
       "path": "packages/server-go/remote/keychain_windows.go",
-      "modTimeUnixNano": 1777239001394371847,
+      "modTimeUnixNano": 1780468793711086367,
       "size": 619,
       "baseName": "keychain_windows",
       "isTest": false,
@@ -387174,7 +387174,7 @@
     },
     "packages/server-go/remote/pairing.go": {
       "path": "packages/server-go/remote/pairing.go",
-      "modTimeUnixNano": 1777239001395210810,
+      "modTimeUnixNano": 1780468793711146618,
       "size": 1826,
       "baseName": "pairing",
       "isTest": false,
@@ -387522,7 +387522,7 @@
     },
     "packages/server-go/remote/pairing_test.go": {
       "path": "packages/server-go/remote/pairing_test.go",
-      "modTimeUnixNano": 1777239001393584051,
+      "modTimeUnixNano": 1780468793711208285,
       "size": 2846,
       "baseName": "pairing_test",
       "isTest": true,
@@ -388113,7 +388113,7 @@
     },
     "packages/server-go/remote/server.go": {
       "path": "packages/server-go/remote/server.go",
-      "modTimeUnixNano": 1777239001391202289,
+      "modTimeUnixNano": 1780468793711306452,
       "size": 5554,
       "baseName": "server",
       "isTest": false,
@@ -388971,7 +388971,7 @@
     },
     "packages/server-go/remote/server_test.go": {
       "path": "packages/server-go/remote/server_test.go",
-      "modTimeUnixNano": 1777239001395629062,
+      "modTimeUnixNano": 1780468793711402786,
       "size": 7104,
       "baseName": "server_test",
       "isTest": true,
@@ -390135,7 +390135,7 @@
     },
     "packages/server-go/remote/tls.go": {
       "path": "packages/server-go/remote/tls.go",
-      "modTimeUnixNano": 1777239001393931345,
+      "modTimeUnixNano": 1780468793711467287,
       "size": 3281,
       "baseName": "tls",
       "isTest": false,
@@ -390606,7 +390606,7 @@
     },
     "packages/server-go/remote/tls_test.go": {
       "path": "packages/server-go/remote/tls_test.go",
-      "modTimeUnixNano": 1777239001394987017,
+      "modTimeUnixNano": 1780468793711526329,
       "size": 2842,
       "baseName": "tls_test",
       "isTest": true,
@@ -391062,7 +391062,7 @@
     },
     "packages/server-go/terminal/manager.go": {
       "path": "packages/server-go/terminal/manager.go",
-      "modTimeUnixNano": 1777239001345097593,
+      "modTimeUnixNano": 1780468793711623455,
       "size": 2836,
       "baseName": "manager",
       "isTest": false,
@@ -391702,7 +391702,7 @@
     },
     "packages/server-go/terminal/manager_test.go": {
       "path": "packages/server-go/terminal/manager_test.go",
-      "modTimeUnixNano": 1777239001344209880,
+      "modTimeUnixNano": 1780468793711682997,
       "size": 3493,
       "baseName": "manager_test",
       "isTest": true,
@@ -392346,7 +392346,7 @@
     },
     "packages/server-go/terminal/manager_windows.go": {
       "path": "packages/server-go/terminal/manager_windows.go",
-      "modTimeUnixNano": 1777239001344698799,
+      "modTimeUnixNano": 1780468793711744331,
       "size": 2896,
       "baseName": "manager_windows",
       "isTest": false,
@@ -393030,7 +393030,7 @@
     },
     "packages/server-go/vpn/identity.go": {
       "path": "packages/server-go/vpn/identity.go",
-      "modTimeUnixNano": 1777239001341506741,
+      "modTimeUnixNano": 1780468793711839373,
       "size": 1522,
       "baseName": "identity",
       "isTest": false,
@@ -393259,7 +393259,7 @@
     },
     "packages/server-go/vpn/trust.go": {
       "path": "packages/server-go/vpn/trust.go",
-      "modTimeUnixNano": 1777239001341053030,
+      "modTimeUnixNano": 1780468793711899707,
       "size": 2378,
       "baseName": "trust",
       "isTest": false,
@@ -393710,7 +393710,7 @@
     },
     "packages/server-go/vpn/tunnel.go": {
       "path": "packages/server-go/vpn/tunnel.go",
-      "modTimeUnixNano": 1777239001339801982,
+      "modTimeUnixNano": 1780468793711998875,
       "size": 6874,
       "baseName": "tunnel",
       "isTest": false,
@@ -394736,7 +394736,7 @@
     },
     "packages/server-go/vpn/tunnel_test.go": {
       "path": "packages/server-go/vpn/tunnel_test.go",
-      "modTimeUnixNano": 1777239001340524653,
+      "modTimeUnixNano": 1780468793712107167,
       "size": 16512,
       "baseName": "tunnel_test",
       "isTest": true,
@@ -397198,7 +397198,7 @@
     },
     "packages/server-go/vpn/vpn_test.go": {
       "path": "packages/server-go/vpn/vpn_test.go",
-      "modTimeUnixNano": 1777239001341893201,
+      "modTimeUnixNano": 1780468793712212126,
       "size": 6305,
       "baseName": "vpn_test",
       "isTest": true,
@@ -398260,7 +398260,7 @@
     },
     "packages/server-go/workspace/registry.go": {
       "path": "packages/server-go/workspace/registry.go",
-      "modTimeUnixNano": 1777412032843360454,
+      "modTimeUnixNano": 1780468793712347878,
       "size": 4512,
       "baseName": "registry",
       "isTest": false,
@@ -398977,7 +398977,7 @@
     },
     "packages/server-go/workspace/registry_test.go": {
       "path": "packages/server-go/workspace/registry_test.go",
-      "modTimeUnixNano": 1777428292473095502,
+      "modTimeUnixNano": 1780468793712459004,
       "size": 10071,
       "baseName": "registry_test",
       "isTest": true,
@@ -400491,7 +400491,7 @@
     },
     "packages/server-go/workspace/tasks.go": {
       "path": "packages/server-go/workspace/tasks.go",
-      "modTimeUnixNano": 1780437032932405089,
+      "modTimeUnixNano": 1780468793712553796,
       "size": 7437,
       "baseName": "tasks",
       "isTest": false,
@@ -401726,7 +401726,7 @@
     },
     "packages/server-go/workspace/tasks_test.go": {
       "path": "packages/server-go/workspace/tasks_test.go",
-      "modTimeUnixNano": 1780437032938547655,
+      "modTimeUnixNano": 1780468793712648630,
       "size": 7833,
       "baseName": "tasks_test",
       "isTest": true,
@@ -403022,7 +403022,7 @@
     },
     "packages/server-go/ws/discord.go": {
       "path": "packages/server-go/ws/discord.go",
-      "modTimeUnixNano": 1777239001387572104,
+      "modTimeUnixNano": 1780468793712779465,
       "size": 8007,
       "baseName": "discord",
       "isTest": false,
@@ -404358,7 +404358,7 @@
     },
     "packages/server-go/ws/discord_test.go": {
       "path": "packages/server-go/ws/discord_test.go",
-      "modTimeUnixNano": 1777409082520257864,
+      "modTimeUnixNano": 1780468793712893674,
       "size": 18423,
       "baseName": "discord_test",
       "isTest": true,
@@ -406635,7 +406635,7 @@
     },
     "packages/server-go/ws/handler.go": {
       "path": "packages/server-go/ws/handler.go",
-      "modTimeUnixNano": 1780467078446847544,
+      "modTimeUnixNano": 1780468793713070967,
       "size": 51060,
       "baseName": "handler",
       "isTest": false,
@@ -413324,7 +413324,7 @@
     },
     "packages/server-go/ws/handler_coverage_test.go": {
       "path": "packages/server-go/ws/handler_coverage_test.go",
-      "modTimeUnixNano": 1777345336656586551,
+      "modTimeUnixNano": 1780468793713171134,
       "size": 1502,
       "baseName": "handler_coverage_test",
       "isTest": true,
@@ -413528,7 +413528,7 @@
     },
     "packages/server-go/ws/handler_extra_test.go": {
       "path": "packages/server-go/ws/handler_extra_test.go",
-      "modTimeUnixNano": 1780467078604760841,
+      "modTimeUnixNano": 1780468793713353011,
       "size": 77036,
       "baseName": "handler_extra_test",
       "isTest": true,
@@ -422656,7 +422656,7 @@
     },
     "packages/server-go/ws/handler_test.go": {
       "path": "packages/server-go/ws/handler_test.go",
-      "modTimeUnixNano": 1780465290478834076,
+      "modTimeUnixNano": 1780468793713526387,
       "size": 52335,
       "baseName": "handler_test",
       "isTest": true,
@@ -428747,7 +428747,7 @@
     },
     "packages/server-go/ws/offline_queue.go": {
       "path": "packages/server-go/ws/offline_queue.go",
-      "modTimeUnixNano": 1777239001386590057,
+      "modTimeUnixNano": 1780468793713600346,
       "size": 3181,
       "baseName": "offline_queue",
       "isTest": false,
@@ -429236,7 +429236,7 @@
     },
     "packages/server-go/ws/offline_queue_test.go": {
       "path": "packages/server-go/ws/offline_queue_test.go",
-      "modTimeUnixNano": 1777239001389388279,
+      "modTimeUnixNano": 1780468793713664014,
       "size": 4932,
       "baseName": "offline_queue_test",
       "isTest": true,
@@ -430014,7 +430014,7 @@
     },
     "packages/server-go/ws/ws_extra_test.go": {
       "path": "packages/server-go/ws/ws_extra_test.go",
-      "modTimeUnixNano": 1777239001388068314,
+      "modTimeUnixNano": 1780468793713782348,
       "size": 12013,
       "baseName": "ws_extra_test",
       "isTest": true,
@@ -431640,7 +431640,7 @@
     },
     "packages/shared/src/index.ts": {
       "path": "packages/shared/src/index.ts",
-      "modTimeUnixNano": 1780467078167918991,
+      "modTimeUnixNano": 1780468793715458612,
       "size": 12421,
       "baseName": "index",
       "isTest": false,
@@ -433537,7 +433537,7 @@
     },
     "scripts/discord-screenshot.sh": {
       "path": "scripts/discord-screenshot.sh",
-      "modTimeUnixNano": 1777412032823928835,
+      "modTimeUnixNano": 1780468793716855957,
       "size": 3897,
       "baseName": "discord-screenshot",
       "isTest": false,
@@ -434071,7 +434071,7 @@
     },
     "scripts/engine-desktop.sh": {
       "path": "scripts/engine-desktop.sh",
-      "modTimeUnixNano": 1780419574879033692,
+      "modTimeUnixNano": 1780468793716955333,
       "size": 1587,
       "baseName": "engine-desktop",
       "isTest": false,
@@ -434390,7 +434390,7 @@
     },
     "scripts/engine-service.sh": {
       "path": "scripts/engine-service.sh",
-      "modTimeUnixNano": 1778535803494896632,
+      "modTimeUnixNano": 1780468793717070834,
       "size": 5926,
       "baseName": "engine-service",
       "isTest": false,
@@ -435116,7 +435116,7 @@
     },
     "scripts/gen-tests.py": {
       "path": "scripts/gen-tests.py",
-      "modTimeUnixNano": 1777089908894722430,
+      "modTimeUnixNano": 1780468793717339461,
       "size": 2068,
       "baseName": "gen-tests",
       "isTest": false,
@@ -435396,7 +435396,7 @@
     },
     "scripts/llama-fleet.sh": {
       "path": "scripts/llama-fleet.sh",
-      "modTimeUnixNano": 1780290872423913216,
+      "modTimeUnixNano": 1780468793717445545,
       "size": 7638,
       "baseName": "llama-fleet",
       "isTest": false,
